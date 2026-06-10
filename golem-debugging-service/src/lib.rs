@@ -377,7 +377,8 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
 
     let total_system_memory = golem_config.memory.total_system_memory();
     let system_memory = golem_config.memory.system_memory();
-    let worker_memory = golem_config.memory.worker_memory();
+    let worker_memory =
+        (total_system_memory as f64 * golem_config.memory.worker_memory_ratio) as u64;
     info!(
         "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
         ISizeFormatter::new(total_system_memory, humansize::BINARY),

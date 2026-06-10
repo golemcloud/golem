@@ -963,30 +963,15 @@ pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
     pub worker_estimate_coefficient: f64,
-    /// Multiplier applied to a component's `component_size`, charged once per
-    /// resident component (shared across all its workers) rather than per worker.
+    /// Multiplier applied to a component's `component_size` when reserving its
+    /// compiled-module memory with the admission gate, charged once per resident
+    /// component (shared across all its workers) rather than per worker.
     pub component_size_coefficient: f64,
-    /// Multiplier (typically > 1.0) applied to the measured limit when sizing the
-    /// estimate semaphore. The estimate per worker is normally larger than its
-    /// real resident usage, so the semaphore is allowed to authorize more
-    /// estimated bytes than the limit: it is the second line of defence behind
-    /// the measured-headroom gate, catching the concurrent-admission race the
-    /// (lockless) gate cannot, while the gate refuses first in normal operation
-    /// against real usage. Always clamped by `worker_memory_max_safe_ratio` so it
-    /// can never itself authorise real usage past a safe fraction of the limit.
-    pub worker_memory_overcommit_ratio: f64,
-    /// Hard upper bound (fraction of the measured limit, < 1.0) on the estimate
-    /// semaphore size, regardless of `worker_memory_overcommit_ratio`. Keeps the
-    /// semaphore below the true limit so headroom always remains for the wasmtime
-    /// host even if the semaphore is the binding guard and estimates happen to
-    /// match real usage.
-    pub worker_memory_max_safe_ratio: f64,
     /// Whether the measured-headroom admission gate is active. Requires the
     /// executor to own its memory environment (its own cgroup/process), as in a
     /// production pod. Disable in shared environments — such as the in-process
     /// test harness — where the probe cannot isolate this executor's footprint
-    /// from co-resident processes; admission then relies on the estimate
-    /// semaphore alone.
+    /// from co-resident processes.
     pub enable_measured_admission: bool,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
@@ -1008,24 +993,6 @@ impl MemoryConfig {
         let mut sysinfo = sysinfo::System::new();
         sysinfo.refresh_memory();
         sysinfo.available_memory()
-    }
-
-    /// Size of the estimate semaphore: the measured limit scaled by the
-    /// overcommit ratio, then clamped to `worker_memory_max_safe_ratio` of the
-    /// limit. The overcommit lets the semaphore sit slightly above the gate
-    /// ceiling as a second line of defence (per-worker estimates exceed real
-    /// usage, so it rarely binds first); the clamp guarantees it can never be
-    /// sized to authorise real usage past a safe fraction of the limit, leaving
-    /// headroom for the wasmtime host.
-    pub fn worker_memory_for_limit(&self, limit_bytes: u64) -> usize {
-        let limit = limit_bytes as f64;
-        let overcommit = limit * self.worker_memory_overcommit_ratio;
-        let safe_cap = limit * self.worker_memory_max_safe_ratio;
-        overcommit.min(safe_cap) as usize
-    }
-
-    pub fn worker_memory(&self) -> usize {
-        self.worker_memory_for_limit(self.total_system_memory())
     }
 
     /// The admission policy for the measured-headroom gate. Reuses
@@ -1058,16 +1025,6 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "component size coefficient: {}",
             self.component_size_coefficient
-        );
-        let _ = writeln!(
-            &mut result,
-            "worker memory overcommit ratio: {}",
-            self.worker_memory_overcommit_ratio
-        );
-        let _ = writeln!(
-            &mut result,
-            "worker memory max safe ratio: {}",
-            self.worker_memory_max_safe_ratio
         );
         let _ = writeln!(
             &mut result,
@@ -1599,8 +1556,6 @@ impl Default for MemoryConfig {
             worker_memory_ratio: 0.8,
             worker_estimate_coefficient: 1.1,
             component_size_coefficient: 2.0,
-            worker_memory_overcommit_ratio: 1.2,
-            worker_memory_max_safe_ratio: 0.9,
             enable_measured_admission: true,
             acquire_retry_delay: Duration::from_millis(500),
             oom_retry_config: RetryConfig {

@@ -14,15 +14,36 @@
 
 //! Measured-headroom admission decision.
 //!
-//! Gates worker admission on the executor environment's *real* memory headroom
-//! read from the [`MemoryProbe`], rather than on the estimate-based semaphore in
-//! [`super::ActiveWorkers`]. This controller is the primary, authoritative
-//! check against measured resident usage and refuses admission in normal
-//! operation; the estimate semaphore is the second line of defence behind it,
-//! its atomic permit acquisition catching the concurrent admissions this
-//! (lockless) controller can let through on the same snapshot. When headroom is
-//! short it evicts already-resident idle-then-warm work; if it still cannot make
-//! room it rejects rather than over-committing.
+//! Gates worker admission on the executor environment's memory headroom. It is
+//! the sole admission authority: there is no estimate-based semaphore behind it.
+//!
+//! The gate weighs two quantities against the usable ceiling:
+//!
+//! * Measured RSS from the [`MemoryProbe`] (cgroup `memory.current` on a
+//!   constrained pod) — what is resident right now.
+//! * The total linear memory *granted* to live workers — what they could fault
+//!   in at any moment.
+//!
+//! Both matter because they fail in opposite directions. Measured RSS lags
+//! admission: `memory.current` counts only touched pages, so a worker admitted
+//! moments ago is not yet resident and a burst admitted against the same low
+//! snapshot would collectively over-commit. The granted total leads residency: a
+//! worker can fault in any page of the virtual memory it was already granted at
+//! any later time, with no admission call to intercept it, so a gate that
+//! reserved only what is resident would let a node full of lightly-touched
+//! workers OOM by writing into memory they already hold. The gate therefore
+//! reserves the full granted total from admission until unload, and admits
+//! against the *larger* of measured RSS and that granted total — safe against
+//! both the burst race and later faulting of granted pages.
+//!
+//! The granted total is maintained by two integer updates: a worker's grant is
+//! added on admission and removed on unload (via [`AdmissionController::release`]
+//! from the worker lifecycle). The headroom check re-derives the reservation
+//! from this maintained total and the current probe reading, so it is O(1) and
+//! exact regardless of worker churn.
+//!
+//! When headroom is short the controller evicts already-resident idle-then-warm
+//! work; if it still cannot make room it rejects rather than over-committing.
 //!
 //! The controller is decoupled from `Worker`/wasmtime via the [`EvictionSource`]
 //! trait so its decision logic can be exercised in isolation with synthetic
@@ -30,6 +51,7 @@
 
 use super::memory_probe::MemoryProbe;
 use async_trait::async_trait;
+use std::sync::Mutex;
 
 /// Why an eviction candidate is worth evicting, in priority order. Lower
 /// variants are evicted first.
@@ -80,25 +102,81 @@ pub struct AdmissionPolicy {
 }
 
 /// Decides admission against measured headroom, evicting resident idle/warm
-/// work as needed. Holds only its policy and probe; live state is read fresh
-/// from the probe and the eviction source on each call (never cached).
+/// work as needed. Holds its policy and probe; live usage is read fresh from the
+/// probe on each call. The only retained state is `granted`: the total linear
+/// memory granted to live workers, maintained across admit and unload, which the
+/// gate reserves so a worker cannot OOM the node by faulting in granted pages.
 pub struct AdmissionController {
     probe: Box<dyn MemoryProbe>,
     policy: AdmissionPolicy,
+    granted: Mutex<u64>,
 }
 
 impl AdmissionController {
     pub fn new(probe: Box<dyn MemoryProbe>, policy: AdmissionPolicy) -> Self {
-        Self { probe, policy }
+        let ceiling = (probe.snapshot().limit_bytes as f64 * policy.usable_ratio) as u64;
+        crate::metrics::workers::record_worker_memory_ceiling(ceiling);
+        Self {
+            probe,
+            policy,
+            granted: Mutex::new(0),
+        }
     }
 
-    /// Bytes available for new admissions: the carve-out ceiling
-    /// (`usable_ratio × limit`) minus current usage. Saturating — never
-    /// underflows when already over the ceiling.
+    /// Bytes available for a new admission: the usable ceiling minus the larger
+    /// of measured RSS and the total memory granted to live workers. Saturating —
+    /// never underflows when already over the ceiling.
+    ///
+    /// A worker can fault in any page of the virtual memory it was granted at any
+    /// time, with no admission call to intercept it, so the gate must reserve the
+    /// full granted total even before it is resident. Measured RSS is only larger
+    /// than the granted total transiently (host/runtime overhead the grant does
+    /// not cover), so taking the maximum keeps the gate safe against both the
+    /// grant a worker may yet fault in and any usage the grant does not capture.
     fn admissible_headroom(&self) -> u64 {
         let snapshot = self.probe.snapshot();
         let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
-        ceiling.saturating_sub(snapshot.current_bytes)
+        let granted = *self.granted.lock().unwrap();
+        crate::metrics::workers::record_worker_memory_ceiling(ceiling);
+        crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
+        ceiling.saturating_sub(snapshot.current_bytes.max(granted))
+    }
+
+    /// Record `request_bytes` of memory granted to a newly admitted worker. The
+    /// gate reserves this until the worker unloads, because the worker may fault
+    /// the granted pages in at any later time.
+    fn reserve(&self, request_bytes: u64) {
+        let mut granted = self.granted.lock().unwrap();
+        *granted += request_bytes;
+        crate::metrics::workers::record_worker_memory_granted(*granted);
+    }
+
+    /// Reserve memory for a cost that is a committed consequence of an already
+    /// admitted worker rather than a fresh admission — currently a component's
+    /// compiled module, loaded into RAM when the first worker of the component
+    /// becomes resident and shared by all its workers. Unlike admission this does
+    /// not evict or reject (the worker is already in); it accounts the bytes so
+    /// later admissions see them. Released with [`Self::release`].
+    pub fn reserve_committed(&self, bytes: u64) {
+        self.reserve(bytes);
+    }
+
+    /// Release the grant of a worker that has unloaded, given the bytes it was
+    /// granted. Its pages leave memory, so its grant no longer needs reserving;
+    /// not releasing it would permanently shrink admissible headroom as workers
+    /// come and go.
+    pub fn release(&self, reserved_bytes: u64) {
+        let mut granted = self.granted.lock().unwrap();
+        *granted = granted.saturating_sub(reserved_bytes);
+        crate::metrics::workers::record_worker_memory_granted(*granted);
+    }
+
+    /// Pre-register grant bytes for workers that were already live when the
+    /// controller was created. Test-only: production registers every worker's
+    /// grant through admission.
+    #[cfg(test)]
+    pub fn seed_granted(&self, bytes: u64) {
+        *self.granted.lock().unwrap() += bytes;
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if
@@ -107,7 +185,8 @@ impl AdmissionController {
     /// Eviction is attempted idle-first, then warm, and only up to the shortfall
     /// (never evicts when headroom already suffices). After eviction the
     /// headroom is re-measured against ground truth; the request is admitted only
-    /// if the real headroom now covers it, otherwise it is rejected.
+    /// if the real headroom now covers it, otherwise it is rejected. On admit the
+    /// request is added to the in-flight reservation.
     pub async fn try_admit(
         &self,
         request_bytes: u64,
@@ -115,6 +194,7 @@ impl AdmissionController {
     ) -> AdmissionDecision {
         // Fast path: enough real headroom already, admit without evicting.
         if self.admissible_headroom() >= request_bytes {
+            self.reserve(request_bytes);
             return AdmissionDecision::Admit;
         }
 
@@ -134,6 +214,7 @@ impl AdmissionController {
         // the probe is the authority, and other activity may have moved usage
         // in either direction while we were evicting.
         if self.admissible_headroom() >= request_bytes {
+            self.reserve(request_bytes);
             AdmissionDecision::Admit
         } else {
             AdmissionDecision::Reject

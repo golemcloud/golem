@@ -47,6 +47,20 @@ struct Resident {
     priority: EvictionPriority,
 }
 
+/// An admitted request whose pages have not yet fully faulted into RSS.
+///
+/// Models the gap between admission and residency: the worker has been admitted
+/// for `reserved` bytes but only `resident` of them have actually touched memory
+/// so far. Real RSS (what the probe reads) reflects only `resident`; the
+/// remaining `reserved - resident` bytes are still in flight and will appear in
+/// RSS later. This lag is what lets concurrent admissions on the same RSS
+/// snapshot collectively over-commit.
+#[derive(Debug, Clone, Copy)]
+struct InFlight {
+    reserved: u64,
+    resident: u64,
+}
+
 /// Shared model of the executor environment's memory.
 #[derive(Debug, Default)]
 struct EnvState {
@@ -56,6 +70,10 @@ struct EnvState {
     pinned_usage: u64,
     /// Resident, evictable work — what the controller may reclaim.
     residents: Vec<Resident>,
+    /// Admitted requests whose pages are still faulting in. Their `resident`
+    /// portion counts toward measured RSS now; their full `reserved` size is
+    /// what RSS will reach once they are fully resident.
+    in_flight: Vec<InFlight>,
     /// Count of evictions performed, for the no-spurious-eviction property.
     evictions: usize,
     /// The priorities evicted, in order, for the ordering property.
@@ -63,8 +81,64 @@ struct EnvState {
 }
 
 impl EnvState {
+    /// Measured RSS: the bytes that have actually faulted in. Lags behind what
+    /// has been admitted, because in-flight requests are only partially
+    /// resident. This is what the probe reports.
     fn usage(&self) -> u64 {
-        self.pinned_usage + self.residents.iter().map(|r| r.size).sum::<u64>()
+        self.pinned_usage
+            + self.residents.iter().map(|r| r.size).sum::<u64>()
+            + self.in_flight.iter().map(|f| f.resident).sum::<u64>()
+    }
+
+    /// Total bytes that admitted work will eventually occupy once every
+    /// in-flight request has fully faulted in. The safety property is stated
+    /// against this value: reserved bytes always become resident, so if this
+    /// can exceed the limit the environment will OOM once the lag resolves.
+    fn eventual_usage(&self) -> u64 {
+        self.pinned_usage
+            + self.residents.iter().map(|r| r.size).sum::<u64>()
+            + self.in_flight.iter().map(|f| f.reserved).sum::<u64>()
+    }
+
+    /// Advance residency: each in-flight request faults in up to `step` more of
+    /// its reserved bytes, raising measured RSS toward its eventual size.
+    /// Fully-resident requests are retired into `pinned_usage`.
+    fn tick_residency(&mut self, step: u64) {
+        for f in &mut self.in_flight {
+            let remaining = f.reserved - f.resident;
+            f.resident += remaining.min(step);
+        }
+        let (done, pending): (Vec<_>, Vec<_>) = self
+            .in_flight
+            .drain(..)
+            .partition(|f| f.resident >= f.reserved);
+        self.pinned_usage += done.iter().map(|f| f.reserved).sum::<u64>();
+        self.in_flight = pending;
+    }
+
+    /// Fault in `step` bytes of granted-but-untouched memory belonging to the
+    /// in-flight request at `index`, without faulting in any other request. A
+    /// worker may touch the virtual memory it was already granted at any later
+    /// time, with no admission call in the loop, so this raises measured RSS for
+    /// one worker in isolation.
+    fn fault_in_one(&mut self, index: usize, step: u64) {
+        if let Some(f) = self.in_flight.get_mut(index) {
+            let remaining = f.reserved - f.resident;
+            f.resident += remaining.min(step);
+        }
+    }
+
+    /// Remove the in-flight worker at `index`: it finishes and unloads, freeing
+    /// both its resident pages and its remaining grant. Measured RSS drops by its
+    /// resident portion. Returns the bytes it was admitted for, so the caller can
+    /// release the gate's reservation for it. The surviving workers' reservations
+    /// for their own untouched grants must not be credited by this drop.
+    fn exit_one(&mut self, index: usize) -> Option<u64> {
+        if index < self.in_flight.len() {
+            Some(self.in_flight.remove(index).reserved)
+        } else {
+            None
+        }
     }
 }
 
@@ -85,6 +159,9 @@ impl MemoryProbe for FakeProbe {
 
 struct FakeEvictionSource {
     state: Arc<Mutex<EnvState>>,
+    /// The gate, so eviction can release each evicted resident's grant — in
+    /// production, eviction unloads the worker, which releases its grant.
+    controller: Arc<AdmissionController>,
 }
 
 #[async_trait::async_trait]
@@ -99,6 +176,7 @@ impl EvictionSource for FakeEvictionSource {
             if state.residents[i].priority == priority {
                 let victim = state.residents.remove(i);
                 freed += victim.size;
+                self.controller.release(victim.size);
                 state.evictions += 1;
                 state.eviction_order.push(priority);
             } else {
@@ -109,17 +187,35 @@ impl EvictionSource for FakeEvictionSource {
     }
 }
 
-fn controller(state: Arc<Mutex<EnvState>>) -> AdmissionController {
+fn controller(state: Arc<Mutex<EnvState>>) -> Arc<AdmissionController> {
     controller_with_ratio(state, 1.0)
 }
 
-fn controller_with_ratio(state: Arc<Mutex<EnvState>>, usable_ratio: f64) -> AdmissionController {
-    AdmissionController::new(
+fn controller_with_ratio(
+    state: Arc<Mutex<EnvState>>,
+    usable_ratio: f64,
+) -> Arc<AdmissionController> {
+    // Workers already resident when the gate is created had their grants
+    // registered at their own admission; seed the gate to match.
+    let initial_granted = {
+        let s = state.lock().unwrap();
+        s.pinned_usage + s.residents.iter().map(|r| r.size).sum::<u64>()
+    };
+    let controller = AdmissionController::new(
         Box::new(FakeProbe {
             state: state.clone(),
         }),
         AdmissionPolicy { usable_ratio },
-    )
+    );
+    controller.seed_granted(initial_granted);
+    Arc::new(controller)
+}
+
+fn eviction_source(
+    state: Arc<Mutex<EnvState>>,
+    controller: Arc<AdmissionController>,
+) -> FakeEvictionSource {
+    FakeEvictionSource { state, controller }
 }
 
 /// Apply one admission attempt against the model, mutating `usage` on admit.
@@ -132,6 +228,28 @@ async fn apply_admit(
     let decision = controller.try_admit(request, source).await;
     if decision == AdmissionDecision::Admit {
         state.lock().unwrap().pinned_usage += request;
+    }
+    decision
+}
+
+/// Apply one admission attempt where admitted bytes do NOT become resident
+/// immediately. On admit the request is recorded as in-flight with zero resident
+/// bytes, so measured RSS is unchanged until a later residency tick faults its
+/// pages in. This models the real lag between admission and RSS, the window in
+/// which concurrent admissions on the same snapshot can collectively
+/// over-commit.
+async fn apply_staggered_admit(
+    controller: &AdmissionController,
+    source: &FakeEvictionSource,
+    state: &Arc<Mutex<EnvState>>,
+    request: u64,
+) -> AdmissionDecision {
+    let decision = controller.try_admit(request, source).await;
+    if decision == AdmissionDecision::Admit {
+        state.lock().unwrap().in_flight.push(InFlight {
+            reserved: request,
+            resident: 0,
+        });
     }
     decision
 }
@@ -150,9 +268,7 @@ async fn admits_when_headroom_is_ample_without_evicting() {
         ..Default::default()
     }));
     let ctrl = controller(state.clone());
-    let source = FakeEvictionSource {
-        state: state.clone(),
-    };
+    let source = eviction_source(state.clone(), ctrl.clone());
 
     let decision = apply_admit(&ctrl, &source, &state, 200).await;
     assert_eq!(decision, AdmissionDecision::Admit);
@@ -180,9 +296,7 @@ async fn evicts_idle_before_warm() {
     // usage = 800, limit = 1000, headroom = 200. Request 300 → shortfall 100.
     // One idle (400) covers it; warm must remain untouched.
     let ctrl = controller(state.clone());
-    let source = FakeEvictionSource {
-        state: state.clone(),
-    };
+    let source = eviction_source(state.clone(), ctrl.clone());
 
     let decision = apply_admit(&ctrl, &source, &state, 300).await;
     assert_eq!(decision, AdmissionDecision::Admit);
@@ -202,9 +316,7 @@ async fn rejects_when_nothing_can_be_freed() {
         ..Default::default()
     }));
     let ctrl = controller(state.clone());
-    let source = FakeEvictionSource {
-        state: state.clone(),
-    };
+    let source = eviction_source(state.clone(), ctrl.clone());
 
     let decision = apply_admit(&ctrl, &source, &state, 200).await;
     assert_eq!(decision, AdmissionDecision::Reject);
@@ -217,6 +329,17 @@ async fn rejects_when_nothing_can_be_freed() {
 #[derive(Debug, Clone)]
 enum Op {
     Admit(u64),
+}
+
+/// An operation in a staggered-start schedule. Unlike [`Op`], admitted bytes do
+/// not become resident immediately — `Tick` advances residency separately, so
+/// the schedule can interleave admissions and page-faulting in any order.
+#[derive(Debug, Clone)]
+enum StaggeredOp {
+    /// Attempt to admit a worker reserving this many bytes.
+    Admit(u64),
+    /// Fault in up to this many more bytes of every in-flight worker.
+    Tick(u64),
 }
 
 fn arb_resident_priority() -> impl Strategy<Value = EvictionPriority> {
@@ -279,7 +402,7 @@ proptest! {
                 ..Default::default()
             }));
             let ctrl = controller(state.clone());
-            let source = FakeEvictionSource { state: state.clone() };
+            let source = eviction_source(state.clone(), ctrl.clone());
 
             for op in ops {
                 match op {
@@ -318,7 +441,7 @@ proptest! {
                 ..Default::default()
             }));
             let ctrl = controller(state.clone());
-            let source = FakeEvictionSource { state: state.clone() };
+            let source = eviction_source(state.clone(), ctrl.clone());
 
             for op in ops {
                 match op {
@@ -349,7 +472,7 @@ proptest! {
                 ..Default::default()
             }));
             let ctrl = controller(state.clone());
-            let source = FakeEvictionSource { state: state.clone() };
+            let source = eviction_source(state.clone(), ctrl.clone());
 
             for op in ops {
                 match op {
@@ -375,6 +498,285 @@ proptest! {
     }
 }
 
+// ── Staggered-start safety ───────────────────────────────────────────────────
+
+/// A schedule of admissions interleaved with residency ticks. Admissions
+/// reserve bytes that only become resident when a later `Tick` faults them in,
+/// so the schedule exercises the lag between admission and measured RSS in which
+/// concurrent admissions can collectively over-commit. Skewed toward `Admit` so
+/// bursts of admissions land between ticks (the dangerous case).
+fn arb_staggered_schedule() -> impl Strategy<Value = Vec<StaggeredOp>> {
+    prop::collection::vec(
+        prop_oneof![
+            3 => (1u64..800).prop_map(StaggeredOp::Admit),
+            1 => (1u64..800).prop_map(StaggeredOp::Tick),
+        ],
+        0..60,
+    )
+}
+
+proptest! {
+    /// Safety invariant under staggered starts: for any interleaving of
+    /// admissions and residency ticks, once every admitted worker has fully
+    /// faulted its pages in, resident usage must not exceed the limit.
+    ///
+    /// Reserved bytes always eventually become resident, so the check is made
+    /// against the state after a final full-residency tick: if that can exceed
+    /// the limit, the environment OOMs once the admission lag resolves. This is
+    /// the general form of the staggered-burst case — admissions that read the
+    /// same low RSS snapshot before each other's pages are counted.
+    #[test]
+    fn staggered_starts_never_exceed_limit_once_resident(
+        (limit, residents) in arb_fitting_state(500..5000, 20),
+        schedule in arb_staggered_schedule(),
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async move {
+            let state = Arc::new(Mutex::new(EnvState {
+                limit,
+                pinned_usage: 0,
+                residents,
+                ..Default::default()
+            }));
+            let ctrl = controller(state.clone());
+            let source = eviction_source(state.clone(), ctrl.clone());
+
+            for op in schedule {
+                match op {
+                    StaggeredOp::Admit(req) => {
+                        apply_staggered_admit(&ctrl, &source, &state, req).await;
+                    }
+                    StaggeredOp::Tick(step) => {
+                        state.lock().unwrap().tick_residency(step);
+                    }
+                }
+                // Even mid-flight, measured RSS must never exceed the limit.
+                let s = state.lock().unwrap();
+                prop_assert!(
+                    s.usage() <= s.limit,
+                    "resident usage {} exceeded limit {} mid-schedule", s.usage(), s.limit
+                );
+            }
+
+            // Fault in everything still in flight, then check the eventual
+            // resident footprint fits.
+            state.lock().unwrap().tick_residency(u64::MAX);
+            let s = state.lock().unwrap();
+            prop_assert!(
+                s.eventual_usage() <= s.limit,
+                "eventual resident usage {} exceeded limit {} once fully resident",
+                s.eventual_usage(), s.limit
+            );
+            Ok(())
+        }).unwrap();
+    }
+}
+
+// ── Granted virtual memory ───────────────────────────────────────────────────
+
+/// One step of a schedule that stresses granted-but-untouched memory.
+#[derive(Debug, Clone)]
+enum GrantOp {
+    /// Attempt to admit a worker granted this many bytes of linear memory.
+    Grant(u64),
+    /// Fault in up to this many bytes of the in-flight worker at this index,
+    /// in isolation from the others.
+    FaultIn(usize, u64),
+    /// The in-flight worker at this index finishes and unloads, dropping its
+    /// resident pages and its remaining grant.
+    Exit(usize),
+}
+
+fn arb_grant_schedule() -> impl Strategy<Value = Vec<GrantOp>> {
+    prop::collection::vec(
+        prop_oneof![
+            3 => (1u64..800).prop_map(GrantOp::Grant),
+            3 => (0usize..20, 1u64..800).prop_map(|(i, step)| GrantOp::FaultIn(i, step)),
+            1 => (0usize..20).prop_map(GrantOp::Exit),
+        ],
+        0..80,
+    )
+}
+
+proptest! {
+    /// A worker may fault in the virtual memory it was already granted at any
+    /// later time, with no admission call in the loop. Once every granted byte
+    /// of every admitted worker becomes resident, that resident footprint must
+    /// not exceed the limit.
+    ///
+    /// Granted bytes can always become resident — nothing in the runtime forces
+    /// a worker to leave granted pages untouched — so the safety check is made
+    /// against the sum of granted sizes after faulting everything in. If that
+    /// can exceed the limit, a node of workers touching their already-granted
+    /// pages will OOM with no grow and no admission to intercept it.
+    #[test]
+    fn granted_memory_never_exceeds_limit_once_faulted_in(
+        limit in 800u64..6000,
+        schedule in arb_grant_schedule(),
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async move {
+            let state = Arc::new(Mutex::new(EnvState { limit, ..Default::default() }));
+            // usable_ratio 1.0 isolates the granted-memory hole from the host
+            // carve-out.
+            let ctrl = controller(state.clone());
+            let source = eviction_source(state.clone(), ctrl.clone());
+
+            for op in schedule {
+                match op {
+                    GrantOp::Grant(bytes) => {
+                        apply_staggered_admit(&ctrl, &source, &state, bytes).await;
+                    }
+                    GrantOp::FaultIn(index, step) => {
+                        state.lock().unwrap().fault_in_one(index, step);
+                    }
+                    GrantOp::Exit(index) => {
+                        let reserved = state.lock().unwrap().exit_one(index);
+                        if let Some(reserved) = reserved {
+                            ctrl.release(reserved);
+                        }
+                    }
+                }
+                let s = state.lock().unwrap();
+                prop_assert!(
+                    s.usage() <= s.limit,
+                    "resident usage {} exceeded limit {} mid-schedule", s.usage(), s.limit
+                );
+            }
+
+            // Every granted byte may yet fault in. Once it all does, it must fit.
+            state.lock().unwrap().tick_residency(u64::MAX);
+            let s = state.lock().unwrap();
+            prop_assert!(
+                s.eventual_usage() <= s.limit,
+                "granted memory {} exceeded limit {} once fully faulted in",
+                s.eventual_usage(), s.limit
+            );
+            Ok(())
+        }).unwrap();
+    }
+
+    /// Liveness: once every admitted worker has unloaded and its pages have left
+    /// memory, the gate's admissible headroom must return to the full ceiling.
+    ///
+    /// Reservations for workers that exit while still holding untouched granted
+    /// memory must be released on unload. If they were not, each such exit would
+    /// permanently shrink headroom, and a node churning workers would slowly
+    /// refuse all admissions despite being empty.
+    #[test]
+    fn headroom_recovers_after_all_workers_exit(
+        limit in 800u64..6000,
+        schedule in arb_grant_schedule(),
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async move {
+            let usable_ratio = 0.8;
+            let state = Arc::new(Mutex::new(EnvState { limit, ..Default::default() }));
+            let ctrl = controller_with_ratio(state.clone(), usable_ratio);
+            let source = eviction_source(state.clone(), ctrl.clone());
+
+            for op in schedule {
+                match op {
+                    GrantOp::Grant(bytes) => {
+                        apply_staggered_admit(&ctrl, &source, &state, bytes).await;
+                    }
+                    GrantOp::FaultIn(index, step) => {
+                        state.lock().unwrap().fault_in_one(index, step);
+                    }
+                    GrantOp::Exit(index) => {
+                        let reserved = state.lock().unwrap().exit_one(index);
+                        if let Some(reserved) = reserved {
+                            ctrl.release(reserved);
+                        }
+                    }
+                }
+            }
+
+            // Unload every worker still resident, releasing each reservation, and
+            // clear measured RSS — the environment is now empty.
+            loop {
+                let reserved = state.lock().unwrap().exit_one(0);
+                match reserved {
+                    Some(reserved) => ctrl.release(reserved),
+                    None => break,
+                }
+            }
+            {
+                let mut s = state.lock().unwrap();
+                s.pinned_usage = 0;
+                s.residents.clear();
+            }
+
+            let ceiling = (limit as f64 * usable_ratio) as u64;
+            let headroom = ctrl.headroom_bytes();
+            prop_assert_eq!(
+                headroom, ceiling,
+                "headroom {} did not recover to ceiling {} after all workers exited",
+                headroom, ceiling
+            );
+            Ok(())
+        }).unwrap();
+    }
+}
+
+// ── Density ──────────────────────────────────────────────────────────────────
+
+proptest! {
+    /// Density invariant: in a settled state (no admission lag outstanding), the
+    /// gate packs the environment to within one request of the usable ceiling
+    /// before it starts rejecting. It must not stop admitting while substantial
+    /// usable room remains.
+    ///
+    /// The schedule admits a fixed request size, fully faulting each admitted
+    /// worker in before the next admit so measured RSS tracks admitted bytes and
+    /// the in-flight reservation drains to zero — the steady-state regime where
+    /// density matters. At the first rejection, resident usage must be at least
+    /// `ceiling - request`: the only room a correct gate may leave free is the
+    /// part too small to fit one more request.
+    #[test]
+    fn admits_to_within_one_request_of_the_ceiling(
+        limit in 2000u64..20_000,
+        request in 50u64..600,
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(async move {
+            let usable_ratio = 0.8;
+            let state = Arc::new(Mutex::new(EnvState {
+                limit,
+                ..Default::default()
+            }));
+            let ctrl = controller_with_ratio(state.clone(), usable_ratio);
+            let source = eviction_source(state.clone(), ctrl.clone());
+
+            let ceiling = (limit as f64 * usable_ratio) as u64;
+
+            // Admit until the first rejection, faulting each worker fully in
+            // before the next so no reservation lag is outstanding.
+            let mut rejected = false;
+            for _ in 0..((limit / request) + 2) {
+                let decision = apply_staggered_admit(&ctrl, &source, &state, request).await;
+                state.lock().unwrap().tick_residency(u64::MAX);
+                if decision == AdmissionDecision::Reject {
+                    rejected = true;
+                    break;
+                }
+            }
+
+            prop_assert!(rejected, "gate never rejected; ceiling {ceiling} too large for the schedule");
+
+            let s = state.lock().unwrap();
+            prop_assert!(
+                s.usage() + request > ceiling,
+                "gate rejected at resident usage {} with ceiling {ceiling}: left more than one request ({request}) of usable room free",
+                s.usage()
+            );
+            // And it must never have over-committed.
+            prop_assert!(s.eventual_usage() <= s.limit);
+            Ok(())
+        }).unwrap();
+    }
+}
+
 // ── Carve-out ratio ──────────────────────────────────────────────────────────
 
 #[test]
@@ -388,9 +790,7 @@ async fn usable_ratio_caps_admission_below_full_limit() {
     // ceiling = 0.8 * 1000 = 800. Request 850 must be rejected even though the
     // raw limit (1000) would allow it — the top 20% is reserved for the host.
     let ctrl = controller_with_ratio(state.clone(), 0.8);
-    let source = FakeEvictionSource {
-        state: state.clone(),
-    };
+    let source = eviction_source(state.clone(), ctrl.clone());
 
     assert_eq!(
         apply_admit(&ctrl, &source, &state, 850).await,

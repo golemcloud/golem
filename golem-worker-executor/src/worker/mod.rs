@@ -28,7 +28,7 @@ use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
     FilesystemStoragePermit, HeldComponentCharge, RegisteredConcurrentAccount,
-    WorkerComponentCharge, WorkerMemoryPermit,
+    WorkerComponentCharge,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -137,6 +137,11 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// at least that many bytes from the blocking eviction path, ensuring
     /// enough idle workers are evicted to satisfy the pending write.
     desired_extra_filesystem_storage: AtomicU64,
+    /// Cumulative memory bytes this worker has reserved with the admission gate:
+    /// its initial requirement plus every grow delta. Released back to the gate
+    /// in full when the worker unloads, so the gate's granted total stays exactly
+    /// symmetric with what was reserved.
+    granted_memory: AtomicU64,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -349,6 +354,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
+            granted_memory: AtomicU64::new(0),
         };
 
         // Wire the worker event service into the forwarding oplog so plugin errors
@@ -985,12 +991,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // Should only be called from invocation loop
     pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
-        // The instance lock must not be held while acquiring memory permits:
-        // permit acquisition runs the admission eviction scan, which takes other
-        // workers' instance locks. Holding this worker's instance lock across
-        // that scan while another growing worker does the same is an AB-BA
-        // deadlock. So acquire the permit without the lock, then re-lock only to
-        // merge it into the running worker.
+        // The instance lock must not be held while running the admission gate:
+        // it may run the eviction scan, which takes other workers' instance
+        // locks. Holding this worker's instance lock across that scan while
+        // another growing worker does the same is an AB-BA deadlock. So check the
+        // state, release the lock, then run the gate.
         match &*self.instance.lock().await {
             WorkerInstance::Running(_) => {}
             WorkerInstance::Stopping(_)
@@ -999,23 +1004,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             | WorkerInstance::Deleting => return Ok(()),
         }
 
-        let Some(new_permits) = self.active_workers().try_acquire(delta).await else {
-            return Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory));
-        };
+        if self.active_workers().try_acquire(delta).await {
+            self.granted_memory.fetch_add(delta, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
+        }
+    }
 
-        // Re-check state under the lock: the worker may have changed state while
-        // permits were being acquired. If it is no longer running, drop the
-        // permits (returned to the pool on drop) and treat as a no-op, matching
-        // the non-running arms above.
-        match &mut *self.instance.lock().await {
-            WorkerInstance::Running(running) => {
-                running.merge_extra_permits(new_permits);
-                Ok(())
-            }
-            WorkerInstance::Stopping(_)
-            | WorkerInstance::WaitingForPermit(_)
-            | WorkerInstance::Unloaded { .. }
-            | WorkerInstance::Deleting => Ok(()),
+    /// Release this worker's entire accumulated memory grant back to the
+    /// admission gate, resetting the running total to zero. Called when the
+    /// worker stops being resident; a later reload re-accumulates the grant from
+    /// scratch through the acquire path.
+    fn release_granted_memory(&self) {
+        let granted = self.granted_memory.swap(0, Ordering::Relaxed);
+        if granted > 0 {
+            self.active_workers().release_memory(granted);
         }
     }
 
@@ -1667,14 +1671,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
+                    self.release_granted_memory();
                     **instance_guard = final_state.into_instance();
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
-                    // RunningWorker::drop releases the memory permit, so dec resident here.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
                     crate::metrics::workers::dec_worker_memory_resident();
+                    self.release_granted_memory();
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
@@ -2223,8 +2228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
-        permit: WorkerMemoryPermit,
-        component_charge: WorkerComponentCharge<Ctx>,
+        component_charge: WorkerComponentCharge,
         filesystem_storage_permit: Option<FilesystemStoragePermit>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
@@ -2239,7 +2243,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
                     this.clone(),
-                    permit,
                     component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
@@ -2254,6 +2257,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
+                // The grant was reserved before this call; the worker is not
+                // becoming resident, so release it rather than leak it.
+                this.release_granted_memory();
             }
         }
     }
@@ -2391,13 +2397,17 @@ impl WaitingWorker {
                 let agent_id = parent.owned_agent_id.agent_id();
                 let registered_concurrent_account = parent.registered_concurrent_account.clone();
                 let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
-                // Do not reserve executor memory while waiting for a per-account
-                // concurrency slot. Otherwise one account could fill the memory
-                // pool with workers that are not allowed to run yet.
-                let permit = parent.active_workers().acquire(memory_requirement).await;
-                // Charge the component's compiled module size once per resident
+                // Do not gate executor memory while waiting for a per-account
+                // concurrency slot. Otherwise one account could exhaust the
+                // memory headroom with workers that are not allowed to run yet.
+                parent.active_workers().acquire(memory_requirement).await;
+                parent
+                    .granted_memory
+                    .fetch_add(memory_requirement, Ordering::Relaxed);
+                // Reserve the component's compiled module size once per resident
                 // component (shared by all its workers). Held for as long as this
-                // worker is resident.
+                // worker is resident; the module faults into RAM when the first
+                // worker loads, so reserving it keeps later admissions honest.
                 let component_charge = match parent.component_charge_requirement().await {
                     Ok((component_id, component_revision, component_module_bytes)) => {
                         parent
@@ -2413,6 +2423,7 @@ impl WaitingWorker {
                         warn!(
                             "Failed to determine component charge requirement, not starting: {err}"
                         );
+                        parent.release_granted_memory();
                         return;
                     }
                 };
@@ -2466,7 +2477,6 @@ impl WaitingWorker {
                 debug!("Attempting to start worker after acquiring enough permits");
                 Worker::start_waiting_worker(
                     parent,
-                    permit,
                     component_charge,
                     filesystem_storage_permit,
                     concurrent_agent_permit,
@@ -2499,11 +2509,9 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    permit: WorkerMemoryPermit,
-    /// Keeps this worker's component module charge alive for as long as the
-    /// worker is resident. Held only to be dropped: dropping it releases the
-    /// component's residency, and the module charge if this was the last worker
-    /// of the component.
+    /// Keeps this worker's component module charge alive while it is resident.
+    /// Held only to be dropped: dropping it releases the component's residency
+    /// (and the module reservation if this was the last worker of the component).
     #[allow(dead_code)]
     component_charge: Box<dyn HeldComponentCharge>,
     /// Storage semaphore permits held by this worker. `None` until storage
@@ -2536,8 +2544,7 @@ impl RunningWorker {
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
-        permit: WorkerMemoryPermit,
-        component_charge: WorkerComponentCharge<Ctx>,
+        component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
     ) -> Self {
@@ -2587,17 +2594,12 @@ impl RunningWorker {
             handle: Some(handle),
             sender,
             queue,
-            permit,
             component_charge: Box::new(component_charge),
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             resume_replay_pending,
         }
-    }
-
-    pub fn merge_extra_permits(&mut self, extra_permit: WorkerMemoryPermit) {
-        self.permit.merge(extra_permit);
     }
 
     /// Merge additional storage permits into this worker's storage permit. If

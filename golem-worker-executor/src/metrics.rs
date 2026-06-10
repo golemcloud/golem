@@ -190,6 +190,46 @@ pub mod workers {
             crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
+        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_total_bytes",
+            "Usable memory ceiling (usable_ratio * measured limit) the admission gate admits against on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_used_bytes",
+            "Total linear memory granted to live workers and reserved by the admission gate on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_ADMISSION_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_admission_rss_bytes",
+            "Measured resident memory (probe snapshot) the admission gate last read on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+    }
+
+    /// Sets the gate's usable memory ceiling gauge.
+    pub fn record_worker_memory_ceiling(bytes: u64) {
+        WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
+    }
+
+    /// Sets the gauge of total memory granted to live workers (the gate's
+    /// reservation).
+    pub fn record_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
+    }
+
+    /// Sets the gauge of measured resident memory last read by the gate.
+    pub fn record_worker_admission_rss(bytes: u64) {
+        WORKER_ADMISSION_RSS_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -300,18 +340,6 @@ pub mod workers {
 
     pub fn inc_filesystem_semaphore_available(permits: u64) {
         WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
-    }
-
-    /// Records acquisition of `bytes` from the worker-memory pool.
-    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
-    pub fn record_memory_permit_acquired(bytes: usize) {
-        crate::metrics::storage::record_worker_memory_pool_acquired(bytes as u64);
-    }
-
-    /// Records release of `bytes` back to the worker-memory pool.
-    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
-    pub fn record_memory_permit_released(bytes: usize) {
-        crate::metrics::storage::record_worker_memory_pool_released(bytes as u64);
     }
 
     pub fn record_worker_kv_cache_value_size(bytes: usize) {
@@ -512,13 +540,13 @@ pub mod wasm {
         .unwrap();
         static ref ALLOCATED_MEMORY_BYTES: Histogram = register_histogram!(
             "allocated_memory_bytes",
-            "Amount of memory allocated by a single memory.grow instruction",
+            "Worker's total linear memory size after a memory.grow, sampled at each grow",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
         static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
             "worker_resident_linear_memory_bytes",
-            "Per-worker cumulative linear-memory ceiling (total_linear_memory_size = sum of memory.grow deltas) sampled at permit acquire. This is the semaphore charge basis (x*ml), an upper bound on resident RSS, NOT measured resident memory (grown pages are largely demand-paged); compare to container_memory_working_set_bytes for the gap",
+            "Per-worker cumulative linear-memory grant (total_linear_memory_size = sum of memory.grow deltas) sampled when the worker is admitted. This is the linear memory the admission gate reserves for the worker; it is an upper bound on resident RSS, not measured resident memory, since grown pages are largely demand-paged. Compare to container_memory_working_set_bytes for the gap.",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
@@ -759,18 +787,6 @@ pub mod storage {
             &["executor_id"]
         )
         .unwrap();
-        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_worker_memory_pool_total_bytes",
-            "Configured worker-memory semaphore size in bytes for this executor",
-            &["executor_id"]
-        )
-        .unwrap();
-        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_worker_memory_pool_used_bytes",
-            "Bytes currently acquired from the worker-memory semaphore on this executor",
-            &["executor_id"]
-        )
-        .unwrap();
     }
 
     pub fn record_filesystem_pool_total(bytes: u64) {
@@ -787,24 +803,6 @@ pub mod storage {
 
     pub fn record_filesystem_pool_released(bytes: u64) {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .sub(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_total(bytes: u64) {
-        WORKER_MEMORY_POOL_TOTAL_BYTES
-            .with_label_values(&[executor_id()])
-            .set(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_acquired(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .add(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_released(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
     }

@@ -36,7 +36,6 @@ use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegist
 use memory_probe::default_probe;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 use tracing::{Instrument, debug};
 
@@ -73,26 +72,21 @@ impl RegisteredConcurrentAccount {
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
-    worker_memory: Arc<Semaphore>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
-    priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
-    /// Authoritative measured-headroom admission gate. Decides whether real
-    /// memory headroom permits a new acquisition, evicting via the worker set
-    /// when short, and is what refuses admission in normal operation. The
-    /// estimate-based `worker_memory` semaphore is the second line of defence
-    /// behind it: its atomic permit acquisition catches the concurrent
-    /// admissions the lockless gate can let through on the same snapshot. `None`
-    /// when measured admission is disabled (e.g. shared test environments) —
-    /// admission then relies on the estimate semaphore alone.
-    admission: Option<AdmissionController>,
-    /// Charges each resident component's compiled module size to the estimate
-    /// pool exactly once (shared across all its workers) rather than per worker.
-    component_charges:
-        Arc<ComponentChargeRegistry<ComponentChargeKey, MemoryPoolChargeSource<Ctx>>>,
+    /// Authoritative measured-headroom admission gate, and the sole admission
+    /// authority. Decides whether real memory headroom permits a new
+    /// acquisition, evicting via the worker set when short. `None` when measured
+    /// admission is disabled (e.g. shared test environments), in which case
+    /// acquisition always proceeds.
+    admission: Option<Arc<AdmissionController>>,
+    /// Reserves each resident component's compiled module size with the gate
+    /// exactly once (shared across all its workers) rather than per worker, so
+    /// the module's resident cost is accounted before it faults into memory.
+    component_charges: Arc<ComponentChargeRegistry<ComponentChargeKey, GateChargeSource>>,
     /// Multiplier applied to a component's `component_size` when sizing its
-    /// module charge permit.
+    /// module charge.
     component_size_coefficient: f64,
 }
 
@@ -100,98 +94,56 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
 type ComponentChargeKey = (ComponentId, ComponentRevision);
 
 /// Guard held by a resident worker keeping its component's module charge alive.
-pub type WorkerComponentCharge<Ctx> =
-    ComponentChargeGuard<ComponentChargeKey, MemoryPoolChargeSource<Ctx>>;
-
-#[derive(Debug)]
-pub struct WorkerMemoryPermit {
-    permit: Option<OwnedSemaphorePermit>,
-}
-
-impl WorkerMemoryPermit {
-    fn new(permit: OwnedSemaphorePermit) -> Self {
-        crate::metrics::workers::record_memory_permit_acquired(permit.num_permits());
-        Self {
-            permit: Some(permit),
-        }
-    }
-
-    pub fn num_permits(&self) -> usize {
-        self.permit
-            .as_ref()
-            .map_or(0, |permit| permit.num_permits())
-    }
-
-    pub fn merge(&mut self, mut other: Self) {
-        if let Some(other_permit) = other.permit.take() {
-            match &mut self.permit {
-                Some(permit) => permit.merge(other_permit),
-                None => self.permit = Some(other_permit),
-            }
-        }
-    }
-}
-
-impl Drop for WorkerMemoryPermit {
-    fn drop(&mut self) {
-        crate::metrics::workers::record_memory_permit_released(self.num_permits());
-    }
-}
+pub type WorkerComponentCharge = ComponentChargeGuard<ComponentChargeKey, GateChargeSource>;
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
-        // Build the probe once and size both admission layers from its reported
-        // limit, so the estimate semaphore and the measured-headroom gate share
-        // a single basis (the pod's cgroup limit when constrained, not host RAM).
+        // Build the probe once and hand it to the measured-headroom gate, which
+        // bases its decision on the pod's cgroup limit when constrained (not host
+        // RAM).
         let probe = default_probe(memory_config.system_memory_override);
-        let worker_memory_size = memory_config.worker_memory_for_limit(probe.limit_bytes());
-        let admission = memory_config
-            .enable_measured_admission
-            .then(|| AdmissionController::new(probe, memory_config.admission_policy()));
+        let admission = memory_config.enable_measured_admission.then(|| {
+            Arc::new(AdmissionController::new(
+                probe,
+                memory_config.admission_policy(),
+            ))
+        });
         let workers = Cache::new(
             None,
             FullCacheEvictionMode::None,
             BackgroundEvictionMode::None,
             "active_workers",
         );
-        let worker_memory = Arc::new(Semaphore::new(worker_memory_size));
-        let priority_allocation_lock = Arc::new(Mutex::new(()));
-        let component_charges = ComponentChargeRegistry::new(MemoryPoolChargeSource {
-            worker_memory: worker_memory.clone(),
-            workers: workers.clone(),
-            priority_allocation_lock: priority_allocation_lock.clone(),
-            acquire_retry_delay: memory_config.acquire_retry_delay,
+        let component_charges = ComponentChargeRegistry::new(GateChargeSource {
+            admission: admission.clone(),
         });
         let active_workers = Self {
             workers,
-            worker_memory,
             worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
             )),
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
-            priority_allocation_lock,
             admission,
             component_charges,
             component_size_coefficient: memory_config.component_size_coefficient,
         };
-        active_workers.initialize_metrics(worker_memory_size);
+        active_workers.initialize_metrics();
         active_workers
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the
-    /// given component. The first resident worker of the component pays its
-    /// compiled-module size (scaled by `component_size_coefficient`) into the
-    /// estimate pool; subsequent workers share the same charge. The returned
-    /// guard releases residency on drop, and the charge is freed when the last
-    /// worker of the component unloads.
+    /// given component. The first resident worker of the component reserves its
+    /// compiled-module size (scaled by `component_size_coefficient`) with the
+    /// gate; subsequent workers share the same charge. The returned guard
+    /// releases the charge when the last worker of the component unloads.
     pub async fn acquire_component_charge(
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
         component_module_bytes: u64,
-    ) -> WorkerComponentCharge<Ctx> {
+    ) -> WorkerComponentCharge {
         let charge_bytes = (self.component_size_coefficient * component_module_bytes as f64) as u64;
         self.component_charges
             .acquire((component_id, component_revision), charge_bytes)
@@ -270,52 +222,31 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
-    pub async fn acquire(&self, memory: u64) -> WorkerMemoryPermit {
-        let mem32: u32 = memory
-            .try_into()
-            .expect("requested memory size is too large");
-
+    /// Blocking memory admission for a starting worker. Loops until the gate
+    /// admits the request, backing off between attempts.
+    ///
+    /// A rejection is transient, not terminal. The gate reads resident memory
+    /// from the probe, which lags real usage (cgroup `memory.current` only counts
+    /// already-touched pages), so a worker admitted earlier may not yet be fully
+    /// resident; pressure eases as its pages settle and as other workers finish.
+    /// Each iteration backs off and re-reads the gate, so the caller eventually
+    /// proceeds once headroom recovers rather than failing under momentary
+    /// pressure. With measured admission disabled the worker is admitted
+    /// immediately.
+    pub async fn acquire(&self, memory: u64) {
+        let Some(admission) = &self.admission else {
+            return;
+        };
         loop {
-            // Blocking acquire: retry until the request can be admitted. A
-            // rejection here is transient, not terminal. The gate reads resident
-            // memory from the probe, which lags real usage (cgroup
-            // `memory.current` only counts already-touched pages), so a worker
-            // admitted earlier may not yet be fully resident; pressure eases as
-            // its pages settle and as other workers finish and release pool
-            // permits. Each iteration backs off, re-reads the gate, and re-tries
-            // the pool, so the caller eventually proceeds once headroom recovers
-            // rather than failing under momentary pressure.
-            // Authoritative measured-headroom gate (when enabled). Evicts
-            // idle-then-warm when real headroom is short; rejects (and we back
-            // off) when it cannot make room rather than risking the limit.
-            if let Some(admission) = &self.admission
-                && admission.try_admit(memory, &self.eviction_source()).await
-                    == AdmissionDecision::Reject
+            // Evicts idle-then-warm when real headroom is short; rejects (and we
+            // back off) when it cannot make room rather than risking the limit.
+            if admission.try_admit(memory, &self.eviction_source()).await
+                == AdmissionDecision::Admit
             {
-                debug!("Measured headroom insufficient for {mem32}, backing off and retrying");
-                tokio::time::sleep(self.acquire_retry_delay).await;
-                continue;
+                return;
             }
-
-            // Estimate-semaphore pool: the second line of defence behind the
-            // gate. Its atomic permit acquisition catches the concurrent
-            // admissions the lockless gate can let through on the same snapshot.
-            // Sized above the gate ceiling (but clamped below the limit), so it
-            // rarely binds first — the gate refuses in normal operation.
-            if let Some(permit) = acquire_pool_permit(
-                &self.worker_memory,
-                &self.workers,
-                &self.priority_allocation_lock,
-                self.acquire_retry_delay,
-                mem32,
-                memory,
-            )
-            .await
-            {
-                break permit;
-            }
-            // Pool could not satisfy the estimate even after eviction; loop and
-            // re-run the gate before trying again.
+            debug!("Measured headroom insufficient for {memory}, backing off and retrying");
+            tokio::time::sleep(self.acquire_retry_delay).await;
         }
     }
 
@@ -327,51 +258,31 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
-    pub async fn try_acquire(&self, memory: u64) -> Option<WorkerMemoryPermit> {
-        let mem32: u32 = memory
-            .try_into()
-            .expect("requested memory size is too large");
-
-        // Authoritative measured-headroom gate (when enabled). Single attempt
-        // (this is the non-blocking path): if real headroom is insufficient even
-        // after eviction, do not admit.
-        if let Some(admission) = &self.admission
-            && admission.try_admit(memory, &self.eviction_source()).await
-                == AdmissionDecision::Reject
-        {
-            debug!("Measured headroom insufficient for {mem32}, not admitting");
-            return None;
-        }
-
-        let mut lock = None;
-        loop {
-            match self.worker_memory.clone().try_acquire_many_owned(mem32) {
-                Ok(permit) => {
-                    debug!(
-                        "Acquired {} memory of {}",
-                        mem32,
-                        self.worker_memory.available_permits()
-                    );
-                    break Some(WorkerMemoryPermit::new(permit));
-                }
-                Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
-                Err(TryAcquireError::NoPermits) => {
-                    if lock.is_none() {
-                        debug!(
-                            "Not enough available memory to acquire {mem32} (available: {}), cancelling waiting acquires and retry",
-                            self.worker_memory.available_permits()
-                        );
-                        lock = Some(self.priority_allocation_lock.lock().await);
-                        continue;
-                    } else {
-                        debug!(
-                            "Not enough available memory to acquire {mem32} (available: {})",
-                            self.worker_memory.available_permits()
-                        );
-                        break None;
-                    }
-                }
+    /// Non-blocking memory admission for a growing worker. A single gate attempt:
+    /// returns `true` when the grow is admitted, `false` when real headroom is
+    /// insufficient even after eviction (the caller turns this into a retriable
+    /// out-of-memory trap). With measured admission disabled the grow is always
+    /// admitted.
+    pub async fn try_acquire(&self, memory: u64) -> bool {
+        let Some(admission) = &self.admission else {
+            return true;
+        };
+        match admission.try_admit(memory, &self.eviction_source()).await {
+            AdmissionDecision::Admit => true,
+            AdmissionDecision::Reject => {
+                debug!("Measured headroom insufficient for {memory}, not admitting");
+                false
             }
+        }
+    }
+
+    /// Release the memory a worker reserved with the admission gate when it
+    /// unloads. `bytes` must be the cumulative amount the worker reserved through
+    /// [`Self::acquire`] and [`Self::try_acquire`], so the gate's granted total
+    /// stays symmetric. No-op when measured admission is disabled.
+    pub fn release_memory(&self, bytes: u64) {
+        if let Some(admission) = &self.admission {
+            admission.release(bytes);
         }
     }
 
@@ -488,12 +399,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
-    fn initialize_metrics(&self, worker_memory_size: usize) {
+    fn initialize_metrics(&self) {
         crate::metrics::workers::initialize_worker_metrics();
         crate::metrics::workers::set_filesystem_semaphore_available(
             self.worker_filesystem_storage.available_bytes(),
         );
-        crate::metrics::storage::record_worker_memory_pool_total(worker_memory_size as u64);
     }
 }
 
@@ -547,62 +457,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
     freed
 }
 
-/// Frees up to `memory` estimate-permit bytes by evicting idle-then-warm
-/// workers, accounting for permits already available. Returns true when enough
-/// is (or was already) free.
-async fn try_free_up_pool_memory<Ctx: WorkerCtx>(
-    worker_memory: &Semaphore,
-    workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
-    memory: u64,
-) -> bool {
-    let current_avail = worker_memory.available_permits();
-    let needed = memory.saturating_sub(current_avail as u64);
-    if needed == 0 {
-        return true;
-    }
-
-    let mut freed = 0u64;
-    for priority in [EvictionPriority::Idle, EvictionPriority::Warm] {
-        if freed >= needed {
-            break;
-        }
-        freed += evict_at_most_memory(workers, priority, needed - freed).await;
-    }
-    freed >= needed
-}
-
-/// Single estimate-semaphore acquisition attempt with eviction. Returns the
-/// permit on success, or `None` when the pool cannot satisfy `mem32` even after
-/// evicting idle/warm workers (caller decides whether to retry). Shared by
-/// `ActiveWorkers::acquire` and the per-component charge source so there is one
-/// pool-acquire implementation.
-async fn acquire_pool_permit<Ctx: WorkerCtx>(
-    worker_memory: &Arc<Semaphore>,
-    workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
-    priority_allocation_lock: &Mutex<()>,
-    acquire_retry_delay: Duration,
-    mem32: u32,
-    memory: u64,
-) -> Option<WorkerMemoryPermit> {
-    let lock = priority_allocation_lock.lock().await; // Block trying until a priority request is retrying once
-    let result = worker_memory.clone().try_acquire_many_owned(mem32);
-    drop(lock);
-    match result {
-        Ok(permit) => Some(WorkerMemoryPermit::new(permit)),
-        Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
-        Err(TryAcquireError::NoPermits) => {
-            if try_free_up_pool_memory(worker_memory, workers, memory).await {
-                // Freed enough; signal the caller to retry the acquire.
-                None
-            } else {
-                // Could not free enough; wait before the caller retries.
-                tokio::time::sleep(acquire_retry_delay).await;
-                None
-            }
-        }
-    }
-}
-
+/// A source of evictable, already-resident memory the gate reclaims through.
 struct WorkerEvictionSource<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
 }
@@ -614,36 +469,41 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
     }
 }
 
-/// Production [`ChargeSource`] for the per-component module charge. Takes
-/// estimate-semaphore permits via the same pool acquire+evict path as worker
-/// memory (the measured-headroom gate already accounts for the resident module
-/// via real RSS, so the charge does not pass through it).
-pub struct MemoryPoolChargeSource<Ctx: WorkerCtx> {
-    worker_memory: Arc<Semaphore>,
-    workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
-    priority_allocation_lock: Arc<Mutex<()>>,
-    acquire_retry_delay: Duration,
+/// Production [`ChargeSource`] for the per-component module charge: reserves the
+/// module's bytes with the measured-headroom gate. The module is a committed
+/// consequence of admitting the first worker of a component (it loads into RAM
+/// when that worker becomes resident), so it is reserved rather than admitted —
+/// it neither evicts nor can be refused. `None` when measured admission is
+/// disabled, in which case the charge is a no-op.
+pub struct GateChargeSource {
+    admission: Option<Arc<AdmissionController>>,
+}
+
+/// Held module charge: releases its reserved bytes from the gate on drop.
+pub struct GateCharge {
+    admission: Option<Arc<AdmissionController>>,
+    bytes: u64,
+}
+
+impl Drop for GateCharge {
+    fn drop(&mut self) {
+        if let Some(admission) = &self.admission {
+            admission.release(self.bytes);
+        }
+    }
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> ChargeSource for MemoryPoolChargeSource<Ctx> {
-    type Charge = WorkerMemoryPermit;
+impl ChargeSource for GateChargeSource {
+    type Charge = GateCharge;
 
-    async fn acquire_charge(&self, bytes: u64) -> WorkerMemoryPermit {
-        let mem32: u32 = bytes.try_into().expect("component charge size too large");
-        loop {
-            if let Some(permit) = acquire_pool_permit(
-                &self.worker_memory,
-                &self.workers,
-                &self.priority_allocation_lock,
-                self.acquire_retry_delay,
-                mem32,
-                bytes,
-            )
-            .await
-            {
-                break permit;
-            }
+    async fn acquire_charge(&self, bytes: u64) -> GateCharge {
+        if let Some(admission) = &self.admission {
+            admission.reserve_committed(bytes);
+        }
+        GateCharge {
+            admission: self.admission.clone(),
+            bytes,
         }
     }
 }

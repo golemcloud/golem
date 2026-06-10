@@ -729,3 +729,114 @@ async fn scheduler_accounts_are_independent() {
     drop(a1);
     drop(a2);
 }
+
+// ── Component module charge against the admission gate ───────────────────────
+
+mod component_module_charge {
+    use super::super::admission::{AdmissionController, AdmissionPolicy};
+    use super::super::component_charge::ComponentChargeRegistry;
+    use super::super::memory_probe::{MemoryProbe, MemorySnapshot};
+    use super::super::{ComponentChargeKey, GateChargeSource, HeldComponentCharge};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use std::sync::Arc;
+    use test_r::test;
+    use uuid::Uuid;
+
+    /// Probe reporting a fixed limit and zero resident memory, so the gate's
+    /// reservation is driven entirely by what is charged through it.
+    #[derive(Debug)]
+    struct FixedProbe {
+        limit: u64,
+    }
+
+    impl MemoryProbe for FixedProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            MemorySnapshot {
+                limit_bytes: self.limit,
+                current_bytes: 0,
+            }
+        }
+    }
+
+    fn key() -> ComponentChargeKey {
+        (ComponentId(Uuid::new_v4()), ComponentRevision::INITIAL)
+    }
+
+    /// The first worker of a component reserves the module's bytes with the gate,
+    /// so admissible headroom drops by the module size before it faults into
+    /// memory. A second worker of the same component reserves nothing more, and
+    /// the reservation is released only when the last worker unloads.
+    #[test]
+    async fn module_charge_reserves_with_gate_until_last_worker_unloads() {
+        let limit = 1000u64;
+        let module_bytes = 200u64;
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+        let component = key();
+
+        assert_eq!(controller.headroom_bytes(), limit);
+
+        let first = registry.acquire(component.clone(), module_bytes).await;
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module_bytes,
+            "first worker of a component must reserve the module size with the gate"
+        );
+
+        let second = registry.acquire(component.clone(), module_bytes).await;
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module_bytes,
+            "a second worker of the same component must not reserve the module again"
+        );
+
+        drop(first);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module_bytes,
+            "the module stays reserved while any worker of the component is resident"
+        );
+
+        drop(second);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "the module reservation is released when the last worker unloads"
+        );
+    }
+
+    /// A `RunningWorker` stores its component charge as
+    /// `Box<dyn HeldComponentCharge>` and releases it by dropping that box when
+    /// the worker unloads. Dropping the box must still release the module
+    /// reservation with the gate, i.e. the concrete charge's release runs through
+    /// the trait object exactly as it would for a live worker.
+    #[test]
+    async fn dropping_boxed_charge_releases_the_reservation() {
+        let limit = 1000u64;
+        let module_bytes = 200u64;
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+
+        let charge = registry.acquire(key(), module_bytes).await;
+        // Store it exactly as RunningWorker does.
+        let boxed: Box<dyn HeldComponentCharge> = Box::new(charge);
+        assert_eq!(controller.headroom_bytes(), limit - module_bytes);
+
+        drop(boxed);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "dropping the boxed charge (as on worker unload) must release the reservation"
+        );
+    }
+}
