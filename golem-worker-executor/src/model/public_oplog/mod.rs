@@ -259,7 +259,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
-                agent_initial_card: _,
                 instance_id,
             } => {
                 let metadata = components

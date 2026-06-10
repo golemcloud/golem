@@ -18,7 +18,6 @@ use futures::Stream;
 use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
-use golem_common::model::card::Card;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -74,7 +73,6 @@ pub struct AgentConfig {
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub created_by_email: AccountEmail,
-    pub agent_initial_card: Card,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
 }
@@ -87,7 +85,6 @@ impl AgentConfig {
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         created_by_email: AccountEmail,
-        agent_initial_card: Card,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
     ) -> AgentConfig {
@@ -98,7 +95,6 @@ impl AgentConfig {
             component_revision_for_replay,
             created_by,
             created_by_email,
-            agent_initial_card,
             initial_agent_config,
             last_snapshot_index,
         }

@@ -40,7 +40,7 @@ pub fn monomorphize_agent_initial_card(
     context: &AgentPermissionMonomorphizationContext,
 ) -> Result<Card, String> {
     Ok(Card {
-        card_id: CardId::new(),
+        card_id: CardId(uuid::Uuid::nil()),
         parent_ids: Vec::new(),
         lower_positive: monomorphize_permissions(lower_positive, context)?,
         lower_negative: monomorphize_permissions(lower_negative, context)?,

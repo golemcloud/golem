@@ -868,7 +868,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
-                agent_initial_card: Vec::new(),
                 instance_id: uuid::Uuid::from_u64_pair(
                     params.instance_id.high_bits,
                     params.instance_id.low_bits,

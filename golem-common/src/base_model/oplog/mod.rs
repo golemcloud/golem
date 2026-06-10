@@ -85,7 +85,6 @@ oplog_entry! {
             initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
             local_agent_config: Vec<UntypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,
-            agent_initial_card: Vec<u8>,
             /// Per-instance fingerprint, unique across recreations of the same agent ID.
             instance_id: Uuid
         }

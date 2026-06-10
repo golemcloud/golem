@@ -65,7 +65,6 @@ use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
-use crate::model::card::Card;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
@@ -552,7 +551,6 @@ pub struct AgentMetadata {
     pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
-    pub agent_initial_card: Card,
 }
 
 impl AgentMetadata {

@@ -20,8 +20,7 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, Card, ClassPermissionTarget, EffectiveSurface,
-    PermissionTarget,
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, PermissionTarget,
 };
 use golem_common::model::component::ComponentId;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -48,7 +47,7 @@ pub trait DirectInvocationAuthService: Send + Sync {
         &self,
         caller_account_id: AccountId,
         caller_account_email: &AccountEmail,
-        caller_initial_card: &Card,
+        caller_effective_surface: &EffectiveSurface,
         owned_agent_id: &OwnedAgentId,
         verb: AgentVerb,
         resource: AgentResourcePattern,
@@ -125,7 +124,7 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
         &self,
         caller_account_id: AccountId,
         caller_account_email: &AccountEmail,
-        caller_initial_card: &Card,
+        caller_effective_surface: &EffectiveSurface,
         owned_agent_id: &OwnedAgentId,
         verb: AgentVerb,
         resource: AgentResourcePattern,
@@ -137,18 +136,10 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
                 details: format!("Component {} not found", owned_agent_id.component_id()),
             })?;
 
-        let caller_effective_surface = EffectiveSurface::from_cards(
-            std::slice::from_ref(caller_initial_card),
-            &golem_common::model::card::recipient::RecipientPattern::Any,
-        )
-        .map_err(|err| RpcError::Denied {
-            details: format!("{err:?}"),
-        })?;
-
         let auth_ctx = AuthCtx::agent_with_effective_surface(
             caller_account_id,
             caller_account_email.clone(),
-            caller_effective_surface,
+            caller_effective_surface.clone(),
         );
 
         auth_ctx
@@ -182,7 +173,7 @@ impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
         &self,
         caller_account_id: AccountId,
         _caller_account_email: &AccountEmail,
-        _caller_initial_card: &Card,
+        _caller_effective_surface: &EffectiveSurface,
         _owned_agent_id: &OwnedAgentId,
         _verb: AgentVerb,
         _resource: AgentResourcePattern,
