@@ -47,7 +47,7 @@ Next we create a new *golem application*:
 golem app new manyworkers rust
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055af_67e7f21355aabe966624fd28_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055af_67e7f21355aabe966624fd28_unnamed.png)
 
 Golem comes with a set of **components templates** for all supported languages. One of these templates is a simple *shopping cart* implementation in Rust, where each Golem worker (running instance of this component) represents a single shopping cart, keeping its contents in memory.
 
@@ -66,7 +66,7 @@ golem app build
 golem app deploy
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b5_67e7f21355aabe966624fd3d_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b5_67e7f21355aabe966624fd3d_unnamed.png)
 
 To see the interface of this example, let's query one using `component get`:
 
@@ -74,7 +74,7 @@ To see the interface of this example, let's query one using `component get`:
 golem component get demo:cart0
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055bb_67e7f21355aabe966624fd46_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055bb_67e7f21355aabe966624fd46_unnamed.png)
 
 Before spawning our thousands of workers, we try out this exported interface by creating a single worker of `demo:cart0` called `test` and calling a few methods in it:
 
@@ -82,23 +82,23 @@ Before spawning our thousands of workers, we try out this exported interface by 
 golem worker invoke demo:cart0/test initialize-cart '"user1"'
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b4_67e7f21355aabe966624fd25_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b4_67e7f21355aabe966624fd25_unnamed.png)
 
 ```bash
 golem worker invoke demo:cart0/test add-item '{ product-id: "p1", name: "Example product", price: 1000.0, quantity: 2 }'
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055ba_67e7f21355aabe966624fd2b_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055ba_67e7f21355aabe966624fd2b_unnamed.png)
 
 ```bash
 golem worker invoke demo:cart0/test get-cart-contents
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b1_67e7f21355aabe966624fd2e_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b1_67e7f21355aabe966624fd2e_unnamed.png)
 
 For some more context, we can also check the size of the compiled WASM files (we were doing a debug build so they are relatively large) for these components:
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b7_67e7f21355aabe966624fd49_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b7_67e7f21355aabe966624fd49_unnamed.png)
 
 We can also query metadata of the created worker to get the same size information, and it is also going to tell us the amount of **memory** the instance allocates on startup:
 
@@ -106,7 +106,7 @@ We can also query metadata of the created worker to get the same size informatio
 golem worker get demo:cart0/test
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b8_67e7f21355aabe966624fd40_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b8_67e7f21355aabe966624fd40_unnamed.png)
 
 And we can query the test worker's *oplog* to get an idea of how much additional memory it allocated dynamically at runtime:
 
@@ -114,7 +114,7 @@ And we can query the test worker's *oplog* to get an idea of how much additional
 golem worker oplog demo:cart0/test --query memory
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b2_67e7f21355aabe966624fd31_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b2_67e7f21355aabe966624fd31_unnamed.png)
 
 ### Spawning many workers
 
@@ -143,7 +143,7 @@ After that, we have 10000 "running" workers (all idle, waiting for a next invoca
 golem worker list demo:cart5
 ```
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b3_67e7f21355aabe966624fd43_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b3_67e7f21355aabe966624fd43_unnamed.png)
 
 Of course only some of these workers (the last accessed ones) are really in the locally running executor's memory. Whenever a worker that's not in memory is going to be accessed, it is loaded and its state is transparently restored before it gets the request. Golem is tracking the resource usage of its running components and if there is not enough memory to load the new component, an old one is going to be dropped out.
 
@@ -151,6 +151,6 @@ Of course only some of these workers (the last accessed ones) are really in the 
 
 To demonstrate this, we can just invoke workers randomly from the 10000 we've created:
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055b9_67e7f21355aabe966624fd4d_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055b9_67e7f21355aabe966624fd4d_unnamed.png)
 
 Thanks to the durable execution model, every one of the 10000 workers reacts just as if it was running.
