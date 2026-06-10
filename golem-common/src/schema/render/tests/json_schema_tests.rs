@@ -54,6 +54,34 @@ fn record_emits_object_with_properties() {
 }
 
 #[test]
+fn record_option_field_is_not_required() {
+    // An `option<…>` record field is present as a property but excluded from
+    // `required`: it may be omitted, and an explicit `null` is still accepted
+    // by the option's `oneOf [null, T]` schema.
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "nickname".to_string(),
+            body: SchemaType::option(SchemaType::string()),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let schema = to_json_schema(&graph, &ty);
+    let props = schema["properties"]
+        .as_object()
+        .expect("properties is object");
+    assert!(props.contains_key("id"));
+    assert!(props.contains_key("nickname"));
+    let required = schema["required"].as_array().expect("required is array");
+    assert_eq!(required, &vec![Value::String("id".to_string())]);
+}
+
+#[test]
 fn primitive_integer_carries_min_max() {
     let ty = SchemaType::s8();
     let graph = SchemaGraph::anonymous(ty.clone());

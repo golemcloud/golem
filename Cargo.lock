@@ -4403,7 +4403,6 @@ dependencies = [
  "indexmap 2.14.0",
  "mime",
  "mime_guess",
- "openapiv3",
  "openidconnect",
  "opentelemetry 0.30.0",
  "opentelemetry-prometheus-text-exporter",
