@@ -71,10 +71,15 @@ impl Error for ContextInitHintError {}
 
 pub mod service {
     use crate::log::LogColorize;
+    use crate::model::text::fmt::{format_error, format_stderr};
     use bytes::Bytes;
+    use colored::Colorize;
     use golem_common::base_model::api;
     use golem_common::model::{AgentId, PromiseId};
     use reqwest::StatusCode;
+    use serde::Deserialize;
+    use serde::de::DeserializeOwned;
+    use serde_json::{Map, Value};
     use std::error::Error;
     use std::fmt::{Display, Formatter};
 
@@ -83,11 +88,35 @@ pub mod service {
         pub status_code: u16,
         pub errors: Vec<String>,
         pub code: Option<String>,
+        pub additional_fields: Map<String, Value>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct AgentErrorDetails {
+        pub cause: String,
+        pub stderr: String,
     }
 
     impl ServiceErrorResponse {
         pub fn error(&self) -> String {
             self.errors.join("\n")
+        }
+
+        pub fn additional_field(&self, name: &str) -> Option<&Value> {
+            self.additional_fields.get(name)
+        }
+
+        pub fn additional_field_as<T>(&self, name: &str) -> Option<T>
+        where
+            T: DeserializeOwned,
+        {
+            self.additional_field(name)
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+        }
+
+        pub fn agent_error(&self) -> Option<AgentErrorDetails> {
+            self.additional_field_as("workerError")
         }
 
         pub fn is_status_code(&self, status_code: u16) -> bool {
@@ -125,6 +154,99 @@ pub mod service {
     }
 
     impl ServiceError {
+        pub fn render(&self) -> String {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(response) => {
+                    let service_name =
+                        format!("{} Service", self.service_name).log_color_highlight();
+                    let status = display_status_code(response.status_code).log_color_error();
+
+                    let code = response
+                        .code
+                        .as_ref()
+                        .map(|code| format!(" ({})", code.log_color_highlight()))
+                        .unwrap_or_default();
+
+                    let mut result = match response.errors.as_slice() {
+                        [] => format!("{} - Error: {}{}", service_name, status, code),
+                        [message] => format!(
+                            "{} - Error: {}, {}{}",
+                            service_name,
+                            status,
+                            format_error(message),
+                            code
+                        ),
+                        messages => {
+                            let mut result =
+                                format!("{} - Error: {}{}", service_name, status, code);
+                            result.push_str("\n\n");
+                            result.push_str(&"Messages:".bright_black().to_string());
+                            for message in messages {
+                                result.push_str(&format!("\n  - {}", format_error(message)));
+                            }
+                            result
+                        }
+                    };
+
+                    if let Some(agent_error) = response.agent_error() {
+                        if !agent_error.stderr.trim().is_empty() {
+                            result.push_str("\n\n");
+                            result.push_str(&"Stderr:".bright_black().to_string());
+                            result.push('\n');
+                            result.push_str(&format_stderr(&agent_error.stderr));
+                        }
+
+                        if !agent_error.cause.trim().is_empty() {
+                            result.push_str("\n\n");
+                            result.push_str(&"Cause:".bright_black().to_string());
+                            result.push('\n');
+                            result.push_str(&format_error(&agent_error.cause));
+                        }
+                    }
+
+                    result
+                }
+                ServiceErrorKind::ReqwestError(error) => render_error_with_source_string(
+                    &format!("{} Service", self.service_name).log_color_highlight(),
+                    "HTTP Client Error",
+                    error,
+                ),
+                ServiceErrorKind::MiddlewareError(error) => format!(
+                    "{} - HTTP Middleware Error: {}",
+                    format!("{} Service", self.service_name).log_color_highlight(),
+                    error.to_string().log_color_warn()
+                ),
+                ServiceErrorKind::ReqwestHeaderError(error) => render_error_with_source_string(
+                    &format!("{} Service", self.service_name).log_color_highlight(),
+                    "HTTP Header Error",
+                    error,
+                ),
+                ServiceErrorKind::SerdeError(error) => render_error_with_source_string(
+                    &format!("{} Service", self.service_name).log_color_highlight(),
+                    "Serialization Error",
+                    error,
+                ),
+                ServiceErrorKind::UnexpectedResponse {
+                    status_code,
+                    payload,
+                } => format!(
+                    "{} - Unexpected Response Error: {}, {}",
+                    format!("{} Service", self.service_name).log_color_highlight(),
+                    display_status_code(*status_code).log_color_error(),
+                    String::from_utf8_lossy(payload)
+                        .to_string()
+                        .log_color_warn()
+                ),
+            }
+        }
+
+        pub fn agent_error(&self) -> Option<AgentErrorDetails> {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(response) => response.agent_error(),
+                _ => None,
+            }
+        }
+
         pub fn is_auth_unauthorized(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
@@ -187,6 +309,7 @@ pub mod service {
                         status_code: error.status_code(),
                         errors: error.errors().to_vec(),
                         code: error.code().map(str::to_string),
+                        additional_fields: error.additional_fields().unwrap_or_default(),
                     })
                 }
                 golem_client::Error::Reqwest(error) => ServiceErrorKind::ReqwestError(error),
@@ -207,12 +330,6 @@ pub mod service {
 
     impl Display for ServiceError {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            fn display_status_code(status_code: u16) -> String {
-                StatusCode::from_u16(status_code)
-                    .map(|status_code| status_code.to_string())
-                    .unwrap_or_else(|_| status_code.to_string())
-            }
-
             fn display_error_with_source<E: std::error::Error>(
                 f: &mut Formatter<'_>,
                 service_name: &str,
@@ -237,14 +354,8 @@ pub mod service {
             let service_name = format!("{} Service", self.service_name).log_color_highlight();
 
             match &self.kind {
-                ServiceErrorKind::ErrorResponse(response) => {
-                    write!(
-                        f,
-                        "{} - Error: {}, {}",
-                        service_name,
-                        display_status_code(response.status_code).log_color_error(),
-                        response.error().log_color_warn()
-                    )
+                ServiceErrorKind::ErrorResponse(_) => {
+                    write!(f, "{}", self.render())
                 }
                 ServiceErrorKind::ReqwestError(error) => {
                     display_error_with_source(f, &service_name, "HTTP Client Error", error)
@@ -279,6 +390,34 @@ pub mod service {
                 }
             }
         }
+    }
+
+    fn display_status_code(status_code: u16) -> String {
+        StatusCode::from_u16(status_code)
+            .map(|status_code| status_code.to_string())
+            .unwrap_or_else(|_| status_code.to_string())
+    }
+
+    fn render_error_with_source_string<E: std::error::Error>(
+        service_name: &str,
+        category: &str,
+        error: &E,
+    ) -> String {
+        let mut result = format!(
+            "{} - {}: {}",
+            service_name,
+            category,
+            error.to_string().log_color_warn()
+        );
+
+        if let Some(source) = error.source() {
+            result.push_str(&format!(
+                ", caused by: {}",
+                source.to_string().log_color_warn()
+            ));
+        }
+
+        result
     }
 
     impl Error for ServiceError {}
@@ -345,5 +484,63 @@ pub mod service {
             display_agent_id(promise_id.agent_id),
             promise_id.oplog_idx
         )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
+        use serde_json::{Map, json};
+        use test_r::test;
+
+        fn agent_error_response() -> ServiceErrorResponse {
+            let mut additional_fields = Map::new();
+            additional_fields.insert(
+                "workerError".to_string(),
+                json!({
+                    "cause": "error while executing at wasm backtrace:\n    0: agent_guest.wasm!abort",
+                    "stderr": "JavaScript error: BOOM!\nStack:\n    at boom (user:91:19)"
+                }),
+            );
+
+            ServiceErrorResponse {
+                status_code: 500,
+                errors: vec!["Invocation Failed".to_string()],
+                code: Some("INTERNAL_AGENT_EXECUTION_FAILED".to_string()),
+                additional_fields,
+            }
+        }
+
+        #[test]
+        fn agent_error_deserializes_from_additional_fields() {
+            let response = agent_error_response();
+
+            let agent_error = response.agent_error().expect("agent error");
+
+            assert!(agent_error.cause.contains("agent_guest.wasm!abort"));
+            assert!(agent_error.stderr.contains("JavaScript error: BOOM!"));
+        }
+
+        #[test]
+        fn service_error_render_includes_code_and_agent_details() {
+            let error = ServiceError {
+                service_name: "Agent",
+                kind: ServiceErrorKind::ErrorResponse(agent_error_response()),
+            };
+
+            let rendered = strip_ansi_escapes::strip_str(error.render());
+
+            assert!(rendered.contains(
+                "Agent Service - Error: 500 Internal Server Error, Invocation Failed (INTERNAL_AGENT_EXECUTION_FAILED)"
+            ));
+            assert!(rendered.contains("Invocation Failed"));
+            assert!(rendered.contains("INTERNAL_AGENT_EXECUTION_FAILED"));
+            assert!(rendered.contains("Stderr:"));
+            assert!(rendered.contains("JavaScript error: BOOM!"));
+            assert!(rendered.contains("Cause:"));
+            assert!(rendered.contains("agent_guest.wasm!abort"));
+            assert!(!rendered.contains("Agent Service response:"));
+            assert!(!rendered.contains("Worker stderr:"));
+            assert!(!rendered.contains("Worker cause:"));
+        }
     }
 }

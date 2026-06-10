@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::text::fmt::format_stderr;
+use crate::model::worker::AgentLogStreamOptions;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use serde::Serialize;
 
@@ -191,12 +193,12 @@ impl AgentStreamEvent {
         }
     }
 
-    pub fn render_text(&self, show_timestamp: bool, show_level: bool) -> String {
+    pub fn render_text(&self, options: &AgentLogStreamOptions) -> String {
         let mut result = String::new();
-        if show_timestamp {
+        if options.show_timestamp {
             result.push_str(&format!("[{}] ", self.timestamp));
         }
-        if show_level {
+        if options.show_level {
             let level = self.text_level_label();
             result.push('[');
             result.push_str(level);
@@ -205,7 +207,11 @@ impl AgentStreamEvent {
             }
             result.push_str("] ");
         }
-        result.push_str(&self.text_message());
+        if options.colors && matches!(self.kind, AgentStreamEventKind::Stderr) {
+            result.push_str(&format_stderr(&self.text_message()))
+        } else {
+            result.push_str(&self.text_message());
+        }
         result
     }
 

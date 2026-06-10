@@ -691,7 +691,7 @@ pub enum GolemCliSubcommand {
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
     Repl {
-        /// Select the language for the REPL, defaults to the component's language
+        /// Select the REPL language. Currently only TypeScript is supported.
         #[arg(long)]
         language: Option<ReplLanguage>,
         #[command(flatten)]
