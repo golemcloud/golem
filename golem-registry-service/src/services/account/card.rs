@@ -32,10 +32,9 @@ use golem_common::model::card::{
     EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern,
     EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern,
     EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
-    EnvironmentShareResourcePattern, FilesystemResourcePattern, KvResourcePattern,
-    NetworkResourcePattern, OplogResourcePattern, PermissionPattern, PlanResourcePattern,
-    RdbmsResourcePattern, SecretResourcePattern, SystemResourcePattern, SystemVerb,
-    ToolResourcePattern,
+    FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
+    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
+    SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
 
 pub(super) fn account_root_card_record(account_id: AccountId, roles: &[AccountRole]) -> CardRecord {
@@ -268,12 +267,6 @@ fn add_account_grants(
             owner: environment_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: EnvironmentSecuritySchemeResourcePattern::Any,
-        }),
-        PermissionPattern::EnvironmentShare(ClassPermissionPattern {
-            verb: None,
-            owner: environment_owner.clone(),
-            recipient: RecipientPattern::Any,
-            resource: EnvironmentShareResourcePattern::Any,
         }),
         PermissionPattern::Blob(ClassPermissionPattern {
             verb: None,

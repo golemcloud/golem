@@ -19,7 +19,7 @@ use crate::repo::model::permission_share::{
     PermissionShareRepoError, PermissionShareRevisionRecord,
 };
 use crate::repo::permission_share::PermissionShareRepo;
-use golem_common::model::account::{Account, AccountId};
+use golem_common::model::account::{Account, AccountEmail, AccountId};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
@@ -47,7 +47,7 @@ pub enum PermissionShareError {
     #[error("Permission share for name {0} not found")]
     PermissionShareByNameNotFound(PermissionShareName),
     #[error("Target account {0} not found")]
-    TargetAccountNotFound(AccountId),
+    TargetAccountNotFound(String),
     #[error("Invalid permission grant {grant}: {message}")]
     InvalidGrant { grant: String, message: String },
     #[error("Permission grant recipient must be '*' or target account '{target_account}'")]
@@ -107,7 +107,9 @@ impl PermissionShareService {
             AccountPermissionShareResourcePattern::Any,
         )?;
 
-        let target_account = self.get_account(data.target_account_id).await?;
+        let target_account = self
+            .get_account_by_email(&data.target_account_email)
+            .await?;
 
         let id = PermissionShareId::new();
         let card = self.permission_share_card(id, &data.data, target_account.email.as_str())?;
@@ -123,7 +125,7 @@ impl PermissionShareService {
                 .permission_share_repo
                 .create(
                     owner_account_id.0,
-                    data.target_account_id.0,
+                    target_account.id.0,
                     revision.clone(),
                     card.clone(),
                 )
@@ -350,7 +352,22 @@ impl PermissionShareService {
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    PermissionShareError::TargetAccountNotFound(account_id)
+                    PermissionShareError::TargetAccountNotFound(account_id.to_string())
+                }
+                other => other.into(),
+            })
+    }
+
+    async fn get_account_by_email(
+        &self,
+        account_email: &AccountEmail,
+    ) -> Result<Account, PermissionShareError> {
+        self.account_service
+            .get_by_email(account_email.as_str(), &AuthCtx::System)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountByEmailNotFound(_) | AccountError::Unauthorized(_) => {
+                    PermissionShareError::TargetAccountNotFound(account_email.as_str().to_string())
                 }
                 other => other.into(),
             })

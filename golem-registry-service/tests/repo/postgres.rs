@@ -21,7 +21,6 @@ use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
-use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -217,7 +216,6 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(pool.clone())),
-        environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
@@ -332,18 +330,6 @@ async fn test_update_call_counts_batch(#[dimension(postgres_variant)] deps: &Dep
 #[test]
 async fn test_resolve_agent_type_owner_no_email(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_owner_no_email(deps).await;
-}
-
-#[test]
-async fn test_resolve_agent_type_shared_with_email(#[dimension(postgres_variant)] deps: &Deps) {
-    crate::repo::common::test_resolve_agent_type_shared_with_email(deps).await;
-}
-
-#[test]
-async fn test_resolve_agent_type_no_share_returns_zero_roles(
-    #[dimension(postgres_variant)] deps: &Deps,
-) {
-    crate::repo::common::test_resolve_agent_type_no_share_returns_zero_roles(deps).await;
 }
 
 #[test]

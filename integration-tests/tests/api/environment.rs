@@ -321,7 +321,7 @@ async fn list_visible_environments_shows_owned_and_shared(
         .create_permission_share(
             &owner.account_id.0,
             &PermissionShareCreation {
-                target_account_id: grantee.account_id,
+                target_account_email: grantee.account_email.clone(),
                 name: PermissionShareName("visible-environment-access".to_string()),
                 data: PermissionShareData {
                     lower_positive: vec![format!(
@@ -454,7 +454,7 @@ async fn deleted_account_hides_shared_environments_from_grantee(
         .create_permission_share(
             &owner.account_id.0,
             &PermissionShareCreation {
-                target_account_id: grantee.account_id,
+                target_account_email: grantee.account_email.clone(),
                 name: PermissionShareName("deleted-account-shared-environment".to_string()),
                 data: PermissionShareData {
                     lower_positive: vec![format!(

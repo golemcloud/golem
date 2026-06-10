@@ -439,7 +439,6 @@ pub struct ResolvedAgentTypeRecord {
     pub webhook_prefix_authority_and_path: Option<String>,
     pub agent_type: Blob<AgentType>,
     pub owner_account_id: Uuid,
-    pub environment_roles_from_shares: i32,
 }
 
 impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {

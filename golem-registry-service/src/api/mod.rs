@@ -20,7 +20,6 @@ pub mod applications;
 pub mod components;
 pub mod domain_registrations;
 pub mod environment_plugin_grants;
-pub mod environment_shares;
 pub mod environments;
 pub mod error;
 pub mod http_api_deployments;
@@ -42,7 +41,6 @@ use self::applications::ApplicationsApi;
 use self::components::ComponentsApi;
 use self::domain_registrations::DomainRegistrationsApi;
 use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
-use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::http_api_deployments::HttpApiDeploymentsApi;
@@ -67,12 +65,7 @@ pub type Apis = (
     ApplicationsApi,
     ComponentsApi,
     DomainRegistrationsApi,
-    (
-        AdminApi,
-        EnvironmentPluginGrantsApi,
-        EnvironmentsApi,
-        EnvironmentSharesApi,
-    ),
+    (AdminApi, EnvironmentPluginGrantsApi, EnvironmentsApi),
     HttpApiDeploymentsApi,
     (LoginApi, MeApi),
     (
@@ -127,10 +120,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.environment_service.clone(),
                     services.deployment_service.clone(),
                     services.deployment_write_service.clone(),
-                    services.auth_service.clone(),
-                ),
-                EnvironmentSharesApi::new(
-                    services.environment_share_service.clone(),
                     services.auth_service.clone(),
                 ),
             ),

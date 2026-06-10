@@ -23,7 +23,6 @@ pub mod deployment;
 pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
-pub mod environment_share;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
 pub mod oauth2_token;

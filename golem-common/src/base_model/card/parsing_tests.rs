@@ -25,7 +25,6 @@ use crate::model::card::recipient::{
     PolymorphicAgentRecipientPattern, PolymorphicEnvironmentRecipientPattern,
     PolymorphicRecipientPattern, RecipientPattern,
 };
-use crate::model::environment_share::EnvironmentShareId;
 use crate::model::permission_share::PermissionShareName;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
@@ -138,10 +137,6 @@ fn fixed_uuid() -> uuid::Uuid {
 
 fn token_id() -> TokenId {
     TokenId(fixed_uuid())
-}
-
-fn environment_share_id() -> EnvironmentShareId {
-    EnvironmentShareId(fixed_uuid())
 }
 
 #[test_gen]
@@ -798,16 +793,6 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     environment: EnvironmentName("prod".to_string()),
                     revision: 42,
                 },
-            }),
-        ),
-        (
-            "environment_share",
-            "environment.share(acme/shop/prod) @ acme/shop/prod : view : 550e8400-e29b-41d4-a716-446655440000",
-            PermissionPattern::EnvironmentShare(ClassPermissionPattern::<EnvironmentShareClass> {
-                verb: Some(EnvironmentShareVerb::View),
-                owner: environment_owner("acme", "shop", "prod"),
-                recipient: environment_recipient("acme", "shop", "prod"),
-                resource: EnvironmentShareResourcePattern::Share(environment_share_id()),
             }),
         ),
         (

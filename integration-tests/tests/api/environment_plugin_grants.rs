@@ -18,7 +18,7 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentPluginGrantError, RegistryServiceGetPluginByIdError,
     RegistryServiceListEnvironmentEnvironmentPluginGrantsError,
 };
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::base64::Base64;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::permission_share::{
@@ -37,7 +37,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 async fn create_permission_share(
     client: &impl RegistryServiceClient,
     owner_account_id: AccountId,
-    target_account_id: AccountId,
+    target_account_email: AccountEmail,
     name: &str,
     lower_positive: Vec<String>,
 ) -> anyhow::Result<PermissionShare> {
@@ -45,7 +45,7 @@ async fn create_permission_share(
         .create_permission_share(
             &owner_account_id.0,
             &PermissionShareCreation {
-                target_account_id,
+                target_account_email,
                 name: PermissionShareName(name.to_string()),
                 data: PermissionShareData {
                     lower_positive,
@@ -91,7 +91,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     create_permission_share(
         &client_2,
         user_2.account_id,
-        user_1.account_id,
+        user_1.account_email.clone(),
         "grant-plugin-to-shared-env",
         vec![
             environment_view_grant(
@@ -340,7 +340,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
     create_permission_share(
         &client_2,
         user_2.account_id,
-        user_1.account_id,
+        user_1.account_email.clone(),
         "plugin-member-view-env",
         vec![
             environment_view_grant(
@@ -547,7 +547,7 @@ async fn shared_user_with_readonly_role_cannot_grant_plugin(
     create_permission_share(
         &user_shared.registry_service_client().await,
         user_shared.account_id,
-        user_owner.account_id,
+        user_owner.account_email.clone(),
         "readonly-plugin-grant-access",
         vec![environment_view_grant(
             user_shared.account_id,
@@ -615,7 +615,7 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
     let permission_share = create_permission_share(
         &client_owner,
         owner.account_id,
-        shared.account_id,
+        shared.account_email.clone(),
         "list-grants-revoked-access",
         vec![
             environment_view_grant(
@@ -762,7 +762,7 @@ async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
     create_permission_share(
         &client_owner,
         owner.account_id,
-        shared.account_id,
+        shared.account_email.clone(),
         "fetch-deleted-grant-access",
         vec![
             environment_view_grant(
@@ -890,7 +890,7 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
     let permission_share = create_permission_share(
         &client_owner,
         owner.account_id,
-        revoked_user.account_id,
+        revoked_user.account_email.clone(),
         "revoked-fetch-grant-access",
         vec![
             environment_view_grant(
