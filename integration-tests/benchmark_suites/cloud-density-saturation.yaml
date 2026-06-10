@@ -37,7 +37,7 @@ benchmarks:
   - name: throughput-saturation-echo-rust
     iterations: 3
     clusterSize: [2]
-    size: [2000, 3000, 4000, 8000, 16000, 20000]
+    size: [2000, 3000, 4000, 5000, 10000, 15000, 20000]
     length: [0]
 
   # TypeScript echo agents — each instance instantiates its own QuickJS runtime
@@ -48,7 +48,7 @@ benchmarks:
   - name: throughput-saturation-echo-ts
     iterations: 3
     clusterSize: [2]
-    size: [1000, 2000, 4000]
+    size: [1000, 2000, 3000]
     length: [0]
 
   # # Synthetic footprint — each agent retains a deterministic per-agent-distinct
