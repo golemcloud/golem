@@ -28,22 +28,6 @@
 
 name: cloud-density-saturation
 benchmarks:
-  # Synthetic footprint — each agent retains a deterministic per-agent-distinct
-  # amount of resident memory, exercising the admission/eviction path with a
-  # controllable footprint near the limit. Run first: this is the variant that
-  # actually fills memory and drives the gate to its reject/evict path.
-  # size   = number of active, memory-holding agents (the ramp axis)
-  # length = base per-agent memory footprint in bytes; each agent retains a
-  #          deterministic multiple (1x..8x), averaging ~4.5x. 16 MiB base =>
-  #          ~72 MiB average per agent, filling a ~10 GiB usable pool around
-  #          ~145 agents. The sweep brackets that ceiling and pushes well past it
-  #          so the admission gate's reject/evict behaviour near OOM is exercised.
-  - name: throughput-saturation-counters
-    iterations: 1
-    clusterSize: [2]
-    size: [50, 100, 150, 200, 300]
-    length: [16777216]
-
   # Rust echo agents — lean per-instance linear memory (the ~900 KB module is
   # charged once per component, shared across all agents; what scales per agent
   # is the small instance heap). The previous run reached the top of the sweep
@@ -66,3 +50,19 @@ benchmarks:
     clusterSize: [2]
     size: [1000, 2000, 4000, 6000, 8000]
     length: [0]
+
+  # Synthetic footprint — each agent retains a deterministic per-agent-distinct
+  # amount of resident memory, exercising the admission/eviction path with a
+  # controllable footprint near the limit. Run first: this is the variant that
+  # actually fills memory and drives the gate to its reject/evict path.
+  # size   = number of active, memory-holding agents (the ramp axis)
+  # length = base per-agent memory footprint in bytes; each agent retains a
+  #          deterministic multiple (1x..8x), averaging ~4.5x. 16 MiB base =>
+  #          ~72 MiB average per agent, filling a ~10 GiB usable pool around
+  #          ~145 agents. The sweep brackets that ceiling and pushes well past it
+  #          so the admission gate's reject/evict behaviour near OOM is exercised.
+  - name: throughput-saturation-counters
+    iterations: 1
+    clusterSize: [2]
+    size: [50, 100, 150, 200, 300]
+    length: [16777216]
