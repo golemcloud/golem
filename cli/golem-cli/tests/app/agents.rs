@@ -11,7 +11,8 @@ use anyhow::Context;
 use goldenfile::Mint;
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
-use indoc::indoc;
+use golem_cli::versions;
+use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
 use test_r::{inherit_test_dep, test};
@@ -98,8 +99,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     fs::write_str(
         &component_manifest_path,
-        indoc! { r#"
-            manifestVersion: 1.5.0
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: rust-code-first
 
@@ -121,7 +122,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 agents: "*"
               rust:
                 agents: "*"
-        "# },
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
 
@@ -520,8 +521,8 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
 
     fs::write_str(
         &component_manifest_path,
-        indoc! { r#"
-            manifestVersion: 1.5.0
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: long-agent-id-rejected
 
@@ -536,7 +537,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             components:
               long-agent-id-rejected:ts-main:
                 templates: ts
-        "# },
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
 
@@ -653,8 +654,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     fs::write_str(
         &component_manifest_path,
-        indoc! { r#"
-            manifestVersion: 1.5.0
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: ts-code-first
 
@@ -676,7 +677,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
                 agents: "*"
               rust:
                 agents: "*"
-        "# },
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
     .unwrap();
 

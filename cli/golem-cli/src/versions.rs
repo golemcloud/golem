@@ -17,12 +17,12 @@ pub mod sdk {
     pub const TS: &str = "1.1.1";
     pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.2";
-    pub const MANIFEST: &str = "1.5.0";
+    pub const MANIFEST: &str = "1.6.0";
 
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.5.0"
+            "1.6.0-dev.1"
         };
     }
 }

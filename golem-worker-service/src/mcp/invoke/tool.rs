@@ -234,6 +234,7 @@ pub fn map_agent_response_to_tool_result(
 // when the types are unstructured.
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolResult {
     Default(serde_json::Value),
     Content(Content),

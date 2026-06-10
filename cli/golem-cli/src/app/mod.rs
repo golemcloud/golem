@@ -17,6 +17,7 @@ pub mod build;
 pub mod context;
 pub mod edit;
 pub mod error;
+pub mod manifest_upgrade;
 pub mod manifest_version;
 pub mod remote_components;
 pub mod template;

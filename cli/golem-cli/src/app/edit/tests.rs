@@ -68,6 +68,75 @@ fn package_json_merge_and_collect() {
 }
 
 #[test]
+fn golem_yaml_updates_existing_schema_references_only() {
+    let source = r#"# custom header
+# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+manifestVersion: 1.5.0
+app: demo
+"#;
+
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+
+    assert!(updated.contains("# custom header"));
+    assert!(updated.contains("https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json"));
+    assert!(!updated.contains("https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json"));
+}
+
+#[test]
+fn golem_yaml_updates_yaml_language_server_schema_reference_variants() {
+    let source = r#"# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+# yaml-language-server: $schema = https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+# yaml-language-server:$schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+manifestVersion: 1.5.0
+app: demo
+"#;
+
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+
+    assert_eq!(updated.matches("/1.6.0-dev.1/golem.schema.json").count(), 3);
+    assert!(!updated.contains("/1.5.0/golem.schema.json"));
+    assert!(updated.contains("# yaml-language-server: $schema = https://"));
+    assert!(updated.contains("# yaml-language-server:$schema=https://"));
+}
+
+#[test]
+fn golem_yaml_updates_schema_references_only_in_header() {
+    let source = r#"# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+manifestVersion: 1.5.0
+app: demo
+
+# $schema: https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json
+customCommands:
+  docs:
+    - command: |
+        # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+        echo docs
+"#;
+
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+
+    assert!(
+        updated.contains(
+            "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json"
+        )
+    );
+    assert!(
+        updated.contains("# $schema: https://schema.golem.cloud/app/golem/1.4.0/golem.schema.json")
+    );
+    assert!(updated.contains("# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json"));
+}
+
+#[test]
+fn golem_yaml_leaves_missing_schema_references_missing() {
+    let source = "manifestVersion: 1.5.0\napp: demo\n";
+
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+
+    assert_eq!(updated, source);
+}
+
+#[test]
 fn package_json_merge_many_entries_into_empty_sections_produces_valid_json() {
     let source = r#"{
   "name": "app",
@@ -1005,9 +1074,9 @@ other: 1
 #[test]
 fn golem_yaml_merge_keeps_schema_and_app_sections() {
     let base = r#"# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -1043,9 +1112,9 @@ httpApi:
 "#;
 
     let update = r#"# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis

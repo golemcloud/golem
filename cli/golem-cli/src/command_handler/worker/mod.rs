@@ -332,7 +332,7 @@ impl WorkerCommandHandler {
         self.ctx.log_handler().log_view(&WorkerCreateView {
             component_name: agent_name_match.component_name,
             agent_name: Some(display_agent_name),
-        });
+        })?;
 
         Ok(())
     }
@@ -545,7 +545,7 @@ impl WorkerCommandHandler {
             log_action("Triggered", "invocation");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_trigger(idempotency_key));
+                .log_view(&InvokeResultView::new_trigger(idempotency_key))?;
         } else {
             logln("");
             self.ctx
@@ -555,7 +555,7 @@ impl WorkerCommandHandler {
                     result,
                     &agent_type,
                     &method_name,
-                ));
+                ))?;
         }
 
         Ok(())
@@ -716,7 +716,7 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                self.ctx.log_handler().log_view(&entries);
+                self.ctx.log_handler().log_view(&entries)?;
             }
 
             if cursor.is_none() {
@@ -792,7 +792,7 @@ impl WorkerCommandHandler {
             agent: agent_name.0.clone(),
             last_oplog_index,
             number_of_invocations,
-        });
+        })?;
 
         Ok(())
     }
@@ -873,7 +873,7 @@ impl WorkerCommandHandler {
                     false,
                 )
                 .await?;
-            self.ctx.log_handler().log_view(&view);
+            self.ctx.log_handler().log_view(&view)?;
             Ok(())
         }
     }
@@ -896,16 +896,15 @@ impl WorkerCommandHandler {
                     .unwrap_or(usize::MAX);
 
                 // Fetch first — while the previous frame is still visible
-                let output = match self
+                let output = self
                     .list_agents(components, filters, scan_cursor, max_count, precise, true)
                     .await
-                {
-                    Ok(view) => self
-                        .ctx
-                        .log_handler()
-                        .render_view_truncated(&view, term_height),
-                    Err(e) => format!("Error: {e:#}"),
-                };
+                    .and_then(|view| {
+                        self.ctx
+                            .log_handler()
+                            .render_view_truncated(&view, term_height)
+                    })
+                    .unwrap_or_else(|e| format!("Error: {e:#}"));
 
                 // Clear and write in one buffered flush — no blank-screen gap
                 queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
@@ -1299,7 +1298,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(metadata_view, true));
+            .log_view(&WorkerGetView::from_metadata(metadata_view, true))?;
 
         Ok(())
     }
@@ -1326,7 +1325,7 @@ impl WorkerCommandHandler {
         self.ctx.log_handler().log_view(&AgentDeleteResult {
             deleted: true,
             agent: agent_name.0.clone(),
-        });
+        })?;
 
         Ok(())
     }
@@ -1387,7 +1386,7 @@ impl WorkerCommandHandler {
                 .collect(),
         };
 
-        self.ctx.log_handler().log_view(&view);
+        self.ctx.log_handler().log_view(&view)?;
 
         log_action(
             "Listed files",
@@ -1528,7 +1527,7 @@ impl WorkerCommandHandler {
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
             priority: plugin_priority,
-        });
+        })?;
 
         Ok(())
     }
@@ -1579,7 +1578,7 @@ impl WorkerCommandHandler {
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
             priority: plugin_priority,
-        });
+        })?;
 
         Ok(())
     }

@@ -189,7 +189,7 @@ impl TemplateHandler {
                 created: true,
                 application_name: selections.application_name.to_string(),
                 application_dir: context.application_path.clone(),
-            });
+            })?;
 
         Ok(())
     }

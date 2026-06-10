@@ -18,7 +18,7 @@
 //! Each view's `TextView::log` is a no-op: when `--format text` is used
 //! (the default), the user has already seen the progress lines on stdout
 //! and adding another rendering of the same information would just be
-//! noise. When `--format json/yaml` is used, the progress text is routed
+//! noise. When `--format json/yaml/toon` is used, the progress text is routed
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 

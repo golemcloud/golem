@@ -465,5 +465,5 @@ Concepts:
 
   Non-interactive use (for agents and CI)
     Pass `-Y`/`--yes` to auto-confirm destructive prompts and
-    `-F json`/`--format json` (or `pretty-json`, `yaml`, `pretty-yaml`)
+    `-F json`/`--format json` (or `pretty-json`, `yaml`, `pretty-yaml`, `toon`)
     to get machine-readable output. Both are global flags.";

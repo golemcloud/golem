@@ -91,7 +91,7 @@ impl EnvironmentCommandHandler {
                 "golem deploy".log_color_highlight()
             ));
         } else {
-            self.ctx.log_handler().log_view(&env_summaries);
+            self.ctx.log_handler().log_view(&env_summaries)?;
         }
 
         Ok(())
@@ -479,7 +479,7 @@ impl EnvironmentCommandHandler {
                     .to_string(),
             );
             logln("");
-            self.ctx.log_handler().log_view(&env_summaries);
+            self.ctx.log_handler().log_view(&env_summaries)?;
         }
 
         Ok(())

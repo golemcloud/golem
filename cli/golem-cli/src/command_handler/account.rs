@@ -113,7 +113,7 @@ impl AccountCommandHandler {
 
     async fn cmd_get(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
         let account = self.get(account_id).await?;
-        self.ctx.log_handler().log_view(&AccountGetView(account));
+        self.ctx.log_handler().log_view(&AccountGetView(account))?;
 
         Ok(())
     }
@@ -139,7 +139,7 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&AccountGetView(account));
+        self.ctx.log_handler().log_view(&AccountGetView(account))?;
 
         Ok(())
     }
@@ -158,7 +158,7 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&AccountNewView(account));
+        self.ctx.log_handler().log_view(&AccountNewView(account))?;
 
         Ok(())
     }
@@ -214,7 +214,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareListView(shares));
+            .log_view(&PermissionShareListView(shares))?;
 
         Ok(())
     }
@@ -226,7 +226,7 @@ impl AccountCommandHandler {
         let share = self.get_permission_share(permission_share_id).await?;
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -248,7 +248,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -279,7 +279,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -310,7 +310,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
