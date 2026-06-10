@@ -142,7 +142,6 @@ message RawCreateParameters {
   optional golem.common.UUID original_phantom_id = 11;
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
-  bytes agent_initial_card = 14;
 }
 
 message RawStartParameters {

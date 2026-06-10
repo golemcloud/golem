@@ -967,7 +967,6 @@ fn default_initial_permissions(
                 AgentInitialPermissionTemplate::default_for(environment_name, component_name),
             )
         })
-        .into_iter()
         .collect()
 }
 

@@ -75,6 +75,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
         _caller_account_email: &golem_common::model::account::AccountEmail,
+        _caller_effective_surface: &golem_common::model::card::EffectiveSurface,
         _agent_config: Vec<AgentConfigEntryDto>,
         _principal: Principal,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
@@ -98,6 +99,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
         _caller_account_email: &golem_common::model::account::AccountEmail,
+        _caller_effective_surface: &golem_common::model::card::EffectiveSurface,
         _principal: Principal,
         _environment_id: golem_common::model::environment::EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
