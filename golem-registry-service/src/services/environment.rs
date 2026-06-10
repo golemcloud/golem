@@ -29,7 +29,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::ApplicationOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, EffectiveSurface, EnvironmentName as CardEnvironmentName,
+    ClassPermissionTarget, EffectiveSurface,
     EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
 };
 use golem_common::model::environment::{

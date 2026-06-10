@@ -36,7 +36,7 @@ use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
+    ClassPermissionTarget, ComponentResourcePattern,
     ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::{
@@ -49,7 +49,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -222,9 +222,8 @@ impl ComponentWriteService {
         let component_metadata =
             component_metadata.with_agent_initial_permissions(default_initial_permissions(
                 component_metadata.agent_types(),
-                &environment.owner_account_email,
-                environment.application_id,
-                environment.id
+                &environment.name,
+                &component_creation.component_name
             ));
         validate_component_metadata_invariants(&component_metadata)?;
 
@@ -420,7 +419,8 @@ impl ComponentWriteService {
             component.metadata =
                 metadata.with_agent_initial_permissions(default_initial_permissions(
                     metadata.agent_types(),
-                    &environment.owner_account_email,
+                    &environment.name,
+                    &component.component_name,
                 ));
         } else if agent_types_changed {
             // TODO: skip the download here
@@ -438,7 +438,8 @@ impl ComponentWriteService {
             component.metadata =
                 metadata.with_agent_initial_permissions(default_initial_permissions(
                     metadata.agent_types(),
-                    &environment.owner_account_email,
+                    &environment.name,
+                    &component_name
                 ));
         } else if provision_configs_changed {
             component.metadata = component
@@ -958,16 +959,15 @@ fn provision_configs_for_agent_types(
 
 fn default_initial_permissions(
     agent_types: &[AgentType],
-    account_email: &AccountEmail,
-    application_id: ApplicationId,
-    environment_id: EnvironmentId,
+    environment_name: &EnvironmentName,
+    component_name: &ComponentName
 ) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
     agent_types
         .iter()
         .map(|agent_type| {
             (
                 agent_type.type_name.clone(),
-                AgentInitialPermissionTemplate::default_for(account_email, application_id, environment_id),
+                AgentInitialPermissionTemplate::default_for(environment_name, component_name),
             )
         })
         .into_iter()

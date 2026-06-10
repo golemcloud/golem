@@ -30,7 +30,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
+    ClassPermissionTarget, ComponentResourcePattern,
     ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::ComponentId;

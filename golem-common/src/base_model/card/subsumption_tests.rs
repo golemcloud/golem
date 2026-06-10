@@ -26,6 +26,7 @@ use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
+use crate::model::application::ApplicationName;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
     PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {

@@ -39,9 +39,8 @@ use crate::model::component::InstalledPlugin;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use super::application::ApplicationId;
+use super::application::{ApplicationId, ApplicationName};
 use super::environment::{EnvironmentId, EnvironmentName};
-use super::card::ApplicationName;
 use super::component::ComponentName;
 
 impl ComponentMetadata {
@@ -483,8 +482,6 @@ impl RawComponentMetadata {
 
 impl AgentInitialPermissionTemplate {
     pub fn default_for(
-        account_email: &AccountEmail,
-        application_name: &ApplicationName,
         environment_name: &EnvironmentName,
         component_name: &ComponentName,
     ) -> Self {

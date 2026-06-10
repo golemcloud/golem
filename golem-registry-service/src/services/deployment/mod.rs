@@ -30,7 +30,7 @@ pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 use golem_common::model::card::owner::ApplicationOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern,
+    ClassPermissionTarget, EnvironmentResourcePattern,
     EnvironmentVerb, PermissionTarget,
 };
 pub use golem_common::model::deployment::DeployValidationWarning;

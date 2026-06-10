@@ -26,7 +26,7 @@ use golem_common::model::application::{
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
-    ApplicationName as CardApplicationName, ApplicationResourcePattern, ApplicationVerb,
+    ApplicationResourcePattern, ApplicationVerb,
     ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
