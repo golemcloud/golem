@@ -35,7 +35,7 @@ benchmarks:
   # eviction-churn rather than memory. Dropped the low points that told us
   # nothing and pushed the range up with coarser steps.
   - name: throughput-saturation-echo-rust
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [4000, 8000, 16000, 24000, 32000]
     length: [0]
@@ -46,7 +46,7 @@ benchmarks:
   # Heavier per agent than the Rust variant, so a lower knee — but the previous
   # run reached 2000 without saturating, so push higher and drop the low points.
   - name: throughput-saturation-echo-ts
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1000, 2000, 4000, 6000, 8000]
     length: [0]
@@ -62,7 +62,7 @@ benchmarks:
   #          ~145 agents. The sweep brackets that ceiling and pushes well past it
   #          so the admission gate's reject/evict behaviour near OOM is exercised.
   - name: throughput-saturation-counters
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [50, 100, 150, 200, 300]
     length: [16777216]
