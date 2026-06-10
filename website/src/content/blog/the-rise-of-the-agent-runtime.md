@@ -1,6 +1,6 @@
 ---
 title: "The Rise of the Agent Runtime"
-date: "2026-06-05"
+date: "2026-06-10"
 author: "John A. De Goes"
 tags: ["Industry Articles", "AI Agent"]
 slug: "the-rise-of-the-agent-runtime"
