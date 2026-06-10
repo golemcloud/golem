@@ -25,6 +25,48 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
 }
 
 #[test]
+async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
+    let app_name = "test-app-help-no-upgrade";
+
+    let mut ctx = TestContext::new();
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let old_manifest = indoc! {"
+        manifestVersion: 1.5.0
+
+        app: test-app-help-no-upgrade
+
+        environments:
+          local:
+            server: local
+            componentPresets: debug
+
+        components:
+          test-app-help-no-upgrade:ts-main:
+            templates: ts
+    "};
+    fs::write_str(&manifest_path, old_manifest).unwrap();
+
+    // Help runs (without --yes, in a non-interactive shell) must not plan or
+    // apply manifest upgrades, while still showing application help
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
+    assert!(!outputs.stderr_contains("Planned automatic application manifest upgrade"));
+    assert!(!outputs.stderr_contains("This action requires confirmation"));
+    assert!(!outputs.stdout_contains("Planned automatic application manifest upgrade"));
+
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), old_manifest);
+}
+
+#[test]
 async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) {
     let app_name = "test-app-name";
 

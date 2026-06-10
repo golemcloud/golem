@@ -101,7 +101,7 @@ impl PluginCommandHandler {
             }
         }
 
-        self.ctx.log_handler().log_view(&entries);
+        self.ctx.log_handler().log_view(&entries)?;
 
         Ok(())
     }
@@ -117,7 +117,7 @@ impl PluginCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PluginRegistrationGetView(result));
+            .log_view(&PluginRegistrationGetView(result))?;
         Ok(())
     }
 
@@ -171,7 +171,7 @@ impl PluginCommandHandler {
 
             self.ctx
                 .log_handler()
-                .log_view(&PluginRegistrationRegisterView(result));
+                .log_view(&PluginRegistrationRegisterView(result))?;
 
             Ok(())
         }

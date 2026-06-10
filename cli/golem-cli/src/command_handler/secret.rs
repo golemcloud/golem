@@ -168,7 +168,7 @@ impl SecretCommandHandler {
         self.ctx.log_handler().log_view(&SecretCreateView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
-        });
+        })?;
 
         Ok(())
     }
@@ -183,7 +183,7 @@ impl SecretCommandHandler {
         self.ctx.log_handler().log_view(&SecretGetView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
-        });
+        })?;
 
         Ok(())
     }
@@ -221,7 +221,7 @@ impl SecretCommandHandler {
         self.ctx.log_handler().log_view(&SecretUpdateView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
-        });
+        })?;
 
         Ok(())
     }
@@ -244,7 +244,7 @@ impl SecretCommandHandler {
         self.ctx.log_handler().log_view(&SecretDeleteView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
-        });
+        })?;
 
         Ok(())
     }
@@ -308,7 +308,7 @@ impl SecretCommandHandler {
             environment_name: environment.environment_name.0,
             show_ids,
             secrets: results,
-        });
+        })?;
 
         Ok(())
     }

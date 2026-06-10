@@ -18,8 +18,11 @@
 use serde_json::{Map, Value};
 use std::fmt;
 
-/// Maximum nesting depth, to protect against stack overflow.
-const MAX_DEPTH: usize = 256;
+/// Maximum nesting depth, to protect against stack overflow (also on 2 MiB
+/// tokio worker thread stacks in debug builds). Far above any realistic
+/// value: JSON payloads parsed with serde_json are limited to a nesting depth
+/// of 128 by its recursion limit.
+const MAX_DEPTH: usize = 1024;
 
 const INDENT: &str = "  ";
 
@@ -33,7 +36,10 @@ impl fmt::Display for ToonEncodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ToonEncodeError::MaxDepthExceeded => {
-                write!(f, "TOON encoding failed: maximum nesting depth exceeded")
+                write!(
+                    f,
+                    "the value is too deeply nested (more than {MAX_DEPTH} levels) to be rendered as TOON, use another format (e.g. --format json) instead"
+                )
             }
             ToonEncodeError::Serialization(error) => {
                 write!(f, "TOON encoding failed: {error}")

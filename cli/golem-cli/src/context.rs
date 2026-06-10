@@ -126,10 +126,13 @@ impl Context {
 
         let app_source_mode =
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags);
-        ApplicationContext::plan_and_apply_manifest_upgrades_before_load(
-            app_source_mode.clone(),
-            global_flags.yes,
-        )?;
+
+        if log_output_for_help.is_none() {
+            ApplicationContext::plan_and_apply_manifest_upgrades_before_load(
+                app_source_mode.clone(),
+                global_flags.yes,
+            )?;
+        }
 
         let preloaded_app =
             ApplicationContext::preload_application(app_source_mode, global_flags.dev_mode)?;

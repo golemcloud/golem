@@ -519,13 +519,19 @@ fn spec_decode_errors() {
 
 #[test]
 fn encode_fails_on_too_deep_nesting() {
-    let deep = (0..300).fold(json!(1), |acc, _| json!({ "a": acc }));
+    let deep = (0..1100).fold(json!(1), |acc, _| json!({ "a": acc }));
     assert_eq!(encode_value(&deep), Err(ToonEncodeError::MaxDepthExceeded));
 
-    let deep_arrays = (0..300).fold(json!(1), |acc, _| json!([acc]));
+    let deep_arrays = (0..1100).fold(json!(1), |acc, _| json!([acc]));
     assert_eq!(
         encode_value(&deep_arrays),
         Err(ToonEncodeError::MaxDepthExceeded)
+    );
+
+    let max_depth_error = encode_value(&deep).unwrap_err().to_string();
+    assert!(
+        max_depth_error.contains("--format json"),
+        "{max_depth_error}"
     );
 }
 

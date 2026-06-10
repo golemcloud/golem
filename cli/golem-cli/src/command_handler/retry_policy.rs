@@ -94,7 +94,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyCreateView(result));
+            .log_view(&RetryPolicyCreateView(result))?;
 
         Ok(())
     }
@@ -115,7 +115,7 @@ impl RetryPolicyCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&results);
+        self.ctx.log_handler().log_view(&results)?;
 
         Ok(())
     }
@@ -166,7 +166,9 @@ impl RetryPolicyCommandHandler {
     async fn cmd_get(&self, name: Option<String>, id: Option<RetryPolicyId>) -> anyhow::Result<()> {
         let result = self.resolve_retry_policy(name, id).await?;
 
-        self.ctx.log_handler().log_view(&RetryPolicyGetView(result));
+        self.ctx
+            .log_handler()
+            .log_view(&RetryPolicyGetView(result))?;
 
         Ok(())
     }
@@ -205,7 +207,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyUpdateView(result));
+            .log_view(&RetryPolicyUpdateView(result))?;
 
         Ok(())
     }
@@ -227,7 +229,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyDeleteView(result));
+            .log_view(&RetryPolicyDeleteView(result))?;
 
         Ok(())
     }

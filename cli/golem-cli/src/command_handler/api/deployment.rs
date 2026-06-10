@@ -67,7 +67,7 @@ impl ApiDeploymentCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&HttpApiDeploymentGetView(result));
+            .log_view(&HttpApiDeploymentGetView(result))?;
 
         Ok(())
     }
@@ -98,7 +98,7 @@ impl ApiDeploymentCommandHandler {
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&deployments);
+        self.ctx.log_handler().log_view(&deployments)?;
 
         Ok(())
     }
