@@ -98,10 +98,10 @@ proptest! {
             "arg",
             ref_ty.clone(),
         )]);
-        let input_doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let input_doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
 
         let output = OutputSchema::Single(Box::new(ref_ty));
-        let output_doc = output_schema_to_json_schema(&graph, &output, JsonSchemaConfig::MCP)
+        let output_doc = output_schema_to_json_schema(&graph, &output, JsonSchemaConfig::WITHOUT_DRAFT_MARKER)
             .expect("single output renders");
 
         for (label, doc) in [

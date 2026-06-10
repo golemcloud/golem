@@ -20,9 +20,14 @@ pub mod resource;
 pub(crate) mod test_support;
 pub mod tool;
 
+use golem_common::base_model::agent::{
+    BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
+    TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
+};
 use golem_common::schema::adapters::{
     analysed_type_to_schema_graph, schema_value_to_value, value_and_type_to_typed_schema_value,
 };
+use golem_common::schema::canonical;
 use golem_common::schema::render::json_value::{from_json_value, to_json_value};
 use golem_wasm::Value;
 use golem_wasm::ValueAndType;
@@ -57,6 +62,90 @@ pub(crate) fn component_model_value_to_json(
 ) -> Result<serde_json::Value, String> {
     let typed = value_and_type_to_typed_schema_value(vat).map_err(|e| e.to_string())?;
     to_json_value(typed.graph(), typed.root_type(), typed.value()).map_err(|e| e.to_string())
+}
+
+/// Parse an unstructured-text element from its canonical JSON envelope
+/// `{ "text": "...", "language"?: "..." }` and apply the descriptor's language
+/// restrictions.
+///
+/// The envelope shape is parsed by the shared `golem-common` canonical Text
+/// codec — the same shape advertised by the MCP tool/resource schema renderer
+/// — so the advertised schema and the accepted JSON stay in agreement.
+pub(crate) fn parse_unstructured_text(
+    value_json: &serde_json::Value,
+    descriptor: &TextDescriptor,
+) -> Result<TextReferenceValue, String> {
+    let payload = canonical::text::from_json(value_json).map_err(|e| e.to_string())?;
+
+    if let Some(code) = &payload.language
+        && let Some(allowed) = &descriptor.restrictions
+        && !allowed.is_empty()
+        && !allowed.iter().any(|t| &t.language_code == code)
+    {
+        let expected: Vec<&str> = allowed.iter().map(|t| t.language_code.as_str()).collect();
+        return Err(format!(
+            "language code '{}' is not allowed. Expected one of: {}",
+            code,
+            expected.join(", ")
+        ));
+    }
+
+    let text_type = payload
+        .language
+        .map(|language_code| TextType { language_code });
+    Ok(TextReferenceValue {
+        value: TextReference::Inline(TextSource {
+            data: payload.text,
+            text_type,
+        }),
+    })
+}
+
+/// Parse an unstructured-binary element from its canonical JSON envelope
+/// `{ "bytes": "<base64url-no-pad>", "mime_type"?: "..." }` and apply the
+/// descriptor's MIME restrictions.
+///
+/// The envelope shape is parsed by the shared `golem-common` canonical Binary
+/// codec — the same shape advertised by the MCP tool/resource schema renderer
+/// — so the advertised schema and the accepted JSON stay in agreement. The
+/// canonical encoding is URL-safe base64 without padding.
+pub(crate) fn parse_unstructured_binary(
+    value_json: &serde_json::Value,
+    descriptor: &BinaryDescriptor,
+) -> Result<BinaryReferenceValue, String> {
+    let payload = canonical::binary::from_json(value_json).map_err(|e| e.to_string())?;
+
+    if let Some(allowed) = &descriptor.restrictions
+        && !allowed.is_empty()
+    {
+        match &payload.mime_type {
+            Some(mime) if allowed.iter().any(|t| &t.mime_type == mime) => {}
+            Some(mime) => {
+                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                return Err(format!(
+                    "MIME type '{}' is not allowed. Expected one of: {}",
+                    mime,
+                    expected.join(", ")
+                ));
+            }
+            None => {
+                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                return Err(format!(
+                    "MIME type is required. Expected one of: {}",
+                    expected.join(", ")
+                ));
+            }
+        }
+    }
+
+    Ok(BinaryReferenceValue {
+        value: BinaryReference::Inline(BinarySource {
+            data: payload.bytes,
+            binary_type: BinaryType {
+                mime_type: payload.mime_type.unwrap_or_default(),
+            },
+        }),
+    })
 }
 
 #[cfg(test)]

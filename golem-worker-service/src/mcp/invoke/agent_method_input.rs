@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use crate::mcp::invoke::multimodal_params_extraction::extract_multimodal_element_value;
-use base64::Engine;
 use golem_common::base_model::agent::{
-    BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
-    DataSchema, ElementSchema, NamedElementSchema, TextReference, TextReferenceValue, TextSource,
-    TextType, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+    ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema, UntypedDataValue,
+    UntypedElementValue, UntypedNamedElementValue,
 };
 use golem_wasm::analysis::AnalysedType;
 use rmcp::model::JsonObject;
@@ -45,16 +43,24 @@ pub fn get_agent_method_input(
 
             let mut named_elements = Vec::new();
             for (i, part) in parts_array.iter().enumerate() {
+                // Each multimodal part is a canonical variant object: a
+                // single-key object `{ <element name>: <value> }`.
                 let obj = part.as_object().ok_or_else(|| {
-                    format!("parts[{}] must be an object with 'name' and 'value'", i)
+                    format!(
+                        "parts[{}] must be a single-key object {{ <name>: <value> }}",
+                        i
+                    )
                 })?;
+                if obj.len() != 1 {
+                    return Err(format!(
+                        "parts[{}] must be a single-key object {{ <name>: <value> }}, got {} keys",
+                        i,
+                        obj.len()
+                    ));
+                }
+                let (name, value_json) = obj.iter().next().expect("object has exactly one entry");
 
-                let name = obj
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| format!("parts[{}] is missing 'name' string field", i))?;
-
-                let elem_schema = schema_map.get(name).ok_or_else(|| {
+                let elem_schema = schema_map.get(name.as_str()).ok_or_else(|| {
                     format!(
                         "parts[{}]: unknown element name '{}'. Expected one of: {}",
                         i,
@@ -62,10 +68,6 @@ pub fn get_agent_method_input(
                         schema_map.keys().copied().collect::<Vec<_>>().join(", ")
                     )
                 })?;
-
-                let value_json = obj
-                    .get("value")
-                    .ok_or_else(|| format!("parts[{}] is missing 'value' field", i))?;
 
                 let element = extract_multimodal_element_value(name, value_json, elem_schema, i)?;
 
@@ -117,99 +119,16 @@ fn extract_single_element_value(
             Ok(UntypedElementValue::ComponentModel(value))
         }
         ElementSchema::UnstructuredText(descriptor) => {
-            let obj = match json_value {
-                Some(serde_json::Value::Object(o)) => o,
-                Some(_) => {
-                    return Err(format!(
-                        "Parameter '{}' must be an object with 'data' and optional 'languageCode'",
-                        name
-                    ));
-                }
-                None => return Err(format!("Missing parameter: {}", name)),
-            };
-
-            let data = obj
-                .get("data")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| format!("Parameter '{}' is missing 'data' string field", name))?
-                .to_string();
-
-            let language_code = obj.get("languageCode").and_then(|v| v.as_str());
-
-            if let Some(code) = language_code
-                && let Some(allowed) = &descriptor.restrictions
-                && !allowed.is_empty()
-                && !allowed.iter().any(|t| t.language_code == code)
-            {
-                let expected: Vec<&str> =
-                    allowed.iter().map(|t| t.language_code.as_str()).collect();
-                return Err(format!(
-                    "Parameter '{}': language code '{}' is not allowed. Expected one of: {}",
-                    name,
-                    code,
-                    expected.join(", ")
-                ));
-            }
-
-            let text_type = language_code.map(|code| TextType {
-                language_code: code.to_string(),
-            });
-
-            Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Inline(TextSource { data, text_type }),
-            }))
+            let json_value = json_value.ok_or_else(|| format!("Missing parameter: {}", name))?;
+            let value = crate::mcp::invoke::parse_unstructured_text(json_value, descriptor)
+                .map_err(|e| format!("Parameter '{}': {}", name, e))?;
+            Ok(UntypedElementValue::UnstructuredText(value))
         }
         ElementSchema::UnstructuredBinary(descriptor) => {
-            let obj = match json_value {
-                Some(serde_json::Value::Object(o)) => o,
-                Some(_) => {
-                    return Err(format!(
-                        "Parameter '{}' must be an object with 'data' and 'mimeType'",
-                        name
-                    ));
-                }
-                None => return Err(format!("Missing parameter: {}", name)),
-            };
-
-            let b64 = obj
-                .get("data")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| format!("Parameter '{}' is missing 'data' string field", name))?;
-
-            let mime_type = obj
-                .get("mimeType")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!("Parameter '{}' is missing 'mimeType' string field", name)
-                })?;
-
-            if let Some(allowed) = &descriptor.restrictions
-                && !allowed.is_empty()
-                && !allowed.iter().any(|t| t.mime_type == mime_type)
-            {
-                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
-                return Err(format!(
-                    "Parameter '{}': MIME type '{}' is not allowed. Expected one of: {}",
-                    name,
-                    mime_type,
-                    expected.join(", ")
-                ));
-            }
-
-            let data = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| format!("Failed to decode base64 parameter '{}': {}", name, e))?;
-
-            Ok(UntypedElementValue::UnstructuredBinary(
-                BinaryReferenceValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data,
-                        binary_type: BinaryType {
-                            mime_type: mime_type.to_string(),
-                        },
-                    }),
-                },
-            ))
+            let json_value = json_value.ok_or_else(|| format!("Missing parameter: {}", name))?;
+            let value = crate::mcp::invoke::parse_unstructured_binary(json_value, descriptor)
+                .map_err(|e| format!("Parameter '{}': {}", name, e))?;
+            Ok(UntypedElementValue::UnstructuredBinary(value))
         }
     }
 }
@@ -218,7 +137,8 @@ fn extract_single_element_value(
 mod tests {
     use super::*;
     use golem_common::base_model::agent::{
-        BinaryDescriptor, ComponentModelElementSchema, NamedElementSchemas, TextDescriptor,
+        BinaryDescriptor, BinaryReference, ComponentModelElementSchema, NamedElementSchemas,
+        TextDescriptor, TextReference,
     };
     use golem_wasm::analysis::analysed_type::{option, str};
     use serde_json::json;
@@ -262,7 +182,7 @@ mod tests {
         let schema = DataSchema::Tuple(NamedElementSchemas {
             elements: vec![text_schema("report")],
         });
-        let args: JsonObject = json!({"report": {"data": "hello world"}})
+        let args: JsonObject = json!({"report": {"text": "hello world"}})
             .as_object()
             .unwrap()
             .clone();
@@ -284,8 +204,8 @@ mod tests {
         let schema = DataSchema::Tuple(NamedElementSchemas {
             elements: vec![binary_schema("image")],
         });
-        // base64("abc") = "YWJj"
-        let args: JsonObject = json!({"image": {"data": "YWJj", "mimeType": "image/png"}})
+        // base64url-no-pad("abc") = "YWJj"
+        let args: JsonObject = json!({"image": {"bytes": "YWJj", "mime_type": "image/png"}})
             .as_object()
             .unwrap()
             .clone();
@@ -321,7 +241,7 @@ mod tests {
             elements: vec![binary_schema("image")],
         });
         let args: JsonObject =
-            json!({"image": {"data": "not-valid-b64!!!", "mimeType": "image/png"}})
+            json!({"image": {"bytes": "not-valid-b64!!!", "mime_type": "image/png"}})
                 .as_object()
                 .unwrap()
                 .clone();
@@ -330,16 +250,30 @@ mod tests {
     }
 
     #[test]
-    fn error_on_binary_missing_mime_type() {
+    fn binary_without_mime_type_is_accepted() {
+        // Canonical binary makes `mime_type` optional; an absent MIME type maps
+        // to an empty legacy `BinaryType.mime_type`.
         let schema = DataSchema::Tuple(NamedElementSchemas {
             elements: vec![binary_schema("image")],
         });
-        let args: JsonObject = json!({"image": {"data": "YWJj"}})
+        let args: JsonObject = json!({"image": {"bytes": "YWJj"}})
             .as_object()
             .unwrap()
             .clone();
-        let err = get_agent_method_input(&args, &schema).unwrap_err();
-        assert!(err.contains("mimeType"), "got: {err}");
+        let result = get_agent_method_input(&args, &schema).unwrap();
+        match result {
+            UntypedDataValue::Tuple(elems) => match &elems[0] {
+                UntypedElementValue::UnstructuredBinary(b) => match &b.value {
+                    BinaryReference::Inline(src) => {
+                        assert_eq!(src.data, b"abc");
+                        assert_eq!(src.binary_type.mime_type, "");
+                    }
+                    _ => panic!("expected inline binary"),
+                },
+                _ => panic!("expected unstructured binary"),
+            },
+            _ => panic!("expected tuple"),
+        }
     }
 
     #[test]
@@ -349,8 +283,8 @@ mod tests {
         });
         let args: JsonObject = json!({
             "parts": [
-                {"name": "description", "value": {"data": "a photo"}},
-                {"name": "photo", "value": {"data": "AQID", "mimeType": "image/png"}}
+                {"description": {"text": "a photo"}},
+                {"photo": {"bytes": "AQID", "mime_type": "image/png"}}
             ]
         })
         .as_object()
@@ -367,7 +301,7 @@ mod tests {
         });
         let args: JsonObject = json!({
             "parts": [
-                {"name": "unknown_field", "value": {"data": "hello"}}
+                {"unknown_field": {"text": "hello"}}
             ]
         })
         .as_object()

@@ -753,7 +753,7 @@ mod agent_entry_points {
     use test_r::test;
 
     #[test]
-    fn mcp_config_omits_draft_marker() {
+    fn without_draft_marker_config_omits_draft_marker() {
         let ty = SchemaType::record(vec![NamedFieldType {
             name: "id".to_string(),
             body: SchemaType::u32(),
@@ -761,11 +761,12 @@ mod agent_entry_points {
         }]);
         let graph = SchemaGraph::anonymous(ty.clone());
         let canonical = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::CANONICAL);
-        let mcp = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::MCP);
+        let without_marker =
+            to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
         assert!(canonical.get("$schema").is_some());
         assert!(
-            mcp.get("$schema").is_none(),
-            "MCP config must omit the $schema draft marker: {mcp}"
+            without_marker.get("$schema").is_none(),
+            "WITHOUT_DRAFT_MARKER config must omit the $schema draft marker: {without_marker}"
         );
     }
 
@@ -781,7 +782,8 @@ mod agent_entry_points {
             ),
         ]);
         let graph = SchemaGraph::empty();
-        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
         assert_eq!(doc["type"], json!("object"));
         assert_eq!(doc["additionalProperties"], json!(false));
         let props = doc["properties"].as_object().expect("properties object");
@@ -824,7 +826,8 @@ mod agent_entry_points {
             body: user_def_body,
         });
         let input = InputSchema::Parameters(vec![NamedField::user_supplied("user", user_ty)]);
-        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
         assert!(
             doc.get("$defs").and_then(|d| d.get("myapp.user")).is_some(),
             "named def must be attached at the document root: {doc}"
@@ -860,7 +863,8 @@ mod agent_entry_points {
             metadata: Default::default(),
         }]);
         let graph = SchemaGraph::empty();
-        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
         let parts = &doc["properties"]["parts"];
         assert_eq!(parts["type"], json!("array"));
         assert!(
@@ -875,18 +879,23 @@ mod agent_entry_points {
     fn output_schema_unit_is_none_and_single_renders() {
         let graph = SchemaGraph::empty();
         assert!(
-            output_schema_to_json_schema(&graph, &OutputSchema::Unit, JsonSchemaConfig::MCP)
-                .is_none()
+            output_schema_to_json_schema(
+                &graph,
+                &OutputSchema::Unit,
+                JsonSchemaConfig::WITHOUT_DRAFT_MARKER
+            )
+            .is_none()
         );
         let out = OutputSchema::Single(Box::new(SchemaType::u32()));
         let rendered =
-            output_schema_to_json_schema(&graph, &out, JsonSchemaConfig::MCP).expect("some schema");
+            output_schema_to_json_schema(&graph, &out, JsonSchemaConfig::WITHOUT_DRAFT_MARKER)
+                .expect("some schema");
         assert_eq!(rendered["type"], json!("integer"));
         assert!(rendered.get("$schema").is_none());
     }
 
     #[test]
-    fn mcp_text_renders_data_language_code_shape() {
+    fn text_with_languages_renders_canonical_shape() {
         use crate::schema::schema_type::TextRestrictions;
         let ty = SchemaType::text(TextRestrictions {
             languages: Some(vec!["en".to_string(), "fr".to_string()]),
@@ -895,46 +904,18 @@ mod agent_entry_points {
             regex: None,
         });
         let graph = SchemaGraph::anonymous(ty.clone());
-        let doc = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::MCP);
+        let doc = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
         assert_eq!(doc["type"], json!("object"));
         let props = doc["properties"].as_object().expect("properties");
-        assert_eq!(props["data"]["type"], json!("string"));
-        assert_eq!(props["data"]["description"], json!("Text content"));
-        assert!(props.contains_key("languageCode"));
-        assert_eq!(
-            props["languageCode"]["description"],
-            json!("Language code. Must be one of: en, fr")
-        );
-        assert_eq!(doc["required"], json!(["data"]));
-        // Canonical mode renders the `{ text, language }` shape instead.
-        let canonical = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::CANONICAL);
-        assert!(canonical["properties"].get("text").is_some());
+        // Canonical Text shape: `{ text, language? }`.
+        assert_eq!(props["text"]["type"], json!("string"));
+        assert!(props.contains_key("language"));
+        assert_eq!(doc["required"], json!(["text"]));
+        assert_eq!(doc["description"], json!("Allowed languages: en, fr"));
     }
 
     #[test]
-    fn mcp_binary_renders_data_mime_type_shape() {
-        use crate::schema::schema_type::BinaryRestrictions;
-        let ty = SchemaType::binary(BinaryRestrictions {
-            mime_types: Some(vec!["image/png".to_string()]),
-            min_bytes: None,
-            max_bytes: None,
-        });
-        let graph = SchemaGraph::anonymous(ty.clone());
-        let doc = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::MCP);
-        let props = doc["properties"].as_object().expect("properties");
-        assert_eq!(
-            props["data"]["description"],
-            json!("Base64-encoded binary data")
-        );
-        assert_eq!(
-            props["mimeType"]["description"],
-            json!("MIME type. Must be one of: image/png")
-        );
-        assert_eq!(doc["required"], json!(["data", "mimeType"]));
-    }
-
-    #[test]
-    fn mcp_multimodal_parts_items_are_inline_name_value_objects() {
+    fn multimodal_parts_items_are_canonical_variant_objects() {
         let mut variant = SchemaType::variant(vec![
             VariantCaseType {
                 name: "description".to_string(),
@@ -953,25 +934,30 @@ mod agent_entry_points {
             SchemaType::list(variant),
         )]);
         let graph = SchemaGraph::empty();
-        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
         let items = &doc["properties"]["parts"]["items"];
         let one_of = items["oneOf"].as_array().expect("oneOf array");
         assert_eq!(one_of.len(), 2);
-        // Each branch is an inline `{ name: const, value: <schema> }` object,
+        // Each branch is the canonical inline variant object `{ <caseName>: <payload> }`,
         // not a `$ref` — and no `$defs` indirection is created.
         assert_eq!(
-            one_of[0]["properties"]["name"]["const"],
-            json!("description")
+            one_of[0]["properties"]["description"]["type"],
+            json!("string")
         );
-        assert_eq!(one_of[0]["properties"]["value"]["type"], json!("string"));
-        // The binary branch value uses the MCP content-block shape.
+        assert_eq!(one_of[0]["required"], json!(["description"]));
+        // The binary branch value uses the canonical `{ bytes, mime_type? }` shape.
         assert_eq!(
-            one_of[1]["properties"]["value"]["required"],
-            json!(["data", "mimeType"])
+            one_of[1]["properties"]["photo"]["properties"]["bytes"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            one_of[1]["properties"]["photo"]["required"],
+            json!(["bytes"])
         );
         assert!(
             doc.get("$defs").is_none(),
-            "MCP multimodal must not synthesise per-branch $defs: {doc}"
+            "multimodal must not synthesise per-branch $defs: {doc}"
         );
     }
 }

@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! MCP tool/resource schema export, driven by the shared, configurable
-//! `golem-common` JSON Schema renderer (`JsonSchemaConfig::MCP`).
+//! MCP tool/resource schema export, driven by the shared `golem-common` JSON
+//! Schema renderer.
 //!
-//! There is no MCP-specific renderer: the same renderer that produces
-//! canonical JSON Schema documents is configured to emit the MCP content-block
-//! shapes (`{ data, languageCode }` for text, `{ data, mimeType }` for binary,
-//! and the multimodal `parts` array of `{ name, value }` objects).
+//! There is no MCP-specific renderer and no MCP-specific JSON shapes: the same
+//! renderer that produces canonical JSON Schema documents is used here, only
+//! configured to omit the `$schema` draft marker
+//! (`JsonSchemaConfig::WITHOUT_DRAFT_MARKER`) since tool/resource schemas are
+//! embedded rather than standalone. Text renders as `{ text, language? }`,
+//! binary as `{ bytes (base64url), mime_type? }`, and multimodal lists as a
+//! `parts` array of canonical variant objects `{ <caseName>: <payload> }`.
 
 use crate::mcp::schema::field_disambiguation::field_name_mapping;
 use golem_common::schema::adapters::{
@@ -61,7 +64,7 @@ pub fn input_schema_to_mcp(graph: &SchemaGraph, input: &InputSchema) -> JsonObje
     rmcp::model::object(input_schema_to_json_schema(
         graph,
         input,
-        JsonSchemaConfig::MCP,
+        JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
     ))
 }
 
@@ -98,7 +101,8 @@ fn structured_output_schema(graph: &SchemaGraph, output: &OutputSchema) -> Optio
     if is_unstructured_output(graph, ty) {
         return None;
     }
-    let mut inner = output_schema_to_json_schema(graph, output, JsonSchemaConfig::MCP)?;
+    let mut inner =
+        output_schema_to_json_schema(graph, output, JsonSchemaConfig::WITHOUT_DRAFT_MARKER)?;
     // The rendered output is a self-contained JSON Schema document: any named
     // definitions live in a `$defs` object at *its* root and every `$ref`
     // points at `#/$defs/<id>` (document-root relative). Because we re-root the

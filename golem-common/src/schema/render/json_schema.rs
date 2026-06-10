@@ -29,64 +29,29 @@ use std::collections::{HashMap, HashSet};
 const JSON_SCHEMA_DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 const MIME_TYPE_PATTERN: &str = "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$";
 
-/// JSON shape used for the rich `Text` / `Binary` scalar nodes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RichScalarShape {
-    /// Canonical encoding: `Text` → `{ text, language? }`, `Binary` →
-    /// `{ bytes (base64url), mime_type? }`.
-    Canonical,
-    /// MCP content-block encoding: `Text` → `{ data, languageCode? }`,
-    /// `Binary` → `{ data (base64), mimeType }`. Matches the historical MCP
-    /// wire shapes that MCP clients and the invoke-side parsers expect.
-    McpLegacy,
-}
-
-/// JSON shape used for a multimodal `list<variant<… Role::Multimodal>>` node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MultimodalShape {
-    /// Render like any other `list<variant<…>>`: an array whose items are a
-    /// `oneOf` of inline `{ <case name>: <case payload schema> }` objects
-    /// (or a bare `const` for a payload-less case).
-    Canonical,
-    /// MCP "parts" encoding: an array whose items are a `oneOf` of inline
-    /// `{ name: <const case>, value: <case payload schema> }` objects.
-    McpParts,
-}
-
 /// Configuration for the JSON Schema renderer.
 ///
-/// The renderer produces the same structural document for every consumer for
-/// the common type set; the knobs below select between the canonical
-/// standalone JSON Schema form and the MCP tool-schema form (no `$schema`
-/// draft marker, MCP content-block shapes for `Text` / `Binary` and the
-/// multimodal `parts` array).
+/// The renderer always produces the same canonical structural document for
+/// every consumer; the only knob is whether to emit the `$schema` draft
+/// marker at the document root (consumers that embed the schema elsewhere,
+/// such as tool/resource schemas, omit it).
 #[derive(Clone, Copy, Debug)]
 pub struct JsonSchemaConfig {
     /// Emit the `$schema` JSON Schema draft marker at the document root.
     pub include_draft_marker: bool,
-    /// JSON shape for `Text` / `Binary` nodes.
-    pub rich_scalar_shape: RichScalarShape,
-    /// JSON shape for multimodal `list<variant<… Role::Multimodal>>` nodes.
-    pub multimodal_shape: MultimodalShape,
 }
 
 impl JsonSchemaConfig {
     /// Canonical standalone JSON Schema document (includes the `$schema`
-    /// draft marker, canonical rich-scalar and multimodal shapes).
+    /// draft marker).
     pub const CANONICAL: Self = Self {
         include_draft_marker: true,
-        rich_scalar_shape: RichScalarShape::Canonical,
-        multimodal_shape: MultimodalShape::Canonical,
     };
 
-    /// MCP tool input/output schema document. MCP clients do not expect the
-    /// `$schema` draft marker on tool schemas, so it is omitted; `Text` /
-    /// `Binary` use the MCP content-block shapes and multimodal lists use the
-    /// `parts` array shape.
-    pub const MCP: Self = Self {
+    /// Canonical JSON Schema document without the `$schema` draft marker, for
+    /// consumers that embed the schema elsewhere (e.g. tool/resource schemas).
+    pub const WITHOUT_DRAFT_MARKER: Self = Self {
         include_draft_marker: false,
-        rich_scalar_shape: RichScalarShape::McpLegacy,
-        multimodal_shape: MultimodalShape::McpParts,
     };
 }
 
@@ -713,12 +678,8 @@ pub(super) fn render_type(
             ])
         }
 
-        SchemaType::Variant { cases, metadata } => {
-            let multimodal = matches!(
-                metadata.role,
-                Some(crate::schema::metadata::Role::Multimodal)
-            );
-            Value::Object(variant_schema(graph, cases, multimodal, table, config))
+        SchemaType::Variant { cases, .. } => {
+            Value::Object(variant_schema(graph, cases, table, config))
         }
 
         SchemaType::Enum { cases, .. } => obj([
@@ -816,10 +777,8 @@ pub(super) fn render_type(
 
         SchemaType::Result { spec, .. } => Value::Object(result_schema(graph, spec, table, config)),
 
-        SchemaType::Text { restrictions, .. } => Value::Object(text_schema(restrictions, config)),
-        SchemaType::Binary { restrictions, .. } => {
-            Value::Object(binary_schema(restrictions, config))
-        }
+        SchemaType::Text { restrictions, .. } => Value::Object(text_schema(restrictions)),
+        SchemaType::Binary { restrictions, .. } => Value::Object(binary_schema(restrictions)),
         SchemaType::Path { spec, .. } => Value::Object(path_schema(spec)),
         SchemaType::Url { restrictions, .. } => Value::Object(url_schema(restrictions)),
         SchemaType::Datetime { .. } => obj([
@@ -885,54 +844,9 @@ fn unsigned_64_schema() -> Value {
 fn variant_schema(
     graph: &SchemaGraph,
     cases: &[VariantCaseType],
-    multimodal: bool,
     table: &BranchNameTable,
     config: JsonSchemaConfig,
 ) -> Map<String, Value> {
-    // MCP "parts" mode renders a multimodal variant inline as a `oneOf` of
-    // `{ name: <const case>, value: <case payload schema> }` objects,
-    // matching the historical worker-service MCP renderer. The carried tag
-    // (the case name) is advertised as the `name` const.
-    if multimodal && config.multimodal_shape == MultimodalShape::McpParts {
-        let one_of: Vec<Value> = cases
-            .iter()
-            .map(|case| {
-                let value_schema = match &case.payload {
-                    Some(payload_ty) => render_type(graph, payload_ty, false, table, config),
-                    None => Map::new().into(),
-                };
-                obj([
-                    ("type", Value::String("object".to_string())),
-                    (
-                        "properties",
-                        Value::Object({
-                            let mut props = Map::new();
-                            props.insert(
-                                "name".to_string(),
-                                obj([
-                                    ("type", Value::String("string".to_string())),
-                                    ("const", Value::String(case.name.clone())),
-                                ]),
-                            );
-                            props.insert("value".to_string(), value_schema);
-                            props
-                        }),
-                    ),
-                    (
-                        "required",
-                        Value::Array(vec![
-                            Value::String("name".to_string()),
-                            Value::String("value".to_string()),
-                        ]),
-                    ),
-                    ("additionalProperties", Value::Bool(false)),
-                ])
-            })
-            .collect();
-        let mut out = Map::new();
-        out.insert("oneOf".to_string(), Value::Array(one_of));
-        return out;
-    }
     let one_of: Vec<Value> = cases
         .iter()
         .map(|case| match &case.payload {
@@ -1009,10 +923,7 @@ fn result_schema(
     out
 }
 
-fn text_schema(restrictions: &TextRestrictions, config: JsonSchemaConfig) -> Map<String, Value> {
-    if config.rich_scalar_shape == RichScalarShape::McpLegacy {
-        return mcp_text_schema(restrictions);
-    }
+fn text_schema(restrictions: &TextRestrictions) -> Map<String, Value> {
     // Canonical Text JSON shape: `{ text: string, language?: string }` with
     // length / pattern constraints lifted into the `text` field.
     let mut text_field = Map::new();
@@ -1049,89 +960,7 @@ fn text_schema(restrictions: &TextRestrictions, config: JsonSchemaConfig) -> Map
     m
 }
 
-/// MCP content-block shape for `Text`: `{ data, languageCode? }`. Mirrors the
-/// historical worker-service MCP renderer so MCP clients and the invoke-side
-/// parser agree on the wire shape.
-fn mcp_text_schema(restrictions: &TextRestrictions) -> Map<String, Value> {
-    let language_code_description = match &restrictions.languages {
-        Some(codes) if !codes.is_empty() => {
-            format!("Language code. Must be one of: {}", codes.join(", "))
-        }
-        _ => "Language code".to_string(),
-    };
-    let mut properties = Map::new();
-    properties.insert(
-        "data".to_string(),
-        obj([
-            ("type", Value::String("string".to_string())),
-            ("description", Value::String("Text content".to_string())),
-        ]),
-    );
-    properties.insert(
-        "languageCode".to_string(),
-        obj([
-            ("type", Value::String("string".to_string())),
-            ("description", Value::String(language_code_description)),
-        ]),
-    );
-    let mut m = Map::new();
-    m.insert("type".to_string(), Value::String("object".to_string()));
-    m.insert("properties".to_string(), Value::Object(properties));
-    m.insert(
-        "required".to_string(),
-        Value::Array(vec![Value::String("data".to_string())]),
-    );
-    m
-}
-
-/// MCP content-block shape for `Binary`: `{ data (base64), mimeType }`. The
-/// `data` field is standard-base64 encoded to match the invoke-side parser
-/// (`base64::engine::general_purpose::STANDARD`).
-fn mcp_binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
-    let mime_type_description = match &restrictions.mime_types {
-        Some(mimes) if !mimes.is_empty() => {
-            format!("MIME type. Must be one of: {}", mimes.join(", "))
-        }
-        _ => "MIME type".to_string(),
-    };
-    let mut properties = Map::new();
-    properties.insert(
-        "data".to_string(),
-        obj([
-            ("type", Value::String("string".to_string())),
-            (
-                "description",
-                Value::String("Base64-encoded binary data".to_string()),
-            ),
-        ]),
-    );
-    properties.insert(
-        "mimeType".to_string(),
-        obj([
-            ("type", Value::String("string".to_string())),
-            ("description", Value::String(mime_type_description)),
-        ]),
-    );
-    let mut m = Map::new();
-    m.insert("type".to_string(), Value::String("object".to_string()));
-    m.insert("properties".to_string(), Value::Object(properties));
-    m.insert(
-        "required".to_string(),
-        Value::Array(vec![
-            Value::String("data".to_string()),
-            Value::String("mimeType".to_string()),
-        ]),
-    );
-    m
-}
-
-fn binary_schema(
-    restrictions: &BinaryRestrictions,
-    config: JsonSchemaConfig,
-) -> Map<String, Value> {
-    if config.rich_scalar_shape == RichScalarShape::McpLegacy {
-        return mcp_binary_schema(restrictions);
-    }
+fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
     // Canonical Binary JSON shape: `{ bytes: base64url-string, mime_type?: string }`.
     // `min_bytes` / `max_bytes` count *raw* bytes; the JSON field is
     // base64url-no-pad-encoded, so the on-wire string length is
