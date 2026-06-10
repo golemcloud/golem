@@ -67,6 +67,9 @@ pub fn error_gen() -> Module {
             fn status_code(&self) -> u16;
             fn errors(&self) -> ErrorMessages<'_>;
             fn code(&self) -> Option<&str>;
+            fn additional_fields(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
+                None
+            }
             fn is_status_code(&self, status_code: u16) -> bool {
                 self.status_code() == status_code
             }

@@ -191,18 +191,7 @@ pub fn format_message_highlight<T: ToString + ?Sized>(s: &T) -> String {
 }
 
 pub fn format_stack(stack: &str) -> String {
-    stack
-        .lines()
-        .map(|line| {
-            if line.contains("called without being linked with an implementation") {
-                line.red().bold().to_string()
-            } else if line.contains("<unknown>!<wasm function") {
-                line.bright_black().to_string()
-            } else {
-                line.yellow().to_string()
-            }
-        })
-        .join("\n")
+    stack.lines().map(format_worker_error_line).join("\n")
 }
 
 pub fn format_error(error: &str) -> String {
@@ -222,13 +211,27 @@ pub fn format_stderr(stderr: &str) -> String {
                 || line.starts_with("Error:")
             {
                 line.red().bold().to_string()
-            } else if line.contains("RUST_BACKTRACE=1") {
+            } else if is_wasm_frame(line) || line.contains("RUST_BACKTRACE=1") {
                 line.bright_black().to_string()
             } else {
                 line.yellow().to_string()
             }
         })
         .join("\n")
+}
+
+fn format_worker_error_line(line: &str) -> String {
+    if line.contains("called without being linked with an implementation") {
+        line.red().bold().to_string()
+    } else if is_wasm_frame(line) {
+        line.bright_black().to_string()
+    } else {
+        line.yellow().to_string()
+    }
+}
+
+fn is_wasm_frame(line: &str) -> bool {
+    line.contains("<unknown>!<wasm function") || line.contains("agent_guest.wasm!")
 }
 
 pub fn format_binary_size(size: &u64) -> String {
