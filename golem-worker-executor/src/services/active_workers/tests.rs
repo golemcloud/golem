@@ -781,14 +781,14 @@ mod component_module_charge {
 
         assert_eq!(controller.headroom_bytes(), limit);
 
-        let first = registry.acquire(component.clone(), module_bytes).await;
+        let first = registry.acquire(component, module_bytes).await;
         assert_eq!(
             controller.headroom_bytes(),
             limit - module_bytes,
             "first worker of a component must reserve the module size with the gate"
         );
 
-        let second = registry.acquire(component.clone(), module_bytes).await;
+        let second = registry.acquire(component, module_bytes).await;
         assert_eq!(
             controller.headroom_bytes(),
             limit - module_bytes,
