@@ -167,7 +167,7 @@ impl MonomorphizeOwner<AccountOwnerPattern> for PolymorphicAccountOwnerPattern {
     ) -> Result<AccountOwnerPattern, String> {
         match self {
             Self::Concrete(owner) => Ok(owner.clone()),
-            Self::Env | Self::Self_ => Ok(AccountOwnerPattern::Account {
+            Self::Account => Ok(AccountOwnerPattern::Account {
                 account: context.account.clone(),
             }),
         }
@@ -181,7 +181,14 @@ impl MonomorphizeOwner<ApplicationOwnerPattern> for PolymorphicApplicationOwnerP
     ) -> Result<ApplicationOwnerPattern, String> {
         match self {
             Self::Concrete(owner) => Ok(owner.clone()),
-            Self::Env | Self::Self_ => Ok(ApplicationOwnerPattern::Application {
+            Self::AccountApplications => Ok(ApplicationOwnerPattern::AccountApplications {
+                account: context.account.clone(),
+            }),
+            Self::AccountApplication { application } => Ok(ApplicationOwnerPattern::Application {
+                account: context.account.clone(),
+                application: application.clone(),
+            }),
+            Self::App => Ok(ApplicationOwnerPattern::Application {
                 account: context.account.clone(),
                 application: context.application.clone(),
             }),
@@ -196,7 +203,35 @@ impl MonomorphizeOwner<EnvironmentOwnerPattern> for PolymorphicEnvironmentOwnerP
     ) -> Result<EnvironmentOwnerPattern, String> {
         match self {
             Self::Concrete(owner) => Ok(owner.clone()),
-            Self::Env | Self::Self_ => Ok(EnvironmentOwnerPattern::Environment {
+            Self::AccountEnvironments => Ok(EnvironmentOwnerPattern::AccountEnvironments {
+                account: context.account.clone(),
+            }),
+            Self::AccountApplicationEnvironments { application } => {
+                Ok(EnvironmentOwnerPattern::ApplicationEnvironments {
+                    account: context.account.clone(),
+                    application: application.clone(),
+                })
+            }
+            Self::AccountEnvironment {
+                application,
+                environment,
+            } => Ok(EnvironmentOwnerPattern::Environment {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+            }),
+            Self::ApplicationEnvironments => Ok(EnvironmentOwnerPattern::ApplicationEnvironments {
+                account: context.account.clone(),
+                application: context.application.clone(),
+            }),
+            Self::ApplicationEnvironment { environment } => {
+                Ok(EnvironmentOwnerPattern::Environment {
+                    account: context.account.clone(),
+                    application: context.application.clone(),
+                    environment: environment.clone(),
+                })
+            }
+            Self::Env => Ok(EnvironmentOwnerPattern::Environment {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
@@ -212,6 +247,53 @@ impl MonomorphizeOwner<ComponentOwnerPattern> for PolymorphicComponentOwnerPatte
     ) -> Result<ComponentOwnerPattern, String> {
         match self {
             Self::Concrete(owner) => Ok(owner.clone()),
+            Self::AccountComponents => Ok(ComponentOwnerPattern::AccountComponents {
+                account: context.account.clone(),
+            }),
+            Self::AccountApplicationComponents { application } => {
+                Ok(ComponentOwnerPattern::ApplicationComponents {
+                    account: context.account.clone(),
+                    application: application.clone(),
+                })
+            }
+            Self::AccountEnvironmentComponents {
+                application,
+                environment,
+            } => Ok(ComponentOwnerPattern::EnvironmentComponents {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+            }),
+            Self::AccountComponent {
+                application,
+                environment,
+                component,
+            } => Ok(ComponentOwnerPattern::Component {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+            }),
+            Self::ApplicationComponents => Ok(ComponentOwnerPattern::ApplicationComponents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+            }),
+            Self::ApplicationEnvironmentComponents { environment } => {
+                Ok(ComponentOwnerPattern::EnvironmentComponents {
+                    account: context.account.clone(),
+                    application: context.application.clone(),
+                    environment: environment.clone(),
+                })
+            }
+            Self::ApplicationComponent {
+                environment,
+                component,
+            } => Ok(ComponentOwnerPattern::Component {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+            }),
             Self::EnvComponents => Ok(ComponentOwnerPattern::EnvironmentComponents {
                 account: context.account.clone(),
                 application: context.application.clone(),
@@ -221,9 +303,9 @@ impl MonomorphizeOwner<ComponentOwnerPattern> for PolymorphicComponentOwnerPatte
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
-                component: ComponentName(component.clone()),
+                component: component.clone(),
             }),
-            Self::Self_ => Ok(ComponentOwnerPattern::Component {
+            Self::Component => Ok(ComponentOwnerPattern::Component {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
@@ -240,6 +322,76 @@ impl MonomorphizeOwner<AgentOwnerPattern> for PolymorphicAgentOwnerPattern {
     ) -> Result<AgentOwnerPattern, String> {
         match self {
             Self::Concrete(owner) => Ok(owner.clone()),
+            Self::AccountAgents => Ok(AgentOwnerPattern::AccountAgents {
+                account: context.account.clone(),
+            }),
+            Self::AccountApplicationAgents { application } => {
+                Ok(AgentOwnerPattern::ApplicationAgents {
+                    account: context.account.clone(),
+                    application: application.clone(),
+                })
+            }
+            Self::AccountEnvironmentAgents {
+                application,
+                environment,
+            } => Ok(AgentOwnerPattern::EnvironmentAgents {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+            }),
+            Self::AccountComponentAgents {
+                application,
+                environment,
+                component,
+            } => Ok(AgentOwnerPattern::ComponentAgents {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+            }),
+            Self::AccountAgent {
+                application,
+                environment,
+                component,
+                agent,
+            } => Ok(AgentOwnerPattern::Agent {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+                agent: agent.clone(),
+            }),
+            Self::ApplicationAgents => Ok(AgentOwnerPattern::ApplicationAgents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+            }),
+            Self::ApplicationEnvironmentAgents { environment } => {
+                Ok(AgentOwnerPattern::EnvironmentAgents {
+                    account: context.account.clone(),
+                    application: context.application.clone(),
+                    environment: environment.clone(),
+                })
+            }
+            Self::ApplicationComponentAgents {
+                environment,
+                component,
+            } => Ok(AgentOwnerPattern::ComponentAgents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+            }),
+            Self::ApplicationAgent {
+                environment,
+                component,
+                agent,
+            } => Ok(AgentOwnerPattern::Agent {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+                agent: agent.clone(),
+            }),
             Self::EnvAgents => Ok(AgentOwnerPattern::EnvironmentAgents {
                 account: context.account.clone(),
                 application: context.application.clone(),
@@ -258,7 +410,20 @@ impl MonomorphizeOwner<AgentOwnerPattern> for PolymorphicAgentOwnerPattern {
                 component: component.clone(),
                 agent: agent.clone(),
             }),
-            Self::Self_ => Ok(AgentOwnerPattern::Agent {
+            Self::ComponentAgents => Ok(AgentOwnerPattern::ComponentAgents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+            }),
+            Self::ComponentAgent { agent } => Ok(AgentOwnerPattern::Agent {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+                agent: agent.clone(),
+            }),
+            Self::Agent => Ok(AgentOwnerPattern::Agent {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
@@ -276,6 +441,76 @@ impl MonomorphizeOwner<ToolOwnerPattern> for PolymorphicToolOwnerPattern {
     ) -> Result<ToolOwnerPattern, String> {
         match self {
             Self::Concrete(owner) => Ok(owner.clone()),
+            Self::AccountTools => Ok(ToolOwnerPattern::AccountTools {
+                account: context.account.clone(),
+            }),
+            Self::AccountApplicationTools { application } => {
+                Ok(ToolOwnerPattern::ApplicationTools {
+                    account: context.account.clone(),
+                    application: application.clone(),
+                })
+            }
+            Self::AccountEnvironmentTools {
+                application,
+                environment,
+            } => Ok(ToolOwnerPattern::EnvironmentTools {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+            }),
+            Self::AccountComponentTools {
+                application,
+                environment,
+                component,
+            } => Ok(ToolOwnerPattern::ComponentTools {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+            }),
+            Self::AccountTool {
+                application,
+                environment,
+                component,
+                tool,
+            } => Ok(ToolOwnerPattern::Tool {
+                account: context.account.clone(),
+                application: application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+                tool: tool.clone(),
+            }),
+            Self::ApplicationTools => Ok(ToolOwnerPattern::ApplicationTools {
+                account: context.account.clone(),
+                application: context.application.clone(),
+            }),
+            Self::ApplicationEnvironmentTools { environment } => {
+                Ok(ToolOwnerPattern::EnvironmentTools {
+                    account: context.account.clone(),
+                    application: context.application.clone(),
+                    environment: environment.clone(),
+                })
+            }
+            Self::ApplicationComponentTools {
+                environment,
+                component,
+            } => Ok(ToolOwnerPattern::ComponentTools {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+            }),
+            Self::ApplicationTool {
+                environment,
+                component,
+                tool,
+            } => Ok(ToolOwnerPattern::Tool {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: environment.clone(),
+                component: component.clone(),
+                tool: tool.clone(),
+            }),
             Self::EnvTools => Ok(ToolOwnerPattern::EnvironmentTools {
                 account: context.account.clone(),
                 application: context.application.clone(),
@@ -292,6 +527,19 @@ impl MonomorphizeOwner<ToolOwnerPattern> for PolymorphicToolOwnerPattern {
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: component.clone(),
+                tool: tool.clone(),
+            }),
+            Self::ComponentTools => Ok(ToolOwnerPattern::ComponentTools {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+            }),
+            Self::ComponentTool { tool } => Ok(ToolOwnerPattern::Tool {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
                 tool: tool.clone(),
             }),
         }

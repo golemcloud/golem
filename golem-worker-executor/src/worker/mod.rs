@@ -3946,7 +3946,10 @@ fn resolve_agent_initial_card(
         .agent_type_initial_permission_template(&agent_id.agent_type)
         .cloned()
         .unwrap_or_else(|| {
-            AgentInitialPermissionTemplate::default_for_account(&component.account_email)
+            AgentInitialPermissionTemplate::default_for(
+                &component.environment_name,
+                &component.component_name,
+            )
         });
 
     let context = AgentPermissionMonomorphizationContext {

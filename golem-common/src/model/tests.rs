@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::card::CardId;
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
-    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
+    AgentStatus, AgentStatusRecord, Card, ComponentId, FilterComparator, IdempotencyKey,
     PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
 };
+use chrono::Utc;
 use desert_rust::BinaryCodec;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::analysed_type::str;
@@ -218,6 +220,18 @@ fn worker_filter_matches() {
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
         created_by_email: AccountEmail::new("test@golem"),
+        agent_initial_card: Card {
+            card_id: CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        },
         config: vec![TypedAgentConfigEntry {
             path: vec!["var1".to_string()],
             value: ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),

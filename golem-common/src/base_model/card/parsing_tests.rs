@@ -18,8 +18,9 @@ use crate::model::card::owner::{
     AccountOwnerPattern, AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
     ComponentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
     PolymorphicAccountOwnerPattern, PolymorphicAgentOwnerPattern,
-    PolymorphicApplicationOwnerPattern, PolymorphicEmptyOwnerPattern,
-    PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern, ToolOwnerPattern,
+    PolymorphicApplicationOwnerPattern, PolymorphicComponentOwnerPattern,
+    PolymorphicEmptyOwnerPattern, PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern,
+    ToolOwnerPattern,
 };
 use crate::model::card::recipient::{
     PolymorphicAgentRecipientPattern, PolymorphicEnvironmentRecipientPattern,
@@ -32,9 +33,6 @@ use RecipientPattern as EnvironmentRecipientPattern;
 use pretty_assertions::assert_eq;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
-use crate::model::environment::EnvironmentName;
-use crate::model::component::ComponentName;
-use crate::model::application::ApplicationName;
 
 fn account_email(account: &str) -> crate::model::account::AccountEmail {
     crate::model::account::AccountEmail::new(account)
@@ -773,59 +771,57 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "application",
-            "application(acme) @ acme : view : shop",
+            "application(acme/shop) @ acme : view :",
             PermissionPattern::Application(ClassPermissionPattern::<ApplicationClass> {
                 verb: Some(ApplicationVerb::View),
-                owner: account_owner("acme"),
+                owner: application_owner("acme", "shop"),
                 recipient: account_recipient("acme"),
-                resource: ApplicationResourcePattern::Application(ApplicationName(
-                    "shop".to_string(),
-                )),
+                resource: ApplicationResourcePattern,
             }),
         ),
         (
             "application_create_any",
-            "application(acme) @ acme : create : *",
+            "application(acme/*) @ acme : create : *",
             PermissionPattern::Application(ClassPermissionPattern::<ApplicationClass> {
                 verb: Some(ApplicationVerb::Create),
-                owner: account_owner("acme"),
+                owner: ApplicationOwnerPattern::AccountApplications {
+                    account: account_email("acme"),
+                },
                 recipient: account_recipient("acme"),
-                resource: ApplicationResourcePattern::Any,
+                resource: ApplicationResourcePattern,
             }),
         ),
         (
             "environment",
-            "environment(acme/shop) @ acme/shop/prod : view : prod",
+            "environment(acme/shop/prod) @ acme/shop/prod : view :",
             PermissionPattern::Environment(ClassPermissionPattern::<EnvironmentClass> {
                 verb: Some(EnvironmentVerb::View),
-                owner: application_owner("acme", "shop"),
+                owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
-                resource: EnvironmentResourcePattern::Environment(EnvironmentName(
-                    "prod".to_string(),
-                )),
+                resource: EnvironmentResourcePattern::Any,
             }),
         ),
         (
             "environment_create_any",
-            "environment(acme/shop) @ acme/shop/prod : create : *",
+            "environment(acme/shop/*) @ acme/shop/prod : create : *",
             PermissionPattern::Environment(ClassPermissionPattern::<EnvironmentClass> {
                 verb: Some(EnvironmentVerb::Create),
-                owner: application_owner("acme", "shop"),
+                owner: EnvironmentOwnerPattern::ApplicationEnvironments {
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                },
                 recipient: environment_recipient("acme", "shop", "prod"),
                 resource: EnvironmentResourcePattern::Any,
             }),
         ),
         (
             "environment_rollback_revision",
-            "environment(acme/shop) @ acme/shop/prod : rollback : prod@rev=42",
+            "environment(acme/shop/prod) @ acme/shop/prod : rollback : @rev=42",
             PermissionPattern::Environment(ClassPermissionPattern::<EnvironmentClass> {
                 verb: Some(EnvironmentVerb::Rollback),
-                owner: application_owner("acme", "shop"),
+                owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
-                resource: EnvironmentResourcePattern::Revision {
-                    environment: EnvironmentName("prod".to_string()),
-                    revision: 42,
-                },
+                resource: EnvironmentResourcePattern::Revision { revision: 42 },
             }),
         ),
         (
@@ -944,37 +940,46 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "component",
-            "component(acme/shop/prod) @ acme/shop/prod : view : cart-svc",
+            "component(acme/shop/prod/cart-svc) @ acme/shop/prod : view :",
             PermissionPattern::Component(ClassPermissionPattern::<ComponentClass> {
                 verb: Some(ComponentVerb::View),
-                owner: environment_owner("acme", "shop", "prod"),
+                owner: ComponentOwnerPattern::Component {
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cart-svc"),
+                },
                 recipient: environment_recipient("acme", "shop", "prod"),
-                resource: ComponentResourcePattern::Component(ComponentName(
-                    "cart-svc".to_string(),
-                )),
+                resource: ComponentResourcePattern::Any,
             }),
         ),
         (
             "component_create_any",
-            "component(acme/shop/prod) @ acme/shop/prod : create : *",
+            "component(acme/shop/prod/*) @ acme/shop/prod : create : *",
             PermissionPattern::Component(ClassPermissionPattern::<ComponentClass> {
                 verb: Some(ComponentVerb::Create),
-                owner: environment_owner("acme", "shop", "prod"),
+                owner: ComponentOwnerPattern::EnvironmentComponents {
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                },
                 recipient: environment_recipient("acme", "shop", "prod"),
                 resource: ComponentResourcePattern::Any,
             }),
         ),
         (
             "component_revision",
-            "component(acme/shop/prod) @ acme/shop/prod : view : cart-svc@rev=42",
+            "component(acme/shop/prod/cart-svc) @ acme/shop/prod : view : @rev=42",
             PermissionPattern::Component(ClassPermissionPattern::<ComponentClass> {
                 verb: Some(ComponentVerb::View),
-                owner: environment_owner("acme", "shop", "prod"),
-                recipient: environment_recipient("acme", "shop", "prod"),
-                resource: ComponentResourcePattern::Revision {
-                    component: ComponentName("cart-svc".to_string()),
-                    revision: 42,
+                owner: ComponentOwnerPattern::Component {
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cart-svc"),
                 },
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: ComponentResourcePattern::Revision { revision: 42 },
             }),
         ),
         (
@@ -1246,18 +1251,6 @@ fn rejects_empty_resource_ids_when_any_resource_is_available() {
             "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke :",
             ToolClass::NAME,
         ),
-        (
-            "application(acme) @ acme : create :",
-            ApplicationClass::NAME,
-        ),
-        (
-            "environment(acme/shop) @ acme/shop/prod : create :",
-            EnvironmentClass::NAME,
-        ),
-        (
-            "component(acme/shop/prod) @ acme/shop/prod : create :",
-            ComponentClass::NAME,
-        ),
     ];
 
     for (input, class) in cases {
@@ -1276,39 +1269,36 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
     let cases: Vec<(&str, &str, PolymorphicPermissionPattern)> = vec![
         (
             "environment_polymorphic_owner_concrete_environment_recipient",
-            "environment(?env) @ acme/shop/prod : view : prod",
+            "environment(?env) @ acme/shop/prod : view :",
             PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern::<
                 EnvironmentClass,
             > {
                 verb: Some(EnvironmentVerb::View),
-                owner: PolymorphicApplicationOwnerPattern::Env,
+                owner: PolymorphicEnvironmentOwnerPattern::Env,
                 recipient: environment_recipient("acme", "shop", "prod"),
-                resource: EnvironmentResourcePattern::Environment(EnvironmentName(
-                    "prod".to_string(),
-                )),
+                resource: EnvironmentResourcePattern::Any,
             }),
         ),
         (
             "component_polymorphic_owner_concrete_environment_recipient",
-            "component(?env) @ acme/shop/prod : view : cart-svc@rev=42",
+            "component(?env/cart-svc) @ acme/shop/prod : view : @rev=42",
             PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern::<
                 ComponentClass,
             > {
                 verb: Some(ComponentVerb::View),
-                owner: PolymorphicEnvironmentOwnerPattern::Env,
-                recipient: environment_recipient("acme", "shop", "prod"),
-                resource: ComponentResourcePattern::Revision {
-                    component: ComponentName("cart-svc".to_string()),
-                    revision: 42,
+                owner: PolymorphicComponentOwnerPattern::EnvComponent {
+                    component: component_name("cart-svc"),
                 },
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: ComponentResourcePattern::Revision { revision: 42 },
             }),
         ),
         (
-            "env_self_owner_concrete_agent_recipient",
-            "env(?self) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : HOME",
+            "env_agent_owner_concrete_agent_recipient",
+            "env(?agent) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : HOME",
             PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern::<EnvClass> {
                 verb: Some(EnvVerb::Read),
-                owner: PolymorphicAgentOwnerPattern::Self_,
+                owner: PolymorphicAgentOwnerPattern::Agent,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
                 resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
             }),
@@ -1399,39 +1389,41 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "application_any_verb_and_resource",
-            "application(acme) @ ?account : * : *",
+            "application(acme/*) @ ?account : * : *",
             PolymorphicManifestPermissionPattern::Application(
                 PolymorphicManifestClassPermissionPattern::<ApplicationClass> {
                     verb: None,
-                    owner: PolymorphicAccountOwnerPattern::Concrete(account_owner("acme")),
+                    owner: PolymorphicApplicationOwnerPattern::Concrete(
+                        ApplicationOwnerPattern::AccountApplications {
+                            account: account_email("acme"),
+                        },
+                    ),
                     recipient: PolymorphicRecipientPattern::Account,
-                    resource: ApplicationResourcePattern::Any,
+                    resource: ApplicationResourcePattern,
                 },
             ),
         ),
         (
             "environment_owner_and_recipient_slots",
-            "environment(?env) @ ?env : view : prod",
+            "environment(?env) @ ?env : view :",
             PolymorphicManifestPermissionPattern::Environment(
                 PolymorphicManifestClassPermissionPattern::<EnvironmentClass> {
                     verb: Some(EnvironmentVerb::View),
-                    owner: PolymorphicApplicationOwnerPattern::Env,
+                    owner: PolymorphicEnvironmentOwnerPattern::Env,
                     recipient: PolymorphicRecipientPattern::Environment(
                         PolymorphicEnvironmentRecipientPattern::Environment,
                     ),
-                    resource: EnvironmentResourcePattern::Environment(EnvironmentName(
-                        "prod".to_string(),
-                    )),
+                    resource: EnvironmentResourcePattern::Any,
                 },
             ),
         ),
         (
             "environment_account_recipient_slot",
-            "environment(?env) @ ?account/*/* : create : *",
+            "environment(?app/*) @ ?account/*/* : create : *",
             PolymorphicManifestPermissionPattern::Environment(
                 PolymorphicManifestClassPermissionPattern::<EnvironmentClass> {
                     verb: Some(EnvironmentVerb::Create),
-                    owner: PolymorphicApplicationOwnerPattern::Env,
+                    owner: PolymorphicEnvironmentOwnerPattern::ApplicationEnvironments,
                     recipient: PolymorphicRecipientPattern::Environment(
                         PolymorphicEnvironmentRecipientPattern::AccountEnvironments,
                     ),
@@ -1441,44 +1433,43 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "component_env_owner_slot_with_revision_resource",
-            "component(?env) @ ?env : view : cart-svc@rev=42",
+            "component(?env/cart-svc) @ ?env : view : @rev=42",
             PolymorphicManifestPermissionPattern::Component(
                 PolymorphicManifestClassPermissionPattern::<ComponentClass> {
                     verb: Some(ComponentVerb::View),
-                    owner: PolymorphicEnvironmentOwnerPattern::Env,
+                    owner: PolymorphicComponentOwnerPattern::EnvComponent {
+                        component: component_name("cart-svc"),
+                    },
                     recipient: PolymorphicRecipientPattern::Environment(
                         PolymorphicEnvironmentRecipientPattern::Environment,
                     ),
-                    resource: ComponentResourcePattern::Revision {
-                        component: ComponentName("cart-svc".to_string()),
-                        revision: 42,
-                    },
+                    resource: ComponentResourcePattern::Revision { revision: 42 },
                 },
             ),
         ),
         (
-            "env_self_slots",
-            "env(?self) @ ?self : read : HOME",
+            "env_agent_slots",
+            "env(?agent) @ ?agent : read : HOME",
             PolymorphicManifestPermissionPattern::Env(PolymorphicManifestClassPermissionPattern::<
                 EnvClass,
             > {
                 verb: Some(EnvVerb::Read),
-                owner: PolymorphicAgentOwnerPattern::Self_,
+                owner: PolymorphicAgentOwnerPattern::Agent,
                 recipient: PolymorphicRecipientPattern::Agent(
-                    PolymorphicAgentRecipientPattern::Self_,
+                    PolymorphicAgentRecipientPattern::Agent,
                 ),
                 resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
             }),
         ),
         (
             "secret_monomorphic_resource",
-            "secret(?env) @ ?self : reveal : billing.account",
+            "secret(?env) @ ?agent : reveal : billing.account",
             PolymorphicManifestPermissionPattern::Secret(
                 PolymorphicManifestClassPermissionPattern::<SecretClass> {
                     verb: Some(SecretVerb::Reveal),
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
                     recipient: PolymorphicRecipientPattern::Agent(
-                        PolymorphicAgentRecipientPattern::Self_,
+                        PolymorphicAgentRecipientPattern::Agent,
                     ),
                     resource: secret_key(vec![
                         SecretKeySegmentPattern::Literal("billing".to_string()),
@@ -1489,13 +1480,13 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "secret_resource_glob",
-            "secret(?env) @ ?self : reveal : billing.*",
+            "secret(?env) @ ?agent : reveal : billing.*",
             PolymorphicManifestPermissionPattern::Secret(
                 PolymorphicManifestClassPermissionPattern::<SecretClass> {
                     verb: Some(SecretVerb::Reveal),
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
                     recipient: PolymorphicRecipientPattern::Agent(
-                        PolymorphicAgentRecipientPattern::Self_,
+                        PolymorphicAgentRecipientPattern::Agent,
                     ),
                     resource: secret_key(vec![
                         SecretKeySegmentPattern::Literal("billing".to_string()),
@@ -1547,7 +1538,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "agent_env_owner_template",
-            "agent(?env/payment-svc/PaymentAgent(*)) @ ?self : invoke : charge",
+            "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : invoke : charge",
             PolymorphicManifestPermissionPattern::Agent(
                 PolymorphicManifestClassPermissionPattern::<AgentClass> {
                     verb: Some(AgentVerb::Invoke),
@@ -1558,7 +1549,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                         )),
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
-                        PolymorphicAgentRecipientPattern::Self_,
+                        PolymorphicAgentRecipientPattern::Agent,
                     ),
                     resource: AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
                 },
@@ -1603,7 +1594,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "tool_env_component_tools_owner",
-            "tool(?env/cli-tools/*) @ ?self : invoke : *",
+            "tool(?env/cli-tools/*) @ ?agent : invoke : *",
             PolymorphicManifestPermissionPattern::Tool(
                 PolymorphicManifestClassPermissionPattern::<ToolClass> {
                     verb: Some(ToolVerb::Invoke),
@@ -1611,7 +1602,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                         component: component_name("cli-tools"),
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
-                        PolymorphicAgentRecipientPattern::Self_,
+                        PolymorphicAgentRecipientPattern::Agent,
                     ),
                     resource: ToolResourcePattern::AnyInvocation,
                 },
@@ -1657,7 +1648,7 @@ fn empty_resource_classes_reject_polymorphic_resource_slots() {
 #[test]
 fn rejects_polymorphic_resource_slots_and_templates() {
     assert_eq!(
-        parse_polymorphic_manifest_permission("env(?self) @ ?self : read : ?env_var"),
+        parse_polymorphic_manifest_permission("env(?agent) @ ?agent : read : ?env_var"),
         Err(CardParseError::InvalidResource {
             class: EnvClass::NAME.to_string(),
             resource: "?env_var".to_string(),
@@ -1665,18 +1656,18 @@ fn rejects_polymorphic_resource_slots_and_templates() {
     );
 
     assert_eq!(
-        parse_polymorphic_manifest_permission("card(acme) @ ?self : install : ?self"),
+        parse_polymorphic_manifest_permission("card(acme) @ ?agent : install : ?agent"),
         Err(CardParseError::InvalidResource {
             class: CardClass::NAME.to_string(),
-            resource: "?self".to_string(),
+            resource: "?agent".to_string(),
         })
     );
 
     assert_eq!(
-        parse_polymorphic_manifest_permission("secret(?env) @ ?self : reveal : secret.?self"),
+        parse_polymorphic_manifest_permission("secret(?env) @ ?agent : reveal : secret.?agent"),
         Err(CardParseError::InvalidResource {
             class: SecretClass::NAME.to_string(),
-            resource: "secret.?self".to_string(),
+            resource: "secret.?agent".to_string(),
         })
     );
 }
@@ -1684,26 +1675,26 @@ fn rejects_polymorphic_resource_slots_and_templates() {
 #[test]
 fn rejects_undeclared_polymorphic_owner_slots() {
     assert_eq!(
-        parse_polymorphic_permission("account(?account) @ ?account : view :"),
+        parse_polymorphic_permission("account(?app) @ acme : view :"),
         Err(CardParseError::InvalidOwnerPath {
             class: AccountClass::NAME.to_string(),
-            owner: "?account".to_string(),
-        })
-    );
-
-    assert_eq!(
-        parse_polymorphic_permission("application(?app) @ ?account : view :"),
-        Err(CardParseError::InvalidOwnerPath {
-            class: ApplicationClass::NAME.to_string(),
             owner: "?app".to_string(),
         })
     );
 
     assert_eq!(
-        parse_polymorphic_permission("component(?component) @ ?env : view : cart-svc"),
+        parse_polymorphic_permission("application(?env) @ acme : view :"),
+        Err(CardParseError::InvalidOwnerPath {
+            class: ApplicationClass::NAME.to_string(),
+            owner: "?env".to_string(),
+        })
+    );
+
+    assert_eq!(
+        parse_polymorphic_permission("component(?agent) @ acme/shop/prod : view :"),
         Err(CardParseError::InvalidOwnerPath {
             class: ComponentClass::NAME.to_string(),
-            owner: "?component".to_string(),
+            owner: "?agent".to_string(),
         })
     );
 }
@@ -1711,7 +1702,7 @@ fn rejects_undeclared_polymorphic_owner_slots() {
 #[test]
 fn rejects_polymorphic_owner_slots_with_wrong_scope() {
     assert_eq!(
-        parse_polymorphic_permission("filesystem(?env) @ ?self : read : /data/**"),
+        parse_polymorphic_permission("filesystem(?env) @ ?agent : read : /data/**"),
         Err(CardParseError::InvalidOwnerPath {
             class: FilesystemClass::NAME.to_string(),
             owner: "?env".to_string(),
@@ -1737,7 +1728,7 @@ fn rejects_undeclared_polymorphic_recipient_slots() {
 
 #[test]
 fn concrete_parser_rejects_slot_variables() {
-    let result = parse_permission("secret(?env) @ ?self : reveal : billing.*");
+    let result = parse_permission("secret(?env) @ ?agent : reveal : billing.*");
 
     assert_eq!(
         result,

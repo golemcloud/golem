@@ -24,10 +24,9 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
     ApplicationUpdate,
 };
-use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::owner::ApplicationOwnerPattern;
 use golem_common::model::card::{
-    ApplicationResourcePattern, ApplicationVerb,
-    ClassPermissionTarget, PermissionTarget,
+    ApplicationResourcePattern, ApplicationVerb, ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -122,8 +121,8 @@ impl ApplicationService {
         authorize_application_permission(
             auth,
             &account.email,
+            &data.name,
             ApplicationVerb::Create,
-            ApplicationResourcePattern::Application(CardApplicationName(data.name.0.clone())),
         )?;
 
         self.account_usage_service
@@ -167,10 +166,8 @@ impl ApplicationService {
         authorize_application_permission(
             auth,
             &application.account_email,
+            &application.name,
             ApplicationVerb::Update,
-            ApplicationResourcePattern::Application(CardApplicationName(
-                application.name.0.clone(),
-            )),
         )?;
 
         if update.current_revision != application.revision {
@@ -215,10 +212,8 @@ impl ApplicationService {
         authorize_application_permission(
             auth,
             &application.account_email,
+            &application.name,
             ApplicationVerb::Delete,
-            ApplicationResourcePattern::Application(CardApplicationName(
-                application.name.0.clone(),
-            )),
         )?;
 
         if current_revision != application.revision {
@@ -259,10 +254,8 @@ impl ApplicationService {
         authorize_application_permission(
             auth,
             &application.account_email,
+            &application.name,
             ApplicationVerb::View,
-            ApplicationResourcePattern::Application(CardApplicationName(
-                application.name.0.clone(),
-            )),
         )
         .map_err(|_| ApplicationError::ApplicationNotFound(application_id))?;
 
@@ -286,13 +279,8 @@ impl ApplicationService {
                     other => other.into(),
                 })?;
 
-        authorize_application_permission(
-            auth,
-            &account.email,
-            ApplicationVerb::View,
-            ApplicationResourcePattern::Application(CardApplicationName(name.0.clone())),
-        )
-        .map_err(|_err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
+        authorize_application_permission(auth, &account.email, name, ApplicationVerb::View)
+            .map_err(|_err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
 
         let result: Application = self
             .application_repo
@@ -334,10 +322,8 @@ impl ApplicationService {
                 authorize_application_permission(
                     auth,
                     &account.email,
+                    &application.name,
                     ApplicationVerb::View,
-                    ApplicationResourcePattern::Application(CardApplicationName(
-                        application.name.0.clone(),
-                    )),
                 )
                 .is_ok()
             })
@@ -348,26 +334,27 @@ impl ApplicationService {
 fn authorize_application_permission(
     auth: &AuthCtx,
     account_email: &AccountEmail,
+    application_name: &ApplicationName,
     verb: ApplicationVerb,
-    resource: ApplicationResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&application_permission_target(
         account_email,
+        application_name,
         verb,
-        resource,
     ))
 }
 
 fn application_permission_target(
     account_email: &AccountEmail,
+    application_name: &ApplicationName,
     verb: ApplicationVerb,
-    resource: ApplicationResourcePattern,
 ) -> PermissionTarget {
     PermissionTarget::Application(ClassPermissionTarget {
         verb: Some(verb),
-        owner: AccountOwnerPattern::Account {
+        owner: ApplicationOwnerPattern::Application {
             account: account_email.clone(),
+            application: application_name.clone(),
         },
-        resource,
+        resource: ApplicationResourcePattern,
     })
 }

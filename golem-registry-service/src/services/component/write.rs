@@ -31,13 +31,11 @@ use golem_common::base_model::component_metadata::{
     AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
-use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentResourcePattern,
-    ComponentVerb, PermissionTarget,
+    ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -65,7 +63,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::info;
-use golem_common::model::application::ApplicationId;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -223,7 +220,7 @@ impl ComponentWriteService {
             component_metadata.with_agent_initial_permissions(default_initial_permissions(
                 component_metadata.agent_types(),
                 &environment.name,
-                &component_creation.component_name
+                &component_creation.component_name,
             ));
         validate_component_metadata_invariants(&component_metadata)?;
 
@@ -439,7 +436,7 @@ impl ComponentWriteService {
                 metadata.with_agent_initial_permissions(default_initial_permissions(
                     metadata.agent_types(),
                     &environment.name,
-                    &component_name
+                    &component_name,
                 ));
         } else if provision_configs_changed {
             component.metadata = component
@@ -960,7 +957,7 @@ fn provision_configs_for_agent_types(
 fn default_initial_permissions(
     agent_types: &[AgentType],
     environment_name: &EnvironmentName,
-    component_name: &ComponentName
+    component_name: &ComponentName,
 ) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
     agent_types
         .iter()
@@ -1006,12 +1003,13 @@ fn authorize_component_permission(
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
-        owner: EnvironmentOwnerPattern::Environment {
+        owner: ComponentOwnerPattern::Component {
             account: environment.owner_account_email.clone(),
             application: environment.application_name.clone(),
             environment: environment.name.clone(),
+            component: component_name.clone(),
         },
-        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+        resource: ComponentResourcePattern::Any,
     }))
 }
 

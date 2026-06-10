@@ -15,7 +15,7 @@
 use super::*;
 use assert2::assert;
 use golem_common::model::card::owner::{
-    AccountOwnerPattern, AgentOwnerPattern, ApplicationOwnerPattern, EmptyOwnerPattern,
+    AccountOwnerPattern, AgentOwnerPattern, ComponentOwnerPattern, EmptyOwnerPattern,
     EnvironmentOwnerPattern,
 };
 use golem_common::model::card::recipient::RecipientPattern;
@@ -120,7 +120,7 @@ fn account_target(account_id: AccountId) -> PermissionTarget {
 fn environment_target(account_id: AccountId, verb: EnvironmentVerb) -> PermissionTarget {
     PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
-        owner: ApplicationOwnerPattern::AccountApplications {
+        owner: EnvironmentOwnerPattern::AccountEnvironments {
             account: account_email(account_id),
         },
         resource: EnvironmentResourcePattern::Any,
@@ -130,7 +130,7 @@ fn environment_target(account_id: AccountId, verb: EnvironmentVerb) -> Permissio
 fn component_target(account_id: AccountId, verb: ComponentVerb) -> PermissionTarget {
     PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
-        owner: EnvironmentOwnerPattern::AccountEnvironments {
+        owner: ComponentOwnerPattern::AccountComponents {
             account: account_email(account_id),
         },
         resource: ComponentResourcePattern::Any,

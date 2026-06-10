@@ -17,26 +17,21 @@ use super::{
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
 use crate::base_model::card::parsing::CardParseError;
-use crate::model::card::owner::EnvironmentOwnerPattern;
+use crate::model::card::owner::ComponentOwnerPattern;
 use combine::parser::char::string;
 use combine::{EasyParser, Parser, eof, many1, optional, satisfy};
 use serde::{Deserialize, Serialize};
-use crate::model::component::ComponentName;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ComponentResourcePattern {
     Any,
-    Component(ComponentName),
-    Revision {
-        component: ComponentName,
-        revision: u64,
-    },
+    Revision { revision: u64 },
 }
 
 impl ResourcePattern for ComponentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource == "*" {
+        if resource.is_empty() || resource == "*" {
             Ok(ComponentResourcePattern::Any)
         } else {
             parse_component_resource(resource).map_err(|_| CardParseError::InvalidResource {
@@ -49,20 +44,8 @@ impl ResourcePattern for ComponentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Component(a), Self::Component(b)) => a == b,
-            (Self::Component(a), Self::Revision { component: b, .. }) => a == b,
-            (
-                Self::Revision {
-                    component: a,
-                    revision: ar,
-                },
-                Self::Revision {
-                    component: b,
-                    revision: br,
-                },
-            ) => a == b && ar == br,
-            (Self::Component(_) | Self::Revision { .. }, Self::Any) => false,
-            (Self::Revision { .. }, Self::Component(_)) => false,
+            (Self::Revision { revision: a }, Self::Revision { revision: b }) => a == b,
+            (Self::Revision { .. }, Self::Any) => false,
         }
     }
 }
@@ -92,7 +75,7 @@ pub struct ComponentClass;
 
 impl PermissionClass for ComponentClass {
     type Verb = ComponentVerb;
-    type Owner = EnvironmentOwnerPattern;
+    type Owner = ComponentOwnerPattern;
     type Resource = ComponentResourcePattern;
     const NAME: &'static str = "component";
 
@@ -108,31 +91,15 @@ impl PermissionClass for ComponentClass {
 }
 
 fn parse_component_resource(resource: &str) -> Result<ComponentResourcePattern, String> {
-    let mut parser = (
-        component_name(),
-        optional(string("@rev=").with(many1(satisfy(|c: char| c.is_ascii_digit())))),
-    )
-        .skip(eof());
+    let parser = optional(string("@"))
+        .with(string("rev=").with(many1(satisfy(|c: char| c.is_ascii_digit()))));
+    let mut parser = parser.skip(eof());
 
-    let ((component, revision), _): ((ComponentName, Option<String>), &str) = parser
+    let (revision, _): (String, &str) = parser
         .easy_parse(resource)
         .map_err(|_| resource.to_string())?;
 
-    match revision {
-        Some(revision) => Ok(ComponentResourcePattern::Revision {
-            component,
-            revision: revision.parse::<u64>().map_err(|_| resource.to_string())?,
-        }),
-        None => Ok(ComponentResourcePattern::Component(component)),
-    }
-}
-
-fn component_name<Input>() -> impl Parser<Input, Output = ComponentName>
-where
-    Input: combine::Stream<Token = char>,
-{
-    many1(satisfy(|c: char| {
-        c != '@' && c != ':' && c != '/' && !c.is_whitespace()
-    }))
-    .map(ComponentName)
+    Ok(ComponentResourcePattern::Revision {
+        revision: revision.parse::<u64>().map_err(|_| resource.to_string())?,
+    })
 }

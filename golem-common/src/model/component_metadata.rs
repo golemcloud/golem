@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::component::ComponentName;
+use super::environment::EnvironmentName;
 pub use super::parsed_function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
@@ -22,11 +24,9 @@ use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
-use crate::model::account::AccountEmail;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::card::owner::{
-    AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
-    PolymorphicAgentOwnerPattern, PolymorphicApplicationOwnerPattern,
+    PolymorphicAgentOwnerPattern, PolymorphicComponentOwnerPattern,
     PolymorphicEnvironmentOwnerPattern,
 };
 use crate::model::card::recipient::RecipientPattern;
@@ -39,9 +39,6 @@ use crate::model::component::InstalledPlugin;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use super::application::{ApplicationId, ApplicationName};
-use super::environment::{EnvironmentId, EnvironmentName};
-use super::component::ComponentName;
 
 impl ComponentMetadata {
     pub fn analyse_component(
@@ -482,24 +479,23 @@ impl RawComponentMetadata {
 
 impl AgentInitialPermissionTemplate {
     pub fn default_for(
-        environment_name: &EnvironmentName,
-        component_name: &ComponentName,
+        _environment_name: &EnvironmentName,
+        _component_name: &ComponentName,
     ) -> Self {
         let recipient = RecipientPattern::Any;
         Self {
             lower_positive: vec![
                 PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
-                    // TODO(agent-permissions): should be PolymorphicApplicationOwnerPattern::App
-                    owner: PolymorphicApplicationOwnerPattern::Env,
-                    recipient: recipient.clone(),
-                    verb: Some(EnvironmentVerb::View),
-                    resource: EnvironmentResourcePattern::Environment(environment_name.clone()),
-                }),
-                PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
                     recipient: recipient.clone(),
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }),
+                PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
+                    owner: PolymorphicComponentOwnerPattern::Component,
+                    recipient: recipient.clone(),
                     verb: Some(ComponentVerb::View),
-                    resource: ComponentResourcePattern::Component(component_name.clone()),
+                    resource: ComponentResourcePattern::Any,
                 }),
                 agent_permission(AgentVerb::View, recipient.clone()),
                 agent_permission(AgentVerb::Invoke, recipient.clone()),
@@ -513,12 +509,9 @@ impl AgentInitialPermissionTemplate {
     }
 }
 
-fn agent_permission(
-    verb: AgentVerb,
-    recipient: RecipientPattern,
-) -> PolymorphicPermissionPattern {
+fn agent_permission(verb: AgentVerb, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
     PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
-        owner: PolymorphicAgentOwnerPattern::Self_,
+        owner: PolymorphicAgentOwnerPattern::Agent,
         recipient,
         verb: Some(verb),
         resource: AgentResourcePattern::Any,

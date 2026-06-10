@@ -20,7 +20,7 @@ use golem_common::SafeDisplay;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::owner::{
-    AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
+    AgentOwnerPattern, ComponentOwnerPattern, EnvironmentOwnerPattern,
 };
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, CardAlgebraError, ClassPermissionTarget,
@@ -372,14 +372,14 @@ fn temporary_agent_effective_surface(account: &AccountEmail) -> EffectiveSurface
         lower: vec![GrantSurface {
             positive: vec![
                 PermissionTarget::Environment(ClassPermissionTarget {
-                    owner: ApplicationOwnerPattern::AccountApplications {
+                    owner: EnvironmentOwnerPattern::AccountEnvironments {
                         account: account.clone(),
                     },
                     verb: Some(EnvironmentVerb::View),
                     resource: EnvironmentResourcePattern::Any,
                 }),
                 PermissionTarget::Component(ClassPermissionTarget {
-                    owner: EnvironmentOwnerPattern::AccountEnvironments {
+                    owner: ComponentOwnerPattern::AccountComponents {
                         account: account.clone(),
                     },
                     verb: Some(ComponentVerb::View),
