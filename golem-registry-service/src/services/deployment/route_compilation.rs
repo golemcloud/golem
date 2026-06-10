@@ -724,7 +724,6 @@ mod tests {
         HttpMountDetails, LiteralSegment, Snapshotting,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::auth::EnvironmentRole;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::domain_registration::Domain;
@@ -750,7 +749,6 @@ mod tests {
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId(Uuid::new_v4()),
-            roles_from_active_shares: BTreeSet::<EnvironmentRole>::new(),
             current_deployment: None,
         }
     }

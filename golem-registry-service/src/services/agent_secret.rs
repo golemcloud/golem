@@ -323,8 +323,8 @@ impl AgentSecretService {
         agent_secret_id: AgentSecretId,
         auth: &AuthCtx,
     ) -> Result<AgentSecret, AgentSecretError> {
-        let (environment_share, _) = self.get_with_environment(agent_secret_id, auth).await?;
-        Ok(environment_share)
+        let (agent_secret, _) = self.get_with_environment(agent_secret_id, auth).await?;
+        Ok(agent_secret)
     }
 
     pub async fn list_in_environment(

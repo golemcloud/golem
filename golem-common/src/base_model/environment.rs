@@ -14,7 +14,6 @@
 
 use crate::base_model::account::{AccountId, AccountSummary};
 use crate::base_model::application::{ApplicationId, ApplicationName, ApplicationSummary};
-use crate::base_model::auth::EnvironmentRole;
 use crate::base_model::deployment::{
     CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion,
 };
@@ -22,7 +21,6 @@ use crate::base_model::diff::Hash;
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
-use std::collections::BTreeSet;
 use std::str::FromStr;
 
 newtype_uuid!(
@@ -99,9 +97,6 @@ declare_structs! {
         pub security_overrides: bool,
 
         pub owner_account_id: AccountId,
-        /// Roles in the environment that were given to the current user by shares. The owner always has full access.
-        /// Note that even if getting a deleted environment only non-deleted shares are considered.
-        pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
 
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }
@@ -114,7 +109,6 @@ declare_structs! {
         pub compatibility_check: bool,
         pub version_check: bool,
         pub security_overrides: bool,
-        pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }
 

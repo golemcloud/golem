@@ -315,7 +315,7 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
         .create_permission_share(
             &user_1.account_id.0,
             &PermissionShareCreation {
-                target_account_id: user_2.account_id,
+                target_account_email: user_2.account_email.clone(),
                 name: PermissionShareName("plugin-component-view".to_string()),
                 data: PermissionShareData {
                     lower_positive: vec![

@@ -119,12 +119,4 @@ declare_enums! {
         MarketingAdmin = 1,
         BuiltinPluginOwner = 2,
     }
-
-    #[derive(Hash, FromRepr, EnumIter, PartialOrd, Ord)]
-    #[repr(i32)]
-    pub enum EnvironmentRole {
-        Admin = 0,
-        Viewer = 1,
-        Deployer = 2,
-    }
 }

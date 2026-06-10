@@ -195,7 +195,6 @@ impl ResolvedEnvironmentIdentity {
                 version_check: summary.environment.version_check,
                 security_overrides: summary.environment.security_overrides,
                 owner_account_id: summary.account.id,
-                roles_from_active_shares: summary.environment.roles_from_active_shares,
                 current_deployment: summary.environment.current_deployment,
             },
         }

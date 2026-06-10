@@ -45,7 +45,7 @@ async fn create_list_update_and_delete_permission_share(
     let client = deps.registry_service().client(&owner.token).await;
 
     let creation = PermissionShareCreation {
-        target_account_id: target.account_id,
+        target_account_email: target.account_email.clone(),
         name: PermissionShareName("team-access".to_string()),
         data: share_data(&format!(
             "application(owner) @ {} : view : shop",
@@ -135,7 +135,7 @@ async fn permission_share_names_are_unique_per_owner(
     let client = deps.registry_service().client(&owner.token).await;
 
     let creation = PermissionShareCreation {
-        target_account_id: target_1.account_id,
+        target_account_email: target_1.account_email.clone(),
         name: PermissionShareName("shared-name".to_string()),
         data: share_data("application(owner) @ * : view : shop"),
     };
@@ -145,7 +145,7 @@ async fn permission_share_names_are_unique_per_owner(
         .await?;
 
     let duplicate = PermissionShareCreation {
-        target_account_id: target_2.account_id,
+        target_account_email: target_2.account_email.clone(),
         name: creation.name.clone(),
         data: share_data("application(owner) @ * : create : *"),
     };
@@ -175,7 +175,7 @@ async fn permission_share_rejects_third_party_recipient(
     let client = deps.registry_service().client(&owner.token).await;
 
     let creation = PermissionShareCreation {
-        target_account_id: target.account_id,
+        target_account_email: target.account_email.clone(),
         name: PermissionShareName("bad-recipient".to_string()),
         data: share_data(&format!(
             "application(owner) @ {} : view : shop",
