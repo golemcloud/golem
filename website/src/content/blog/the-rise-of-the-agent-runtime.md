@@ -12,6 +12,7 @@ The dominant use of AI in 2026 is a *coding agent*—even though almost none of 
 This shift is invisible to users, but it is breaking the infrastructure beneath them. Every major vendor is now quietly rebuilding fragments of the same missing layer—a runtime sized for the agent—and none of them ships the whole thing.
 
 In this post, I'll explain what's breaking, why everyone is rebuilding the same kernel badly, and what we built Golem to do about it.
+https://golem.cloud/blog/the-rise-of-the-agent-runtime/
 
 ## Billions of Programs, Invisibly Written
 
@@ -118,7 +119,7 @@ Every model vendor is privately rebuilding fragments of the same runtime, and no
 
 And the *harness for every task* pattern carries a structural implication that I have not seen anyone else state plainly: if the harness can be regenerated per task, then the only safety guarantees that survive across regenerations are the ones the harness *cannot edit*. The harness chooses what the agent does. The kernel decides what the agent *can* do.
 
-This is why guardrails and policies in AI frameworks are built on sand. They all run *alongside* the agent—which means they are only as reliable as the coding agent or human that made them, which is to say, not reliable at all. Only capability denial at the host boundary cannot be circumvented by the agent's code.
+This is why guardrails and policies in current AI frameworks are built on sand. They all run *alongside* the agent—which means they are only as reliable as the coding agent or human that made them, which is to say, not reliable at all. Only capability denial at the host boundary cannot be circumvented by the agent's code.
 
 What decides the category is whether enforcement is *structural*—built into a runtime the agent cannot edit—rather than configurable from inside the application. Web Application Firewalls grew into a multi-billion-dollar category precisely because in-application defenses against the OWASP Top 10 were not enough. The same argument applies, point for point, to the OWASP LLM Top 10.
 
@@ -126,12 +127,12 @@ What decides the category is whether enforcement is *structural*—built into a 
 
 Add up the fragments those vendors are reconstructing, and you get seven primitives—each answering one of the substrate failures named above:
 
-1. **Isolation**. A megabyte-class per-identity sandbox with its own filesystem solves the cost-of-isolation problem Cloudflare and Anthropic converged on.
+1. **Isolation**. A megabyte-class per-agent sandbox solves the cost-of-isolation problem.
 2. **Authorization**. Capability-based authorization solves the lethal trifecta and OWASP's excessive-agency failure mode.
 3. **Mediation**. Host-mediated tool middleware solves the bypass problem in-process middleware cannot.
 4. **Secrecy**. Opaque secrets solve OWASP's sensitive-information disclosure.
 5. **Durability**. Deterministic durable execution solves the non-idempotent side-effect problem Inngest named.
-6. **Memory**. Per-agent storage gives agents the working memory the 128 MB-class isolate could not.
+6. **Memory**. Per-agent file system and linear memory gives agents the working memory the 128 MB-class isolate could not.
 7. **Auditability**. A runtime-produced audit journal closes the loop the EU AI Act and NIST require.
 
 Here is the key claim: the seven only solve the substrate problem when they are present *in the same runtime*. We built Golem to do exactly this.
