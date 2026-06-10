@@ -19,9 +19,9 @@ use crate::model::text::fmt::{
     DecoratedIndent, TextView, TruncatableTextView, to_colored_json, to_colored_yaml,
     truncate_rendered,
 };
+use crate::toon;
 use serde::Serialize;
 use std::sync::Arc;
-use toon_format::encode_default;
 
 pub const TOON_FRAME_START: &str = "@toon";
 pub const TOON_FRAME_END: &str = "@end";
@@ -99,7 +99,7 @@ impl LogHandler {
 pub fn render_toon_document<S: Serialize>(value: &S) -> String {
     format!(
         "{TOON_FRAME_START}\n{}\n{TOON_FRAME_END}",
-        encode_default(value).unwrap()
+        toon::encode(value).unwrap()
     )
 }
 

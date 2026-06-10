@@ -44,6 +44,7 @@ pub mod log;
 pub mod model;
 pub mod process;
 pub mod sdk_overrides;
+pub mod toon;
 pub mod validation;
 pub mod versions;
 

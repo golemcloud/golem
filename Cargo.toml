@@ -256,7 +256,6 @@ tokio-tungstenite = { version = "0.25.0", features = ["native-tls"] }
 tokio-util = "0.7.13"
 toml = "0.9.5"
 toml_edit = "0.23.3"
-toon-format = { version = "=0.5.0", default-features = false }
 tonic = { version = "0.14.2", features = ["gzip"] }
 tonic-health = "0.14.2"
 tonic-prost = "0.14.2"

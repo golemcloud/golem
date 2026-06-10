@@ -3711,7 +3711,6 @@ dependencies = [
  "tokio-tungstenite 0.25.0",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
- "toon-format",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
@@ -10315,18 +10314,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-opentelemetry-instrumentation-sdk",
-]
-
-[[package]]
-name = "toon-format"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f89570c1a68d73941f728cca32a4345b2ffca36667ad921af336c60309a3e7e"
-dependencies = [
- "indexmap 2.14.0",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
