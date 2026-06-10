@@ -24,6 +24,8 @@ use pretty_assertions::assert_matches;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
     PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {

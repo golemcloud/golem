@@ -32,6 +32,7 @@ use RecipientPattern as EnvironmentRecipientPattern;
 use pretty_assertions::assert_eq;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
+use crate::model::environment::EnvironmentName;
 
 fn account_email(account: &str) -> crate::model::account::AccountEmail {
     crate::model::account::AccountEmail::new(account)

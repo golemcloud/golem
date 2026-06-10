@@ -669,6 +669,7 @@ impl WorkerService for DefaultWorkerService {
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
+                    agent_initial_card,
                     instance_id,
                 },
             )) => {
@@ -701,6 +702,28 @@ impl WorkerService for DefaultWorkerService {
                         panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
 
+                let agent_initial_card = if agent_initial_card.is_empty() {
+                    golem_common::model::card::Card {
+                        card_id: golem_common::model::card::CardId::new(),
+                        parent_ids: Vec::new(),
+                        lower_positive: Vec::new(),
+                        lower_negative: Vec::new(),
+                        upper_positive: Vec::new(),
+                        upper_negative: Vec::new(),
+                        created_at: chrono::Utc::now(),
+                        expires_at: None,
+                        system_card: false,
+                        managed_by: None,
+                    }
+                } else {
+                    golem_common::serialization::deserialize(&agent_initial_card)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "failed to deserialize agent initial card for {owned_agent_id}: {err}"
+                            )
+                        })
+                };
+
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
@@ -722,6 +745,7 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    agent_initial_card,
                 };
 
                 let last_known_status = match self.read_cached_status(owned_agent_id).await {

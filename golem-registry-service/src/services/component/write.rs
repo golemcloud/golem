@@ -27,8 +27,11 @@ use crate::services::environment_plugin_grant::{
 };
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
+};
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
@@ -62,6 +65,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::info;
+use golem_common::model::application::ApplicationId;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -215,6 +219,13 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
+        let component_metadata =
+            component_metadata.with_agent_initial_permissions(default_initial_permissions(
+                component_metadata.agent_types(),
+                &environment.owner_account_email,
+                environment.application_id,
+                environment.id
+            ));
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
@@ -400,12 +411,17 @@ impl ComponentWriteService {
 
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 new_wasm.clone(),
                 final_provision_configs,
             )
             .await?;
+            component.metadata =
+                metadata.with_agent_initial_permissions(default_initial_permissions(
+                    metadata.agent_types(),
+                    &environment.owner_account_email,
+                ));
         } else if agent_types_changed {
             // TODO: skip the download here
             let old_data = self
@@ -413,12 +429,17 @@ impl ComponentWriteService {
                 .get(environment_id, &component.object_store_key)
                 .await?;
 
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 Arc::from(old_data),
                 final_provision_configs,
             )
             .await?;
+            component.metadata =
+                metadata.with_agent_initial_permissions(default_initial_permissions(
+                    metadata.agent_types(),
+                    &environment.owner_account_email,
+                ));
         } else if provision_configs_changed {
             component.metadata = component
                 .metadata
@@ -932,6 +953,24 @@ fn provision_configs_for_agent_types(
     provision_configs
         .into_iter()
         .filter(|(agent_type_name, _)| agent_type_names.contains(agent_type_name))
+        .collect()
+}
+
+fn default_initial_permissions(
+    agent_types: &[AgentType],
+    account_email: &AccountEmail,
+    application_id: ApplicationId,
+    environment_id: EnvironmentId,
+) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
+    agent_types
+        .iter()
+        .map(|agent_type| {
+            (
+                agent_type.type_name.clone(),
+                AgentInitialPermissionTemplate::default_for(account_email, application_id, environment_id),
+            )
+        })
+        .into_iter()
         .collect()
 }
 

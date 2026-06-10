@@ -60,8 +60,12 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
     AgentMode, LegacyParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
+use golem_common::model::card::{
+    AgentPermissionMonomorphizationContext, Card, monomorphize_agent_initial_card,
+};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::component_metadata::AgentInitialPermissionTemplate;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
@@ -2640,6 +2644,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id.as_ref(),
                     &component,
                 )?;
+                let agent_initial_card = resolve_agent_initial_card(
+                    agent_id.as_ref(),
+                    &owned_agent_id.agent_id.agent_id,
+                    &component,
+                )?;
 
                 // Store only the per-worker env overrides. Agent-type defaults are applied
                 // at runtime in get_environment
@@ -2691,6 +2700,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    agent_initial_card,
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -2719,6 +2729,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map(Into::into)
                         .collect(),
                     initial_worker_metadata.original_phantom_id,
+                    golem_common::serialization::serialize(
+                        &initial_worker_metadata.agent_initial_card,
+                    )
+                    .map_err(|err| {
+                        WorkerExecutorError::unknown(format!(
+                            "Failed to serialize agent initial card: {err}"
+                        ))
+                    })?,
                     instance_id,
                 );
 
@@ -3471,6 +3489,7 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.created_by_email,
+                worker_metadata.agent_initial_card,
                 worker_metadata.config,
                 last_snapshot_index,
             ),
@@ -3900,6 +3919,58 @@ fn resolve_agent_properties<T: HasConfig>(
         agent_mode,
         snapshot_policy,
     }
+}
+
+fn resolve_agent_initial_card(
+    agent_id: Option<&LegacyParsedAgentId>,
+    agent_name: &str,
+    component: &golem_service_base::model::component::Component,
+) -> Result<Card, WorkerExecutorError> {
+    let Some(agent_id) = agent_id else {
+        return Ok(Card {
+            card_id: golem_common::model::card::CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+    };
+
+    let template = component
+        .metadata
+        .agent_type_initial_permission_template(&agent_id.agent_type)
+        .cloned()
+        .unwrap_or_else(|| {
+            AgentInitialPermissionTemplate::default_for_account(&component.account_email)
+        });
+
+    let context = AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: agent_name.to_string(),
+        agent_type: agent_id.agent_type.clone(),
+    };
+
+    monomorphize_agent_initial_card(
+        &template.lower_positive,
+        &template.lower_negative,
+        &template.upper_positive,
+        &template.upper_negative,
+        &context,
+    )
+    .map_err(|err| {
+        WorkerExecutorError::invalid_request(format!(
+            "Invalid agent initial permissions for {}: {err}",
+            agent_id.agent_type
+        ))
+    })
 }
 
 fn resolve_snapshot_policy(

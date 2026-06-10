@@ -41,7 +41,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentInvocationMode, AgentPrincipal, Principal, UntypedDataValue,
 };
-use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
+use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, Card};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -64,6 +64,7 @@ pub trait Rpc: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -78,6 +79,7 @@ pub trait Rpc: Send + Sync {
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -91,6 +93,7 @@ pub trait Rpc: Send + Sync {
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -295,6 +298,7 @@ impl Rpc for RemoteInvocationRpc {
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -313,6 +317,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 self_created_by_email,
+                self_initial_card,
                 config,
                 principal,
             )
@@ -332,6 +337,7 @@ impl Rpc for RemoteInvocationRpc {
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -352,6 +358,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 self_created_by_email,
+                self_initial_card,
                 principal,
                 owned_agent_id.environment_id,
             )
@@ -375,6 +382,7 @@ impl Rpc for RemoteInvocationRpc {
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -394,6 +402,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 self_created_by_email,
+                self_initial_card,
                 principal,
                 owned_agent_id.environment_id,
             )
@@ -797,6 +806,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -815,6 +825,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .check(
                     self_created_by,
                     self_created_by_email,
+                    self_initial_card,
                     owned_agent_id,
                     AgentVerb::Invoke,
                     AgentResourcePattern::Any,
@@ -846,6 +857,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     owned_agent_id,
                     self_created_by,
                     self_created_by_email,
+                    self_initial_card,
                     self_agent_id,
                     self_env,
                     self_stack,
@@ -863,6 +875,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -880,6 +893,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .check(
                     self_created_by,
                     self_created_by_email,
+                    self_initial_card,
                     owned_agent_id,
                     AgentVerb::Invoke,
                     AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
@@ -926,6 +940,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     method_parameters,
                     self_created_by,
                     self_created_by_email,
+                    self_initial_card,
                     self_agent_id,
                     self_env,
                     self_stack,
@@ -942,6 +957,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_created_by_email: &AccountEmail,
+        self_initial_card: &Card,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -959,6 +975,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .check(
                     self_created_by,
                     self_created_by_email,
+                    self_initial_card,
                     owned_agent_id,
                     AgentVerb::Invoke,
                     AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
@@ -999,6 +1016,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     method_parameters,
                     self_created_by,
                     self_created_by_email,
+                    self_initial_card,
                     self_agent_id,
                     self_env,
                     self_stack,

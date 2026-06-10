@@ -20,6 +20,7 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
 use combine::{EasyParser, Parser, eof, many1, satisfy};
 use serde::{Deserialize, Serialize};
+use crate::model::application::ApplicationName;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -27,11 +28,6 @@ pub enum ApplicationResourcePattern {
     Any,
     Application(ApplicationName),
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct ApplicationName(pub String);
 
 impl ResourcePattern for ApplicationResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {

@@ -1,0 +1,299 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::class::*;
+use super::owner::*;
+use super::{Card, CardId, PermissionPattern, PolymorphicPermissionPattern};
+use crate::model::account::AccountEmail;
+use crate::model::agent::AgentTypeName;
+use crate::model::application::ApplicationName;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
+use chrono::Utc;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPermissionMonomorphizationContext {
+    pub account: AccountEmail,
+    pub application: ApplicationName,
+    pub environment: EnvironmentName,
+    pub component: ComponentName,
+    pub agent_name: String,
+    pub agent_type: AgentTypeName,
+}
+
+pub fn monomorphize_agent_initial_card(
+    lower_positive: &[PolymorphicPermissionPattern],
+    lower_negative: &[PolymorphicPermissionPattern],
+    upper_positive: &[PolymorphicPermissionPattern],
+    upper_negative: &[PolymorphicPermissionPattern],
+    context: &AgentPermissionMonomorphizationContext,
+) -> Result<Card, String> {
+    Ok(Card {
+        card_id: CardId::new(),
+        parent_ids: Vec::new(),
+        lower_positive: monomorphize_permissions(lower_positive, context)?,
+        lower_negative: monomorphize_permissions(lower_negative, context)?,
+        upper_positive: monomorphize_permissions(upper_positive, context)?,
+        upper_negative: monomorphize_permissions(upper_negative, context)?,
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+fn monomorphize_permissions(
+    permissions: &[PolymorphicPermissionPattern],
+    context: &AgentPermissionMonomorphizationContext,
+) -> Result<Vec<PermissionPattern>, String> {
+    permissions
+        .iter()
+        .map(|permission| monomorphize_permission(permission, context))
+        .collect()
+}
+
+macro_rules! mono_permission {
+    ($variant:ident, $pattern:expr, $context:expr) => {{
+        let pattern = $pattern;
+        Ok(PermissionPattern::$variant(ClassPermissionPattern {
+            owner: pattern.owner.monomorphize($context)?,
+            recipient: pattern.recipient.clone(),
+            verb: pattern.verb,
+            resource: pattern.resource.clone(),
+        }))
+    }};
+}
+
+fn monomorphize_permission(
+    permission: &PolymorphicPermissionPattern,
+    context: &AgentPermissionMonomorphizationContext,
+) -> Result<PermissionPattern, String> {
+    match permission {
+        PolymorphicPermissionPattern::Filesystem(p) => mono_permission!(Filesystem, p, context),
+        PolymorphicPermissionPattern::Network(p) => mono_permission!(Network, p, context),
+        PolymorphicPermissionPattern::Env(p) => mono_permission!(Env, p, context),
+        PolymorphicPermissionPattern::Oplog(p) => mono_permission!(Oplog, p, context),
+        PolymorphicPermissionPattern::Config(p) => mono_permission!(Config, p, context),
+        PolymorphicPermissionPattern::Secret(p) => mono_permission!(Secret, p, context),
+        PolymorphicPermissionPattern::Agent(p) => mono_permission!(Agent, p, context),
+        PolymorphicPermissionPattern::Tool(p) => mono_permission!(Tool, p, context),
+        PolymorphicPermissionPattern::Kv(p) => mono_permission!(Kv, p, context),
+        PolymorphicPermissionPattern::Blob(p) => mono_permission!(Blob, p, context),
+        PolymorphicPermissionPattern::Rdbms(p) => mono_permission!(Rdbms, p, context),
+        PolymorphicPermissionPattern::Card(p) => mono_permission!(Card, p, context),
+        PolymorphicPermissionPattern::System(p) => mono_permission!(System, p, context),
+        PolymorphicPermissionPattern::Plan(p) => mono_permission!(Plan, p, context),
+        PolymorphicPermissionPattern::Account(p) => mono_permission!(Account, p, context),
+        PolymorphicPermissionPattern::AccountUsage(p) => mono_permission!(AccountUsage, p, context),
+        PolymorphicPermissionPattern::AccountToken(p) => mono_permission!(AccountToken, p, context),
+        PolymorphicPermissionPattern::AccountPlugin(p) => {
+            mono_permission!(AccountPlugin, p, context)
+        }
+        PolymorphicPermissionPattern::Application(p) => mono_permission!(Application, p, context),
+        PolymorphicPermissionPattern::Environment(p) => mono_permission!(Environment, p, context),
+        PolymorphicPermissionPattern::EnvironmentPluginGrant(p) => {
+            mono_permission!(EnvironmentPluginGrant, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentDomainRegistration(p) => {
+            mono_permission!(EnvironmentDomainRegistration, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentSecurityScheme(p) => {
+            mono_permission!(EnvironmentSecurityScheme, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentHttpApiDeployment(p) => {
+            mono_permission!(EnvironmentHttpApiDeployment, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentMcpDeployment(p) => {
+            mono_permission!(EnvironmentMcpDeployment, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentAgentSecret(p) => {
+            mono_permission!(EnvironmentAgentSecret, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentResourceDefinition(p) => {
+            mono_permission!(EnvironmentResourceDefinition, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentRetryPolicy(p) => {
+            mono_permission!(EnvironmentRetryPolicy, p, context)
+        }
+        PolymorphicPermissionPattern::Component(p) => mono_permission!(Component, p, context),
+        PolymorphicPermissionPattern::AccountOauth2Identity(p) => {
+            mono_permission!(AccountOauth2Identity, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentInitialFiles(p) => {
+            mono_permission!(EnvironmentInitialFiles, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentKvBucket(p) => {
+            mono_permission!(EnvironmentKvBucket, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentBlobBucket(p) => {
+            mono_permission!(EnvironmentBlobBucket, p, context)
+        }
+        PolymorphicPermissionPattern::AccountPermissionShare(p) => {
+            mono_permission!(AccountPermissionShare, p, context)
+        }
+    }
+}
+
+trait MonomorphizeOwner<T> {
+    fn monomorphize(&self, context: &AgentPermissionMonomorphizationContext) -> Result<T, String>;
+}
+
+impl MonomorphizeOwner<EmptyOwnerPattern> for PolymorphicEmptyOwnerPattern {
+    fn monomorphize(
+        &self,
+        _context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<EmptyOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+        }
+    }
+}
+
+impl MonomorphizeOwner<AccountOwnerPattern> for PolymorphicAccountOwnerPattern {
+    fn monomorphize(
+        &self,
+        context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<AccountOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::Env | Self::Self_ => Ok(AccountOwnerPattern::Account {
+                account: context.account.clone(),
+            }),
+        }
+    }
+}
+
+impl MonomorphizeOwner<ApplicationOwnerPattern> for PolymorphicApplicationOwnerPattern {
+    fn monomorphize(
+        &self,
+        context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<ApplicationOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::Env | Self::Self_ => Ok(ApplicationOwnerPattern::Application {
+                account: context.account.clone(),
+                application: context.application.clone(),
+            }),
+        }
+    }
+}
+
+impl MonomorphizeOwner<EnvironmentOwnerPattern> for PolymorphicEnvironmentOwnerPattern {
+    fn monomorphize(
+        &self,
+        context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<EnvironmentOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::Env | Self::Self_ => Ok(EnvironmentOwnerPattern::Environment {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+            }),
+        }
+    }
+}
+
+impl MonomorphizeOwner<ComponentOwnerPattern> for PolymorphicComponentOwnerPattern {
+    fn monomorphize(
+        &self,
+        context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<ComponentOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::EnvComponents => Ok(ComponentOwnerPattern::EnvironmentComponents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+            }),
+            Self::EnvComponent { component } => Ok(ComponentOwnerPattern::Component {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: ComponentName(component.clone()),
+            }),
+            Self::Self_ => Ok(ComponentOwnerPattern::Component {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+            }),
+        }
+    }
+}
+
+impl MonomorphizeOwner<AgentOwnerPattern> for PolymorphicAgentOwnerPattern {
+    fn monomorphize(
+        &self,
+        context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<AgentOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::EnvAgents => Ok(AgentOwnerPattern::EnvironmentAgents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+            }),
+            Self::EnvComponentAgents { component } => Ok(AgentOwnerPattern::ComponentAgents {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: component.clone(),
+            }),
+            Self::EnvAgent { component, agent } => Ok(AgentOwnerPattern::Agent {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: component.clone(),
+                agent: agent.clone(),
+            }),
+            Self::Self_ => Ok(AgentOwnerPattern::Agent {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+                agent: AgentOwnerLeafPattern::Agent(context.agent_name.clone()),
+            }),
+        }
+    }
+}
+
+impl MonomorphizeOwner<ToolOwnerPattern> for PolymorphicToolOwnerPattern {
+    fn monomorphize(
+        &self,
+        context: &AgentPermissionMonomorphizationContext,
+    ) -> Result<ToolOwnerPattern, String> {
+        match self {
+            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::EnvTools => Ok(ToolOwnerPattern::EnvironmentTools {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+            }),
+            Self::EnvComponentTools { component } => Ok(ToolOwnerPattern::ComponentTools {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: component.clone(),
+            }),
+            Self::EnvTool { component, tool } => Ok(ToolOwnerPattern::Tool {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: component.clone(),
+                tool: tool.clone(),
+            }),
+        }
+    }
+}

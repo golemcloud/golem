@@ -42,9 +42,11 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
 }
 
 fn mk_impersonated(id: AccountId) -> AuthCtx {
+    let account_email = account_email(id);
     AuthCtx::Agent(AgentAuthCtx {
         account_id: id,
-        account_email: account_email(id),
+        account_email: account_email.clone(),
+        effective_surface: super::temporary_agent_effective_surface(&account_email),
     })
 }
 

@@ -189,6 +189,7 @@ pub struct UserAuthCtx {
 pub struct AgentAuthCtx {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
+    pub effective_surface: EffectiveSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -227,9 +228,19 @@ impl AuthCtx {
     }
 
     pub fn agent(account_id: AccountId, account_email: AccountEmail) -> AuthCtx {
+        let effective_surface = temporary_agent_effective_surface(&account_email);
+        Self::agent_with_effective_surface(account_id, account_email, effective_surface)
+    }
+
+    pub fn agent_with_effective_surface(
+        account_id: AccountId,
+        account_email: AccountEmail,
+        effective_surface: EffectiveSurface,
+    ) -> AuthCtx {
         AuthCtx::Agent(AgentAuthCtx {
             account_id,
             account_email,
+            effective_surface,
         })
     }
 
@@ -331,8 +342,7 @@ impl AuthCtx {
                 authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
             Self::Agent(agent) => {
-                let effective_surface = temporary_agent_effective_surface(&agent.account_email);
-                authorize_effective_surface_permission(&effective_surface, target)
+                authorize_effective_surface_permission(&agent.effective_surface, target)
             }
         }
     }
@@ -635,6 +645,7 @@ mod test {
 mod protobuf {
     use super::{
         AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
+        temporary_agent_effective_surface,
     };
     use golem_common::model::account::AccountEmail;
     use golem_common::model::auth::AccountRole;
@@ -765,7 +776,14 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
-                account_email: AccountEmail::new(value.account_email),
+                account_email: AccountEmail::new(value.account_email.clone()),
+                effective_surface: value
+                    .effective_surface
+                    .map(deserialize_effective_surface)
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        temporary_agent_effective_surface(&AccountEmail::new(value.account_email))
+                    }),
             })
         }
     }
@@ -775,6 +793,7 @@ mod protobuf {
             Self {
                 account_id: Some(value.account_id.into()),
                 account_email: value.account_email.into_inner(),
+                effective_surface: Some(serialize_effective_surface(value.effective_surface)),
             }
         }
     }

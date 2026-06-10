@@ -21,6 +21,7 @@ use crate::model::card::owner::ApplicationOwnerPattern;
 use combine::parser::char::string;
 use combine::{EasyParser, Parser, eof, many1, optional, satisfy};
 use serde::{Deserialize, Serialize};
+use crate::model::environment::EnvironmentName;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -32,11 +33,6 @@ pub enum EnvironmentResourcePattern {
         revision: u64,
     },
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct EnvironmentName(pub String);
 
 impl ResourcePattern for EnvironmentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
