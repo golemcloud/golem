@@ -109,23 +109,16 @@ impl EvictionSource for FakeEvictionSource {
     }
 }
 
-fn controller(state: Arc<Mutex<EnvState>>, reserve_bytes: u64) -> AdmissionController {
-    controller_with_ratio(state, 1.0, reserve_bytes)
+fn controller(state: Arc<Mutex<EnvState>>) -> AdmissionController {
+    controller_with_ratio(state, 1.0)
 }
 
-fn controller_with_ratio(
-    state: Arc<Mutex<EnvState>>,
-    usable_ratio: f64,
-    reserve_bytes: u64,
-) -> AdmissionController {
+fn controller_with_ratio(state: Arc<Mutex<EnvState>>, usable_ratio: f64) -> AdmissionController {
     AdmissionController::new(
         Box::new(FakeProbe {
             state: state.clone(),
         }),
-        AdmissionPolicy {
-            usable_ratio,
-            reserve_bytes,
-        },
+        AdmissionPolicy { usable_ratio },
     )
 }
 
@@ -156,7 +149,7 @@ async fn admits_when_headroom_is_ample_without_evicting() {
         }],
         ..Default::default()
     }));
-    let ctrl = controller(state.clone(), 0);
+    let ctrl = controller(state.clone());
     let source = FakeEvictionSource {
         state: state.clone(),
     };
@@ -186,7 +179,7 @@ async fn evicts_idle_before_warm() {
     }));
     // usage = 800, limit = 1000, headroom = 200. Request 300 → shortfall 100.
     // One idle (400) covers it; warm must remain untouched.
-    let ctrl = controller(state.clone(), 0);
+    let ctrl = controller(state.clone());
     let source = FakeEvictionSource {
         state: state.clone(),
     };
@@ -208,7 +201,7 @@ async fn rejects_when_nothing_can_be_freed() {
         residents: vec![],
         ..Default::default()
     }));
-    let ctrl = controller(state.clone(), 0);
+    let ctrl = controller(state.clone());
     let source = FakeEvictionSource {
         state: state.clone(),
     };
@@ -217,31 +210,6 @@ async fn rejects_when_nothing_can_be_freed() {
     assert_eq!(decision, AdmissionDecision::Reject);
     // No over-commit: usage unchanged.
     assert_eq!(state.lock().unwrap().usage(), 950);
-}
-
-#[test]
-async fn reserve_is_kept_free() {
-    let state = Arc::new(Mutex::new(EnvState {
-        limit: 1000,
-        pinned_usage: 700,
-        residents: vec![],
-        ..Default::default()
-    }));
-    // headroom = 300, reserve = 200 → admissible = 100. Request 150 → reject.
-    let ctrl = controller(state.clone(), 200);
-    let source = FakeEvictionSource {
-        state: state.clone(),
-    };
-
-    assert_eq!(
-        apply_admit(&ctrl, &source, &state, 150).await,
-        AdmissionDecision::Reject
-    );
-    // But a request within the admissible window succeeds.
-    assert_eq!(
-        apply_admit(&ctrl, &source, &state, 100).await,
-        AdmissionDecision::Admit
-    );
 }
 
 // ── Property tests ───────────────────────────────────────────────────────────
@@ -295,12 +263,11 @@ fn arb_fitting_state(
 
 proptest! {
     /// Safety invariant: across any random sequence of admits — with random
-    /// pre-resident work, random sizes, and a random reserve — modeled usage
-    /// must never exceed the limit. This is the property that rules out OOM.
+    /// pre-resident work and random sizes — modeled usage must never exceed the
+    /// limit. This is the property that rules out OOM.
     #[test]
     fn usage_never_exceeds_limit(
         (limit, residents) in arb_fitting_state(500..5000, 20),
-        reserve in 0u64..300,
         ops in arb_ops(),
     ) {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
@@ -311,7 +278,7 @@ proptest! {
                 residents,
                 ..Default::default()
             }));
-            let ctrl = controller(state.clone(), reserve);
+            let ctrl = controller(state.clone());
             let source = FakeEvictionSource { state: state.clone() };
 
             for op in ops {
@@ -350,7 +317,7 @@ proptest! {
                 residents,
                 ..Default::default()
             }));
-            let ctrl = controller(state.clone(), 0);
+            let ctrl = controller(state.clone());
             let source = FakeEvictionSource { state: state.clone() };
 
             for op in ops {
@@ -381,7 +348,7 @@ proptest! {
                 residents,
                 ..Default::default()
             }));
-            let ctrl = controller(state.clone(), 0);
+            let ctrl = controller(state.clone());
             let source = FakeEvictionSource { state: state.clone() };
 
             for op in ops {
@@ -420,7 +387,7 @@ async fn usable_ratio_caps_admission_below_full_limit() {
     }));
     // ceiling = 0.8 * 1000 = 800. Request 850 must be rejected even though the
     // raw limit (1000) would allow it — the top 20% is reserved for the host.
-    let ctrl = controller_with_ratio(state.clone(), 0.8, 0);
+    let ctrl = controller_with_ratio(state.clone(), 0.8);
     let source = FakeEvictionSource {
         state: state.clone(),
     };
@@ -433,150 +400,6 @@ async fn usable_ratio_caps_admission_below_full_limit() {
         apply_admit(&ctrl, &source, &state, 800).await,
         AdmissionDecision::Admit
     );
-}
-
-// ── Concurrency ──────────────────────────────────────────────────────────────
-//
-// In production, each admission reads headroom (`try_admit`) and then separately
-// commits to the upstream atomic permit (modeled here as `pinned_usage +=
-// request`). The two steps are not serialised across concurrent admissions, so
-// several admissions can read the same pre-commit snapshot, all pass the check,
-// and all commit. The `reserve` margin accounts for this instead of a lock:
-// concurrent admissions may push usage above the carve-out ceiling into the
-// reserve, but must not push it above the true `limit`.
-//
-// These tests force the maximum-overlap case with a barrier: every admission
-// completes its headroom check before any admission commits. This makes the
-// maximum overshoot deterministic rather than dependent on task scheduling, so
-// an undersized reserve is reliably detected and a correctly sized one is
-// actually exercised.
-
-/// Run `racers` admissions of `request` bytes against a fresh environment with
-/// the given `reserve`, forcing all headroom checks to complete before any
-/// commit (maximum overlap). Returns the final environment usage and the number
-/// of admits granted.
-async fn race_admissions_worst_case(
-    limit: u64,
-    initial_pinned: u64,
-    reserve: u64,
-    racers: usize,
-    request: u64,
-) -> (u64, usize) {
-    let state = Arc::new(Mutex::new(EnvState {
-        limit,
-        pinned_usage: initial_pinned,
-        residents: vec![],
-        ..Default::default()
-    }));
-    let ctrl = Arc::new(controller_with_ratio(state.clone(), 1.0, reserve));
-    // All racers check before any commits: the maximum-overlap schedule.
-    let barrier = Arc::new(tokio::sync::Barrier::new(racers));
-
-    let mut handles = Vec::new();
-    for _ in 0..racers {
-        let ctrl = ctrl.clone();
-        let state = state.clone();
-        let barrier = barrier.clone();
-        handles.push(tokio::spawn(async move {
-            let source = FakeEvictionSource {
-                state: state.clone(),
-            };
-            let decision = ctrl.try_admit(request, &source).await;
-            // Hold every racer here until all have decided against the same
-            // pre-commit snapshot, then let the commits run together.
-            barrier.wait().await;
-            if decision == AdmissionDecision::Admit {
-                state.lock().unwrap().pinned_usage += request;
-                true
-            } else {
-                false
-            }
-        }));
-    }
-    let mut admitted = 0;
-    for h in handles {
-        if h.await.unwrap() {
-            admitted += 1;
-        }
-    }
-    let usage = state.lock().unwrap().usage();
-    (usage, admitted)
-}
-
-proptest! {
-    /// A reserve sized for the maximum concurrent overshoot keeps real usage
-    /// under the limit even when every racer checks before any commits, with a
-    /// non-trivial near-ceiling pinned base.
-    ///
-    /// Sizing: at most all `racers` can pass against the same pre-commit
-    /// snapshot, so the reserve must cover `racers × request` landing in the
-    /// window between check and commit. With that margin, usage stays
-    /// `<= limit`.
-    #[test]
-    fn sufficient_reserve_holds_under_worst_case_overlap(
-        racers in 2usize..16,
-        request in 50u64..400,
-        base_fill in 0u64..2000,
-    ) {
-        let reserve = request * racers as u64;
-        // Limit leaves room for the pre-existing fill, the reserve, and at least
-        // one request's worth of admissible headroom above the reserve.
-        let limit = base_fill + reserve + request + 500;
-
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            let (usage, _) =
-                race_admissions_worst_case(limit, base_fill, reserve, racers, request).await;
-            prop_assert!(
-                usage <= limit,
-                "maximum overlap drove usage {usage} past limit {limit}"
-            );
-            Ok(())
-        }).unwrap();
-    }
-
-    /// With no reserve and maximum overlap forced, several racers admitting at
-    /// once must push usage above the carve-out ceiling. This confirms the race
-    /// the design tolerates is real and this harness reproduces it; without it,
-    /// the safety test above could pass without ever exercising a concurrent
-    /// overshoot. Usage may still stay under `limit`; the assertion is on the
-    /// overshoot past the ceiling.
-    #[test]
-    fn worst_case_overlap_overshoots_ceiling_without_reserve(
-        racers in 2usize..12,
-        request in 50u64..400,
-    ) {
-        // Ceiling headroom sized for exactly one request; no reserve cushion.
-        let ceiling = request;
-        let limit = request * racers as u64 + 1000;
-
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            // pinned = limit - ceiling so admissible headroom is exactly one
-            // request; with reserve 0, every racer sees room for itself.
-            let pinned = limit - ceiling;
-            let (usage, admitted) =
-                race_admissions_worst_case(limit, pinned, 0, racers, request).await;
-            // More than one admit means the gate let concurrent racers through
-            // on the same snapshot.
-            prop_assert!(
-                admitted >= 2,
-                "expected concurrent over-admission with no reserve, got {admitted} admits"
-            );
-            prop_assert!(
-                usage > ceiling + pinned,
-                "usage {usage} did not overshoot the ceiling {}",
-                ceiling + pinned
-            );
-            Ok(())
-        }).unwrap();
-    }
 }
 
 /// Concurrent memory grows must not deadlock against the admission eviction
@@ -666,10 +489,7 @@ mod grow_lock_ordering {
     fn controller(probe: Box<dyn MemoryProbe>) -> Arc<AdmissionController> {
         Arc::new(AdmissionController::new(
             probe,
-            AdmissionPolicy {
-                usable_ratio: 1.0,
-                reserve_bytes: 0,
-            },
+            AdmissionPolicy { usable_ratio: 1.0 },
         ))
     }
 

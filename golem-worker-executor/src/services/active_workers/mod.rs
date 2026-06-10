@@ -80,10 +80,12 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     acquire_retry_delay: Duration,
     /// Authoritative measured-headroom admission gate. Decides whether real
     /// memory headroom permits a new acquisition, evicting via the worker set
-    /// when short. The estimate-based `worker_memory` semaphore is the cheap
-    /// pre-filter and atomic commit in front of it. `None` when measured
-    /// admission is disabled (e.g. shared test environments) — admission then
-    /// relies on the estimate semaphore alone.
+    /// when short, and is what refuses admission in normal operation. The
+    /// estimate-based `worker_memory` semaphore is the second line of defence
+    /// behind it: its atomic permit acquisition catches the concurrent
+    /// admissions the lockless gate can let through on the same snapshot. `None`
+    /// when measured admission is disabled (e.g. shared test environments) —
+    /// admission then relies on the estimate semaphore alone.
     admission: Option<AdmissionController>,
     /// Charges each resident component's compiled module size to the estimate
     /// pool exactly once (shared across all its workers) rather than per worker.
@@ -138,13 +140,14 @@ impl Drop for WorkerMemoryPermit {
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
-        let worker_memory_size = memory_config.worker_memory();
-        let admission = memory_config.enable_measured_admission.then(|| {
-            AdmissionController::new(
-                default_probe(memory_config.system_memory_override),
-                memory_config.admission_policy(),
-            )
-        });
+        // Build the probe once and size both admission layers from its reported
+        // limit, so the estimate semaphore and the measured-headroom gate share
+        // a single basis (the pod's cgroup limit when constrained, not host RAM).
+        let probe = default_probe(memory_config.system_memory_override);
+        let worker_memory_size = memory_config.worker_memory_for_limit(probe.limit_bytes());
+        let admission = memory_config
+            .enable_measured_admission
+            .then(|| AdmissionController::new(probe, memory_config.admission_policy()));
         let workers = Cache::new(
             None,
             FullCacheEvictionMode::None,
@@ -273,6 +276,15 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .expect("requested memory size is too large");
 
         loop {
+            // Blocking acquire: retry until the request can be admitted. A
+            // rejection here is transient, not terminal. The gate reads resident
+            // memory from the probe, which lags real usage (cgroup
+            // `memory.current` only counts already-touched pages), so a worker
+            // admitted earlier may not yet be fully resident; pressure eases as
+            // its pages settle and as other workers finish and release pool
+            // permits. Each iteration backs off, re-reads the gate, and re-tries
+            // the pool, so the caller eventually proceeds once headroom recovers
+            // rather than failing under momentary pressure.
             // Authoritative measured-headroom gate (when enabled). Evicts
             // idle-then-warm when real headroom is short; rejects (and we back
             // off) when it cannot make room rather than risking the limit.
@@ -285,7 +297,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 continue;
             }
 
-            // Estimate-semaphore pool: cheap pre-check + atomic commit.
+            // Estimate-semaphore pool: the second line of defence behind the
+            // gate. Its atomic permit acquisition catches the concurrent
+            // admissions the lockless gate can let through on the same snapshot.
+            // Sized above the gate ceiling (but clamped below the limit), so it
+            // rarely binds first — the gate refuses in normal operation.
             if let Some(permit) = acquire_pool_permit(
                 &self.worker_memory,
                 &self.workers,

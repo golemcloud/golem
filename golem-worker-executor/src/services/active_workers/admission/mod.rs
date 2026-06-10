@@ -16,11 +16,13 @@
 //!
 //! Gates worker admission on the executor environment's *real* memory headroom
 //! read from the [`MemoryProbe`], rather than on the estimate-based semaphore in
-//! [`super::ActiveWorkers`]. The two work together: the semaphore is a cheap,
-//! high-frequency pre-filter over reserved-but-not-yet-resident intent; this
-//! controller is the authoritative check against measured resident usage. When
-//! headroom is short it evicts already-resident idle-then-warm work; if it still
-//! cannot make room it rejects rather than over-committing.
+//! [`super::ActiveWorkers`]. This controller is the primary, authoritative
+//! check against measured resident usage and refuses admission in normal
+//! operation; the estimate semaphore is the second line of defence behind it,
+//! its atomic permit acquisition catching the concurrent admissions this
+//! (lockless) controller can let through on the same snapshot. When headroom is
+//! short it evicts already-resident idle-then-warm work; if it still cannot make
+//! room it rejects rather than over-committing.
 //!
 //! The controller is decoupled from `Worker`/wasmtime via the [`EvictionSource`]
 //! trait so its decision logic can be exercised in isolation with synthetic
@@ -67,23 +69,14 @@ pub enum AdmissionDecision {
 
 /// Configuration for the headroom-based admission decision.
 ///
-/// Two knobs with distinct jobs:
-///
 /// * `usable_ratio` — fraction of the measured limit usable for WASM admission.
 ///   The remainder is left for the host (the executor process, allocator
 ///   arenas, runtime buffers). Mirrors `worker_memory_ratio`, but applied to the
 ///   measured limit rather than the configured total.
-///
-/// * `reserve_bytes` — margin kept free below the carve-out ceiling to absorb
-///   the window in which concurrent admissions are observed before becoming
-///   resident. Its sufficiency under concurrency is asserted by the property
-///   test in `tests.rs`.
 #[derive(Debug, Clone, Copy)]
 pub struct AdmissionPolicy {
     /// Fraction (0.0..=1.0) of the measured limit usable for WASM admission.
     pub usable_ratio: f64,
-    /// Dynamic safety margin kept free below the carve-out ceiling.
-    pub reserve_bytes: u64,
 }
 
 /// Decides admission against measured headroom, evicting resident idle/warm
@@ -100,14 +93,12 @@ impl AdmissionController {
     }
 
     /// Bytes available for new admissions: the carve-out ceiling
-    /// (`usable_ratio × limit`) minus current usage minus the reserve.
-    /// Saturating throughout — never underflows when already over a ceiling.
+    /// (`usable_ratio × limit`) minus current usage. Saturating — never
+    /// underflows when already over the ceiling.
     fn admissible_headroom(&self) -> u64 {
         let snapshot = self.probe.snapshot();
         let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
-        ceiling
-            .saturating_sub(snapshot.current_bytes)
-            .saturating_sub(self.policy.reserve_bytes)
+        ceiling.saturating_sub(snapshot.current_bytes)
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if

@@ -47,9 +47,10 @@ impl MemorySnapshot {
     }
 }
 
-/// Reads the executor environment's real memory state. Cheap enough to sample
-/// at admission time, but not on every wasmtime `memory.grow` (that is what the
-/// estimate-semaphore pre-check absorbs).
+/// Reads the executor environment's real memory state. Sampled at every
+/// admission attempt, including each wasmtime `memory.grow`, so it must be
+/// cheap: the cgroup v2 backend is two small file reads independent of the
+/// number of resident workers.
 pub trait MemoryProbe: Send + Sync + Debug {
     fn snapshot(&self) -> MemorySnapshot;
 
@@ -172,6 +173,10 @@ impl MemoryProbe for CgroupV2Probe {
 /// (falling back to host RAM / process RSS otherwise).
 pub fn default_probe(memory_override: Option<u64>) -> Box<dyn MemoryProbe> {
     if let Some(limit) = memory_override {
+        tracing::info!(
+            limit_bytes = limit,
+            "Memory probe: ProcessRssProbe (limit pinned by system_memory_override)"
+        );
         return Box::new(ProcessRssProbe::new(limit));
     }
 
@@ -184,8 +189,18 @@ pub fn default_probe(memory_override: Option<u64>) -> Box<dyn MemoryProbe> {
     #[cfg(target_os = "linux")]
     {
         if let Some(probe) = CgroupV2Probe::try_new(host_ram) {
+            let snapshot = probe.snapshot();
+            tracing::info!(
+                limit_bytes = snapshot.limit_bytes,
+                current_bytes = snapshot.current_bytes,
+                "Memory probe: CgroupV2Probe (cgroup memory.max/current)"
+            );
             return Box::new(probe);
         }
     }
+    tracing::info!(
+        limit_bytes = host_ram,
+        "Memory probe: ProcessRssProbe (host RAM, no cgroup v2 limit)"
+    );
     Box::new(ProcessRssProbe::new(host_ram))
 }
