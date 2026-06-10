@@ -198,7 +198,9 @@ fn classify_single_response(
                     );
                 }
                 None => {
-                    responses.insert(204, ResponseBodyOpenApiSchema::Unknown);
+                    // `result<(), E>` with a unit ok: success carries no
+                    // payload, so 204 No Content must have no body.
+                    responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
                 }
             }
             match &spec.err {
@@ -213,7 +215,9 @@ fn classify_single_response(
                     );
                 }
                 None => {
-                    responses.insert(500, ResponseBodyOpenApiSchema::Unknown);
+                    // `result<T, ()>` with a unit err: the error carries no
+                    // payload, so the 500 response has no body.
+                    responses.insert(500, ResponseBodyOpenApiSchema::NoBody);
                 }
             }
         }

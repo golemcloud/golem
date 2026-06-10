@@ -196,11 +196,7 @@
             ]
           }
         },
-        "required": [
-          "name",
-          "description",
-          "enabled"
-        ],
+        "required": [],
         "title": "ResourceUpdate",
         "type": "object"
       },
@@ -1092,14 +1088,6 @@
             "description": "Response 200"
           },
           "500": {
-            "content": {
-              "*/*": {
-                "schema": {
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
             "description": "Response 500"
           }
         }
@@ -1124,14 +1112,6 @@
         ],
         "responses": {
           "204": {
-            "content": {
-              "*/*": {
-                "schema": {
-                  "format": "binary",
-                  "type": "string"
-                }
-              }
-            },
             "description": "Response 204"
           },
           "500": {

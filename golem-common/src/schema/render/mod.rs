@@ -38,7 +38,5 @@ pub use json_schema::{
     to_json_schema_with_config,
 };
 pub use json_value::{from_json_value, to_json_value};
-pub use openapi::{
-    input_schema_to_openapi_components, output_schema_to_openapi_components, to_openapi_components,
-};
+pub use openapi::to_openapi_components;
 pub use walker::{SchemaWalker, WalkerError, resolve_ref, walk};

@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::schema::agent::{AutoInjectedKind, InputSchema, NamedField, OutputSchema};
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
-use crate::schema::render::openapi::{
-    input_schema_to_openapi_components, output_schema_to_openapi_components, to_openapi_components,
-};
+use crate::schema::render::openapi::to_openapi_components;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, UnionBranch, UnionSpec,
 };
@@ -226,112 +223,4 @@ fn nested_refs_inside_schemas_are_rewritten() {
         group_schema["items"]["$ref"],
         json!("#/components/schemas/u")
     );
-}
-
-#[test]
-fn input_schema_required_is_option_aware() {
-    // A user-supplied required field and a user-supplied optional field:
-    // only the non-option field appears in `required`.
-    let input = InputSchema::Parameters(vec![
-        NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::user_supplied("nickname", SchemaType::option(SchemaType::string())),
-    ]);
-    let graph = SchemaGraph::anonymous(SchemaType::bool());
-    let bundle = input_schema_to_openapi_components(&graph, &input);
-    let root = &bundle["root"];
-    assert_eq!(root["type"], json!("object"));
-    let required = root["required"].as_array().expect("required array");
-    assert_eq!(required, &vec![json!("name")]);
-    // Both fields are still present as properties.
-    let props = root["properties"].as_object().expect("properties");
-    assert!(props.contains_key("name"));
-    assert!(props.contains_key("nickname"));
-}
-
-#[test]
-fn input_schema_hides_auto_injected_fields() {
-    // Auto-injected fields are host-provided and must not surface in the
-    // OpenAPI input schema (neither as a property nor as required).
-    let input = InputSchema::Parameters(vec![
-        NamedField::user_supplied("query", SchemaType::string()),
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
-    ]);
-    let graph = SchemaGraph::anonymous(SchemaType::bool());
-    let bundle = input_schema_to_openapi_components(&graph, &input);
-    let root = &bundle["root"];
-    let props = root["properties"].as_object().expect("properties");
-    assert!(props.contains_key("query"));
-    assert!(
-        !props.contains_key("principal"),
-        "auto-injected field must be hidden from the public surface"
-    );
-    let required = root["required"].as_array().expect("required array");
-    assert_eq!(required, &vec![json!("query")]);
-}
-
-#[test]
-fn input_schema_named_field_type_emits_component_ref() {
-    // A field whose schema is a `Ref` to a named record emits the record
-    // into `components.schemas` once and references it from the property.
-    let user_id = TypeId::new("myapp.user");
-    let user_def = SchemaTypeDef {
-        id: user_id.clone(),
-        name: Some("User".to_string()),
-        body: SchemaType::record(vec![NamedFieldType {
-            name: "id".to_string(),
-            body: SchemaType::u32(),
-            metadata: Default::default(),
-        }]),
-    };
-    let graph = SchemaGraph {
-        defs: vec![user_def],
-        root: SchemaType::bool(),
-    };
-    let input = InputSchema::Parameters(vec![NamedField::user_supplied(
-        "user",
-        SchemaType::ref_to(user_id),
-    )]);
-    let bundle = input_schema_to_openapi_components(&graph, &input);
-    assert!(bundle["components"]["schemas"]["myapp.user"].is_object());
-    assert_eq!(
-        bundle["root"]["properties"]["user"]["$ref"],
-        json!("#/components/schemas/myapp.user")
-    );
-}
-
-#[test]
-fn output_unit_renders_to_none() {
-    let graph = SchemaGraph::anonymous(SchemaType::bool());
-    assert!(output_schema_to_openapi_components(&graph, &OutputSchema::Unit).is_none());
-}
-
-#[test]
-fn output_single_ref_is_rewritten_to_component() {
-    let user_id = TypeId::new("myapp.user");
-    let user_def = SchemaTypeDef {
-        id: user_id.clone(),
-        name: Some("User".to_string()),
-        body: SchemaType::record(vec![NamedFieldType {
-            name: "id".to_string(),
-            body: SchemaType::u32(),
-            metadata: Default::default(),
-        }]),
-    };
-    let graph = SchemaGraph {
-        defs: vec![user_def],
-        root: SchemaType::ref_to(user_id.clone()),
-    };
-    let output = OutputSchema::Single(Box::new(SchemaType::ref_to(user_id)));
-    let bundle =
-        output_schema_to_openapi_components(&graph, &output).expect("single output renders");
-    assert!(bundle["components"]["schemas"]["myapp.user"].is_object());
-    assert_eq!(
-        bundle["root"]["$ref"],
-        json!("#/components/schemas/myapp.user")
-    );
-    assert!(bundle["root"].get("$schema").is_none());
 }

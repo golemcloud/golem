@@ -238,8 +238,8 @@ fn result_ok_and_err_map_to_200_and_500() {
 }
 
 #[test]
-fn result_void_err_maps_500_to_unknown_binary() {
-    // result<ok, _> with no error type → 200 json (ok) + 500 `*/*` binary.
+fn result_void_err_maps_500_to_no_content() {
+    // result<ok, _> with no error type → 200 json (ok) + 500 no content.
     let op = operation_for(
         call_agent_route(
             Method::GET,
@@ -260,15 +260,13 @@ fn result_void_err_maps_500_to_unknown_binary() {
         op["responses"]["200"]["content"]["application/json"]["schema"]["type"],
         json!("object")
     );
-    assert_eq!(
-        op["responses"]["500"]["content"]["*/*"]["schema"],
-        json!({ "type": "string", "format": "binary" })
-    );
+    assert!(op["responses"]["500"].is_object());
+    assert!(op["responses"]["500"].get("content").is_none());
 }
 
 #[test]
-fn result_void_ok_maps_204_to_unknown_binary() {
-    // result<_, err> with no ok type → 204 `*/*` binary + 500 json (err).
+fn result_void_ok_maps_204_to_no_content() {
+    // result<_, err> with no ok type → 204 no content + 500 json (err).
     let op = operation_for(
         call_agent_route(
             Method::GET,
@@ -283,10 +281,8 @@ fn result_void_ok_maps_204_to_unknown_binary() {
         "/rerr",
         "get",
     );
-    assert_eq!(
-        op["responses"]["204"]["content"]["*/*"]["schema"],
-        json!({ "type": "string", "format": "binary" })
-    );
+    assert!(op["responses"]["204"].is_object());
+    assert!(op["responses"]["204"].get("content").is_none());
     assert_eq!(
         op["responses"]["500"]["content"]["application/json"]["schema"]["type"],
         json!("object")

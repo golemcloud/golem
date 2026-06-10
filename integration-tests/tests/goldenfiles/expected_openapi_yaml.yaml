@@ -128,10 +128,7 @@ components:
           oneOf:
           - type: 'null'
           - type: string
-      required:
-      - name
-      - description
-      - enabled
+      required: []
       title: ResourceUpdate
       type: object
     ResultErrResponse:
@@ -711,11 +708,6 @@ paths:
                 $ref: '#/components/schemas/ResultOkResponse'
           description: Response 200
         '500':
-          content:
-            '*/*':
-              schema:
-                format: binary
-                type: string
           description: Response 500
   /http-agents/{agent-name}/resp/result-void-json:
     post:
@@ -732,11 +724,6 @@ paths:
         style: simple
       responses:
         '204':
-          content:
-            '*/*':
-              schema:
-                format: binary
-                type: string
           description: Response 204
         '500':
           content:
