@@ -117,8 +117,8 @@ pub fn to_json_schema_with_config(
 /// attached at the document root so the document is self-contained.
 ///
 /// This reuses the same node rendering as [`to_json_schema_with_config`] by
-/// projecting the parameter list onto a synthetic record root, then replacing
-/// the record's (all-required) `required` array with the option-aware one.
+/// projecting the user-supplied parameter list onto a synthetic record root;
+/// the record renderer already emits an option-aware `required` array.
 pub fn input_schema_to_json_schema(
     graph: &SchemaGraph,
     input: &InputSchema,
@@ -141,16 +141,7 @@ pub fn input_schema_to_json_schema(
         fields: record_fields,
         metadata: MetadataEnvelope::default(),
     };
-    let mut doc = to_json_schema_with_config(graph, &record, config);
-    if let Some(obj) = doc.as_object_mut() {
-        let required: Vec<Value> = user_fields
-            .iter()
-            .filter(|f| !resolves_to_option(graph, &f.schema))
-            .map(|f| Value::String(f.name.clone()))
-            .collect();
-        obj.insert("required".to_string(), Value::Array(required));
-    }
-    doc
+    to_json_schema_with_config(graph, &record, config)
 }
 
 /// Render an [`OutputSchema`] to an optional JSON Schema document.
@@ -668,7 +659,12 @@ pub(super) fn render_type(
                 let mut field_schema = render_type(graph, &field.body, false, table, config);
                 attach_metadata(&mut field_schema, &field.metadata);
                 props.insert(field.name.clone(), field_schema);
-                required.push(Value::String(field.name.clone()));
+                // `option<…>` fields are not required: the field may be omitted
+                // entirely, and an explicit `null` is still accepted by the
+                // option's `oneOf [null, T]` schema.
+                if !resolves_to_option(graph, &field.body) {
+                    required.push(Value::String(field.name.clone()));
+                }
             }
             obj([
                 ("type", Value::String("object".to_string())),

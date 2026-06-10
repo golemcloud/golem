@@ -28,6 +28,13 @@ use crate::schema::render::json_schema::{
 use crate::schema::schema_type::SchemaType;
 use serde_json::{Map, Value};
 
+/// JSON Schema renderer configuration used by [`to_openapi_components`]:
+/// canonical node shapes, but without the JSON Schema `$schema` draft marker
+/// (OpenAPI does not accept it).
+const OPENAPI_CONFIG: JsonSchemaConfig = JsonSchemaConfig {
+    include_draft_marker: false,
+};
+
 /// Render `(graph, ty)` to an OpenAPI 3.1 schema bundle.
 ///
 /// The returned object has shape:
@@ -46,7 +53,7 @@ use serde_json::{Map, Value};
 pub fn to_openapi_components(graph: &SchemaGraph, ty: &SchemaType) -> Value {
     // OpenAPI renders the canonical structural form; only ref-rewriting and
     // `$schema` omission differ, both handled below.
-    let config = JsonSchemaConfig::CANONICAL;
+    let config = OPENAPI_CONFIG;
     let table = build_branch_name_table(graph, ty);
     let root = rewrite_refs(render_type(graph, ty, true, &table, config));
     let mut defs = render_defs(graph, &table, config);

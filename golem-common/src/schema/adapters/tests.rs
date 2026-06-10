@@ -1059,6 +1059,39 @@ fn agent_dependency_cannot_see_parent_refs() {
 }
 
 // --------------------------------------------------------------------------
+// Legacy resource handles
+// --------------------------------------------------------------------------
+
+#[test]
+fn lower_errors_on_handle() {
+    use golem_wasm::analysis::analysed_type::handle;
+    use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
+
+    let ty = handle(AnalysedResourceId(0), AnalysedResourceMode::Owned);
+    let mut builder = SchemaGraphBuilder::new();
+    let err = builder.lower(&ty).unwrap_err();
+    assert!(
+        matches!(err, SchemaAdapterError::LegacyHandle),
+        "builder must reject handles; got: {err:?}"
+    );
+}
+
+#[test]
+fn lower_errors_on_nested_handle() {
+    use golem_wasm::analysis::analysed_type::{handle, list};
+    use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
+
+    // Handles must be rejected recursively, e.g. inside a `list<handle>`.
+    let ty = list(handle(AnalysedResourceId(7), AnalysedResourceMode::Owned));
+    let mut builder = SchemaGraphBuilder::new();
+    let err = builder.lower(&ty).unwrap_err();
+    assert!(
+        matches!(err, SchemaAdapterError::LegacyHandle),
+        "builder must reject nested handles; got: {err:?}"
+    );
+}
+
+// --------------------------------------------------------------------------
 // Property-based round-trip tests over the shared legacy subset
 // --------------------------------------------------------------------------
 
