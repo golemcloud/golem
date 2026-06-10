@@ -30,8 +30,7 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
-    PersistenceLevel,
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, PersistenceLevel,
 };
 use golem_common::model::{
     NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
@@ -47,7 +46,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use wasmtime::component::Resource;
 use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
@@ -515,8 +514,8 @@ pub trait DurabilityHost: InFunctionRetryHost {
     /// notably for the read-only side-effect guard that fires on every `Write*` function type
     /// when the worker is executing a read-only agent method. This is the single, central
     /// place where that guard lives: every host call that wants to perform a write side
-    /// effect funnels through `begin_durable_function` (either directly or via
-    /// `Durability::new`), so the read-only trap is uniformly enforced here without any
+    /// effect funnels through `begin_durable_function` (either directly or via the concurrent
+    /// durability `CallHandle`), so the read-only trap is uniformly enforced here without any
     /// per-callsite checks.
     async fn begin_durable_function(
         &mut self,
@@ -575,7 +574,7 @@ pub trait DurabilityHost: InFunctionRetryHost {
 
     /// Returns `Ok(())` if the worker is in normal (write-capable) invocation strictness mode,
     /// or `Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation)` if the worker is currently
-    /// executing a read-only agent method. This is invoked from `Durability::new` for every
+    /// executing a read-only agent method. This is invoked from `begin_durable_function` for every
     /// `Write*` durable function type so that any host call carrying a side effect is rejected
     /// before any oplog entry is written.
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap>;
@@ -848,9 +847,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         // the call up front when the worker is executing a read-only agent method. This is the
         // single, central place that enforces the read-only contract — outgoing HTTP, RPC,
         // KV/blobstore writes, RDBMS queries/transactions, worker-management calls, websocket
-        // writes, etc. all funnel through `begin_durable_function` (directly or via
-        // `Durability::new`) and are uniformly rejected here before any oplog entry is
-        // appended. The `GolemSpecificWasmTrap` is folded into
+        // writes, etc. all funnel through `begin_durable_function` (directly or via the
+        // concurrent durability `CallHandle`) and are uniformly rejected here before any oplog
+        // entry is appended. The `GolemSpecificWasmTrap` is folded into
         // `WorkerExecutorError::ReadOnlyViolation` so the trap survives the conversion chain
         // (anyhow → wasmtime::Error → StreamError / SocketError) and can later be recognised
         // by `TrapType::from_error` as `AgentError::ReadOnlyViolation`.
@@ -1324,172 +1323,6 @@ impl InFunctionRetryController {
     }
 }
 
-pub struct Durability<Pair: HostPayloadPair> {
-    begin_index: OplogIndex,
-    retry: InFunctionRetryController,
-    _phantom: std::marker::PhantomData<Pair>,
-}
-
-impl<Pair: HostPayloadPair> Durability<Pair> {
-    pub async fn new(
-        ctx: &mut impl DurabilityHost,
-        function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError> {
-        ctx.observe_function_call(Pair::INTERFACE, Pair::FUNCTION);
-
-        // The generic read-only side-effect trap lives in `begin_durable_function`; we just
-        // forward the fully qualified host-function name so it can be surfaced in the
-        // resulting `WorkerExecutorError::ReadOnlyViolation` for diagnostics.
-        let begin_index = ctx
-            .begin_durable_function(&function_type, Pair::FQFN)
-            .await?;
-        let durable_execution_state = ctx.durable_execution_state();
-
-        Ok(Self {
-            begin_index,
-            retry: InFunctionRetryController::new(
-                function_type,
-                durable_execution_state,
-                Pair::FQFN,
-            ),
-            _phantom: std::marker::PhantomData,
-        })
-    }
-
-    pub fn is_live(&self) -> bool {
-        self.retry.is_live()
-    }
-
-    pub async fn try_trigger_retry<Ok, Err: Display>(
-        &self,
-        ctx: &mut impl DurabilityHost,
-        result: &Result<Ok, Err>,
-        classify: impl Fn(&Err) -> HostFailureKind,
-    ) -> anyhow::Result<()> {
-        self.retry.try_trigger_retry(ctx, result, classify).await
-    }
-
-    pub async fn try_trigger_retry_with_properties<Ok, Err: Display>(
-        &self,
-        ctx: &mut impl DurabilityHost,
-        result: &Result<Ok, Err>,
-        classify: impl Fn(&Err) -> HostFailureKind,
-        properties: RetryProperties,
-    ) -> anyhow::Result<()> {
-        self.retry
-            .try_trigger_retry_with_properties(ctx, result, classify, properties)
-            .await
-    }
-
-    pub async fn try_trigger_retry_or_loop<Ok, Err: Display>(
-        &mut self,
-        ctx: &mut (impl DurabilityHost + Sync),
-        result: &Result<Ok, Err>,
-        classify: impl Fn(&Err) -> HostFailureKind,
-    ) -> anyhow::Result<InternalRetryResult> {
-        self.retry
-            .try_trigger_retry_or_loop(ctx, result, classify)
-            .await
-    }
-
-    pub async fn try_trigger_retry_or_loop_with_properties<Ok, Err: Display>(
-        &mut self,
-        ctx: &mut (impl DurabilityHost + Sync),
-        result: &Result<Ok, Err>,
-        classify: impl Fn(&Err) -> HostFailureKind,
-        properties: RetryProperties,
-    ) -> anyhow::Result<InternalRetryResult> {
-        self.retry
-            .try_trigger_retry_or_loop_with_properties(ctx, result, classify, properties)
-            .await
-    }
-
-    pub async fn persist(
-        &self,
-        ctx: &mut impl DurabilityHost,
-        request: Pair::Req,
-        response: Pair::Resp,
-    ) -> Result<Pair::Resp, WorkerExecutorError> {
-        // We keep a clone of the original response to return after persisting.
-        // `persist_raw` returns the same `HostResponse` it received unchanged,
-        // so the previous round-trip via `try_into().unwrap()` was always safe;
-        // the clone avoids the round-trip entirely and removes the `.unwrap()`.
-        let result = response.clone();
-        self.persist_raw(ctx, request.into(), response.into())
-            .await?;
-        Ok(result)
-    }
-
-    pub async fn persist_raw(
-        &self,
-        ctx: &mut impl DurabilityHost,
-        request: HostRequest,
-        response: HostResponse,
-    ) -> Result<HostResponse, WorkerExecutorError> {
-        if self
-            .retry
-            .durable_execution_state()
-            .snapshotting_mode
-            .is_none()
-        {
-            ctx.mark_atomic_region_side_effect();
-            ctx.persist_durable_function_invocation(
-                Pair::HOST_FUNCTION_NAME,
-                &request,
-                &response,
-                self.retry.function_type().clone(),
-            )
-            .await;
-            ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
-                .await?;
-        }
-        Ok(response)
-    }
-
-    pub async fn replay(
-        &self,
-        ctx: &mut impl DurabilityHost,
-    ) -> Result<Pair::Resp, WorkerExecutorError> {
-        let response = self.replay_raw(ctx).await?;
-        response
-            .try_into()
-            .map_err(|err| WorkerExecutorError::unexpected_oplog_entry("HostResponse", err))
-    }
-
-    pub async fn replay_raw(
-        &self,
-        ctx: &mut impl DurabilityHost,
-    ) -> Result<HostResponse, WorkerExecutorError> {
-        let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
-
-        let function_name = Pair::FQFN;
-        Self::validate_oplog_entry(&oplog_entry, function_name)?;
-
-        ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
-            .await?;
-
-        Ok(oplog_entry.response)
-    }
-
-    fn validate_oplog_entry(
-        oplog_entry: &PersistedDurableFunctionInvocation,
-        expected_function_name: &str,
-    ) -> Result<(), WorkerExecutorError> {
-        if oplog_entry.function_name != expected_function_name {
-            error!(
-                "Unexpected imported function call entry in oplog: expected {}, got {}",
-                expected_function_name, oplog_entry.function_name
-            );
-            Err(WorkerExecutorError::unexpected_oplog_entry(
-                expected_function_name,
-                oplog_entry.function_name.clone(),
-            ))
-        } else {
-            Ok(())
-        }
-    }
-}
-
 /// Counts the number of `OplogEntry::Error` entries in the oplog whose `retry_from`
 /// matches the given `retry_point`. This is used to initialize `base_retry_count`
 /// when spawning background retry tasks, so that the retry budget accounts for
@@ -1733,6 +1566,7 @@ impl DynamicPollable for LazyInitializedPollableEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::oplog::HostPayloadPair;
     use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
     use golem_common::model::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
@@ -1926,14 +1760,35 @@ mod tests {
         }
     }
 
-    /// Helper: creates a Durability<KeyvalueEventualGet> with a given function type
-    async fn make_durability(
+    /// Helper: creates an `InFunctionRetryController` for the given function type, using the
+    /// fully-qualified host-function name of an arbitrary host-call pair as the retry label.
+    async fn make_retry_controller(
         ctx: &mut MockDurabilityHost,
         function_type: DurableFunctionType,
-    ) -> Durability<KeyvalueEventualGet> {
-        Durability::<KeyvalueEventualGet>::new(ctx, function_type)
-            .await
-            .expect("Durability::new should succeed with mock")
+    ) -> InFunctionRetryController {
+        InFunctionRetryController::new(
+            function_type,
+            ctx.durable_execution_state(),
+            <KeyvalueEventualGet as HostPayloadPair>::FQFN,
+        )
+    }
+
+    /// Helper: opens a durable function the same way the host-call entry path does — observe the
+    /// call, then run the central read-only side-effect check in `begin_durable_function`.
+    async fn begin_durable_call(
+        ctx: &mut MockDurabilityHost,
+        function_type: DurableFunctionType,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        DurabilityHost::observe_function_call(
+            ctx,
+            <KeyvalueEventualGet as HostPayloadPair>::INTERFACE,
+            <KeyvalueEventualGet as HostPayloadPair>::FUNCTION,
+        );
+        ctx.begin_durable_function(
+            &function_type,
+            <KeyvalueEventualGet as HostPayloadPair>::FQFN,
+        )
+        .await
     }
 
     // Test 1: In-function retry works for eligible operations
@@ -1949,10 +1804,10 @@ mod tests {
                 inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
             },
         }];
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("connection refused".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -1964,7 +1819,7 @@ mod tests {
 
         assert_eq!(action, InternalRetryResult::RetryInternally);
         assert_eq!(ctx.retry_entries_appended, 1);
-        assert_eq!(durability.retry.retry_state.retry_count(), 1);
+        assert_eq!(controller.retry_state.retry_count(), 1);
         assert_eq!(ctx.trap_triggered_count, 0, "should NOT fall back to trap");
     }
 
@@ -1972,10 +1827,10 @@ mod tests {
     #[test]
     async fn in_function_retry_returns_persist_on_success() {
         let mut ctx = MockDurabilityHost::new();
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Ok("value".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -1987,17 +1842,17 @@ mod tests {
 
         assert_eq!(action, InternalRetryResult::Persist);
         assert_eq!(ctx.retry_entries_appended, 0);
-        assert_eq!(durability.retry.retry_state.retry_count(), 0);
+        assert_eq!(controller.retry_state.retry_count(), 0);
     }
 
     // Test 1c: Permanent errors return Persist (no retry)
     #[test]
     async fn in_function_retry_returns_persist_on_permanent_error() {
         let mut ctx = MockDurabilityHost::new();
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("invalid key format".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2025,13 +1880,13 @@ mod tests {
                 inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
             },
         }];
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
 
         // Attempts 0, 1, 2 should return RetryInternally
         for i in 0..3 {
-            let action = durability
+            let action = controller
                 .try_trigger_retry_or_loop_with_properties(
                     &mut ctx,
                     &result,
@@ -2048,7 +1903,7 @@ mod tests {
         }
 
         // Attempt 3 should return Persist (budget exhausted)
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2059,7 +1914,7 @@ mod tests {
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::Persist);
         assert_eq!(ctx.retry_entries_appended, 3);
-        assert_eq!(durability.retry.retry_state.retry_count(), 3);
+        assert_eq!(controller.retry_state.retry_count(), 3);
     }
 
     #[test]
@@ -2078,12 +1933,12 @@ mod tests {
             },
         }];
 
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
         props.set("verb", PredicateValue::Text("invoke".to_string()));
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2110,12 +1965,12 @@ mod tests {
             policy: RetryPolicy::Immediate,
         }];
 
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
         props.set("verb", PredicateValue::Text("query".to_string()));
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2142,13 +1997,13 @@ mod tests {
             policy: RetryPolicy::Never,
         }];
 
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
         // This type mismatch forces a coercion error during predicate evaluation.
         props.set("attempt", PredicateValue::Boolean(true));
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2178,12 +2033,12 @@ mod tests {
             },
         }];
 
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
         props.set("verb", PredicateValue::Text("invoke".to_string()));
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2211,10 +2066,11 @@ mod tests {
                 inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
             },
         }];
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::WriteRemote).await;
+        let mut controller =
+            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2239,10 +2095,10 @@ mod tests {
             policy: RetryPolicy::Periodic(Duration::from_secs(30)),
         }];
         ctx.max_in_function_retry_delay = Duration::from_secs(20);
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2269,10 +2125,10 @@ mod tests {
     async fn atomic_region_disables_in_function_retry() {
         let mut ctx = MockDurabilityHost::new();
         ctx.in_atomic_region = true;
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("connection refused".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2298,11 +2154,11 @@ mod tests {
     #[test]
     async fn batched_write_disables_in_function_retry() {
         let mut ctx = MockDurabilityHost::new();
-        let mut durability =
-            make_durability(&mut ctx, DurableFunctionType::WriteRemoteBatched(None)).await;
+        let mut controller =
+            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemoteBatched(None)).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2320,11 +2176,12 @@ mod tests {
     #[test]
     async fn transaction_write_disables_in_function_retry() {
         let mut ctx = MockDurabilityHost::new();
-        let mut durability =
-            make_durability(&mut ctx, DurableFunctionType::WriteRemoteTransaction(None)).await;
+        let mut controller =
+            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemoteTransaction(None))
+                .await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2343,10 +2200,11 @@ mod tests {
     async fn write_remote_without_idempotence_disables_in_function_retry() {
         let mut ctx = MockDurabilityHost::new();
         ctx.assume_idempotence = false;
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::WriteRemote).await;
+        let mut controller =
+            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2375,10 +2233,10 @@ mod tests {
         // Interrupt fires immediately
         ctx.interrupt_signal = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
 
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let err = durability
+        let err = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2411,10 +2269,10 @@ mod tests {
         // Arm the interrupt to fire via the polling loop
         ctx.interrupt_armed.store(true, Ordering::Release);
 
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
-        let err = durability
+        let err = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2442,13 +2300,13 @@ mod tests {
         }];
         // Simulate 3 prior oplog-level retries
         ctx.oplog_retry_count = 3;
-        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
 
         // With 3 oplog retries, total=3. max_retries=5.
         // Attempt at total=3 → ok (within budget)
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2460,7 +2318,7 @@ mod tests {
         assert_eq!(action, InternalRetryResult::RetryInternally);
 
         // Attempt at total=4 → ok (within budget)
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2472,7 +2330,7 @@ mod tests {
         assert_eq!(action, InternalRetryResult::RetryInternally);
 
         // Attempt at total=5 → exhausted (5 >= max_retries)
-        let action = durability
+        let action = controller
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
                 &result,
@@ -2847,7 +2705,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Generic read-only side-effect trap (Durability::new)
+    // Generic read-only side-effect trap (begin_durable_function)
     // ---------------------------------------------------------------------
 
     /// Read function types must always succeed, regardless of whether the
@@ -2861,7 +2719,7 @@ mod tests {
         ] {
             let mut ctx = MockDurabilityHost::new();
             ctx.read_only_method = Some("read-only-method".to_string());
-            let result = Durability::<KeyvalueEventualGet>::new(&mut ctx, ft.clone()).await;
+            let result = begin_durable_call(&mut ctx, ft.clone()).await;
             assert!(
                 result.is_ok(),
                 "read-only check must not trip for {ft:?}, got {:?}",
@@ -2871,7 +2729,7 @@ mod tests {
     }
 
     /// When the worker is NOT in read-only mode, every `Write*` function
-    /// type must construct `Durability` successfully — the new generic
+    /// type must open the durable function successfully — the new generic
     /// check must be a strict precondition added on top of the existing
     /// behaviour, not a new constraint that always fires.
     #[test]
@@ -2884,7 +2742,7 @@ mod tests {
         ] {
             let mut ctx = MockDurabilityHost::new();
             // read_only_method left as None.
-            let result = Durability::<KeyvalueEventualGet>::new(&mut ctx, ft.clone()).await;
+            let result = begin_durable_call(&mut ctx, ft.clone()).await;
             assert!(
                 result.is_ok(),
                 "non-read-only worker must accept {ft:?}, got {:?}",
@@ -2911,9 +2769,9 @@ mod tests {
             let mut ctx = MockDurabilityHost::new();
             ctx.read_only_method = Some("agent::read-only-method".to_string());
 
-            let result = Durability::<KeyvalueEventualGet>::new(&mut ctx, ft.clone()).await;
+            let result = begin_durable_call(&mut ctx, ft.clone()).await;
             let err = match result {
-                Ok(_) => panic!("read-only worker must refuse {ft:?} via Durability::new"),
+                Ok(_) => panic!("read-only worker must refuse {ft:?} via begin_durable_function"),
                 Err(e) => e,
             };
 

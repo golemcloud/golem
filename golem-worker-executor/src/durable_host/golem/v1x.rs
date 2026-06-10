@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{
-    ActiveAtomicRegion, Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
+    ActiveAtomicRegion, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
@@ -170,25 +171,33 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
-        let durability =
-            Durability::<GolemApiCreatePromise>::new(self, DurableFunctionType::WriteLocal).await?;
+        let mut handle = CallHandle::<GolemApiCreatePromise, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
-            let oplog_idx = self.state.current_oplog_index().await.next();
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            // The promise oplog index is the host-call `Start` index: with the legacy atomic pair
+            // this equalled `current_oplog_index().next()` captured before the pair was written.
+            // It is stable across an incomplete-replay re-execution because the `Start` is reused.
+            let oplog_idx = handle.start_index();
             let promise_id = self
                 .public_state
                 .promise_service
                 .create(&self.owned_agent_id.agent_id, oplog_idx)
                 .await;
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiPromiseId { promise_id },
-                )
+            handle
+                .complete(self, HostResponseGolemApiPromiseId { promise_id })
                 .await?
-        } else {
-            durability.replay(self).await?
         };
 
         Ok(result.promise_id.into())
@@ -208,46 +217,75 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         promise_id: golem_api_1_x::host::PromiseId,
         data: Vec<u8>,
     ) -> anyhow::Result<bool> {
-        let durability =
-            Durability::<GolemApiCompletePromise>::new(self, DurableFunctionType::WriteLocal)
-                .await?;
-
         let promise_id: PromiseId = promise_id.into();
-        let result = if durability.is_live() {
+
+        let mut handle = CallHandle::<GolemApiCompletePromise, NotCancellable>::start(
+            self,
+            HostRequestGolemApiPromiseId {
+                promise_id: promise_id.clone(),
+            },
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             // A promise must be completed on the instance that is owning the agent that originally created here.
             let agent_id = &promise_id.agent_id;
 
             let is_local_worker = match self.state.shard_service.check_worker(agent_id) {
                 Ok(()) => true,
                 Err(WorkerExecutorError::InvalidShardId { .. }) => false,
-                Err(other) => Err(other)?,
+                Err(other) => {
+                    handle.abandon_for_trap();
+                    return Err(other.into());
+                }
             };
 
             let promise_completion_result = if is_local_worker {
-                self.public_state
+                match self
+                    .public_state
                     .promise_service
                     .complete(promise_id.clone(), data)
-                    .await?
+                    .await
+                {
+                    Ok(completed) => completed,
+                    Err(err) => {
+                        handle.abandon_for_trap();
+                        return Err(err.into());
+                    }
+                }
             } else {
                 // talk to the executor that actually owns the promise
-                self.state
+                match self
+                    .state
                     .worker_proxy
                     .complete_promise(promise_id.clone(), data, self.created_by())
-                    .await?
+                    .await
+                {
+                    Ok(completed) => completed,
+                    Err(err) => {
+                        handle.abandon_for_trap();
+                        return Err(err.into());
+                    }
+                }
             };
 
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestGolemApiPromiseId { promise_id },
                     HostResponseGolemApiPromiseCompletion {
                         completed: promise_completion_result,
                     },
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         Ok(result.completed)
     }
@@ -517,29 +555,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
-        let durability = Durability::<GolemApiGenerateIdempotencyKey>::new(
+        let handle = CallHandle::<GolemApiGenerateIdempotencyKey, NotCancellable>::start(
             self,
+            HostRequestNoInput {},
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
-        let oplog_index = self.state.current_oplog_index().await;
+        // Even though `IdempotencyKey::derived` is used, we still need to persist this, because the
+        // derived key depends on the oplog index. `begin_index()` is the durable-scope index of this
+        // call; reusing it (rather than reading the live oplog index again) keeps the derived key
+        // stable across an incomplete-replay re-execution, since the `Start` is reused.
+        let oplog_index = handle.begin_index();
 
-        // NOTE: Even though IdempotencyKey::derived is used, we still need to persist this,
-        //       because the derived key depends on the oplog index.
-        let result = if durability.is_live() {
-            let key = self.derive_idempotency_key(oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiIdempotencyKey { uuid },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| {
+                let key = ctx.derive_idempotency_key(oplog_index);
+                let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
+                Ok::<_, anyhow::Error>(HostResponseGolemApiIdempotencyKey { uuid })
+            })
+            .await?;
         Ok(result.uuid.into())
     }
 
@@ -553,9 +588,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // `update_worker` handler. The error returned by `worker_proxy.update` below
         // propagates back to the caller agent as a regular update error, so no additional
         // local check is needed here.
-        let mut durability =
-            Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
-
         let agent_id: AgentId = agent_id.into();
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
 
@@ -571,7 +603,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let target_revision: ComponentRevision =
             target_version.try_into().map_err(|e: String| anyhow!(e))?;
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<GolemApiUpdateWorker, NotCancellable>::start(
+            self,
+            HostRequestGolemApiUpdateAgent {
+                agent_id,
+                target_revision,
+                mode,
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let retry_properties = RetryContext::golem_api("update-agent");
             let result = loop {
                 let result = self
@@ -585,7 +635,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         self.created_by(),
                     )
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop_with_properties(
                         self,
                         &result,
@@ -599,47 +649,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             let result = result.map_err(|err| err.to_string());
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemApiUpdateAgent {
-                        agent_id,
-                        target_revision,
-                        mode,
-                    },
-                    HostResponseGolemApiUnit { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemApiUnit { result })
+                .await?
+        };
 
         result.result.map_err(|err| anyhow!(err))
     }
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<golem_api_1_x::host::AgentMetadata> {
-        let durability =
-            Durability::<GolemApiGetSelfMetadata>::new(self, DurableFunctionType::ReadLocal)
-                .await?;
+        let handle = CallHandle::<GolemApiGetSelfMetadata, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
-            let metadata = self
-                .public_state
-                .worker()
-                .get_latest_worker_metadata()
-                .await
-                .into();
-
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiSelfAgentMetadata { metadata },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| {
+                let metadata = ctx
+                    .public_state
+                    .worker()
+                    .get_latest_worker_metadata()
+                    .await
+                    .into();
+                Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata { metadata })
+            })
+            .await?;
 
         Ok(result.metadata.into())
     }
@@ -648,46 +684,45 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_id: golem_api_1_x::host::AgentId,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentMetadata>> {
-        let durability =
-            Durability::<GolemApiGetAgentMetadata>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-
         let agent_id: AgentId = agent_id.into();
 
-        let result = if durability.is_live() {
-            let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-            let result = self.state.worker_service.get(&owned_agent_id).await;
-            let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
-                let mut metadata = result.initial_worker_metadata;
-                if let Some(last_known_status) = &result.last_known_status {
-                    metadata.last_known_status = last_known_status.clone();
-                }
-                let agent_mode = metadata.agent_mode;
-                if let Some(status) = calculate_last_known_status_with_checkpoint(
-                    &self.state,
-                    &owned_agent_id,
-                    agent_mode,
-                    result.last_known_status,
-                )
-                .await
-                {
-                    metadata.last_known_status = status;
-                }
-                Some(metadata.into())
-            } else {
-                None
-            };
+        let handle = CallHandle::<GolemApiGetAgentMetadata, NotCancellable>::start(
+            self,
+            HostRequestGolemApiAgentId {
+                agent_id: agent_id.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemApiAgentId { agent_id },
-                    HostResponseGolemApiAgentMetadata { metadata },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| {
+                let owned_agent_id =
+                    OwnedAgentId::new(ctx.owned_agent_id.environment_id, &agent_id);
+                let result = ctx.state.worker_service.get(&owned_agent_id).await;
+                let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
+                    let mut metadata = result.initial_worker_metadata;
+                    if let Some(last_known_status) = &result.last_known_status {
+                        metadata.last_known_status = last_known_status.clone();
+                    }
+                    let agent_mode = metadata.agent_mode;
+                    if let Some(status) = calculate_last_known_status_with_checkpoint(
+                        &ctx.state,
+                        &owned_agent_id,
+                        agent_mode,
+                        result.last_known_status,
+                    )
+                    .await
+                    {
+                        metadata.last_known_status = status;
+                    }
+                    Some(metadata.into())
+                } else {
+                    None
+                };
+                Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata { metadata })
+            })
+            .await?;
 
         Ok(result.metadata.map(|metadata| metadata.into()))
     }
@@ -698,15 +733,30 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_agent_id: golem_api_1_x::host::AgentId,
         oplog_idx_cut_off: golem_api_1_x::host::OplogIndex,
     ) -> anyhow::Result<()> {
-        let mut durability =
-            Durability::<GolemApiForkWorker>::new(self, DurableFunctionType::WriteRemote).await?;
-
         let source_agent_id: AgentId = source_agent_id.into();
         let target_agent_id: AgentId = target_agent_id.into();
 
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<GolemApiForkWorker, NotCancellable>::start(
+            self,
+            HostRequestGolemApiForkAgent {
+                source_agent_id: source_agent_id.clone(),
+                target_agent_id: target_agent_id.clone(),
+                oplog_index_cut_off,
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let retry_properties = RetryContext::golem_api("fork-agent");
             let result = loop {
                 let result = self
@@ -719,7 +769,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         self.created_by(),
                     )
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop_with_properties(
                         self,
                         &result,
@@ -733,20 +783,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             let result = result.map_err(|err| err.to_string());
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemApiForkAgent {
-                        source_agent_id,
-                        target_agent_id,
-                        oplog_index_cut_off,
-                    },
-                    HostResponseGolemApiUnit { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemApiUnit { result })
+                .await?
+        };
 
         result.result.map_err(|err| anyhow!(err))
     }
@@ -756,20 +796,34 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_id: golem_api_1_x::host::AgentId,
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<()> {
-        let mut durability =
-            Durability::<GolemApiRevertWorker>::new(self, DurableFunctionType::WriteRemote).await?;
-
         let agent_id: AgentId = agent_id.into();
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<GolemApiRevertWorker, NotCancellable>::start(
+            self,
+            HostRequestGolemApiRevertAgent {
+                agent_id: agent_id.clone(),
+                target: target.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let retry_properties = RetryContext::golem_api("revert-agent");
             let result = loop {
                 let result = self
                     .worker_proxy()
                     .revert(&agent_id, target.clone(), self.created_by())
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop_with_properties(
                         self,
                         &result,
@@ -783,16 +837,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             let result = result.map_err(|err| err.to_string());
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemApiRevertAgent { agent_id, target },
-                    HostResponseGolemApiUnit { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemApiUnit { result })
+                .await?
+        };
 
         result.result.map_err(|err| anyhow!(err))
     }
@@ -801,11 +849,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         component_slug: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::ComponentId>> {
-        let mut durability =
-            Durability::<GolemApiResolveComponentId>::new(self, DurableFunctionType::WriteRemote)
-                .await?;
+        let mut handle = CallHandle::<GolemApiResolveComponentId, NotCancellable>::start(
+            self,
+            HostRequestGolemApiComponentSlug {
+                component_slug: component_slug.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let retry_properties = RetryContext::golem_api("resolve-component-id");
             let result = loop {
                 let result = self
@@ -818,7 +878,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         self.state.component_metadata.account_id,
                     )
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop_with_properties(
                         self,
                         &result,
@@ -832,16 +892,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             let result = result.map_err(|err| err.to_string());
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemApiComponentSlug { component_slug },
-                    HostResponseGolemApiComponentId { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemApiComponentId { result })
+                .await?
+        };
 
         result
             .result
@@ -868,18 +922,31 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         component_slug: String,
         agent_name: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentId>> {
-        let mut durability =
-            Durability::<GolemApiResolveAgentIdStrict>::new(self, DurableFunctionType::WriteRemote)
-                .await?;
+        let mut handle = CallHandle::<GolemApiResolveAgentIdStrict, NotCancellable>::start(
+            self,
+            HostRequestGolemApiComponentSlugAndAgentName {
+                component_slug: component_slug.clone(),
+                agent_name: agent_name.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let retry_properties = RetryContext::golem_api("resolve-agent-id-strict");
             let result = loop {
                 let result = self
                     .resolve_agent_id_strict_internal(component_slug.clone(), agent_name.clone())
                     .await;
 
-                match durability
+                match handle
                     .try_trigger_retry_or_loop_with_properties(
                         self,
                         &result,
@@ -893,19 +960,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             let result = result.map_err(|err| err.to_string());
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemApiComponentSlugAndAgentName {
-                        component_slug,
-                        agent_name,
-                    },
-                    HostResponseGolemApiAgentId { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemApiAgentId { result })
+                .await?
+        };
 
         result
             .result
@@ -914,21 +972,36 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn fork(&mut self) -> anyhow::Result<ForkResult> {
-        let mut durability =
-            Durability::<GolemApiFork>::new(self, DurableFunctionType::WriteRemote).await?;
+        let mut handle = CallHandle::<GolemApiFork, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
+        let result = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let retry_properties = RetryContext::golem_api("fork");
             let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                LegacyParsedAgentId::new(
+                match LegacyParsedAgentId::new(
                     agent_id.agent_type.clone(),
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),
-                )
-                .map_err(|e| anyhow!(e))?
-                .to_string()
+                ) {
+                    Ok(parsed) => parsed.to_string(),
+                    Err(err) => {
+                        handle.abandon_for_trap();
+                        return Err(anyhow!(err));
+                    }
+                }
             } else {
                 format!("{}-{}", self.agent_id().agent_id, forked_phantom_id)
             };
@@ -956,7 +1029,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         forked_phantom_id,
                     )
                     .await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop_with_properties(
                         self,
                         &fork_result,
@@ -973,19 +1046,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let fork_result = fork_result
                 .map(|_| golem_common::model::ForkResult::Original)
                 .map_err(|err| err.to_string());
-            Ok(durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestNoInput {},
                     HostResponseGolemApiFork {
                         forked_phantom_id,
                         result: fork_result,
                     },
                 )
-                .await?)
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         match result.result {
             Ok(fork_result) => {
@@ -1120,39 +1190,36 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
         &mut self,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        let durability =
-            Durability::<GolemApiGetPromiseResult>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
+        let handle = CallHandle::<GolemApiGetPromiseResult, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
-            let self_agent_id = self.agent_id().clone();
-            let entry = self.table().get(&resource)?;
+        let result = handle
+            .run(self, async |ctx| {
+                let self_agent_id = ctx.agent_id().clone();
+                let entry = ctx.table().get(&resource)?;
 
-            // only the agent that originally created the promise is woken up when it is completed.
-            if entry.promise_id.agent_id != self_agent_id {
-                return Err(anyhow!(
-                    "Tried awaiting a promise not created by the current agent"
-                ));
-            }
-
-            let result = match entry.get_handle().await {
-                Ok(handle) => handle.get().await,
-                Err(err) => {
-                    return Err(anyhow::Error::from(WorkerExecutorError::runtime(
-                        err.clone(),
-                    )));
+                // only the agent that originally created the promise is woken up when it is completed.
+                if entry.promise_id.agent_id != self_agent_id {
+                    return Err(anyhow!(
+                        "Tried awaiting a promise not created by the current agent"
+                    ));
                 }
-            };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiPromiseResult { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+
+                let result = match entry.get_handle().await {
+                    Ok(handle) => handle.get().await,
+                    Err(err) => {
+                        return Err(anyhow::Error::from(WorkerExecutorError::runtime(
+                            err.clone(),
+                        )));
+                    }
+                };
+                Ok::<_, anyhow::Error>(HostResponseGolemApiPromiseResult { result })
+            })
+            .await?;
 
         Ok(result.result)
     }

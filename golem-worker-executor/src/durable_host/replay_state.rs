@@ -673,14 +673,14 @@ impl ReplayState {
 
     /// Feeds the concurrent replay resolver when an `End`/`Cancelled` entry is *committed*
     /// (permanently consumed). Resolves only calls that are actually being awaited
-    /// (`resolve_if_pending`), so the `End`/`Cancelled` of every legacy host call — which is
-    /// consumed through this same cursor but never registered — is ignored instead of leaking.
+    /// (`resolve_if_pending`), so the `End`/`Cancelled` of any call not tracked by the resolver —
+    /// e.g. the guest-facing manual durability pair, consumed through this same cursor but never
+    /// registered — is ignored instead of leaking.
     async fn on_committed_replay_entry(&mut self, idx: OplogIndex, entry: &OplogEntry) {
         match entry {
             OplogEntry::End {
                 start_index,
                 response,
-                forced_commit,
                 ..
             } => {
                 let mut internal = self.internal.write().await;
@@ -689,23 +689,14 @@ impl ReplayState {
                     Resolution::Completed {
                         end_idx: idx,
                         response: response.clone(),
-                        forced_commit: *forced_commit,
                     },
                 );
             }
-            OplogEntry::Cancelled {
-                start_index,
-                partial,
-                ..
-            } => {
+            OplogEntry::Cancelled { start_index, .. } => {
                 let mut internal = self.internal.write().await;
-                internal.concurrent_resolver.resolve_if_pending(
-                    *start_index,
-                    Resolution::Cancelled {
-                        cancelled_idx: idx,
-                        partial: partial.clone(),
-                    },
-                );
+                internal
+                    .concurrent_resolver
+                    .resolve_if_pending(*start_index, Resolution::Cancelled { cancelled_idx: idx });
             }
             _ => {}
         }

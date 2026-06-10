@@ -14,8 +14,8 @@
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
@@ -26,82 +26,46 @@ use golem_common::model::oplog::{
 use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
-/// Reads the monotonic clock and completes the given live (or incomplete-turned-live) call handle.
-/// On a host error it explicitly records a cancellation (rather than relying on `Drop`) and
-/// surfaces the original error.
-async fn complete_monotonic_now<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: CallHandle<host_functions::MonotonicClockNow, Cancellable>,
-) -> wasmtime::Result<HostResponseMonotonicClockTimestamp> {
-    let nanos = {
-        let mut view = ctx.as_wasi_view();
-        match Host::now(&mut view.clocks()).await {
-            Ok(nanos) => nanos,
-            Err(err) => {
-                if let Err(cancel_err) = handle.cancel(ctx, None).await {
-                    tracing::warn!(
-                        "failed to record cancellation for monotonic_clock::now: {cancel_err}"
-                    );
-                }
-                return Err(err);
-            }
-        }
-    };
-    Ok(handle
-        .complete(ctx, HostResponseMonotonicClockTimestamp { nanos })
-        .await?)
-}
-
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> wasmtime::Result<Instant> {
-        // This single host function exercises the concurrent-replay path (eager `Start` +
-        // resolver-matched `End`). Every other call site still uses the legacy `Durability` path.
-        // `now()` is `ReadLocal` and never has external side effects, so it is `Cancellable`.
-        let handle = CallHandle::<host_functions::MonotonicClockNow, Cancellable>::start(
+        // `now()` is a re-executable `ReadLocal`, so it uses the `CallHandle::run` combinator: the
+        // live clock read is supplied as the action and is run on the live path or re-run if replay
+        // finds the `Start` without its `End`; a committed `End` replays without touching the clock.
+        let handle = CallHandle::<host_functions::MonotonicClockNow, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
 
-        let result = if handle.is_live() {
-            complete_monotonic_now(self, handle).await?
-        } else {
-            match handle.replay(self).await? {
-                CallReplayOutcome::Replayed(response) => response,
-                // The eager `Start` was committed but its `End` was not: `now()` is a re-executable
-                // `ReadLocal`, so read the clock again and complete the existing `Start`.
-                CallReplayOutcome::Incomplete(handle) => {
-                    complete_monotonic_now(self, handle).await?
-                }
-            }
-        };
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let mut view = ctx.as_wasi_view();
+                let nanos = Host::now(&mut view.clocks()).await?;
+                Ok(HostResponseMonotonicClockTimestamp { nanos })
+            })
+            .await?;
 
         Ok(result.nanos)
     }
 
     async fn resolution(&mut self) -> wasmtime::Result<Instant> {
-        let durability = Durability::<host_functions::MonotonicClockResolution>::new(
+        let handle = CallHandle::<host_functions::MonotonicClockResolution, NotCancellable>::start(
             self,
+            HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
 
-        let result = if durability.is_live() {
-            let nanos = {
-                let mut view = self.as_wasi_view();
-                Host::resolution(&mut view.clocks()).await?
-            };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseMonotonicClockTimestamp { nanos },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let nanos = {
+                    let mut view = ctx.as_wasi_view();
+                    Host::resolution(&mut view.clocks()).await?
+                };
+                Ok(HostResponseMonotonicClockTimestamp { nanos })
+            })
+            .await?;
 
         Ok(result.nanos)
     }
@@ -116,29 +80,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         duration_in_nanos: Duration,
     ) -> wasmtime::Result<Resource<Pollable>> {
-        let durability = Durability::<host_functions::MonotonicClockSubscribeDuration>::new(
-            self,
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let handle =
+            CallHandle::<host_functions::MonotonicClockSubscribeDuration, NotCancellable>::start(
+                self,
+                HostRequestMonotonicClockDuration { duration_in_nanos },
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
 
-        let now = {
-            if durability.is_live() {
+        let now = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
                 let nanos = {
-                    let mut view = self.as_wasi_view();
+                    let mut view = ctx.as_wasi_view();
                     Host::now(&mut view.clocks()).await?
                 };
-                durability
-                    .persist(
-                        self,
-                        HostRequestMonotonicClockDuration { duration_in_nanos },
-                        HostResponseMonotonicClockTimestamp { nanos },
-                    )
-                    .await
-            } else {
-                durability.replay(self).await
-            }
-        }?;
+                Ok(HostResponseMonotonicClockTimestamp { nanos })
+            })
+            .await?;
 
         self.public_state
             .worker()

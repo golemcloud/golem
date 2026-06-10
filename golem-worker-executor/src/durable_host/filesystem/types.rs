@@ -30,9 +30,8 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 };
 use wasmtime_wasi::runtime::spawn_blocking;
 
-use crate::durable_host::{
-    Durability, DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState,
-};
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
@@ -43,6 +42,7 @@ use golem_common::model::oplog::types::{
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
@@ -298,15 +298,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let durability =
-            Durability::<FilesystemTypesDescriptorStat>::new(self, DurableFunctionType::ReadLocal)
-                .await
-                .map_err(FsError::trap)?;
-
         let path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.clone(),
             Descriptor::Dir(d) => d.path.clone(),
         };
+
+        // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
+        // value), so only the file-times are made durable via `CallHandle::run`.
+        let handle = CallHandle::<FilesystemTypesDescriptorStat, NotCancellable>::start(
+            self,
+            HostRequestFileSystemPath {
+                path: path.to_string_lossy().to_string(),
+            },
+            DurableFunctionType::ReadLocal,
+        )
+        .await
+        .map_err(FsError::trap)?;
 
         let mut view = self.as_wasi_view();
         let stat = HostDescriptor::stat(&mut view.filesystem(), self_).await;
@@ -322,28 +329,21 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                 .ok_or_else(|| fs_error.to_string())),
         };
 
-        let result = if durability.is_live() {
-            let result = stat
-                .clone()
-                .map(|stat| SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
-                })
-                .map_err(FileSystemError::from_result);
-
-            durability
-                .persist(
-                    self,
-                    HostRequestFileSystemPath {
-                        path: path.to_string_lossy().to_string(),
-                    },
-                    HostResponseFileSystemStat { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }
-        .map_err(FsError::trap)?;
+        let result = handle
+            .run(self, async |_ctx| -> Result<_, WorkerExecutorError> {
+                let result = stat
+                    .clone()
+                    .map(|stat| SerializableFileTimes {
+                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                        data_modification_timestamp: stat
+                            .data_modification_timestamp
+                            .map(|t| t.into()),
+                    })
+                    .map_err(FileSystemError::from_result);
+                Ok(HostResponseFileSystemStat { result })
+            })
+            .await
+            .map_err(FsError::trap)?;
 
         match result.result {
             Ok(times) => {
@@ -379,17 +379,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<DescriptorStat, FsError> {
-        let durability = Durability::<FilesystemTypesDescriptorStatAt>::new(
-            self,
-            DurableFunctionType::ReadLocal,
-        )
-        .await
-        .map_err(FsError::trap)?;
-
         let full_path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.join(path.clone()),
             Descriptor::Dir(d) => d.path.join(path.clone()),
         };
+
+        // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
+        // value), so only the file-times are made durable via `CallHandle::run`.
+        let handle = CallHandle::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
+            self,
+            HostRequestFileSystemPath {
+                path: full_path.to_string_lossy().to_string(),
+            },
+            DurableFunctionType::ReadLocal,
+        )
+        .await
+        .map_err(FsError::trap)?;
 
         let mut view = self.as_wasi_view();
         let stat = HostDescriptor::stat_at(&mut view.filesystem(), self_, path_flags, path).await;
@@ -405,28 +410,21 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                 .ok_or_else(|| fs_error.to_string())),
         };
 
-        let result = if durability.is_live() {
-            let result = stat
-                .clone()
-                .map(|stat| SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
-                })
-                .map_err(FileSystemError::from_result);
-
-            durability
-                .persist(
-                    self,
-                    HostRequestFileSystemPath {
-                        path: full_path.to_string_lossy().to_string(),
-                    },
-                    HostResponseFileSystemStat { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }
-        .map_err(FsError::trap)?;
+        let result = handle
+            .run(self, async |_ctx| -> Result<_, WorkerExecutorError> {
+                let result = stat
+                    .clone()
+                    .map(|stat| SerializableFileTimes {
+                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                        data_modification_timestamp: stat
+                            .data_modification_timestamp
+                            .map(|t| t.into()),
+                    })
+                    .map_err(FileSystemError::from_result);
+                Ok(HostResponseFileSystemStat { result })
+            })
+            .await
+            .map_err(FsError::trap)?;
 
         match result.result {
             Ok(times) => {

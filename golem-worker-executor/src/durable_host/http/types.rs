@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::HttpOutgoingBodyState;
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::inline_retry::{
     StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
@@ -502,29 +503,49 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         if let Some(request_state) = self.state.open_http_requests.get(&self_.rep()) {
             let request = request_state.request.clone();
 
-            let durability = Durability::<HttpTypesFutureTrailersGet>::new(
+            // `WriteRemoteBatched`: not re-executable on an incomplete `Start`, so replay never
+            // yields `Incomplete` (it hard-errors instead) and the lone batched `Start` is recovered
+            // by the surrounding durable scope.
+            let mut call = CallHandle::<HttpTypesFutureTrailersGet, NotCancellable>::start(
                 self,
+                request,
                 DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
             )
             .await
             .map_err(wasmtime::Error::from)?;
 
             let handle = self_.rep();
-            if durability.is_live() {
+            if call.is_live() {
                 let result = HostFutureTrailers::get(&mut self.as_wasi_http_view(), self_).await;
-                let (to_serialize, for_retry) = match &result {
-                    Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
+
+                // The only fallible step while the `Start` is open is reading the trailers from the
+                // resource table; on failure abandon the started call (leaving its `Start`
+                // incomplete, never a `Cancelled`) and propagate.
+                let trailers_serialized = match &result {
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
                         let mut serialized_trailers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
-
-                        for (key, value) in self.table().get(trailers)?.iter() {
-                            serialized_trailers
-                                .entry(key.as_str().to_string())
-                                .or_default()
-                                .push(value.as_bytes().to_vec());
+                        match self.table().get(trailers) {
+                            Ok(trailers) => {
+                                for (key, value) in trailers.iter() {
+                                    serialized_trailers
+                                        .entry(key.as_str().to_string())
+                                        .or_default()
+                                        .push(value.as_bytes().to_vec());
+                                }
+                                Some(serialized_trailers)
+                            }
+                            Err(err) => {
+                                call.abandon_for_trap();
+                                return Err(err.into());
+                            }
                         }
-                        (Ok(Some(Ok(Ok(Some(serialized_trailers))))), Ok(()))
                     }
+                    _ => None,
+                };
+
+                let (to_serialize, for_retry) = match &result {
+                    Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
+                    Ok(Some(Ok(Ok(Some(_))))) => (Ok(Some(Ok(Ok(trailers_serialized)))), Ok(())),
                     Ok(Some(Ok(Err(error_code)))) => (
                         Ok(Some(Ok(Err(error_code.into())))),
                         Err(HttpFailure::ErrorCode(error_code.clone())),
@@ -539,17 +560,15 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                         Err(HttpFailure::Other(err.to_string())),
                     ),
                 };
-                durability
-                    .try_trigger_retry(self, &for_retry, |err| match err {
-                        HttpFailure::ErrorCode(code) => classify_http_error_code(code),
-                        HttpFailure::Other(_) => HostFailureKind::Transient,
-                    })
-                    .await
-                    .map_err(wasmtime::Error::from_anyhow)?;
-                let _ = durability
-                    .persist(
+                call.try_trigger_retry(self, &for_retry, |err| match err {
+                    HttpFailure::ErrorCode(code) => classify_http_error_code(code),
+                    HttpFailure::Other(_) => HostFailureKind::Transient,
+                })
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
+                let _ = call
+                    .complete(
                         self,
-                        request,
                         HostResponseHttpFutureTrailersGet {
                             result: to_serialize,
                         },
@@ -565,11 +584,10 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
 
                 result
             } else {
-                let serialized: HostResponseHttpFutureTrailersGet =
-                    durability
-                        .replay(self)
-                        .await
-                        .map_err(wasmtime::Error::from)?;
+                let serialized: HostResponseHttpFutureTrailersGet = call
+                    .replay_expecting_completion(self)
+                    .await
+                    .map_err(wasmtime::Error::from)?;
                 let result = match serialized.result {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
@@ -1515,20 +1533,16 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     begin_index: golem_common::model::oplog::OplogIndex,
 ) {
     if ctx.state.snapshotting_mode.is_none() {
-        let parent_start_index = ctx.state.current_parent_start_index();
-        ctx.state
-            .oplog
-            .add_completed_host_call(
-                HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
-                &HostRequest::HttpRequest(request),
-                &HostResponse::HttpResponse(HostResponseHttpResponse {
-                    response: serializable_response.clone(),
-                }),
-                DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
-                parent_start_index,
-            )
-            .await
-            .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+        ctx.append_completed_child_call(
+            HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
+            &HostRequest::HttpRequest(request),
+            &HostResponse::HttpResponse(HostResponseHttpResponse {
+                response: serializable_response.clone(),
+            }),
+            DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
         ctx.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)

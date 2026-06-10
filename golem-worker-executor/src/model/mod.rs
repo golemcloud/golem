@@ -423,7 +423,7 @@ impl TrapType {
                             semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
-                            // The generic read-only check inside `Durability::new` reports
+                            // The generic read-only check inside `begin_durable_function` reports
                             // violations as `WorkerExecutorError::ReadOnlyViolation` so the
                             // trap survives `WorkerExecutorError -> wasmtime::Error -> ...`
                             // conversions (which would otherwise discard the original

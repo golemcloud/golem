@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed, host_functions,
@@ -22,29 +23,25 @@ use wasmtime_wasi::random::WasiRandomView as _;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn insecure_seed(&mut self) -> wasmtime::Result<(u64, u64)> {
-        let durability = Durability::<host_functions::RandomInsecureSeedInsecureSeed>::new(
-            self,
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
-        let result = if durability.is_live() {
-            let result = {
-                let mut view = self.as_wasi_view();
-                Host::insecure_seed(view.random()).await?
-            };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseRandomSeed {
-                        lo: result.0,
-                        hi: result.1,
-                    },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let handle =
+            CallHandle::<host_functions::RandomInsecureSeedInsecureSeed, NotCancellable>::start(
+                self,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let result = {
+                    let mut view = ctx.as_wasi_view();
+                    Host::insecure_seed(view.random()).await?
+                };
+                Ok(HostResponseRandomSeed {
+                    lo: result.0,
+                    hi: result.1,
+                })
+            })
+            .await?;
 
         Ok((result.lo, result.hi))
     }

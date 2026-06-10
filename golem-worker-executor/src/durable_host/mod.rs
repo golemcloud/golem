@@ -102,9 +102,9 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, PersistenceLevel, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
-    UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, HostRequest, HostRequestHttpRequest,
+    HostResponse, LogLevel, OplogEntry, OplogIndex, PersistenceLevel, RawSnapshotData,
+    ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -1369,6 +1369,50 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             Ok(())
         }
+    }
+
+    /// Appends a completed child host call inside the innermost open durable scope, as an eager
+    /// `Start` immediately followed by its matching `End`. Unlike [`crate::durable_host::concurrent::CallHandle::start`]
+    /// this never opens a new durable scope — it records the result of a poll on an async future
+    /// (HTTP / RPC) within a request/invoke scope that the caller opens and closes itself.
+    ///
+    /// Both payloads are uploaded before the `Start` is appended, so a serialization failure never
+    /// leaves a dangling `Start`. The two entries are written with plain `add`s (eager model: a
+    /// forced commit may flush the `Start` before its `End`; an incomplete `Start` is rejected on
+    /// replay, like the surrounding scope-recovery rules). The caller remains responsible for the
+    /// snapshotting guard, closing the surrounding scope, finishing spans, and the durable commit.
+    pub(crate) async fn append_completed_child_call(
+        &mut self,
+        function_name: HostFunctionName,
+        request: &HostRequest,
+        response: &HostResponse,
+        function_type: DurableFunctionType,
+    ) -> Result<(), String> {
+        let parent_start_index = self.state.current_parent_start_index();
+        let request_payload = self.state.oplog.upload_payload(request).await?;
+        let response_payload = self.state.oplog.upload_payload(response).await?;
+        let now = Timestamp::now_utc();
+        let start_idx = self
+            .state
+            .oplog
+            .add(OplogEntry::Start {
+                timestamp: now,
+                parent_start_index,
+                function_name,
+                request: Some(request_payload),
+                durable_function_type: function_type,
+            })
+            .await;
+        self.state
+            .oplog
+            .add(OplogEntry::End {
+                timestamp: now,
+                start_index: start_idx,
+                response: Some(response_payload),
+                forced_commit: false,
+            })
+            .await;
+        Ok(())
     }
 
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
