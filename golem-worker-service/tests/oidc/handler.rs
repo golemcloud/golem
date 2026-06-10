@@ -141,6 +141,7 @@ fn request_new(path: &str) -> RichRequest {
 pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> ResolvedRouteEntry {
     let compiled_route = RichCompiledRoute {
         account_id: Default::default(),
+        account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         environment_id: Default::default(),
         route_id: 1,
         method: Method::GET,

@@ -27,9 +27,14 @@ use golem_common::model::card::{
 };
 use test_r::test;
 
+fn account_email(account_id: AccountId) -> golem_common::model::account::AccountEmail {
+    golem_common::model::account::AccountEmail::new(format!("{account_id}@test"))
+}
+
 fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) -> AuthCtx {
     AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: plan_id,
         account_roles: roles.iter().cloned().collect(),
         effective_surface: empty_effective_surface(),
@@ -37,7 +42,10 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
 }
 
 fn mk_impersonated(id: AccountId) -> AuthCtx {
-    AuthCtx::Agent(AgentAuthCtx { account_id: id })
+    AuthCtx::Agent(AgentAuthCtx {
+        account_id: id,
+        account_email: account_email(id),
+    })
 }
 
 fn empty_effective_surface() -> EffectiveSurface {
@@ -69,7 +77,7 @@ fn account_token_grant(account_id: AccountId, recipient: RecipientPattern) -> Pe
     PermissionPattern::AccountToken(ClassPermissionPattern {
         verb: Some(AccountTokenVerb::Create),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         recipient,
         resource: AccountTokenResourcePattern::Any,
@@ -80,7 +88,7 @@ fn account_token_target(account_id: AccountId) -> PermissionTarget {
     PermissionTarget::AccountToken(ClassPermissionTarget {
         verb: Some(AccountTokenVerb::Create),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         resource: AccountTokenResourcePattern::Any,
     })
@@ -90,7 +98,7 @@ fn account_grant(account_id: AccountId, recipient: RecipientPattern) -> Permissi
     PermissionPattern::Account(ClassPermissionPattern {
         verb: Some(AccountVerb::Update),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         recipient,
         resource: AccountResourcePattern,
@@ -101,7 +109,7 @@ fn account_target(account_id: AccountId) -> PermissionTarget {
     PermissionTarget::Account(ClassPermissionTarget {
         verb: Some(AccountVerb::Update),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         resource: AccountResourcePattern,
     })
@@ -111,7 +119,7 @@ fn environment_target(account_id: AccountId, verb: EnvironmentVerb) -> Permissio
     PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
         owner: ApplicationOwnerPattern::AccountApplications {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         resource: EnvironmentResourcePattern::Any,
     })
@@ -121,7 +129,7 @@ fn component_target(account_id: AccountId, verb: ComponentVerb) -> PermissionTar
     PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
         owner: EnvironmentOwnerPattern::AccountEnvironments {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         resource: ComponentResourcePattern::Any,
     })
@@ -131,7 +139,7 @@ fn agent_target(account_id: AccountId, verb: AgentVerb) -> PermissionTarget {
     PermissionTarget::Agent(ClassPermissionTarget {
         verb: Some(verb),
         owner: AgentOwnerPattern::AccountAgents {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
         resource: AgentResourcePattern::Any,
     })
@@ -165,6 +173,7 @@ fn user_with_effective_surface_can_authorize_permission() {
     let target = report_target();
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
@@ -242,6 +251,7 @@ fn user_with_effective_surface_can_authorize_account_token_permission() {
     let target = account_token_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
@@ -263,6 +273,7 @@ fn effective_surface_account_token_grant_for_different_holder_does_not_authorize
     let target = account_token_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
@@ -283,6 +294,7 @@ fn effective_surface_account_token_target_ignores_recipient_after_holder_filteri
     let target = account_token_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
@@ -302,6 +314,7 @@ fn effective_surface_account_token_grant_does_not_authorize_different_owner_targ
     );
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
@@ -330,6 +343,7 @@ fn user_with_effective_surface_can_authorize_account_permission() {
     let target = account_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
+        account_email: account_email(account_id),
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),

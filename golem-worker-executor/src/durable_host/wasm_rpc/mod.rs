@@ -28,7 +28,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentMethod, AgentType, DataSchema, LegacyParsedAgentId, UntypedDataValue,
 };
@@ -265,6 +265,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .create_await_interrupt_signal();
                     let rpc = self.rpc();
                     let created_by = self.created_by();
+                    let created_by_email = self.created_by_email().clone();
                     let agent_id = self.agent_id().clone();
 
                     let either_result = futures::future::select(
@@ -274,6 +275,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             method_name.clone(),
                             input_untyped.clone(),
                             created_by,
+                            &created_by_email,
                             &agent_id,
                             &env,
                             stack,
@@ -453,6 +455,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         method_name.clone(),
                         input_untyped.clone(),
                         self.created_by(),
+                        self.created_by_email(),
                         self.agent_id(),
                         &env,
                         stack,
@@ -581,6 +584,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let agent_id = self.agent_id().clone();
         let created_by = self.created_by();
+        let created_by_email = self.created_by_email().clone();
         let request = HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
@@ -633,6 +637,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 input_typed.clone(),
                 output_schema.clone(),
                 created_by,
+                created_by_email,
                 agent_id,
                 env,
                 stack,
@@ -656,6 +661,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     remote_agent_id,
                     self_agent_id: agent_id,
                     self_created_by: created_by,
+                    self_created_by_email: created_by_email,
                     env,
                     method_name,
                     method_parameters: input_typed,
@@ -1189,9 +1195,15 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         if durability.is_live() {
             if should_attempt_remote_cancel {
                 let caller_account_id = self.created_by();
+                let caller_account_email = self.created_by_email();
                 if let Err(err) = self
                     .worker_proxy()
-                    .cancel_invocation(&remote_agent_id, idempotency_key, caller_account_id)
+                    .cancel_invocation(
+                        &remote_agent_id,
+                        idempotency_key,
+                        caller_account_id,
+                        caller_account_email,
+                    )
                     .await
                 {
                     tracing::info!(err=%err, "Best-effort cancel_invocation failed");
@@ -1365,6 +1377,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .create_demand(
             &remote_agent_id,
             ctx.created_by(),
+            ctx.created_by_email(),
             ctx.agent_id(),
             env,
             stack,
@@ -1442,6 +1455,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     input: TypedRpcInput,
     output_schema: DataSchema,
     created_by: AccountId,
+    created_by_email: AccountEmail,
     agent_id: AgentId,
     env: Vec<(String, String)>,
     stack: InvocationContextStack,
@@ -1455,6 +1469,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let input = input.clone();
         let output_schema = output_schema.clone();
         let created_by = created_by;
+        let created_by_email = created_by_email.clone();
         let agent_id = agent_id.clone();
         let env = env.clone();
         let stack = stack.clone();
@@ -1472,6 +1487,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     method_name,
                     input_untyped,
                     created_by,
+                    &created_by_email,
                     &agent_id,
                     &env,
                     stack,
@@ -1663,6 +1679,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         remote_agent_id,
         self_agent_id,
         self_created_by,
+        self_created_by_email,
         env,
         method_name,
         method_parameters,
@@ -1718,6 +1735,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         method_parameters.clone(),
         output_schema.clone(),
         *self_created_by,
+        self_created_by_email.clone(),
         self_agent_id.clone(),
         env.clone(),
         stack,
@@ -1943,6 +1961,7 @@ enum FutureInvokeResultState {
         remote_agent_id: OwnedAgentId,
         self_agent_id: AgentId,
         self_created_by: AccountId,
+        self_created_by_email: AccountEmail,
         env: Vec<(String, String)>,
         method_name: String,
         method_parameters: TypedRpcInput,

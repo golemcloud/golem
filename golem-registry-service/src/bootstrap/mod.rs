@@ -161,8 +161,6 @@ impl Services {
         let component_compilation_service =
             crate::services::component_compilation::configured(&config.component_compilation);
 
-        let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
-
         let plan_service = Arc::new(PlanService::new(repos.plan_repo));
         plan_service
             .create_initial_plans(&config.initial_plans)
@@ -197,6 +195,11 @@ impl Services {
             .create_initial_accounts(&config.initial_accounts)
             .await
             .map_err(|e| e.into_anyhow())?;
+
+        let account_usage_service = Arc::new(AccountUsageService::new_with_account_service(
+            repos.account_usage_repo,
+            account_service.clone(),
+        ));
 
         let token_service = Arc::new(TokenService::new(
             repos.token_repo,

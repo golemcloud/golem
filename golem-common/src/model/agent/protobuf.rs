@@ -967,6 +967,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplemen
                 .account_id
                 .ok_or_else(|| "Missing account_id field".to_string())?
                 .try_into()?,
+            account_email: crate::model::account::AccountEmail::new(value.account_email),
         })
     }
 }
@@ -980,6 +981,7 @@ impl From<RegisteredAgentTypeImplementer>
             component_revision: value.component_revision.into(),
             component_name: value.component_name,
             account_id: Some(value.account_id.into()),
+            account_email: value.account_email.into_inner(),
         }
     }
 }

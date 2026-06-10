@@ -1146,6 +1146,7 @@ impl TestDsl for TestWorkerExecutor {
                 oplog_index_cutoff: oplog_index.into(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
+                component_owner_account_email: "test@golem".to_string(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
             })

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::account::AccountId;
+use crate::base_model::account::{AccountEmail, AccountId};
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
 use std::str::FromStr;
@@ -25,7 +25,9 @@ newtype_uuid!(
 declare_revision!(ApplicationRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
     pub struct ApplicationName(pub String);
 }
 
@@ -85,6 +87,7 @@ declare_structs! {
         pub id: ApplicationId,
         pub revision: ApplicationRevision,
         pub account_id: AccountId,
+        pub account_email: AccountEmail,
         pub name: ApplicationName,
     }
 

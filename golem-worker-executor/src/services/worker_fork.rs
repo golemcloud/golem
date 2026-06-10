@@ -42,7 +42,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -66,6 +66,7 @@ pub trait WorkerForkService: Send + Sync {
     async fn fork(
         &self,
         fork_account_id: AccountId,
+        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
@@ -75,6 +76,7 @@ pub trait WorkerForkService: Send + Sync {
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
+        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
@@ -528,6 +530,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
             created_by: initial_source_worker_metadata.created_by,
+            created_by_email: initial_source_worker_metadata.created_by_email,
             environment_id,
             env: initial_source_worker_metadata.env,
             config: initial_source_worker_metadata.config,
@@ -705,6 +708,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
         fork_account_id: AccountId,
+        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
@@ -725,7 +729,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_agent_id, true, fork_account_id)
+            .resume(target_agent_id, true, fork_account_id, fork_account_email)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
@@ -737,6 +741,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
+        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
@@ -779,7 +784,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_agent_id, true, fork_account_id)
+            .resume(target_agent_id, true, fork_account_id, fork_account_email)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())

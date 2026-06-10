@@ -117,7 +117,10 @@ impl CallAgentHandler {
                 None,
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
-                AuthCtx::agent(resolved_route.route.account_id),
+                AuthCtx::agent(
+                    resolved_route.route.account_id,
+                    resolved_route.route.account_email.clone(),
+                ),
                 proto_principal,
                 Some(resolved_route.route.environment_id),
             )
@@ -237,7 +240,13 @@ impl CallAgentHandler {
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(agent_id, AuthCtx::agent(resolved_route.route.account_id))
+            .get_metadata(
+                agent_id,
+                AuthCtx::agent(
+                    resolved_route.route.account_id,
+                    resolved_route.route.account_email.clone(),
+                ),
+            )
             .await
         {
             Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),

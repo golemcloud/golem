@@ -74,6 +74,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_env: HashMap<String, String>,
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
         _agent_config: Vec<AgentConfigEntryDto>,
         _principal: Principal,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
@@ -96,6 +97,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_env: HashMap<String, String>,
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
         _principal: Principal,
         _environment_id: golem_common::model::environment::EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
@@ -111,6 +113,7 @@ impl WorkerProxy for TestWorkerProxy {
         _agent_id: &AgentId,
         _idempotency_key: IdempotencyKey,
         _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<bool, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -126,6 +129,7 @@ impl WorkerProxy for TestWorkerProxy {
         _mode: UpdateMode,
         _disable_wakeup: bool,
         _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -139,6 +143,7 @@ impl WorkerProxy for TestWorkerProxy {
         agent_id: &AgentId,
         force: bool,
         caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         let mut retry_count = Self::RETRY_COUNT;
 
@@ -152,6 +157,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {
@@ -201,6 +207,7 @@ impl WorkerProxy for TestWorkerProxy {
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
@@ -212,6 +219,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {
@@ -226,6 +234,7 @@ impl WorkerProxy for TestWorkerProxy {
             .clone()
             .fork_worker(ForkWorkerRequest {
                 component_owner_account_id: Some(component.account_id.into()),
+                component_owner_account_email: component.account_email.as_str().to_string(),
                 environment_id: Some(component.environment_id.into()),
                 source_agent_id: Some(source_agent_id.clone().into()),
                 target_agent_id: Some(target_agent_id.clone().into()),
@@ -253,6 +262,7 @@ impl WorkerProxy for TestWorkerProxy {
         agent_id: &AgentId,
         target: RevertWorkerTarget,
         caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
@@ -264,6 +274,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {
@@ -303,6 +314,7 @@ impl WorkerProxy for TestWorkerProxy {
         _promise_id: PromiseId,
         _data: Vec<u8>,
         _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<bool, WorkerProxyError> {
         unimplemented!()
     }
@@ -312,6 +324,7 @@ impl WorkerProxy for TestWorkerProxy {
         _agent_id: &AgentId,
         _idempotency_key: IdempotencyKey,
         _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
         _environment_id: Option<golem_common::base_model::environment::EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError> {
         Ok(InvocationStatus::Unknown)
@@ -328,6 +341,7 @@ impl WorkerProxy for TestWorkerProxy {
         _metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
         _first_entry_index: golem_common::base_model::OplogIndex,
         _entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        _account_email: &golem_common::model::account::AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         unimplemented!()
     }

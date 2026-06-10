@@ -36,7 +36,7 @@ use golem_common::model::card::{
     AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::model::component::{
-    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
+    CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -91,10 +91,10 @@ fn authorize_agent_permission(
     auth_ctx
         .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
             owner: AgentOwnerPattern::Agent {
-                account: component.account_id.to_string(),
-                application: component.application_name.0.clone(),
-                environment: component.environment_name.0.clone(),
-                component: component.component_name.0.clone(),
+                account: component.account_email.clone(),
+                application: component.application_name.clone(),
+                environment: component.environment_name.clone(),
+                component: component.component_name.clone(),
                 agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
             },
             verb: Some(verb),
@@ -114,10 +114,10 @@ fn authorize_component_agents_permission(
     auth_ctx
         .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
             owner: AgentOwnerPattern::ComponentAgents {
-                account: component.account_id.to_string(),
-                application: component.application_name.0.clone(),
-                environment: component.environment_name.0.clone(),
-                component: component.component_name.0.clone(),
+                account: component.account_email.clone(),
+                application: component.application_name.clone(),
+                environment: component.environment_name.clone(),
+                component: component.component_name.clone(),
             },
             verb: Some(verb),
             resource,
@@ -691,6 +691,7 @@ impl WorkerService {
                 oplog_index_cut_off,
                 component.environment_id,
                 component.account_id,
+                component.account_email,
                 auth_ctx,
             )
             .await?;
@@ -992,6 +993,8 @@ impl WorkerService {
 
         let component_name = registered_agent_type.implemented_by.component_name.clone();
         let component_owner_account_id = registered_agent_type.implemented_by.account_id;
+        let component_owner_account_email =
+            registered_agent_type.implemented_by.account_email.clone();
 
         let method = agent_type
             .methods
@@ -1040,10 +1043,10 @@ impl WorkerService {
 
         auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
             owner: AgentOwnerPattern::Agent {
-                account: component_owner_account_id.to_string(),
-                application: request.app_name.0,
-                environment: request.env_name.0,
-                component: component_name,
+                account: component_owner_account_email,
+                application: request.app_name,
+                environment: request.env_name,
+                component: ComponentName(component_name),
                 agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
             },
             verb: Some(AgentVerb::Invoke),
@@ -1135,7 +1138,7 @@ mod tests {
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentInvocationOutput;
     use golem_common::model::Empty;
-    use golem_common::model::account::AccountId;
+    use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
         HttpEndpointDetails, NamedElementSchemas, RegisteredAgentType,
@@ -1608,6 +1611,7 @@ mod tests {
             _: OplogIndex,
             _: EnvironmentId,
             _: AccountId,
+            _: AccountEmail,
             _: AuthCtx,
         ) -> WorkerResult<()> {
             unimplemented!()
@@ -1711,6 +1715,7 @@ mod tests {
                             component_revision,
                             component_name: component.component_name.0.clone(),
                             account_id: component.account_id,
+                            account_email: component.account_email.clone(),
                         },
                     },
                     environment_id,
@@ -1821,6 +1826,7 @@ mod tests {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id,
+            account_email: golem_common::model::account::AccountEmail::new("weather@golem"),
             application_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
             environment_name: EnvironmentName::try_from("prod").unwrap(),
             component_size: 0,

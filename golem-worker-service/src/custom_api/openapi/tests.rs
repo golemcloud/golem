@@ -21,7 +21,7 @@ use golem_common::base_model::agent::{
     BinaryDescriptor, BinaryType, ComponentModelElementSchema, DataSchema, ElementSchema,
     NamedElementSchema, NamedElementSchemas, TextDescriptor, TextType,
 };
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
@@ -91,6 +91,7 @@ fn call_agent_route(
 ) -> RichCompiledRoute {
     RichCompiledRoute {
         account_id: AccountId::new(),
+        account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
         route_id: 0,
         method,
@@ -616,6 +617,7 @@ fn raw_route(
 ) -> RichCompiledRoute {
     RichCompiledRoute {
         account_id: AccountId::new(),
+        account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
         route_id: 0,
         method,

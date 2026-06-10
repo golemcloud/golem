@@ -302,6 +302,7 @@ impl DeploymentContext {
 
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
                 account_id,
+                account_email: self.environment.owner_account_email.clone(),
                 environment_id: self.environment.id,
                 deployment_revision,
                 domain: domain.clone(),
@@ -618,6 +619,7 @@ pub fn extract_registered_agent_types(
                 component_revision: component.revision,
                 component_name: component.component_name.0.clone(),
                 account_id: component.account_id,
+                account_email: component.account_email.clone(),
             };
 
             let webhook_domain_and_segments = ok_or_continue!(
@@ -637,6 +639,7 @@ pub fn extract_registered_agent_types(
                     component_revision: component.revision,
                     component_name: component.component_name.0.clone(),
                     account_id: component.account_id,
+                    account_email: component.account_email.clone(),
                 },
                 webhook_domain_and_segments,
             };

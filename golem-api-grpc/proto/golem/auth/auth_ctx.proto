@@ -24,10 +24,12 @@ message UserAuthCtx {
   golem.account.PlanId plan_id = 2;
   repeated AccountRole account_roles = 3;
   AuthEffectiveSurface effective_surface = 4;
+  string account_email = 5;
 }
 
 message AgentAuthCtx {
   golem.common.AccountId account_id = 1;
+  string account_email = 2;
 }
 
 message AdminImpersonationAuthCtx {
@@ -36,6 +38,7 @@ message AdminImpersonationAuthCtx {
   repeated AccountRole target_account_roles = 3;
   golem.account.PlanId target_account_plan_id = 4;
   AuthEffectiveSurface effective_surface = 5;
+  string target_account_email = 6;
 }
 
 message AuthCtx {

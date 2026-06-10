@@ -33,13 +33,33 @@ use pretty_assertions::assert_eq;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 
+fn account_email(account: &str) -> crate::model::account::AccountEmail {
+    crate::model::account::AccountEmail::new(account)
+}
+
+fn application_name(application: &str) -> crate::model::application::ApplicationName {
+    crate::model::application::ApplicationName(application.to_string())
+}
+
+fn environment_name(environment: &str) -> crate::model::environment::EnvironmentName {
+    crate::model::environment::EnvironmentName(environment.to_string())
+}
+
+fn component_name(component: &str) -> crate::model::component::ComponentName {
+    crate::model::component::ComponentName(component.to_string())
+}
+
+fn agent_type_name(agent_type: &str) -> crate::model::agent::AgentTypeName {
+    crate::model::agent::AgentTypeName(agent_type.to_string())
+}
+
 fn parsed_permission(input: &str) -> PermissionPattern {
     parse_permission(input).expect("permission should parse")
 }
 
 fn account_owner(account: &str) -> AccountOwnerPattern {
     AccountOwnerPattern::Account {
-        account: account.to_string(),
+        account: account_email(account),
     }
 }
 
@@ -51,8 +71,8 @@ fn account_recipient(account: &str) -> AccountRecipientPattern {
 
 fn application_owner(account: &str, application: &str) -> ApplicationOwnerPattern {
     ApplicationOwnerPattern::Application {
-        account: account.to_string(),
-        application: application.to_string(),
+        account: account_email(account),
+        application: application_name(application),
     }
 }
 
@@ -62,9 +82,9 @@ fn environment_owner(
     environment: &str,
 ) -> EnvironmentOwnerPattern {
     EnvironmentOwnerPattern::Environment {
-        account: account.to_string(),
-        application: application.to_string(),
-        environment: environment.to_string(),
+        account: account_email(account),
+        application: application_name(application),
+        environment: environment_name(environment),
     }
 }
 
@@ -88,10 +108,10 @@ fn agent_owner(
     agent: AgentOwnerLeafPattern,
 ) -> AgentOwnerPattern {
     AgentOwnerPattern::Agent {
-        account: account.to_string(),
-        application: application.to_string(),
-        environment: environment.to_string(),
-        component: component.to_string(),
+        account: account_email(account),
+        application: application_name(application),
+        environment: environment_name(environment),
+        component: component_name(component),
         agent,
     }
 }
@@ -422,7 +442,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     "shop",
                     "prod",
                     "cart-svc",
-                    AgentOwnerLeafPattern::AgentTypeWildcard("ShoppingCart".to_string()),
+                    AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name("ShoppingCart")),
                 ),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
                 resource: AgentResourcePattern::Method(AgentMethodName("add-item".to_string())),
@@ -434,10 +454,10 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::Delete),
                 owner: AgentOwnerPattern::ComponentAgents {
-                    account: "acme".to_string(),
-                    application: "shop".to_string(),
-                    environment: "prod".to_string(),
-                    component: "cart-svc".to_string(),
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cart-svc"),
                 },
                 recipient: AgentRecipientPattern::Agent {
                     account: "acme".to_string(),
@@ -459,7 +479,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     "shop",
                     "prod",
                     "cart-svc",
-                    AgentOwnerLeafPattern::AgentTypeWildcard("ShoppingCart".to_string()),
+                    AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name("ShoppingCart")),
                 ),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
                 resource: AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
@@ -477,7 +497,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     "shop",
                     "prod",
                     "cart-svc",
-                    AgentOwnerLeafPattern::AgentTypeWildcard("ShoppingCart".to_string()),
+                    AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name("ShoppingCart")),
                 ),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
                 resource: AgentResourcePattern::OplogIndex(42),
@@ -489,10 +509,10 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             PermissionPattern::Tool(ClassPermissionPattern::<ToolClass> {
                 verb: Some(ToolVerb::Invoke),
                 owner: ToolOwnerPattern::Tool {
-                    account: "acme".to_string(),
-                    application: "shop".to_string(),
-                    environment: "prod".to_string(),
-                    component: "cli-tools".to_string(),
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cli-tools"),
                     tool: "grep".to_string(),
                 },
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -508,10 +528,10 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             PermissionPattern::Tool(ClassPermissionPattern::<ToolClass> {
                 verb: Some(ToolVerb::Invoke),
                 owner: ToolOwnerPattern::Tool {
-                    account: "acme".to_string(),
-                    application: "shop".to_string(),
-                    environment: "prod".to_string(),
-                    component: "cli-tools".to_string(),
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cli-tools"),
                     tool: "grep".to_string(),
                 },
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -967,10 +987,10 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             > {
                 verb: Some(EnvironmentInitialFilesVerb::View),
                 owner: ComponentOwnerPattern::Component {
-                    account: "acme".to_string(),
-                    application: "shop".to_string(),
-                    environment: "prod".to_string(),
-                    component: "cart-svc".to_string(),
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cart-svc"),
                 },
                 recipient: environment_recipient("acme", "shop", "prod"),
                 resource: EnvironmentInitialFilesResourcePattern::Path(
@@ -1307,8 +1327,10 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
             PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::Invoke),
                 owner: PolymorphicAgentOwnerPattern::EnvAgent {
-                    component: "payment-svc".to_string(),
-                    agent: AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string()),
+                    component: component_name("payment-svc"),
+                    agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name(
+                        "PaymentAgent",
+                    )),
                 },
                 recipient: agent_recipient(
                     "acme",
@@ -1517,8 +1539,10 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                 PolymorphicManifestClassPermissionPattern::<AgentClass> {
                     verb: Some(AgentVerb::Invoke),
                     owner: PolymorphicAgentOwnerPattern::EnvAgent {
-                        component: "payment-svc".to_string(),
-                        agent: AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string()),
+                        component: component_name("payment-svc"),
+                        agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name(
+                            "PaymentAgent",
+                        )),
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
                         PolymorphicAgentRecipientPattern::Self_,
@@ -1534,7 +1558,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                 PolymorphicManifestClassPermissionPattern::<AgentClass> {
                     verb: None,
                     owner: PolymorphicAgentOwnerPattern::EnvComponentAgents {
-                        component: "payment-svc".to_string(),
+                        component: component_name("payment-svc"),
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
                         PolymorphicAgentRecipientPattern::ComponentAgents,
@@ -1550,8 +1574,10 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                 PolymorphicManifestClassPermissionPattern::<AgentClass> {
                     verb: Some(AgentVerb::Invoke),
                     owner: PolymorphicAgentOwnerPattern::EnvAgent {
-                        component: "payment-svc".to_string(),
-                        agent: AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string()),
+                        component: component_name("payment-svc"),
+                        agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name(
+                            "PaymentAgent",
+                        )),
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
                         PolymorphicAgentRecipientPattern::ComponentAgent {
@@ -1569,7 +1595,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                 PolymorphicManifestClassPermissionPattern::<ToolClass> {
                     verb: Some(ToolVerb::Invoke),
                     owner: PolymorphicToolOwnerPattern::EnvComponentTools {
-                        component: "cli-tools".to_string(),
+                        component: component_name("cli-tools"),
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
                         PolymorphicAgentRecipientPattern::Self_,

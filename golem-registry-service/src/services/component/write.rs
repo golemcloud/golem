@@ -251,6 +251,7 @@ impl ComponentWriteService {
             .try_into_model(
                 environment.application_id,
                 environment.owner_account_id,
+                environment.owner_account_email.clone(),
                 environment.application_name.clone(),
                 environment.name.clone(),
             )?;
@@ -302,6 +303,7 @@ impl ComponentWriteService {
         let mut component = component_record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
+            environment.owner_account_email.clone(),
             environment.application_name.clone(),
             environment.name.clone(),
         )?;
@@ -456,6 +458,7 @@ impl ComponentWriteService {
             .try_into_model(
                 environment.application_id,
                 environment.owner_account_id,
+                environment.owner_account_email.clone(),
                 environment.application_name.clone(),
                 environment.name.clone(),
             )?;
@@ -498,6 +501,7 @@ impl ComponentWriteService {
         let component = component_record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
+            environment.owner_account_email,
             environment.application_name,
             environment.name,
         )?;
@@ -994,9 +998,9 @@ fn authorize_component_permission(
     auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
         owner: EnvironmentOwnerPattern::Environment {
-            account: environment.owner_account_id.to_string(),
-            application: environment.application_name.0.clone(),
-            environment: environment.name.0.clone(),
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
         },
         resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
     }))

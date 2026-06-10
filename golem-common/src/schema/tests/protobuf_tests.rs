@@ -18,6 +18,7 @@ use crate::base_model::agent::{
     AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::model::account::AccountEmail;
 use crate::schema::agent::{
     AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
     AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
@@ -137,6 +138,7 @@ fn registered_agent_type_schema_proto_round_trip() {
             component_revision: ComponentRevision::INITIAL,
             component_name: "test-component".to_string(),
             account_id: AccountId(Uuid::from_u128(0x1234)),
+            account_email: AccountEmail::new("test@golem.cloud"),
         },
     };
     let proto: golem_api_grpc::proto::golem::registry::RegisteredAgentTypeSchema =

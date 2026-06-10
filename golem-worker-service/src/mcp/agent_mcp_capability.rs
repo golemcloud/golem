@@ -17,7 +17,7 @@ use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::constructor_param_extraction::validate_constructor_schema_for_mcp;
 use crate::mcp::schema::{McpToolSchema, get_mcp_tool_schema};
 use anyhow::Context;
-use golem_common::base_model::account::AccountId;
+use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
@@ -54,6 +54,7 @@ impl McpAgentCapability {
     #[allow(clippy::too_many_arguments)]
     pub fn from_agent_method(
         account_id: &AccountId,
+        account_email: &AccountEmail,
         environment_id: &EnvironmentId,
         agent_type_name: &AgentTypeName,
         agent_mode: AgentMode,
@@ -117,6 +118,7 @@ impl McpAgentCapability {
                 environment_id: *environment_id,
                 account_id: *account_id,
                 schema_graph,
+                account_email: account_email.clone(),
                 constructor: constructor.clone(),
                 method: method.clone(),
                 tool,
@@ -178,6 +180,7 @@ impl McpAgentCapability {
                 environment_id: *environment_id,
                 account_id: *account_id,
                 schema_graph,
+                account_email: account_email.clone(),
                 constructor: constructor.clone(),
                 method: method.clone(),
                 component_id,

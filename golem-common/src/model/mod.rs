@@ -63,7 +63,7 @@ use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::LegacyParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::account::AccountId;
+use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
@@ -543,6 +543,7 @@ pub struct AgentMetadata {
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
+    pub created_by_email: AccountEmail,
     pub config: Vec<TypedAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,

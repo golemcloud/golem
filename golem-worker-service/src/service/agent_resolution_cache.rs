@@ -318,6 +318,7 @@ mod tests {
                     component_revision: ComponentRevision::INITIAL,
                     component_name: "test-component".to_string(),
                     account_id: AccountId(Uuid::nil()),
+                    account_email: golem_common::model::account::AccountEmail::new("test@golem"),
                 },
             },
             environment_id: env_id,

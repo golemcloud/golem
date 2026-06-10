@@ -17,6 +17,7 @@ use crate::base_model::card::CardId;
 use crate::base_model::plan::PlanId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use derive_more::Display;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use uuid::uuid;
 
@@ -28,8 +29,12 @@ impl AccountId {
 
 declare_revision!(AccountRevision);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Display)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Display, IntoValue, FromValue,
+)]
 #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
 #[cfg_attr(
     feature = "full",
     oai(from_json = false, from_parameter = false, from_multipart = false)

@@ -58,17 +58,12 @@ async fn create_permission_share(
         .await?)
 }
 
-fn environment_view_grant(
-    owner: AccountId,
-    app_name: &str,
-    env_name: &str,
-    recipient: &str,
-) -> String {
+fn environment_view_grant(owner: &str, app_name: &str, env_name: &str, recipient: &str) -> String {
     format!("environment({owner}/{app_name}) @ {recipient} : view : {env_name}")
 }
 
 fn environment_plugin_grant_grant(
-    owner: AccountId,
+    owner: &str,
     app_name: &str,
     env_name: &str,
     recipient: &str,
@@ -95,27 +90,27 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         "grant-plugin-to-shared-env",
         vec![
             environment_view_grant(
-                user_2.account_id,
+                user_2.account_email.as_str(),
                 &shared_env.application_name.0,
                 &shared_env.name.0,
                 user_1.account_email.as_str(),
             ),
             environment_plugin_grant_grant(
-                user_2.account_id,
+                user_2.account_email.as_str(),
                 &shared_env.application_name.0,
                 &shared_env.name.0,
                 user_1.account_email.as_str(),
                 "create",
             ),
             environment_plugin_grant_grant(
-                user_2.account_id,
+                user_2.account_email.as_str(),
                 &shared_env.application_name.0,
                 &shared_env.name.0,
                 user_1.account_email.as_str(),
                 "view",
             ),
             environment_plugin_grant_grant(
-                user_2.account_id,
+                user_2.account_email.as_str(),
                 &shared_env.application_name.0,
                 &shared_env.name.0,
                 user_1.account_email.as_str(),
@@ -344,13 +339,13 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
         "plugin-member-view-env",
         vec![
             environment_view_grant(
-                user_2.account_id,
+                user_2.account_email.as_str(),
                 &shared_env.application_name.0,
                 &shared_env.name.0,
                 user_1.account_email.as_str(),
             ),
             environment_plugin_grant_grant(
-                user_2.account_id,
+                user_2.account_email.as_str(),
                 &shared_env.application_name.0,
                 &shared_env.name.0,
                 user_1.account_email.as_str(),
@@ -550,7 +545,7 @@ async fn shared_user_with_readonly_role_cannot_grant_plugin(
         user_owner.account_email.clone(),
         "readonly-plugin-grant-access",
         vec![environment_view_grant(
-            user_shared.account_id,
+            user_shared.account_email.as_str(),
             &shared_env.application_name.0,
             &shared_env.name.0,
             user_owner.account_email.as_str(),
@@ -619,13 +614,13 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
         "list-grants-revoked-access",
         vec![
             environment_view_grant(
-                owner.account_id,
+                owner.account_email.as_str(),
                 &env.application_name.0,
                 &env.name.0,
                 shared.account_email.as_str(),
             ),
             environment_plugin_grant_grant(
-                owner.account_id,
+                owner.account_email.as_str(),
                 &env.application_name.0,
                 &env.name.0,
                 shared.account_email.as_str(),
@@ -766,13 +761,13 @@ async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
         "fetch-deleted-grant-access",
         vec![
             environment_view_grant(
-                owner.account_id,
+                owner.account_email.as_str(),
                 &env.application_name.0,
                 &env.name.0,
                 shared.account_email.as_str(),
             ),
             environment_plugin_grant_grant(
-                owner.account_id,
+                owner.account_email.as_str(),
                 &env.application_name.0,
                 &env.name.0,
                 shared.account_email.as_str(),
@@ -894,13 +889,13 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         "revoked-fetch-grant-access",
         vec![
             environment_view_grant(
-                owner.account_id,
+                owner.account_email.as_str(),
                 &env.application_name.0,
                 &env.name.0,
                 revoked_user.account_email.as_str(),
             ),
             environment_plugin_grant_grant(
-                owner.account_id,
+                owner.account_email.as_str(),
                 &env.application_name.0,
                 &env.name.0,
                 revoked_user.account_email.as_str(),

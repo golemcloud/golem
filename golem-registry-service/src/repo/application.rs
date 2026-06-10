@@ -204,6 +204,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
+                        a.email as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
@@ -237,6 +238,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
+                        a.email as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
@@ -268,6 +270,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
+                        a.email as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
@@ -296,12 +299,14 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
         self.with_tx_err("create", |tx| async move {
-            tx.execute(
-                sqlx::query(indoc! { r#"
+            let application_record: ApplicationRecord = tx.fetch_one_as(
+                sqlx::query_as(indoc! { r#"
                     INSERT INTO applications
                     (application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
                     VALUES ($1, $2, $3, $4, $4, NULL, $5, 0)
-                    RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                    RETURNING application_id, name, account_id,
+                        (SELECT email FROM accounts WHERE account_id = applications.account_id) AS account_email,
+                        created_at, updated_at, deleted_at, modified_by, current_revision_id
                 "# })
                     .bind(revision.application_id)
                     .bind(&revision.name)
@@ -315,6 +320,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
             Ok(ApplicationExtRevisionRecord {
                 account_id,
+                account_email: application_record.account_email,
                 entity_created_at: revision.audit.created_at.clone(),
                 revision,
             })
@@ -334,7 +340,9 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         UPDATE applications
                         SET name = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
                         WHERE application_id = $5
-                        RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                        RETURNING application_id, name, account_id,
+                            (SELECT email FROM accounts WHERE account_id = applications.account_id) AS account_email,
+                            created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.name)
                     .bind(&revision.audit.created_at)
@@ -348,6 +356,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
                 Ok(ApplicationExtRevisionRecord {
                     account_id: application_record.account_id,
+                    account_email: application_record.account_email,
                     entity_created_at: application_record.audit.created_at,
                     revision,
                 })
@@ -371,7 +380,9 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         UPDATE applications
                         SET name = $1, updated_at = $2, deleted_at = $2, modified_by = $3, current_revision_id = $4
                         WHERE application_id = $5
-                        RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                        RETURNING application_id, name, account_id,
+                            (SELECT email FROM accounts WHERE account_id = applications.account_id) AS account_email,
+                            created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.name)
                     .bind(&revision.audit.created_at)
@@ -418,6 +429,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
                 Ok(ApplicationExtRevisionRecord {
                     account_id: application_record.account_id,
+                    account_email: application_record.account_email,
                     entity_created_at: application_record.audit.created_at,
                     revision,
                 })

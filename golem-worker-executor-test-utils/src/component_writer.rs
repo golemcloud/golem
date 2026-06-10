@@ -616,6 +616,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             environment_id: value.environment_id,
             application_id: value.application_id,
             account_id: value.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
             environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_name: ComponentName(value.component_name),

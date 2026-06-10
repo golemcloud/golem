@@ -55,6 +55,7 @@ pub struct EnvironmentExtRecord {
     pub current_revision_id: i64,
 
     pub owner_account_id: Uuid,
+    pub owner_account_email: String,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -135,6 +136,7 @@ pub struct EnvironmentExtRevisionRecord {
     pub revision: EnvironmentRevisionRecord,
 
     pub owner_account_id: Uuid,
+    pub owner_account_email: String,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -157,6 +159,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             security_overrides: value.revision.security_overrides,
 
             owner_account_id: AccountId(value.owner_account_id),
+            owner_account_email: AccountEmail::new(value.owner_account_email),
 
             current_deployment: match (
                 value.current_deployment_revision,
@@ -199,6 +202,7 @@ pub struct OptionalEnvironmentExtRevisionRecord {
     pub security_overrides: Option<bool>,
 
     pub owner_account_id: Uuid,
+    pub owner_account_email: String,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -209,6 +213,10 @@ pub struct OptionalEnvironmentExtRevisionRecord {
 impl OptionalEnvironmentExtRevisionRecord {
     pub fn owner_account_id(&self) -> AccountId {
         AccountId(self.owner_account_id)
+    }
+
+    pub fn owner_account_email(&self) -> AccountEmail {
+        AccountEmail::new(self.owner_account_email.clone())
     }
 
     pub fn into_revision_record(self) -> Option<EnvironmentExtRevisionRecord> {
@@ -241,6 +249,7 @@ impl OptionalEnvironmentExtRevisionRecord {
             },
 
             owner_account_id: self.owner_account_id,
+            owner_account_email: self.owner_account_email,
 
             current_deployment_revision: self.current_deployment_revision,
             current_deployment_deployment_revision: self.current_deployment_deployment_revision,

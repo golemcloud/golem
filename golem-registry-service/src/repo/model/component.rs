@@ -17,7 +17,7 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentId;
@@ -245,6 +245,7 @@ impl ComponentExtRevisionRecord {
         self,
         application_id: ApplicationId,
         account_id: AccountId,
+        account_email: AccountEmail,
         application_name: ApplicationName,
         environment_name: EnvironmentName,
     ) -> Result<Component, RepoError> {
@@ -254,6 +255,7 @@ impl ComponentExtRevisionRecord {
             environment_id: EnvironmentId(self.environment_id),
             application_id,
             account_id,
+            account_email,
             application_name,
             environment_name,
             component_name: ComponentName(self.name),

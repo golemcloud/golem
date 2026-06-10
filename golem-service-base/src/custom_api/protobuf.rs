@@ -23,6 +23,7 @@ use crate::custom_api::{
     SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 use golem_wasm::analysis::TypeEnum;
@@ -104,6 +105,7 @@ impl TryFrom<proto::golem::customapi::CompiledRoutes> for CompiledRoutes {
 
         Ok(Self {
             account_id,
+            account_email: AccountEmail::new(value.account_email),
             environment_id,
             deployment_revision: value.deployment_revision.try_into()?,
             security_schemes,
@@ -116,6 +118,7 @@ impl From<CompiledRoutes> for proto::golem::customapi::CompiledRoutes {
     fn from(value: CompiledRoutes) -> Self {
         Self {
             account_id: Some(value.account_id.into()),
+            account_email: value.account_email.into_inner(),
             environment_id: Some(value.environment_id.into()),
             deployment_revision: value.deployment_revision.into(),
             security_schemes: value

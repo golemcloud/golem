@@ -100,9 +100,10 @@ impl PermissionShareService {
         data: PermissionShareCreation,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
+        let owner_account = self.get_account(owner_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            owner_account_id,
+            &owner_account.email,
             AccountPermissionShareVerb::Create,
             AccountPermissionShareResourcePattern::Any,
         )?;
@@ -154,9 +155,10 @@ impl PermissionShareService {
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
         let mut share = self.get(permission_share_id, auth).await?;
+        let owner_account = self.get_account(share.owner_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            share.owner_account_id,
+            &owner_account.email,
             AccountPermissionShareVerb::Update,
             AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
@@ -212,9 +214,10 @@ impl PermissionShareService {
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
         let mut share = self.get(permission_share_id, auth).await?;
+        let owner_account = self.get_account(share.owner_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            share.owner_account_id,
+            &owner_account.email,
             AccountPermissionShareVerb::Delete,
             AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
@@ -261,7 +264,7 @@ impl PermissionShareService {
             ))?
             .try_into()?;
 
-        self.authorize_view(&share, auth)?;
+        self.authorize_view(&share, auth).await?;
 
         Ok(share)
     }
@@ -272,9 +275,10 @@ impl PermissionShareService {
         name: &str,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
+        let owner_account = self.get_account(owner_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            owner_account_id,
+            &owner_account.email,
             AccountPermissionShareVerb::View,
             AccountPermissionShareResourcePattern::Name(PermissionShareName(name.to_string())),
         )?;
@@ -294,9 +298,10 @@ impl PermissionShareService {
         owner_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
+        let owner_account = self.get_account(owner_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            owner_account_id,
+            &owner_account.email,
             AccountPermissionShareVerb::View,
             AccountPermissionShareResourcePattern::Any,
         )?;
@@ -314,9 +319,10 @@ impl PermissionShareService {
         target_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
+        let target_account = self.get_account(target_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            target_account_id,
+            &target_account.email,
             AccountPermissionShareVerb::View,
             AccountPermissionShareResourcePattern::Any,
         )?;
@@ -410,21 +416,23 @@ impl PermissionShareService {
         })
     }
 
-    fn authorize_view(
+    async fn authorize_view(
         &self,
         share: &PermissionShare,
         auth: &AuthCtx,
     ) -> Result<(), PermissionShareError> {
+        let owner_account = self.get_account(share.owner_account_id).await?;
+        let target_account = self.get_account(share.target_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            share.owner_account_id,
+            &owner_account.email,
             AccountPermissionShareVerb::View,
             AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )
         .or_else(|_| {
             authorize_permission_share_permission(
                 auth,
-                share.target_account_id,
+                &target_account.email,
                 AccountPermissionShareVerb::View,
                 AccountPermissionShareResourcePattern::Name(share.name.clone()),
             )
@@ -436,7 +444,7 @@ impl PermissionShareService {
 
 fn authorize_permission_share_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountPermissionShareVerb,
     resource: AccountPermissionShareResourcePattern,
 ) -> Result<(), AuthorizationError> {
@@ -444,7 +452,7 @@ fn authorize_permission_share_permission(
         ClassPermissionTarget {
             verb: Some(verb),
             owner: AccountOwnerPattern::Account {
-                account: account_id.to_string(),
+                account: account_email.clone(),
             },
             resource,
         },

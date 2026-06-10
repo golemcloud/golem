@@ -749,6 +749,7 @@ mod tests {
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId(Uuid::new_v4()),
+            owner_account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             current_deployment: None,
         }
     }
@@ -829,6 +830,7 @@ mod tests {
             component_revision: ComponentRevision::INITIAL,
             component_name: "test-component".to_string(),
             account_id: AccountId(Uuid::new_v4()),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         };
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();
@@ -1112,6 +1114,7 @@ mod tests {
             component_revision: ComponentRevision::INITIAL,
             component_name: "test-component".to_string(),
             account_id: AccountId(Uuid::new_v4()),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         };
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();

@@ -19,7 +19,7 @@ use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use chrono::{DateTime, Utc};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
@@ -95,9 +95,15 @@ impl TokenService {
             .ok_or(TokenError::TokenNotFound(token_id))?
             .into();
 
+        let account = self
+            .account_service
+            .get(token.account_id, &AuthCtx::System)
+            .await
+            .map_err(|_| TokenError::TokenNotFound(token_id))?;
+
         authorize_account_token_permission(
             auth,
-            token.account_id,
+            &account.email,
             AccountTokenVerb::View,
             AccountTokenResourcePattern::Token(token_id),
         )
@@ -118,9 +124,15 @@ impl TokenService {
             .ok_or(TokenError::TokenBySecretNotFound)?
             .into();
 
+        let account = self
+            .account_service
+            .get(token.account_id, &AuthCtx::System)
+            .await
+            .map_err(|_| TokenError::TokenBySecretNotFound)?;
+
         authorize_account_token_permission(
             auth,
-            token.account_id,
+            &account.email,
             AccountTokenVerb::View,
             AccountTokenResourcePattern::Token(token.id),
         )
@@ -148,7 +160,8 @@ impl TokenService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<TokenWithSecret>, TokenError> {
-        self.account_service
+        let account = self
+            .account_service
             .get(account_id, &AuthCtx::System)
             .await
             .map_err(|err| match err {
@@ -160,7 +173,7 @@ impl TokenService {
 
         authorize_account_token_permission(
             auth,
-            account_id,
+            &account.email,
             AccountTokenVerb::View,
             AccountTokenResourcePattern::Any,
         )?;
@@ -182,7 +195,8 @@ impl TokenService {
         expires_at: DateTime<Utc>,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        self.account_service
+        let account = self
+            .account_service
             .get(account_id, &AuthCtx::System)
             .await
             .map_err(|err| match err {
@@ -194,7 +208,7 @@ impl TokenService {
 
         authorize_account_token_permission(
             auth,
-            account_id,
+            &account.email,
             AccountTokenVerb::Create,
             AccountTokenResourcePattern::Any,
         )?;
@@ -295,9 +309,15 @@ impl TokenService {
             .ok_or(TokenError::TokenNotFound(token_id))?
             .into();
 
+        let account = self
+            .account_service
+            .get(token.account_id, &AuthCtx::System)
+            .await
+            .map_err(|_| TokenError::TokenNotFound(token_id))?;
+
         authorize_account_token_permission(
             auth,
-            token.account_id,
+            &account.email,
             AccountTokenVerb::Delete,
             AccountTokenResourcePattern::Token(token_id),
         )?;
@@ -312,11 +332,15 @@ impl TokenService {
 
 fn authorize_account_token_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountTokenVerb,
     resource: AccountTokenResourcePattern,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&account_token_permission_target(account_id, verb, resource))
+    auth.authorize_permission(&account_token_permission_target(
+        account_email,
+        verb,
+        resource,
+    ))
 }
 
 fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
@@ -328,14 +352,14 @@ fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), A
 }
 
 fn account_token_permission_target(
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountTokenVerb,
     resource: AccountTokenResourcePattern,
 ) -> PermissionTarget {
     PermissionTarget::AccountToken(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email.clone(),
         },
         resource,
     })

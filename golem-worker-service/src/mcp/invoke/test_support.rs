@@ -24,7 +24,7 @@ use futures::Stream;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentType, AgentTypeName};
 use golem_common::model::agent::{NamedElementSchemas, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -460,6 +460,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: EnvironmentId,
         _: AccountId,
+        _: AccountEmail,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -526,6 +527,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) component_id: ComponentId,
     pub(crate) environment_id: EnvironmentId,
     pub(crate) account_id: AccountId,
+    pub(crate) account_email: AccountEmail,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params:
         Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
@@ -536,6 +538,7 @@ impl InvocationHarness {
         let component_id = ComponentId(Uuid::new_v4());
         let environment_id = EnvironmentId(Uuid::new_v4());
         let account_id = AccountId(Uuid::new_v4());
+        let account_email = golem_common::model::account::AccountEmail::new("mcp@golem");
         let component = Component {
             id: component_id,
             revision: ComponentRevision::INITIAL,
@@ -544,6 +547,7 @@ impl InvocationHarness {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id,
+            account_email: account_email.clone(),
             application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
             environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 0,
@@ -601,6 +605,7 @@ impl InvocationHarness {
             component_id,
             environment_id,
             account_id,
+            account_email,
             agent_ids,
             method_params,
         }

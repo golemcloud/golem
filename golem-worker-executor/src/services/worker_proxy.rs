@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -59,6 +59,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
     ) -> Result<AgentFingerprint, WorkerProxyError>;
@@ -75,6 +76,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
         principal: Principal,
         environment_id: EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
@@ -86,6 +88,7 @@ pub trait WorkerProxy: Send + Sync {
         mode: UpdateMode,
         disable_wakeup: bool,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError>;
 
     async fn resume(
@@ -93,6 +96,7 @@ pub trait WorkerProxy: Send + Sync {
         owned_agent_id: &AgentId,
         force: bool,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError>;
 
     async fn fork_worker(
@@ -101,6 +105,7 @@ pub trait WorkerProxy: Send + Sync {
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError>;
 
     async fn revert(
@@ -108,6 +113,7 @@ pub trait WorkerProxy: Send + Sync {
         agent_id: &AgentId,
         target: RevertWorkerTarget,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError>;
 
     async fn complete_promise(
@@ -115,6 +121,7 @@ pub trait WorkerProxy: Send + Sync {
         promise_id: PromiseId,
         data: Vec<u8>,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<bool, WorkerProxyError>;
 
     async fn lookup_invocation_status(
@@ -122,6 +129,7 @@ pub trait WorkerProxy: Send + Sync {
         agent_id: &AgentId,
         idempotency_key: IdempotencyKey,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
         environment_id: Option<EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError>;
 
@@ -130,6 +138,7 @@ pub trait WorkerProxy: Send + Sync {
         agent_id: &AgentId,
         idempotency_key: IdempotencyKey,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<bool, WorkerProxyError>;
 
     async fn process_oplog_entries(
@@ -143,6 +152,7 @@ pub trait WorkerProxy: Send + Sync {
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError>;
 }
 
@@ -257,8 +267,8 @@ impl RemoteWorkerProxy {
         }
     }
 
-    fn get_auth_ctx(&self, account_id: AccountId) -> AuthCtx {
-        AuthCtx::agent(account_id)
+    fn get_auth_ctx(&self, account_id: AccountId, account_email: &AccountEmail) -> AuthCtx {
+        AuthCtx::agent(account_id, account_email.clone())
     }
 }
 
@@ -271,12 +281,13 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response: LaunchNewWorkerResponse = self
             .worker_service_client
@@ -331,12 +342,13 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
         principal: Principal,
         environment_id: EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         debug!("Invoking remote agent method {method_name} on worker {agent_id}");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let proto_mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode = mode.into();
         let proto_mode = proto_mode as i32;
@@ -436,10 +448,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         mode: UpdateMode,
         disable_wakeup: bool,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response: UpdateWorkerResponse = self
             .worker_service_client
@@ -469,10 +482,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         agent_id: &AgentId,
         force: bool,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         debug!("Resuming remote worker");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response: ResumeWorkerResponse = self
             .worker_service_client
@@ -501,10 +515,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response = self
             .worker_service_client
@@ -535,8 +550,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         agent_id: &AgentId,
         target: RevertWorkerTarget,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError> {
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response: RevertWorkerResponse = self
             .worker_service_client
@@ -564,8 +580,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         promise_id: PromiseId,
         data: Vec<u8>,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<bool, WorkerProxyError> {
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response: CompletePromiseResponse = self
             .worker_service_client
@@ -596,9 +613,10 @@ impl WorkerProxy for RemoteWorkerProxy {
         agent_id: &AgentId,
         idempotency_key: IdempotencyKey,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
         environment_id: Option<EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError> {
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
         let proto_mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode =
             AgentInvocationMode::Lookup.into();
         let proto_mode = proto_mode as i32;
@@ -643,10 +661,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         agent_id: &AgentId,
         idempotency_key: IdempotencyKey,
         caller_account_id: AccountId,
+        caller_account_email: &AccountEmail,
     ) -> Result<bool, WorkerProxyError> {
         debug!(agent_id=%agent_id, idempotency_key=%idempotency_key, "Cancelling invocation on remote agent");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let auth_ctx = self.get_auth_ctx(caller_account_id, caller_account_email);
 
         let response: CancelInvocationResponse = self
             .worker_service_client
@@ -680,10 +699,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        account_email: &AccountEmail,
     ) -> Result<(), WorkerProxyError> {
         debug!(target_agent_id=%target_agent_id, "Processing oplog entries on remote agent");
 
-        let auth_ctx = self.get_auth_ctx(account_id);
+        let auth_ctx = self.get_auth_ctx(account_id, account_email);
 
         let response: ProcessOplogEntriesResponse = self
             .worker_service_client

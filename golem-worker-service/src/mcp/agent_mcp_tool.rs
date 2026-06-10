@@ -15,7 +15,7 @@
 use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::base_model::account::AccountId;
+use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
@@ -36,6 +36,7 @@ pub struct AgentMcpTool {
     /// bodies resolve against, both while rendering and while converting to
     /// the still-legacy invoke types.
     pub schema_graph: Arc<SchemaGraph>,
+    pub account_email: AccountEmail,
     pub constructor: AgentConstructorSchema,
     pub method: AgentMethodSchema,
     pub component_id: ComponentId,
