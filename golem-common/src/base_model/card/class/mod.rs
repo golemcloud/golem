@@ -37,7 +37,6 @@ mod environment_plugin_grant;
 mod environment_resource_definition;
 mod environment_retry_policy;
 mod environment_security_scheme;
-mod environment_share;
 mod filesystem;
 mod kv;
 mod network;
@@ -79,7 +78,6 @@ pub use environment_plugin_grant::*;
 pub use environment_resource_definition::*;
 pub use environment_retry_policy::*;
 pub use environment_security_scheme::*;
-pub use environment_share::*;
 pub use filesystem::*;
 pub use kv::*;
 pub use network::*;
@@ -113,7 +111,6 @@ macro_rules! card_permission_classes {
             AccountPlugin: AccountPluginClass,
             Application: ApplicationClass,
             Environment: EnvironmentClass,
-            EnvironmentShare: EnvironmentShareClass,
             EnvironmentPluginGrant: EnvironmentPluginGrantClass,
             EnvironmentDomainRegistration: EnvironmentDomainRegistrationClass,
             EnvironmentSecurityScheme: EnvironmentSecuritySchemeClass,

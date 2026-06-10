@@ -116,7 +116,6 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-registry-service/` - Component registry
 - `golem-common/` - Shared types and utilities
 - `golem-wasm/` - WASM utilities
-- `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
 - `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala, MoonBit) - **not part of main build flow, see SDK-specific AGENTS.md**
 - `docs/` - User-facing documentation site at [learn.golem.cloud](https://learn.golem.cloud) (Next.js / Nextra / Bun) - **not part of main build flow, see `docs/AGENTS.md`**

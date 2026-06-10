@@ -52,11 +52,12 @@ pub use analysed_type::{
     schema_graph_to_analysed_type, schema_type_to_analysed_type,
 };
 pub use data_schema::{
-    data_schema_to_input_schema, data_schema_to_output_schema, input_schema_to_data_schema,
-    output_schema_to_data_schema,
+    FALLBACK_OUTPUT_FIELD_NAME, MULTIMODAL_PARTS_FIELD_NAME, data_schema_to_input_schema,
+    data_schema_to_output_schema, input_schema_to_data_schema, is_multimodal_schema_type,
+    multimodal_variant_cases, output_schema_to_data_schema,
 };
 pub use element_schema::{element_schema_to_schema_type, schema_type_to_element_schema};
-pub use error::{SchemaAdapterError, legacy_type_id};
+pub use error::{SchemaAdapterError, legacy_type_id, resolve_ref};
 pub use untyped::{
     typed_input_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
     untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,

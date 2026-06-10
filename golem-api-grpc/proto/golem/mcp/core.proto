@@ -14,5 +14,5 @@ message CompiledMcp {
   string domain = 4;
   map<string, golem.registry.RegisteredAgentTypeImplementer> agent_type_implementers = 5;
   golem.customapi.SecuritySchemeDetails security_scheme = 6;
-  repeated golem.registry.RegisteredAgentType registered_agent_types = 7;
+  repeated golem.registry.RegisteredAgentTypeSchema registered_agent_types = 7;
 }

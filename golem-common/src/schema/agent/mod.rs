@@ -33,7 +33,7 @@
 
 use crate::base_model::agent::{
     AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
-    ReadOnlyConfig, Snapshotting,
+    ReadOnlyConfig, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
@@ -70,7 +70,7 @@ impl InputSchema {
 /// Output schema of an agent method.
 ///
 /// Multimodal outputs are expressed as
-/// `Single(list<union<…>> with role = Multimodal)`, not as a separate enum
+/// `Single(list<variant<…>> with role = Multimodal)`, not as a separate enum
 /// case.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
@@ -284,6 +284,15 @@ pub struct AgentTypeSchema {
     pub snapshotting: Snapshotting,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<AgentConfigDeclaration>,
+}
+
+/// Schema-model form of a registered agent type. Mirrors the legacy
+/// `RegisteredAgentType`, with `agent_type` replaced by [`AgentTypeSchema`].
+/// Used by the MCP export path (`CompiledMcp`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegisteredAgentTypeSchema {
+    pub agent_type: AgentTypeSchema,
+    pub implemented_by: RegisteredAgentTypeImplementer,
 }
 
 impl AgentDependencySchema {

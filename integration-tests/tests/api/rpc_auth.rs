@@ -118,7 +118,7 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
         .create_permission_share(
             &owner.account_id.0,
             &PermissionShareCreation {
-                target_account_id: caller.account_id,
+                target_account_email: caller.account_email.clone(),
                 name: PermissionShareName("rpc-auth-access".to_string()),
                 data: PermissionShareData {
                     lower_positive: vec![

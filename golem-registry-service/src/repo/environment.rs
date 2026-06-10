@@ -34,7 +34,6 @@ use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
 use indoc::{formatdoc, indoc};
 use sqlx::{Database, Row};
 use std::fmt::Debug;
-use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -258,7 +257,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         name: &str,
-        actor: Uuid,
+        _actor: Uuid,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("get_by_name")
@@ -271,7 +270,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.compatibility_check, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
-                        COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -285,14 +283,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
-
-                    LEFT JOIN environment_shares es
-                        ON es.environment_id = e.environment_id
-                        AND es.grantee_account_id = $3
-                        AND es.deleted_at IS NULL
-                    LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_share_id
-                        AND esr.revision_id = es.current_revision_id
 
                     LEFT JOIN current_deployments cd
                         ON cd.environment_id = e.environment_id
@@ -311,8 +301,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND e.deleted_at IS NULL
                 "# })
                 .bind(application_id)
-                .bind(name)
-                .bind(actor),
+                .bind(name),
             )
             .await?;
 
@@ -322,7 +311,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        actor: Uuid,
+        _actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -336,7 +325,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.compatibility_check, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
-                        COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -351,16 +339,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
 
-                    LEFT JOIN environment_shares es
-                        ON es.environment_id = e.environment_id
-                        AND es.grantee_account_id = $2
-                        -- only join shares if the environment itself is not deleted
-                        AND e.deleted_at IS NULL
-                        AND es.deleted_at IS NULL
-                    LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_share_id
-                        AND esr.revision_id = es.current_revision_id
-
                     LEFT JOIN current_deployments cd
                         ON cd.environment_id = e.environment_id
                     LEFT JOIN current_deployment_revisions cdr
@@ -374,10 +352,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.environment_id = $1
                         AND a.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
-                        AND ($3 OR e.deleted_at IS NULL)
+                        AND ($2 OR e.deleted_at IS NULL)
                 "# })
                 .bind(environment_id)
-                .bind(actor)
                 .bind(include_deleted),
             )
             .await?;
@@ -388,7 +365,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        actor: Uuid,
+        _actor: Uuid,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_by_owner")
@@ -401,7 +378,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.compatibility_check, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
-                        COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -419,14 +395,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
 
-                    LEFT JOIN environment_shares es
-                        ON es.environment_id = e.environment_id
-                        AND es.grantee_account_id = $2
-                        AND es.deleted_at IS NULL
-                    LEFT JOIN environment_share_revisions esr
-                        ON esr.environment_share_id = es.environment_share_id
-                        AND esr.revision_id = es.current_revision_id
-
                     LEFT JOIN current_deployments cd
                         ON cd.environment_id = e.environment_id
                     LEFT JOIN current_deployment_revisions cdr
@@ -441,8 +409,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND a.deleted_at IS NULL
                     ORDER BY e.name
                 "#})
-                .bind(application_id)
-                .bind(actor),
+                .bind(application_id),
             )
             .await?;
 
@@ -481,8 +448,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                        JOIN accounts a ON a.account_id = ap.account_id
                        WHERE ap.application_id = environments.application_id) AS owner_account_id,
 
-                      -- Hard-coded defaults
-                      0 AS environment_roles_from_shares,
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
                       NULL AS current_deployment_deployment_version,
@@ -504,7 +469,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 revision,
 
                 owner_account_id: environment_record.owner_account_id,
-                environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
@@ -546,8 +510,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                        JOIN accounts a ON a.account_id = ap.account_id
                        WHERE ap.application_id = environments.application_id) AS owner_account_id,
 
-                      -- Hard-coded defaults
-                      0 AS environment_roles_from_shares,
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
                       NULL AS current_deployment_deployment_version,
@@ -587,7 +549,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 revision,
 
                 owner_account_id: environment_record.owner_account_id,
-                environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
@@ -642,18 +603,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                              FROM applications ap
                              JOIN accounts a ON a.account_id = ap.account_id
                              WHERE ap.application_id = environments.application_id) AS owner_account_id,
-
-                            -- Environment roles from shares
-                            COALESCE((
-                              SELECT esr.roles
-                              FROM environment_shares es
-                              JOIN environment_share_revisions esr
-                                ON esr.environment_share_id = es.environment_share_id
-                               AND esr.revision_id = es.current_revision_id
-                              WHERE es.environment_id = environments.environment_id
-                                AND es.grantee_account_id = $3
-                                AND es.deleted_at IS NULL
-                            ), 0) AS environment_roles_from_shares,
 
                             -- Current deployment info
                             (
@@ -711,7 +660,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     revision,
 
                     owner_account_id: environment_record.owner_account_id,
-                    environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record
@@ -764,18 +712,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                              FROM applications ap
                              JOIN accounts a ON a.account_id = ap.account_id
                              WHERE ap.application_id = environments.application_id) AS owner_account_id,
-
-                            -- Environment roles from shares
-                            COALESCE((
-                              SELECT esr.roles
-                              FROM environment_shares es
-                              JOIN environment_share_revisions esr
-                                ON esr.environment_share_id = es.environment_share_id
-                               AND esr.revision_id = es.current_revision_id
-                              WHERE es.environment_id = environments.environment_id
-                                AND es.grantee_account_id = $3
-                                AND es.deleted_at IS NULL
-                            ), 0) AS environment_roles_from_shares,
 
                             -- Current deployment info
                             (
@@ -857,7 +793,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     revision,
 
                     owner_account_id: environment_record.owner_account_id,
-                    environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record
@@ -876,12 +811,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn list_visible_to_account(
         &self,
-        account_id: Uuid,
+        _account_id: Uuid,
         account_email: Option<&str>,
         app_name: Option<&str>,
         env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
-        let mut binding_stack = BindingsStack::new(2);
+        let mut binding_stack = BindingsStack::new(1);
 
         let account_email_filter = if let Some(account_email) = account_email {
             let i = binding_stack.push(account_email);
@@ -913,8 +848,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 r.compatibility_check AS environment_compatibility_check,
                 r.version_check AS environment_version_check,
                 r.security_overrides AS environment_security_overrides,
-
-                COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
                 -- Current deployment (optional)
                 cdr.revision_id AS current_deployment_revision,
@@ -948,16 +881,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 ON r.environment_id = e.environment_id
                 AND r.revision_id = e.current_revision_id
 
-            -- Environment shares
-            LEFT JOIN environment_shares es
-                ON es.environment_id = e.environment_id
-                AND es.grantee_account_id = $1
-                AND es.deleted_at IS NULL
-
-            LEFT JOIN environment_share_revisions esr
-                ON esr.environment_share_id = es.environment_share_id
-                AND esr.revision_id = es.current_revision_id
-
             -- Current deployment
             LEFT JOIN current_deployments cd
                 ON cd.environment_id = e.environment_id
@@ -976,12 +899,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             ORDER BY a.email, ap.name, e.name
         "#};
 
-        let query_as = {
-            let binding_stack = binding_stack;
-            sqlx::query_as(&query)
-                .bind(account_id)
-                .pipe(|q| binding_stack.apply(q))
-        };
+        let query_as = binding_stack.apply(sqlx::query_as(&query));
 
         let result = self
             .with_ro("list_visible_to_account")

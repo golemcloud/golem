@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Proptest strategies covering every case of [`super::SchemaType`] and
-//! [`super::SchemaValue`], plus helpers for assembling [`super::SchemaGraph`]
-//! and [`super::TypedSchemaValue`] instances.
+//! Proptest strategies covering every case of
+//! [`SchemaType`](crate::schema::schema_type::SchemaType) and
+//! [`SchemaValue`](crate::schema::schema_value::SchemaValue), plus helpers for
+//! assembling [`SchemaGraph`](crate::schema::graph::SchemaGraph) and
+//! [`TypedSchemaValue`](crate::schema::graph::TypedSchemaValue) instances.
 //!
 //! The strategies are deliberately structural — they do not try to keep a
 //! generated value compatible with a generated type, because the round-trip

@@ -593,6 +593,46 @@ pub const ACCOUNT_DELETE: &str = "Examples:
   # Delete a specific account by ID
   golem-cli account delete --account-id acc-12345";
 
+pub const ACCOUNT_PERMISSION_SHARE_LIST: &str = "Examples:
+  # List permission shares owned by the current account
+  golem-cli account permission-share list
+
+  # List permission shares received by the current account
+  golem-cli account permission-share list --received";
+
+pub const ACCOUNT_PERMISSION_SHARE_GET: &str = "Examples:
+  # Get a permission share by ID
+  golem-cli account permission-share get 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+
+pub const ACCOUNT_PERMISSION_SHARE_GET_BY_NAME: &str = "Examples:
+  # Get a permission share by name from the current account
+  golem-cli account permission-share get-by-name staging-access";
+
+pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
+  # Share permissions with another account
+  golem-cli account permission-share new target@example.com staging-access \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
+    --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
+
+  # Add a lower negative grant by repeating the flag
+  golem-cli account permission-share new target@example.com staging-access \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
+    --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'";
+
+pub const ACCOUNT_PERMISSION_SHARE_UPDATE: &str = "Examples:
+  # Replace lower permission grants on an existing share
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'
+
+  # Rename while replacing grants
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
+    --name staging-access-v2 \
+    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'";
+
+pub const ACCOUNT_PERMISSION_SHARE_DELETE: &str = "Examples:
+  # Delete a permission share by ID
+  golem-cli account permission-share delete 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+
 // API token commands -------------------------------------------------------------------------------
 
 pub const API_TOKEN_LIST: &str = "Examples:

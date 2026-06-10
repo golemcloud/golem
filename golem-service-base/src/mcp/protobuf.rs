@@ -1,8 +1,7 @@
 use crate::mcp::{AgentTypeImplementers, CompiledMcp};
 use golem_common::base_model::domain_registration::Domain;
-use golem_common::model::agent::{
-    AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
-};
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentTypeImplementer};
+use golem_common::schema::RegisteredAgentTypeSchema;
 
 impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
     fn from(value: CompiledMcp) -> Self {
@@ -50,7 +49,7 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
             })
             .collect::<Result<_, String>>()?;
 
-        let registered_agent_types: Vec<RegisteredAgentType> = value
+        let registered_agent_types: Vec<RegisteredAgentTypeSchema> = value
             .registered_agent_types
             .into_iter()
             .map(|rat| rat.try_into())

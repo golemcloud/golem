@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
-
 #[cfg(feature = "full")]
 mod binary_codec_tests;
+#[cfg(feature = "full")]
+mod protobuf_tests;
 #[cfg(feature = "full")]
 mod wit_tests;

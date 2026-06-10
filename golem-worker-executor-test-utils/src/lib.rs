@@ -594,7 +594,6 @@ impl TestWorkerExecutor {
                 *environment_id,
                 self.context.application_id,
                 self.context.account_id,
-                HashSet::new(),
             )
             .await
     }

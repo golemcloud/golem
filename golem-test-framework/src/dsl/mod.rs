@@ -31,7 +31,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     CanonicalFilePath, ComponentDto, ComponentId, ComponentRevision, PluginInstallation,
@@ -42,14 +41,13 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -744,27 +742,6 @@ pub trait TestDslExtended: TestDsl {
         &self,
         environment_options: &EnvironmentOptions,
     ) -> anyhow::Result<(Application, Environment)>;
-
-    async fn share_environment(
-        &self,
-        environment_id: &EnvironmentId,
-        grantee_account_id: &AccountId,
-        roles: &[EnvironmentRole],
-    ) -> anyhow::Result<EnvironmentShare> {
-        let client = self.registry_service_client().await;
-
-        let environment_share = client
-            .create_environment_share(
-                &environment_id.0,
-                &EnvironmentShareCreation {
-                    grantee_account_id: *grantee_account_id,
-                    roles: BTreeSet::from_iter(roles.iter().copied()),
-                },
-            )
-            .await?;
-
-        Ok(environment_share)
-    }
 
     async fn register_domain(&self, environment_id: &EnvironmentId) -> anyhow::Result<Domain> {
         let client = self.registry_service_client().await;

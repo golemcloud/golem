@@ -549,10 +549,49 @@ fn data_schema_tuple_input_round_trip() {
 }
 
 #[test]
-fn data_schema_multimodal_to_input_is_error() {
-    let ds = DataSchema::Multimodal(NamedElementSchemas { elements: vec![] });
-    let err = data_schema_to_input_schema(&ds).unwrap_err();
-    assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+fn data_schema_multimodal_input_round_trip() {
+    // Multimodal input is supported generically: it maps to a single
+    // user-supplied `parts` field of type `list<variant<… Role::Multimodal>>`
+    // and round-trips back to the original multimodal `DataSchema`.
+    let ds = DataSchema::Multimodal(NamedElementSchemas {
+        elements: vec![
+            NamedElementSchema {
+                name: "text".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            },
+            NamedElementSchema {
+                name: "binary".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            },
+        ],
+    });
+    let input = data_schema_to_input_schema(&ds).unwrap();
+    let InputSchema::Parameters(fields) = &input;
+    assert_eq!(
+        fields.len(),
+        1,
+        "multimodal input is a single `parts` field"
+    );
+    assert_eq!(fields[0].name, "parts");
+    assert!(matches!(fields[0].source, FieldSource::UserSupplied));
+    match &fields[0].schema {
+        SchemaType::List { element, .. } => match element.as_ref() {
+            SchemaType::Variant { cases, metadata } => {
+                assert_eq!(metadata.role, Some(Role::Multimodal));
+                let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                assert_eq!(names, vec!["text", "binary"]);
+                assert!(
+                    cases.iter().all(|c| c.payload.is_some()),
+                    "every multimodal variant case carries an element payload"
+                );
+            }
+            other => panic!("expected list element to be Variant, got {other:?}"),
+        },
+        other => panic!("expected `parts` to be a List, got {other:?}"),
+    }
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let back = input_schema_to_data_schema(&graph, &input).unwrap();
+    assert_eq!(ds, back);
 }
 
 #[test]
@@ -669,14 +708,16 @@ fn data_schema_multimodal_output_round_trip() {
         ],
     });
     let output = data_schema_to_output_schema(&ds).unwrap();
-    // Forward should produce `Single(list<union<...> with Role::Multimodal>)`.
+    // Forward should produce `Single(list<variant<...> with Role::Multimodal>)`.
     match &output {
         OutputSchema::Single(boxed) => match boxed.as_ref() {
             SchemaType::List { element, .. } => match element.as_ref() {
-                SchemaType::Union { metadata, .. } => {
+                SchemaType::Variant { cases, metadata } => {
                     assert_eq!(metadata.role, Some(Role::Multimodal));
+                    let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                    assert_eq!(names, vec!["text", "binary"]);
                 }
-                other => panic!("expected list element to be Union, got {other:?}"),
+                other => panic!("expected list element to be Variant, got {other:?}"),
             },
             other => panic!("expected Single(List(...)), got {other:?}"),
         },
@@ -1224,13 +1265,54 @@ mod untyped_round_trip {
     }
 
     #[test]
-    fn input_multimodal_data_schema_rejected() {
-        let err = untyped_data_value_to_typed_input(
-            UntypedDataValue::Tuple(vec![]),
-            &DataSchema::Multimodal(NamedElementSchemas { elements: vec![] }),
-        )
-        .unwrap_err();
-        assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+    fn input_multimodal_round_trip() {
+        // Multimodal input is supported: a multimodal schema + value lowers
+        // to a single `parts` parameter carrying a `list<union<…>>` value and
+        // round-trips back to the original multimodal `UntypedDataValue`.
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "summary".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+                NamedElementSchema {
+                    name: "image".into(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+        let value = UntypedDataValue::Multimodal(vec![
+            UntypedNamedElementValue {
+                name: "summary".into(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "ok".into(),
+                        text_type: None,
+                    }),
+                }),
+            },
+            UntypedNamedElementValue {
+                name: "image".into(),
+                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: vec![1, 2, 3],
+                        binary_type: BinaryType {
+                            mime_type: "image/png".into(),
+                        },
+                    }),
+                }),
+            },
+        ]);
+        let (input_schema, values) =
+            untyped_data_value_to_typed_input(value.clone(), &schema).unwrap();
+        let InputSchema::Parameters(fields) = &input_schema;
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "parts");
+        assert_eq!(values.len(), 1);
+        let back = typed_input_to_untyped_data_value(&input_schema, &values).unwrap();
+        assert_eq!(value, back);
     }
 
     #[test]

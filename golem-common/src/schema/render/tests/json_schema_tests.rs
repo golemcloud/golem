@@ -16,7 +16,7 @@ use crate::schema::graph::SchemaGraph;
 use crate::schema::render::json_schema::to_json_schema;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
-    UnionBranch, UnionSpec,
+    UnionBranch, UnionSpec, VariantCaseType,
 };
 use serde_json::{Value, json};
 use test_r::test;
@@ -555,95 +555,71 @@ fn unions_with_structurally_identical_branches_dedupe() {
 }
 
 #[test]
-fn multimodal_union_does_not_emit_discriminator_or_constraints() {
-    // Multimodal unions carry placeholder per-branch discriminator rules
-    // (`FieldAbsent { field_name: "" }`); the renderer must NOT lift those
-    // into the branch schemas as constraints and must NOT emit an
-    // OpenAPI-style `discriminator` block on the parent union schema.
-    let mut union = SchemaType::union(UnionSpec {
-        branches: vec![
-            UnionBranch {
-                tag: "caption".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-            UnionBranch {
-                tag: "image_url".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-        ],
-    });
-    union.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
-    let graph = SchemaGraph::anonymous(union.clone());
-    let schema = to_json_schema(&graph, &union);
-    // Parent: no `discriminator` block.
+fn multimodal_variant_canonical_renders_inline_tagged_oneof() {
+    // Multimodal is modelled as a tagged `variant` with `Role::Multimodal`.
+    // Under the canonical config it renders like any other variant: an
+    // inline `oneOf` of `{ <case>: <payload> }` objects, with no `$defs`
+    // indirection and no OpenAPI `discriminator` block.
+    let mut variant = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "caption".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "image_url".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+    ]);
+    variant.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
+    let graph = SchemaGraph::anonymous(variant.clone());
+    let schema = to_json_schema(&graph, &variant);
+
     assert!(
         schema.get("discriminator").is_none(),
-        "multimodal union must not emit a `discriminator` block: {schema}"
+        "multimodal variant must not emit a `discriminator` block: {schema}"
     );
-    // The parent `oneOf` must still resolve via `$ref` into branch defs.
     let one_of = schema["oneOf"]
         .as_array()
-        .expect("multimodal union renders as `oneOf`");
+        .expect("multimodal variant renders as `oneOf`");
     assert_eq!(one_of.len(), 2);
-    let defs = schema["$defs"].as_object().expect("$defs object");
-    // The branch defs must NOT carry a record-shaped `properties`/`required`
-    // / `not` clause synthesised from the placeholder discriminator: they
-    // are just `{ "type": "string" }` (no extra constraints).
-    for branch_ref in one_of {
-        let ptr = branch_ref["$ref"].as_str().expect("oneOf entry is a $ref");
-        let key = ptr.strip_prefix("#/$defs/").expect("ref points into $defs");
-        let def = defs[key].as_object().expect("def is an object");
-        assert_eq!(def["type"], json!("string"));
+    // Each entry is the inline tagged-object shape; no `$ref`.
+    for (entry, name) in one_of.iter().zip(["caption", "image_url"]) {
         assert!(
-            def.get("properties").is_none(),
-            "multimodal branch def must not synthesise object constraints from placeholder discriminator: {def:?}"
+            entry.get("$ref").is_none(),
+            "canonical multimodal variant entries are inline, not $ref: {entry}"
         );
-        assert!(
-            def.get("required").is_none(),
-            "multimodal branch def must not synthesise `required`: {def:?}"
-        );
-        assert!(
-            def.get("not").is_none(),
-            "multimodal branch def must not synthesise `not`: {def:?}"
-        );
+        assert_eq!(entry["required"], json!([name]));
+        assert_eq!(entry["properties"][name]["type"], json!("string"));
     }
 }
 
 #[test]
-fn multimodal_branch_does_not_collide_with_normal_branch_in_defs() {
-    // The same `UnionBranch` value renders differently when the parent
-    // union is multimodal (no discriminator constraint) vs. normal (with
-    // discriminator constraint). The synthesised `$defs` key must therefore
-    // distinguish the two render modes, otherwise whichever union is
-    // emitted last would silently overwrite the other.
-    let shared_branch = UnionBranch {
-        tag: "left".to_string(),
-        body: SchemaType::record(vec![NamedFieldType {
-            name: "kind".to_string(),
-            body: SchemaType::string(),
-            metadata: Default::default(),
-        }]),
-        discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
-            field_name: "kind".to_string(),
-            literal: Some("L".to_string()),
-        }),
+fn multimodal_variant_does_not_pollute_union_defs() {
+    // A multimodal variant renders inline, so it must not contribute any
+    // `$defs` entries; a sibling normal union still gets its branch defs.
+    let mut multimodal_variant = SchemaType::variant(vec![VariantCaseType {
+        name: "caption".to_string(),
+        payload: Some(SchemaType::string()),
         metadata: Default::default(),
-    };
+    }]);
+    multimodal_variant.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
     let normal_union = SchemaType::union(UnionSpec {
-        branches: vec![shared_branch.clone()],
+        branches: vec![UnionBranch {
+            tag: "left".to_string(),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "kind".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            }]),
+            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                field_name: "kind".to_string(),
+                literal: Some("L".to_string()),
+            }),
+            metadata: Default::default(),
+        }],
     });
-    let mut multimodal_union = SchemaType::union(UnionSpec {
-        branches: vec![shared_branch.clone()],
-    });
-    multimodal_union.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
     let root = SchemaType::record(vec![
         NamedFieldType {
             name: "normal".to_string(),
@@ -652,43 +628,32 @@ fn multimodal_branch_does_not_collide_with_normal_branch_in_defs() {
         },
         NamedFieldType {
             name: "multimodal".to_string(),
-            body: multimodal_union,
+            body: SchemaType::list(multimodal_variant),
             metadata: Default::default(),
         },
     ]);
     let graph = SchemaGraph::anonymous(root.clone());
     let schema = to_json_schema(&graph, &root);
-    let defs = schema["$defs"].as_object().expect("$defs object");
 
+    // The normal union still resolves through `$defs` via `$ref`.
     let normal_ref = schema["properties"]["normal"]["oneOf"][0]["$ref"]
         .as_str()
-        .expect("normal ref");
-    let multimodal_ref = schema["properties"]["multimodal"]["oneOf"][0]["$ref"]
-        .as_str()
-        .expect("multimodal ref");
-    assert_ne!(
-        normal_ref, multimodal_ref,
-        "shared branch must produce distinct $defs keys in normal vs. multimodal mode"
-    );
+        .expect("normal union renders via $ref");
     let normal_key = normal_ref.strip_prefix("#/$defs/").unwrap();
-    let multimodal_key = multimodal_ref.strip_prefix("#/$defs/").unwrap();
-
-    // Normal union: branch def carries the discriminator constraint
-    // (`const` on the field).
+    let defs = schema["$defs"].as_object().expect("$defs object");
     assert_eq!(
         defs[normal_key]["properties"]["kind"]["const"],
         json!("L"),
         "normal branch def must carry the discriminator constraint"
     );
-    // Multimodal union: branch def does NOT carry a `const` constraint
-    // on the discriminator field.
-    let multimodal_def = defs[multimodal_key].as_object().expect("def is object");
-    let multimodal_kind = multimodal_def["properties"]["kind"]
-        .as_object()
-        .expect("kind is object");
+    // The multimodal variant list renders inline (array of inline `oneOf`).
+    let item = &schema["properties"]["multimodal"]["items"];
+    let one_of = item["oneOf"]
+        .as_array()
+        .expect("multimodal items are `oneOf`");
     assert!(
-        multimodal_kind.get("const").is_none(),
-        "multimodal branch def must NOT carry the discriminator `const`: {multimodal_def:?}"
+        one_of[0].get("$ref").is_none(),
+        "multimodal variant entries are inline, not $ref: {item}"
     );
 }
 
@@ -769,4 +734,230 @@ fn colliding_branch_tags_disambiguate_by_parent_field() {
         ["AlphaShared", "BetaShared"].into_iter().collect(),
         "colliding tags must be disambiguated by the parent record field, got {keys:?}"
     );
+}
+
+// --------------------------------------------------------------------------
+// Configurable renderer + agent-level (InputSchema/OutputSchema) entry points
+// --------------------------------------------------------------------------
+
+mod agent_entry_points {
+    use super::*;
+    use crate::schema::agent::{
+        AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
+    };
+    use crate::schema::metadata::Role;
+    use crate::schema::render::json_schema::{
+        JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
+        to_json_schema_with_config,
+    };
+    use test_r::test;
+
+    #[test]
+    fn without_draft_marker_config_omits_draft_marker() {
+        let ty = SchemaType::record(vec![NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        }]);
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let canonical = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::CANONICAL);
+        let without_marker =
+            to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
+        assert!(canonical.get("$schema").is_some());
+        assert!(
+            without_marker.get("$schema").is_none(),
+            "WITHOUT_DRAFT_MARKER config must omit the $schema draft marker: {without_marker}"
+        );
+    }
+
+    #[test]
+    fn input_schema_omits_auto_injected_and_marks_options_optional() {
+        let input = InputSchema::Parameters(vec![
+            NamedField::user_supplied("city", SchemaType::string()),
+            NamedField::user_supplied("hint", SchemaType::option(SchemaType::string())),
+            NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::string(),
+            ),
+        ]);
+        let graph = SchemaGraph::empty();
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
+        assert_eq!(doc["type"], json!("object"));
+        assert_eq!(doc["additionalProperties"], json!(false));
+        let props = doc["properties"].as_object().expect("properties object");
+        assert!(props.contains_key("city"));
+        assert!(props.contains_key("hint"));
+        assert!(
+            !props.contains_key("principal"),
+            "auto-injected fields must not be surfaced: {doc}"
+        );
+        let required = doc["required"].as_array().expect("required array");
+        assert!(required.contains(&Value::String("city".to_string())));
+        assert!(
+            !required.contains(&Value::String("hint".to_string())),
+            "option fields must not be required: {doc}"
+        );
+        assert!(
+            !required.contains(&Value::String("principal".to_string())),
+            "auto-injected fields must not be required: {doc}"
+        );
+        assert!(doc.get("$schema").is_none());
+    }
+
+    #[test]
+    fn input_schema_attaches_defs_at_root() {
+        // A record field type becomes a named def in the graph; the rendered
+        // input schema must carry the $defs at its root and reference it.
+        let user_ty = SchemaType::Ref {
+            id: crate::schema::metadata::TypeId("myapp.user".to_string()),
+            metadata: Default::default(),
+        };
+        let user_def_body = SchemaType::record(vec![NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        }]);
+        let mut graph = SchemaGraph::empty();
+        graph.defs.push(crate::schema::graph::SchemaTypeDef {
+            id: crate::schema::metadata::TypeId("myapp.user".to_string()),
+            name: Some("User".to_string()),
+            body: user_def_body,
+        });
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied("user", user_ty)]);
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
+        assert!(
+            doc.get("$defs").and_then(|d| d.get("myapp.user")).is_some(),
+            "named def must be attached at the document root: {doc}"
+        );
+        let user_prop = &doc["properties"]["user"];
+        assert!(
+            user_prop.get("$ref").is_some(),
+            "ref-typed field must render as a $ref: {user_prop}"
+        );
+    }
+
+    #[test]
+    fn input_schema_multimodal_renders_parts_array() {
+        // A multimodal input is a single user-supplied `parts` field of type
+        // list<variant<… Role::Multimodal>>; it renders as a `parts` array.
+        let mut variant = SchemaType::variant(vec![
+            VariantCaseType {
+                name: "text".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            },
+            VariantCaseType {
+                name: "image".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            },
+        ]);
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        let input = InputSchema::Parameters(vec![NamedField {
+            name: "parts".to_string(),
+            source: FieldSource::UserSupplied,
+            schema: SchemaType::list(variant),
+            metadata: Default::default(),
+        }]);
+        let graph = SchemaGraph::empty();
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
+        let parts = &doc["properties"]["parts"];
+        assert_eq!(parts["type"], json!("array"));
+        assert!(
+            parts["items"].get("oneOf").is_some(),
+            "multimodal parts items must be a oneOf: {parts}"
+        );
+        let required = doc["required"].as_array().expect("required array");
+        assert!(required.contains(&Value::String("parts".to_string())));
+    }
+
+    #[test]
+    fn output_schema_unit_is_none_and_single_renders() {
+        let graph = SchemaGraph::empty();
+        assert!(
+            output_schema_to_json_schema(
+                &graph,
+                &OutputSchema::Unit,
+                JsonSchemaConfig::WITHOUT_DRAFT_MARKER
+            )
+            .is_none()
+        );
+        let out = OutputSchema::Single(Box::new(SchemaType::u32()));
+        let rendered =
+            output_schema_to_json_schema(&graph, &out, JsonSchemaConfig::WITHOUT_DRAFT_MARKER)
+                .expect("some schema");
+        assert_eq!(rendered["type"], json!("integer"));
+        assert!(rendered.get("$schema").is_none());
+    }
+
+    #[test]
+    fn text_with_languages_renders_canonical_shape() {
+        use crate::schema::schema_type::TextRestrictions;
+        let ty = SchemaType::text(TextRestrictions {
+            languages: Some(vec!["en".to_string(), "fr".to_string()]),
+            min_length: None,
+            max_length: None,
+            regex: None,
+        });
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let doc = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
+        assert_eq!(doc["type"], json!("object"));
+        let props = doc["properties"].as_object().expect("properties");
+        // Canonical Text shape: `{ text, language? }`.
+        assert_eq!(props["text"]["type"], json!("string"));
+        assert!(props.contains_key("language"));
+        assert_eq!(doc["required"], json!(["text"]));
+        assert_eq!(doc["description"], json!("Allowed languages: en, fr"));
+    }
+
+    #[test]
+    fn multimodal_parts_items_are_canonical_variant_objects() {
+        let mut variant = SchemaType::variant(vec![
+            VariantCaseType {
+                name: "description".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            },
+            VariantCaseType {
+                name: "photo".to_string(),
+                payload: Some(SchemaType::binary(Default::default())),
+                metadata: Default::default(),
+            },
+        ]);
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied(
+            "parts",
+            SchemaType::list(variant),
+        )]);
+        let graph = SchemaGraph::empty();
+        let doc =
+            input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::WITHOUT_DRAFT_MARKER);
+        let items = &doc["properties"]["parts"]["items"];
+        let one_of = items["oneOf"].as_array().expect("oneOf array");
+        assert_eq!(one_of.len(), 2);
+        // Each branch is the canonical inline variant object `{ <caseName>: <payload> }`,
+        // not a `$ref` — and no `$defs` indirection is created.
+        assert_eq!(
+            one_of[0]["properties"]["description"]["type"],
+            json!("string")
+        );
+        assert_eq!(one_of[0]["required"], json!(["description"]));
+        // The binary branch value uses the canonical `{ bytes, mime_type? }` shape.
+        assert_eq!(
+            one_of[1]["properties"]["photo"]["properties"]["bytes"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            one_of[1]["properties"]["photo"]["required"],
+            json!(["bytes"])
+        );
+        assert!(
+            doc.get("$defs").is_none(),
+            "multimodal must not synthesise per-branch $defs: {doc}"
+        );
+    }
 }

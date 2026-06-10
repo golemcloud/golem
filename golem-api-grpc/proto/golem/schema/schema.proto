@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+package golem.schema;
+
+import "golem/common/empty.proto";
+
+// Recursive protobuf mirror of the in-memory schema model from
+// golem-common/src/schema. The WIT carrier (golem:core@2.0.0) is flat with
+// indices because WIT cannot express recursion; protobuf can, so this mirror
+// follows the recursive Rust types directly for simpler conversions.
+
+// A self-contained schema graph: a named-type registry (`defs`) plus a root
+// type. `SchemaType.ref_type` references a def by its `id`.
+message SchemaGraph {
+  repeated SchemaTypeDef defs = 1;
+  SchemaType root = 2;
+}
+
+// A named type definition inside a `SchemaGraph`. Metadata lives on `body`.
+message SchemaTypeDef {
+  string id = 1;
+  optional string name = 2;
+  SchemaType body = 3;
+}
+
+// Typed metadata envelope (docs / aliases / examples / deprecation / role).
+message MetadataEnvelope {
+  optional string doc = 1;
+  repeated string aliases = 2;
+  repeated string examples = 3;
+  optional string deprecated = 4;
+  optional Role role = 5;
+}
+
+// Open role registry; unknown roles fall back to structural handling.
+message Role {
+  oneof value {
+    golem.common.Empty multimodal = 1;
+    string other = 2;
+  }
+}
+
+// Optional list-of-strings wrapper so `None` vs `Some(empty)` is distinguishable.
+message StringList {
+  repeated string items = 1;
+}
+
+// One schema type node. `metadata` carries the per-node envelope; `body`
+// carries the structural shape.
+message SchemaType {
+  MetadataEnvelope metadata = 1;
+  oneof body {
+    // Reference to a named definition in the enclosing `SchemaGraph`.
+    string ref_type = 2;
+
+    // Primitives
+    golem.common.Empty bool_type = 3;
+    golem.common.Empty s8_type = 4;
+    golem.common.Empty s16_type = 5;
+    golem.common.Empty s32_type = 6;
+    golem.common.Empty s64_type = 7;
+    golem.common.Empty u8_type = 8;
+    golem.common.Empty u16_type = 9;
+    golem.common.Empty u32_type = 10;
+    golem.common.Empty u64_type = 11;
+    golem.common.Empty f32_type = 12;
+    golem.common.Empty f64_type = 13;
+    golem.common.Empty char_type = 14;
+    golem.common.Empty string_type = 15;
+
+    // Structural composites
+    RecordType record_type = 20;
+    VariantType variant_type = 21;
+    EnumType enum_type = 22;
+    FlagsType flags_type = 23;
+    TupleType tuple_type = 24;
+    ListType list_type = 25;
+    FixedListType fixed_list_type = 26;
+    MapType map_type = 27;
+    OptionType option_type = 28;
+    ResultType result_type = 29;
+
+    // Rich semantic types
+    TextRestrictions text_type = 40;
+    BinaryRestrictions binary_type = 41;
+    PathSpec path_type = 42;
+    UrlRestrictions url_type = 43;
+    golem.common.Empty datetime_type = 44;
+    golem.common.Empty duration_type = 45;
+    QuantitySpec quantity_type = 46;
+
+    // Discriminated union (closed, inferred-tag)
+    UnionSpec union_type = 60;
+
+    // Capability nodes
+    SecretSpec secret_type = 70;
+    QuotaTokenSpec quota_token_type = 71;
+
+    // WASI P3 stubs (parseable only; no semantics yet)
+    WasiStubType future_type = 80;
+    WasiStubType stream_type = 81;
+  }
+}
+
+message RecordType {
+  repeated NamedFieldType fields = 1;
+}
+
+message NamedFieldType {
+  string name = 1;
+  SchemaType body = 2;
+  MetadataEnvelope metadata = 3;
+}
+
+message VariantType {
+  repeated VariantCaseType cases = 1;
+}
+
+message VariantCaseType {
+  string name = 1;
+  // Absent payload (message not set) means a payload-less case.
+  SchemaType payload = 2;
+  MetadataEnvelope metadata = 3;
+}
+
+message EnumType {
+  repeated string cases = 1;
+}
+
+message FlagsType {
+  repeated string flags = 1;
+}
+
+message TupleType {
+  repeated SchemaType elements = 1;
+}
+
+message ListType {
+  SchemaType element = 1;
+}
+
+message FixedListType {
+  SchemaType element = 1;
+  uint32 length = 2;
+}
+
+message MapType {
+  SchemaType key = 1;
+  SchemaType value = 2;
+}
+
+message OptionType {
+  SchemaType inner = 1;
+}
+
+message ResultType {
+  // Absent ok/err (message not set) means that side has no payload.
+  SchemaType ok = 1;
+  SchemaType err = 2;
+}
+
+message TextRestrictions {
+  // Absent `languages` means unrestricted.
+  StringList languages = 1;
+  optional uint32 min_length = 2;
+  optional uint32 max_length = 3;
+  optional string regex = 4;
+}
+
+message BinaryRestrictions {
+  // Absent `mime_types` means unrestricted.
+  StringList mime_types = 1;
+  optional uint32 min_bytes = 2;
+  optional uint32 max_bytes = 3;
+}
+
+enum PathDirection {
+  PATH_DIRECTION_UNSPECIFIED = 0;
+  PATH_DIRECTION_INPUT = 1;
+  PATH_DIRECTION_OUTPUT = 2;
+  PATH_DIRECTION_IN_OUT = 3;
+}
+
+enum PathKind {
+  PATH_KIND_UNSPECIFIED = 0;
+  PATH_KIND_FILE = 1;
+  PATH_KIND_DIRECTORY = 2;
+  PATH_KIND_ANY = 3;
+}
+
+message PathSpec {
+  PathDirection direction = 1;
+  PathKind kind = 2;
+  StringList allowed_mime_types = 3;
+  StringList allowed_extensions = 4;
+}
+
+message UrlRestrictions {
+  StringList allowed_schemes = 1;
+  StringList allowed_hosts = 2;
+}
+
+message QuantityValue {
+  int64 mantissa = 1;
+  int32 scale = 2;
+  string unit = 3;
+}
+
+message QuantitySpec {
+  string base_unit = 1;
+  repeated string allowed_suffixes = 2;
+  QuantityValue min = 3;
+  QuantityValue max = 4;
+}
+
+message UnionSpec {
+  repeated UnionBranch branches = 1;
+}
+
+message UnionBranch {
+  string tag = 1;
+  SchemaType body = 2;
+  DiscriminatorRule discriminator = 3;
+  MetadataEnvelope metadata = 4;
+}
+
+message DiscriminatorRule {
+  oneof rule {
+    string prefix = 1;
+    string suffix = 2;
+    string contains = 3;
+    string regex = 4;
+    FieldDiscriminator field_equals = 5;
+    string field_absent = 6;
+  }
+}
+
+message FieldDiscriminator {
+  string field_name = 1;
+  optional string literal = 2;
+}
+
+message SecretSpec {
+  optional string category = 1;
+}
+
+message QuotaTokenSpec {
+  optional string resource_name = 1;
+}
+
+// Future/Stream stub bodies. Absent `element` means the inner type is unknown.
+message WasiStubType {
+  SchemaType element = 1;
+}
