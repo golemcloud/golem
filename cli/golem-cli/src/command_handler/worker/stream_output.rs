@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::format::Format;
-use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
+use crate::model::text::fmt::{format_stderr, to_colored_json, to_colored_yaml};
 use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
@@ -318,7 +318,11 @@ impl WorkerStreamOutput {
             }
             Format::Text => {
                 let prefix = self.prefix(timestamp, "STDERR");
-                self.colored(LogLevel::Error, &format!("{prefix}{message}"));
+                if self.options.colors {
+                    println!("{prefix}{}", format_stderr(message));
+                } else {
+                    println!("{prefix}{message}");
+                }
             }
         }
     }

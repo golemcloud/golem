@@ -17,8 +17,8 @@ use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, Pr
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
-use crate::model::GuestLanguage;
 use crate::model::format::Format;
+use crate::model::repl::ReplLanguage;
 use crate::model::worker::RawAgentId;
 use anyhow::bail;
 use colored::Colorize;
@@ -34,7 +34,6 @@ use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 use itertools::Itertools;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -408,22 +407,9 @@ impl InteractiveHandler {
 
     pub fn select_repl_language(
         &self,
-        used_languages: &HashSet<GuestLanguage>,
-    ) -> anyhow::Result<GuestLanguage> {
-        Ok(Select::new(
-            "Select REPL language:",
-            used_languages
-                .iter()
-                .cloned()
-                .sorted()
-                .chain(
-                    GuestLanguage::iter()
-                        .filter(|lang| !used_languages.contains(lang))
-                        .sorted(),
-                )
-                .collect::<Vec<_>>(),
-        )
-        .prompt()?)
+        repl_languages: Vec<ReplLanguage>,
+    ) -> anyhow::Result<ReplLanguage> {
+        Ok(Select::new("Select REPL language:", repl_languages).prompt()?)
     }
 
     pub fn select_new_app_name(
