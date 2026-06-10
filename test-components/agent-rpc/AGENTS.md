@@ -518,6 +518,8 @@ cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 
 This project includes coding-agent skills in `.agents/skills/`. Load a skill when the task matches its description.
 
+**Activation cues for `golem.yaml` edits**: whenever a task involves editing `golem.yaml`, load `golem-edit-manifest` for the manifest schema, and also load the section-specific skill — `golem-add-env-vars` for `env`/`envDefaults`/`secretDefaults` changes, `golem-add-initial-files` for `files:` blocks, `golem-profiles-and-environments` for `presets`/environment-scoped sections, `golem-manage-plugins` for `plugins:` entries, `golem-configure-api-domain` for `httpApi`, and `golem-configure-mcp-server` for `mcp`.
+
 | Skill | Description |
 |-------|-------------|
 | `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
@@ -682,6 +684,19 @@ To enable AI features, uncomment the relevant provider dependency in the compone
 - Constructor parameters define agent identity — they must be serializable types
 - Do not manually edit files in `golem-temp/` — they are auto-generated build artifacts
 - The build pipeline uses `golem-typegen` to extract type metadata from TypeScript via decorators; ensure `experimentalDecorators` and `emitDecoratorMetadata` are enabled in `tsconfig.json`
+
+## Running Golem CLI commands non-interactively
+
+The `golem` CLI prompts for confirmation when it needs to apply changes such as syncing project skill files, updating dependency configurations, or recreating deployments. In non-interactive contexts (CI, scripts, coding agents) **always pass `--yes` (or `-y`) to mutating commands** so the CLI auto-confirms instead of aborting:
+
+```shell
+golem build --yes
+golem deploy --yes
+golem new --yes --template <LANGUAGE> <APPLICATION_PATH>
+golem agent update --yes <AGENT>
+```
+
+If you see `This action requires confirmation, but the current shell is non-interactive.` (older CLI versions: `The current input device is not an interactive one, defaulting to "false"`) followed by `Failed to build application`, re-run the same command with `--yes`.
 
 ## Documentation
 
