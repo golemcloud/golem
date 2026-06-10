@@ -681,6 +681,7 @@ impl ReplayState {
             OplogEntry::End {
                 start_index,
                 response,
+                forced_commit,
                 ..
             } => {
                 let mut internal = self.internal.write().await;
@@ -689,14 +690,23 @@ impl ReplayState {
                     Resolution::Completed {
                         end_idx: idx,
                         response: response.clone(),
+                        forced_commit: *forced_commit,
                     },
                 );
             }
-            OplogEntry::Cancelled { start_index, .. } => {
+            OplogEntry::Cancelled {
+                start_index,
+                partial,
+                ..
+            } => {
                 let mut internal = self.internal.write().await;
-                internal
-                    .concurrent_resolver
-                    .resolve_if_pending(*start_index, Resolution::Cancelled { cancelled_idx: idx });
+                internal.concurrent_resolver.resolve_if_pending(
+                    *start_index,
+                    Resolution::Cancelled {
+                        cancelled_idx: idx,
+                        partial: partial.clone(),
+                    },
+                );
             }
             _ => {}
         }

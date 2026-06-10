@@ -17,9 +17,9 @@
 //! A durable host call is identified by the [`OplogIndex`] of its `Start` entry. While live,
 //! the call eagerly appends a `Start` (capturing its request) and later an `End` (its response)
 //! or a `Cancelled`. During replay the [`ConcurrentReplayResolver`] matches each completed
-//! `End`/`Cancelled` back to the awaiting [`CallHandle`] via a `tokio::sync::oneshot` channel, so
-//! the two halves of a call no longer have to be adjacent in the oplog — which is what lets us
-//! track async, parallel host functions.
+//! `End`/`Cancelled` back to the awaiting [`CallHandle`] via a [`ReplayableOneshot`], so the two
+//! halves of a call no longer have to be adjacent in the oplog — which is what lets us track
+//! async, parallel host functions.
 //!
 //! Every durable host call runs through this path via [`CallHandle`]. Because the ported host
 //! methods still take `&mut self`, two calls cannot truly overlap yet, so the resolver's
@@ -46,6 +46,16 @@ use crate::services::oplog::OplogOps;
 use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
 
+/// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
+/// to the awaiting [`CallHandle`].
+///
+/// `tokio::sync::oneshot` already supports send-before-await, which is all this currently needs.
+/// The only "resolve happened before the awaiter registered" case is handled by the resolver's
+/// `buffered` map, not by the channel. This is kept behind a type alias so it can later be swapped
+/// for a dedicated replayable primitive.
+pub type ReplayableOneshot<T> = oneshot::Sender<T>;
+pub type ReplayableOneshotReceiver<T> = oneshot::Receiver<T>;
+
 /// The outcome of a durable call as observed while replaying the oplog.
 ///
 /// The entry index is carried purely for validation and diagnostics.
@@ -55,9 +65,13 @@ pub enum Resolution {
     Completed {
         end_idx: OplogIndex,
         response: Option<OplogPayload<HostResponse>>,
+        forced_commit: bool,
     },
     /// The call was cancelled (dropped before completion) via a `Cancelled` entry.
-    Cancelled { cancelled_idx: OplogIndex },
+    Cancelled {
+        cancelled_idx: OplogIndex,
+        partial: Option<OplogPayload<HostResponse>>,
+    },
 }
 
 /// The outcome of driving the replay cursor for a durable call.
@@ -199,6 +213,8 @@ impl ReplayCallHandle {
 /// is exercised in unit tests by attaching a sink that records these events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DropEvent {
+    /// A `Cancellable` handle was dropped unfinished; a real recorder would enqueue a `Cancelled`.
+    UnfinishedCancellable { start_idx: OplogIndex },
     /// A `NotCancellable` handle was dropped unfinished; this is a programming error.
     UnfinishedNotCancellable { start_idx: OplogIndex },
 }
@@ -209,9 +225,24 @@ pub trait DropPolicy {
     fn unfinished_drop(start_idx: OplogIndex, sink: Option<&UnboundedSender<DropEvent>>);
 }
 
+/// Drop policy for calls that may legitimately be cancelled (dropped from a `select!`, etc.).
+pub struct Cancellable;
+
 /// Drop policy for calls that must always be finished or explicitly cancelled. Dropping one
 /// unfinished is a bug (default-deny).
 pub struct NotCancellable;
+
+impl DropPolicy for Cancellable {
+    fn unfinished_drop(start_idx: OplogIndex, sink: Option<&UnboundedSender<DropEvent>>) {
+        if let Some(sink) = sink {
+            let _ = sink.send(DropEvent::UnfinishedCancellable { start_idx });
+        } else {
+            tracing::warn!(
+                "durable call {start_idx} dropped unfinished; no production cancellation recorder yet"
+            );
+        }
+    }
+}
 
 impl DropPolicy for NotCancellable {
     fn unfinished_drop(start_idx: OplogIndex, sink: Option<&UnboundedSender<DropEvent>>) {
@@ -829,6 +860,7 @@ mod tests {
         Resolution::Completed {
             end_idx: idx(end_idx),
             response: None,
+            forced_commit: false,
         }
     }
 
@@ -866,6 +898,7 @@ mod tests {
             idx(1),
             Resolution::Cancelled {
                 cancelled_idx: idx(2),
+                partial: None,
             },
         ));
         match rx.try_recv() {
@@ -943,6 +976,19 @@ mod tests {
     }
 
     #[test]
+    fn drop_cancellable_unfinished_enqueues_exactly_one_cancelled() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let _handle = live_unfinished_handle::<Cancellable>(idx(5), tx);
+        }
+        match rx.try_recv() {
+            Ok(DropEvent::UnfinishedCancellable { start_idx }) => assert_eq!(start_idx, idx(5)),
+            other => panic!("expected one UnfinishedCancellable, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "expected exactly one drop event");
+    }
+
+    #[test]
     fn drop_not_cancellable_unfinished_signals_policy_violation() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         {
@@ -958,7 +1004,7 @@ mod tests {
     fn drop_after_finish_is_noop() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         {
-            let mut handle = live_unfinished_handle::<NotCancellable>(idx(9), tx);
+            let mut handle = live_unfinished_handle::<Cancellable>(idx(9), tx);
             handle.finished = true;
         }
         assert!(
