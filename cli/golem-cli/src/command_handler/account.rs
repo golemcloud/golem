@@ -214,7 +214,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareListView(shares));
+            .log_view(&PermissionShareListView(shares))?;
 
         Ok(())
     }
@@ -226,7 +226,7 @@ impl AccountCommandHandler {
         let share = self.get_permission_share(permission_share_id).await?;
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -248,7 +248,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -279,7 +279,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -310,7 +310,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share));
+            .log_view(&PermissionShareGetView(share))?;
 
         Ok(())
     }
