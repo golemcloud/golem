@@ -13,23 +13,21 @@
 // limitations under the License.
 
 use super::parse_common::ParseError;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::{ResultSpec, SchemaType};
 
-pub(super) fn parse_type_moonbit(input: &str) -> Result<AnalysedType, ParseError> {
-    let result = parse_type_inner(input.trim())?;
-    Ok(result)
+pub(super) fn parse_type_moonbit(input: &str) -> Result<(SchemaGraph, SchemaType), ParseError> {
+    let ty = parse_type_inner(input.trim())?;
+    Ok((SchemaGraph::anonymous(ty.clone()), ty))
 }
 
-fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
+fn parse_type_inner(s: &str) -> Result<SchemaType, ParseError> {
     let s = s.trim();
 
-    // Check for T? suffix (option shorthand)
     if let Some(inner) = s.strip_suffix('?') {
-        return Ok(analysed_type::option(parse_type_inner(inner)?));
+        return Ok(SchemaType::option(parse_type_inner(inner)?));
     }
 
-    // Check for tuple (T1, T2, ...)
     if s.starts_with('(') && s.ends_with(')') {
         let inner = &s[1..s.len() - 1];
         let parts = split_all_top_level_commas(inner)?;
@@ -37,34 +35,34 @@ fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
             .into_iter()
             .map(parse_type_inner)
             .collect::<Result<Vec<_>, _>>()?;
-        return Ok(analysed_type::tuple(types));
+        return Ok(SchemaType::tuple(types));
     }
 
     if let Some(inner) = strip_generic(s, "Array", '[', ']') {
-        return Ok(analysed_type::list(parse_type_inner(inner)?));
+        return Ok(SchemaType::list(parse_type_inner(inner)?));
     }
     if let Some(inner) = strip_generic(s, "Option", '[', ']') {
-        return Ok(analysed_type::option(parse_type_inner(inner)?));
+        return Ok(SchemaType::option(parse_type_inner(inner)?));
     }
     if let Some(inner) = strip_generic(s, "Result", '[', ']') {
         let (ok_str, err_str) = split_at_top_level_comma(inner)?;
-        return Ok(analysed_type::result(
-            parse_type_inner(ok_str)?,
-            parse_type_inner(err_str)?,
-        ));
+        return Ok(SchemaType::result(ResultSpec {
+            ok: Some(Box::new(parse_type_inner(ok_str)?)),
+            err: Some(Box::new(parse_type_inner(err_str)?)),
+        }));
     }
 
     match s {
-        "String" => Ok(analysed_type::str()),
-        "Bool" => Ok(analysed_type::bool()),
-        "Char" => Ok(analysed_type::chr()),
-        "Byte" => Ok(analysed_type::u8()),
-        "Int" => Ok(analysed_type::s32()),
-        "Int64" => Ok(analysed_type::s64()),
-        "UInt" => Ok(analysed_type::u32()),
-        "UInt64" => Ok(analysed_type::u64()),
-        "Float" => Ok(analysed_type::f32()),
-        "Double" => Ok(analysed_type::f64()),
+        "String" => Ok(SchemaType::string()),
+        "Bool" => Ok(SchemaType::bool()),
+        "Char" => Ok(SchemaType::char()),
+        "Byte" => Ok(SchemaType::u8()),
+        "Int" => Ok(SchemaType::s32()),
+        "Int64" => Ok(SchemaType::s64()),
+        "UInt" => Ok(SchemaType::u32()),
+        "UInt64" => Ok(SchemaType::u64()),
+        "Float" => Ok(SchemaType::f32()),
+        "Double" => Ok(SchemaType::f64()),
         _ => Err(ParseError {
             position: 0,
             message: format!("unrecognized MoonBit type '{s}'"),

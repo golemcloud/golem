@@ -23,6 +23,7 @@ use golem_common::model::agent::{
     Snapshotting,
 };
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment_share::EnvironmentShareId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -37,6 +38,7 @@ use golem_registry_service::repo::model::application::{
 use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, ImmutableAuditFields,
 };
+use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
@@ -79,20 +81,27 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         plan_id: deps.test_plan_id(),
     };
 
-    let created_account = deps.account_repo.create(account.clone()).await.unwrap();
+    let created_account = deps
+        .account_repo
+        .create(account.clone(), test_account_root_card(account.account_id))
+        .await
+        .unwrap();
     compare_created_to_requested_account(&account, &created_account);
 
     let result_for_same_email = deps
         .account_repo
-        .create(AccountRevisionRecord {
-            account_id: new_repo_uuid(),
-            revision_id: 0,
-            email: account.email.clone(),
-            audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
-            name: new_repo_uuid().to_string(),
-            roles: 0,
-            plan_id: deps.test_plan_id(),
-        })
+        .create(
+            AccountRevisionRecord {
+                account_id: new_repo_uuid(),
+                revision_id: 0,
+                email: account.email.clone(),
+                audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
+                name: new_repo_uuid().to_string(),
+                roles: 0,
+                plan_id: deps.test_plan_id(),
+            },
+            test_account_root_card(new_repo_uuid()),
+        )
         .await;
     let_assert!(Err(AccountRepoError::AccountViolatesUniqueness) = result_for_same_email);
 
@@ -124,7 +133,11 @@ pub async fn test_update(deps: &Deps) {
         plan_id: deps.test_plan_id(),
     };
 
-    let created_account = deps.account_repo.create(account.clone()).await.unwrap();
+    let created_account = deps
+        .account_repo
+        .create(account.clone(), test_account_root_card(account.account_id))
+        .await
+        .unwrap();
     compare_created_to_requested_account(&account, &created_account);
 
     let updated_account = AccountRevisionRecord {
@@ -290,7 +303,6 @@ pub async fn test_environment_create(deps: &Deps) {
                 app.revision.application_id,
                 env_name,
                 user.revision.account_id,
-                false,
             )
             .await
             .unwrap()
@@ -325,7 +337,6 @@ pub async fn test_environment_create(deps: &Deps) {
             app.revision.application_id,
             env_name,
             user.revision.account_id,
-            false,
         )
         .await
         .unwrap();
@@ -334,12 +345,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env_by_id = deps
         .environment_repo
-        .get_by_id(
-            env.revision.environment_id,
-            user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(env.revision.environment_id, user.revision.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
@@ -427,7 +433,6 @@ pub async fn test_environment_update(deps: &Deps) {
             env_rev_0.application_id,
             &env_rev_0.revision.name,
             user.revision.account_id,
-            false,
         )
         .await
         .unwrap();
@@ -438,12 +443,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(
-            env_rev_1.environment_id,
-            user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(env_rev_1.environment_id, user.revision.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -486,7 +486,6 @@ pub async fn test_environment_update(deps: &Deps) {
             env_rev_0.application_id,
             &env_rev_0.revision.name,
             user.revision.account_id,
-            false,
         )
         .await
         .unwrap();
@@ -497,12 +496,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(
-            env_rev_2.environment_id,
-            user.revision.account_id,
-            false,
-            false,
-        )
+        .get_by_id(env_rev_2.environment_id, user.revision.account_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
@@ -1126,6 +1120,22 @@ fn compare_created_to_requested_account(
     assert!(created.revision.roles == requested.roles)
 }
 
+fn test_account_root_card(account_id: Uuid) -> CardRecord {
+    CardRecord::creation(
+        CardId(new_repo_uuid()),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        true,
+        Some(CardManagedBy::AccountRoot {
+            account_id: golem_common::model::account::AccountId(account_id),
+        }),
+    )
+}
+
 // resolve_agent_type_by_names tests ---------------------------------------------------------------
 
 fn make_test_agent_type(name: &str) -> AgentType {
@@ -1242,6 +1252,8 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         agent_type_name: agent_type_name.clone(),
         component_id,
         component_revision_id,
+        component_name,
+        owner_account_id,
         webhook_prefix_authority_and_path: None,
         agent_type: Blob::new(agent_type),
         canonical_agent_type_name: agent_type_name.to_kebab_case(),

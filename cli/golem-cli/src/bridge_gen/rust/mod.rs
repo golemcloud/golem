@@ -23,6 +23,9 @@ use golem_common::model::agent::{
     AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType, BinaryType,
     DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
+use golem_common::schema::adapters::analysed_type::schema_type_to_analysed_type;
+use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -184,7 +187,8 @@ impl RustBridgeGenerator {
                     .join("_")
             );
             let param_name = Ident::new(&self.to_rust_ident(&param_name_str), Span::call_site());
-            let param_type = self.wit_type_to_typeref(&config.value_type)?;
+            let config_schema_type = self.import_analysed_type(&config.value_type)?;
+            let param_type = self.schema_type_to_typeref(&config_schema_type)?;
             config_param_defs.push(quote! { #param_name: Option<#param_type> });
 
             let path_segments: Vec<TokenStream> = config
@@ -499,7 +503,10 @@ impl RustBridgeGenerator {
         element_schema: &ElementSchema,
     ) -> anyhow::Result<TokenStream> {
         match element_schema {
-            ElementSchema::ComponentModel(schema) => self.wit_type_to_typeref(&schema.element_type),
+            ElementSchema::ComponentModel(schema) => {
+                let schema_type = self.import_analysed_type(&schema.element_type)?;
+                self.schema_type_to_typeref(&schema_type)
+            }
             ElementSchema::UnstructuredText(descriptor) => {
                 if let Some(restrictions) = &descriptor.restrictions {
                     let languages_enum = self.get_languages_enum(restrictions);
@@ -525,11 +532,69 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn wit_type_to_typedef(
+    /// Resolve a legacy [`AnalysedType`] from the agent declaration to the
+    /// [`SchemaType`] that was lowered for it during `TypeNaming::new`.
+    /// Returning the memoised result is critical: a fresh
+    /// `analysed_type_to_schema_graph(typ)` here would only see the type
+    /// in isolation and emit the base `TypeId`, which would silently
+    /// collide with the disambiguated id in `type_naming.graph()` and
+    /// cause two distinct same-name composites to be rendered as the
+    /// first one's body.
+    fn import_analysed_type(&self, typ: &AnalysedType) -> anyhow::Result<SchemaType> {
+        self.type_naming
+            .imported_schema_type(typ)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "Legacy AnalysedType was not collected during TypeNaming::new — \
+                     bridge_gen lost track of an emit-time type. typ = {typ:?}"
+                )
+            })
+    }
+
+    /// Resolve a [`SchemaType::Ref`] against [`TypeNaming::graph`] and return
+    /// the def body. For inline schema types this returns the input
+    /// unchanged. Used by emit helpers that need to discriminate on the
+    /// structural body shape.
+    fn resolve_ref<'a>(&'a self, typ: &'a SchemaType) -> &'a SchemaType {
+        match typ {
+            SchemaType::Ref { id, .. } => {
+                let def: &SchemaTypeDef = self
+                    .type_naming
+                    .graph()
+                    .lookup(id)
+                    .expect("Ref points to a def in the shared graph");
+                &def.body
+            }
+            other => other,
+        }
+    }
+
+    /// Emit a legacy `golem_wasm::analysis::AnalysedType::...` token-stream
+    /// literal for a schema-layer type. The generated bridge SDK still
+    /// references the legacy analysis surface, so the schema body is
+    /// projected back via [`schema_type_to_analysed_type`] before the
+    /// existing literal-emission walker runs.
+    fn schema_type_as_value(&self, typ: &SchemaType) -> anyhow::Result<TokenStream> {
+        let legacy = schema_type_to_analysed_type(self.type_naming.graph(), typ)
+            .map_err(|e| anyhow!("Cannot emit legacy AnalysedType literal for {typ:?}: {e}"))?;
+        Ok(self.analysed_type_as_value(&legacy))
+    }
+
+    fn schema_type_to_typedef(
         &self,
         type_name: &RustTypeName,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<TokenStream> {
+        // The walker keys on the schema layer, but the generated
+        // `IntoValue` / `FromValue` / `get_type` impls still reference the
+        // legacy `golem_wasm::analysis::AnalysedType` / `golem_wasm::Value`
+        // surface — that is the SDK contract this generator targets.
+        // Rich schema variants without a legacy counterpart surface as a
+        // clean error from `schema_type_to_analysed_type` when emitting
+        // those literal bodies; the conversion is delegated inside
+        // `analysed_type_as_value` via [`schema_type_to_legacy_value`].
+        let resolved = self.resolve_ref(typ);
         let name = match type_name {
             RustTypeName::Derived(type_name) => Ident::new(type_name, Span::call_site()),
             RustTypeName::Remapped() => {
@@ -537,297 +602,323 @@ impl RustBridgeGenerator {
             }
         };
 
-        match typ {
-            AnalysedType::Variant(variant) => {
-                let mut cases = Vec::new();
-                let mut into_value_cases = Vec::new();
-                let mut from_value_cases = Vec::new();
-                let mut case_names_lit = Vec::new();
-                let mut case_type_tokens = Vec::new();
-
-                for (idx, case) in variant.cases.iter().enumerate() {
-                    let case_ident =
-                        Ident::new(&self.to_rust_case_name(&case.name), Span::call_site());
-                    let idx_u32 = idx as u32;
-                    case_names_lit.push(case.name.clone());
-
-                    match &case.typ {
-                        Some(typ) => {
-                            // TODO: auto-inline anonymous records
-
-                            let inner = self.wit_type_to_typeref(typ)?;
-                            cases.push(quote! { #case_ident(#inner) });
-
-                            // get_type() case — include the inner type
-                            let type_value = self.analysed_type_as_value(typ);
-                            case_type_tokens.push(quote! { Some(#type_value) });
-
-                            // IntoValue implementation
-                            into_value_cases.push(quote! {
-                                Self::#case_ident(value) => golem_wasm::Value::Variant {
-                                    case_idx: #idx_u32,
-                                    case_value: Some(Box::new(value.into_value())),
-                                }
-                            });
-
-                            // FromValue implementation
-                            from_value_cases.push(quote! {
-                                    #idx_u32 => {
-                                        let inner_value = case_value.ok_or_else(|| format!("Expected case_value for {}", stringify!(#case_ident)))?;
-                                        Ok(Self::#case_ident(<#inner as golem_wasm::FromValue>::from_value(*inner_value)?))
-                                    }
-                                });
-                        }
-                        None => {
-                            cases.push(quote! { #case_ident });
-
-                            // get_type() case — no inner type
-                            case_type_tokens.push(quote! { None });
-
-                            // IntoValue implementation
-                            into_value_cases.push(quote! {
-                                Self::#case_ident => golem_wasm::Value::Variant {
-                                    case_idx: #idx_u32,
-                                    case_value: None,
-                                }
-                            });
-
-                            // FromValue implementation
-                            from_value_cases.push(quote! {
-                                #idx_u32 => Ok(Self::#case_ident)
-                            });
-                        }
-                    }
-                }
-
-                Ok(quote! {
-                    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-                    pub enum #name {
-                        #(#cases),*
-                    }
-
-                    impl golem_wasm::IntoValue for #name {
-                        fn into_value(self) -> golem_wasm::Value {
-                            match self {
-                                #(#into_value_cases),*
-                            }
-                        }
-
-                        fn get_type() -> golem_wasm::analysis::AnalysedType {
-                            golem_wasm::analysis::AnalysedType::Variant(golem_wasm::analysis::TypeVariant {
-                                name: Some(stringify!(#name).to_string()),
-                                owner: None,
-                                cases: vec![
-                                    #(
-                                        golem_wasm::analysis::NameOptionTypePair {
-                                            name: #case_names_lit.to_string(),
-                                            typ: #case_type_tokens,
-                                        }
-                                    ),*
-                                ],
-                            })
-                        }
-                    }
-
-                    impl golem_wasm::FromValue for #name {
-                        fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                            match value {
-                                golem_wasm::Value::Variant { case_idx, case_value } => {
-                                    match case_idx {
-                                        #(#from_value_cases,)*
-                                        _ => Err(format!("Invalid variant case index: {}", case_idx)),
-                                    }
-                                }
-                                _ => Err(format!("Expected Variant value, got {:?}", value)),
-                            }
-                        }
-                    }
-                })
-            }
-            AnalysedType::Result(result) => {
-                let ok = match result.ok.as_ref() {
-                    Some(ok_type) => self.wit_type_to_typeref(ok_type)?,
+        match resolved {
+            SchemaType::Variant { cases, .. } => self.emit_variant_typedef(&name, cases),
+            SchemaType::Result { spec, .. } => {
+                let ok = match spec.ok.as_deref() {
+                    Some(ok_type) => self.schema_type_to_typeref(ok_type)?,
                     None => quote! { () },
                 };
-                let err = match result.err.as_ref() {
-                    Some(err_type) => self.wit_type_to_typeref(err_type)?,
+                let err = match spec.err.as_deref() {
+                    Some(err_type) => self.schema_type_to_typeref(err_type)?,
                     None => quote! { () },
                 };
                 Ok(quote! { pub type #name = Result<#ok, #err>; })
             }
-            AnalysedType::Option(option) => {
-                let inner = self.wit_type_to_typeref(&option.inner)?;
+            SchemaType::Option { inner, .. } => {
+                let inner = self.schema_type_to_typeref(inner)?;
                 Ok(quote! { pub type #name = Option<#inner>; })
             }
-            AnalysedType::Enum(r#enum) => {
-                let mut cases = Vec::new();
-                let mut into_value_cases = Vec::new();
-                let mut from_value_cases = Vec::new();
-                let mut case_names_lit = Vec::new();
+            SchemaType::Enum { cases, .. } => self.emit_enum_typedef(&name, cases),
+            SchemaType::Flags { .. } => {
+                // NOTE: none of the code-first SDKs support flags at the moment
+                Err(anyhow!("Flags are not supported"))
+            }
+            SchemaType::Record { fields, .. } => self.emit_record_typedef(&name, fields),
+            SchemaType::Tuple { elements, .. } => {
+                let mut tokens = Vec::new();
+                for item in elements.iter() {
+                    tokens.push(self.schema_type_to_typeref(item)?);
+                }
+                Ok(quote! { pub type #name = (#(#tokens),*); })
+            }
+            SchemaType::List { element, .. } => {
+                let inner = self.schema_type_to_typeref(element)?;
+                Ok(quote! { pub type #name = Vec<#inner>; })
+            }
+            SchemaType::String { .. } => Ok(quote! { pub type #name = String; }),
+            SchemaType::Char { .. } => Ok(quote! { pub type #name = char; }),
+            SchemaType::F64 { .. } => Ok(quote! { pub type #name = f64; }),
+            SchemaType::F32 { .. } => Ok(quote! { pub type #name = f32; }),
+            SchemaType::U64 { .. } => Ok(quote! { pub type #name = u64; }),
+            SchemaType::S64 { .. } => Ok(quote! { pub type #name = i64; }),
+            SchemaType::U32 { .. } => Ok(quote! { pub type #name = u32; }),
+            SchemaType::S32 { .. } => Ok(quote! { pub type #name = i32; }),
+            SchemaType::U16 { .. } => Ok(quote! { pub type #name = u16; }),
+            SchemaType::S16 { .. } => Ok(quote! { pub type #name = i16; }),
+            SchemaType::U8 { .. } => Ok(quote! { pub type #name = u8; }),
+            SchemaType::S8 { .. } => Ok(quote! { pub type #name = i8; }),
+            SchemaType::Bool { .. } => Ok(quote! { pub type #name = bool; }),
+            // Schema-layer rich variants and capabilities have no legacy
+            // `AnalysedType` counterpart and the existing SDK target does not
+            // know how to round-trip them. Reject early with a clear error.
+            other @ (SchemaType::FixedList { .. }
+            | SchemaType::Map { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Binary { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Duration { .. }
+            | SchemaType::Quantity { .. }
+            | SchemaType::Union { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. }) => Err(anyhow!(
+                "Cannot emit Rust type definition for unsupported schema variant: {other:?}"
+            )),
+            SchemaType::Ref { .. } => {
+                unreachable!("Ref was resolved to its body via resolve_ref")
+            }
+        }
+    }
 
-                for (idx, case) in r#enum.cases.iter().enumerate() {
-                    let case_ident = Ident::new(&self.to_rust_case_name(case), Span::call_site());
-                    cases.push(quote! { #case_ident });
-                    case_names_lit.push(case.clone());
+    /// Helper: emit a `Variant` `typedef` plus its `IntoValue` / `FromValue` /
+    /// `IntoValueAndType::get_type` impls. The `get_type` body emits a legacy
+    /// `golem_wasm::analysis::AnalysedType::Variant` literal — the SDK
+    /// contract this generator targets.
+    fn emit_variant_typedef(
+        &self,
+        name: &Ident,
+        cases: &[VariantCaseType],
+    ) -> anyhow::Result<TokenStream> {
+        let mut emitted_cases = Vec::new();
+        let mut into_value_cases = Vec::new();
+        let mut from_value_cases = Vec::new();
+        let mut case_names_lit = Vec::new();
+        let mut case_type_tokens = Vec::new();
 
-                    // IntoValue implementation
+        for (idx, case) in cases.iter().enumerate() {
+            let case_ident = Ident::new(&self.to_rust_case_name(&case.name), Span::call_site());
+            let idx_u32 = idx as u32;
+            case_names_lit.push(case.name.clone());
+
+            match &case.payload {
+                Some(typ) => {
+                    let inner = self.schema_type_to_typeref(typ)?;
+                    emitted_cases.push(quote! { #case_ident(#inner) });
+
+                    let type_value = self.schema_type_as_value(typ)?;
+                    case_type_tokens.push(quote! { Some(#type_value) });
+
                     into_value_cases.push(quote! {
-                        Self::#case_ident => golem_wasm::Value::Enum(#idx as u32)
+                        Self::#case_ident(value) => golem_wasm::Value::Variant {
+                            case_idx: #idx_u32,
+                            case_value: Some(Box::new(value.into_value())),
+                        }
                     });
 
-                    // FromValue implementation
-                    let idx_u32 = idx as u32;
+                    from_value_cases.push(quote! {
+                            #idx_u32 => {
+                                let inner_value = case_value.ok_or_else(|| format!("Expected case_value for {}", stringify!(#case_ident)))?;
+                                Ok(Self::#case_ident(<#inner as golem_wasm::FromValue>::from_value(*inner_value)?))
+                            }
+                        });
+                }
+                None => {
+                    emitted_cases.push(quote! { #case_ident });
+                    case_type_tokens.push(quote! { None });
+                    into_value_cases.push(quote! {
+                        Self::#case_ident => golem_wasm::Value::Variant {
+                            case_idx: #idx_u32,
+                            case_value: None,
+                        }
+                    });
                     from_value_cases.push(quote! {
                         #idx_u32 => Ok(Self::#case_ident)
                     });
                 }
-
-                Ok(quote! {
-                    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-                    pub enum #name {
-                        #(#cases),*
-                    }
-
-                    impl golem_wasm::IntoValue for #name {
-                        fn into_value(self) -> golem_wasm::Value {
-                            match self {
-                                #(#into_value_cases),*
-                            }
-                        }
-
-                        fn get_type() -> golem_wasm::analysis::AnalysedType {
-                            golem_wasm::analysis::AnalysedType::Enum(golem_wasm::analysis::TypeEnum {
-                                cases: vec![#(#case_names_lit.to_string()),*],
-                                name: Some(stringify!(#name).to_string()),
-                                owner: None,
-                            })
-                        }
-                    }
-
-                    impl golem_wasm::FromValue for #name {
-                        fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                            match value {
-                                golem_wasm::Value::Enum(idx) => {
-                                    match idx {
-                                        #(#from_value_cases,)*
-                                        _ => Err(format!("Invalid enum index: {}", idx)),
-                                    }
-                                }
-                                _ => Err(format!("Expected Enum value, got {:?}", value)),
-                            }
-                        }
-                    }
-                })
             }
-            AnalysedType::Flags(_flags) => {
-                Err(anyhow!("Flags are not supported")) // NOTE: none of the code-first SDKs support flags at the moment
-            }
-            AnalysedType::Record(record) => {
-                let mut fields = Vec::new();
-                let mut field_idents = Vec::new();
-                let mut field_types = Vec::new();
-                let mut field_names_lit = Vec::new();
-                let mut into_value_fields = Vec::new();
-                let mut from_value_fields = Vec::new();
-
-                for field in &record.fields {
-                    let field_ident =
-                        Ident::new(&self.to_rust_ident(&field.name), Span::call_site());
-                    let field_type = self.wit_type_to_typeref(&field.typ)?;
-
-                    fields.push(quote! { pub #field_ident: #field_type });
-                    field_idents.push(field_ident.clone());
-                    field_types.push(field_type.clone());
-                    field_names_lit.push(field.name.clone());
-
-                    // IntoValue implementation
-                    into_value_fields.push(quote! {
-                        self.#field_ident.into_value()
-                    });
-
-                    // FromValue implementation
-                    from_value_fields.push(quote! {
-                            let #field_ident = <#field_type as golem_wasm::FromValue>::from_value(fields.remove(0))?;
-                        });
-                }
-
-                let field_count = field_idents.len();
-
-                Ok(quote! {
-                    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-                    pub struct #name {
-                        #(#fields),*
-                    }
-
-                    impl golem_wasm::IntoValue for #name {
-                        fn into_value(self) -> golem_wasm::Value {
-                            golem_wasm::Value::Record(vec![
-                                #(#into_value_fields),*
-                            ])
-                        }
-
-                        fn get_type() -> golem_wasm::analysis::AnalysedType {
-                            use golem_wasm::analysis::analysed_type::field;
-
-                            golem_wasm::analysis::AnalysedType::Record(golem_wasm::analysis::TypeRecord {
-                                fields: vec![
-                                    #(
-                                        field(#field_names_lit, <#field_types as golem_wasm::IntoValue>::get_type())
-                                    ),*
-                                ],
-                                name: Some(stringify!(#name).to_string()),
-                                owner: None,
-                            })
-                        }
-                    }
-
-                    impl golem_wasm::FromValue for #name {
-                        fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                            match value {
-                                golem_wasm::Value::Record(mut fields) if fields.len() == #field_count => {
-                                    #(#from_value_fields)*
-                                    Ok(Self {
-                                        #(#field_idents),*
-                                    })
-                                }
-                                golem_wasm::Value::Record(fields) => {
-                                    Err(format!("Expected Record with {} fields, got {}", #field_count, fields.len()))
-                                }
-                                _ => Err(format!("Expected Record value, got {:?}", value)),
-                            }
-                        }
-                    }
-                })
-            }
-            AnalysedType::Tuple(tuple) => {
-                let mut elements = Vec::new();
-                for item in tuple.items.iter() {
-                    elements.push(self.wit_type_to_typeref(item)?);
-                }
-                Ok(quote! { pub type #name = (#(#elements),*); })
-            }
-            AnalysedType::List(list) => {
-                let inner = self.wit_type_to_typeref(&list.inner)?;
-                Ok(quote! { pub type #name = Vec<#inner>; })
-            }
-            AnalysedType::Str(_) => Ok(quote! { pub type #name = String; }),
-            AnalysedType::Chr(_) => Ok(quote! { pub type #name = char; }),
-            AnalysedType::F64(_) => Ok(quote! { pub type #name = f64; }),
-            AnalysedType::F32(_) => Ok(quote! { pub type #name = f32; }),
-            AnalysedType::U64(_) => Ok(quote! { pub type #name = u64; }),
-            AnalysedType::S64(_) => Ok(quote! { pub type #name = i64; }),
-            AnalysedType::U32(_) => Ok(quote! { pub type #name = u32; }),
-            AnalysedType::S32(_) => Ok(quote! { pub type #name = i32; }),
-            AnalysedType::U16(_) => Ok(quote! { pub type #name = u16; }),
-            AnalysedType::S16(_) => Ok(quote! { pub type #name = i16; }),
-            AnalysedType::U8(_) => Ok(quote! { pub type #name = u8; }),
-            AnalysedType::S8(_) => Ok(quote! { pub type #name = i8; }),
-            AnalysedType::Bool(_) => Ok(quote! { pub type #name = bool; }),
-            AnalysedType::Handle(_) => Err(anyhow!("Handles are not supported")),
         }
+
+        Ok(quote! {
+            #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+            pub enum #name {
+                #(#emitted_cases),*
+            }
+
+            impl golem_wasm::IntoValue for #name {
+                fn into_value(self) -> golem_wasm::Value {
+                    match self {
+                        #(#into_value_cases),*
+                    }
+                }
+
+                fn get_type() -> golem_wasm::analysis::AnalysedType {
+                    golem_wasm::analysis::AnalysedType::Variant(golem_wasm::analysis::TypeVariant {
+                        name: Some(stringify!(#name).to_string()),
+                        owner: None,
+                        cases: vec![
+                            #(
+                                golem_wasm::analysis::NameOptionTypePair {
+                                    name: #case_names_lit.to_string(),
+                                    typ: #case_type_tokens,
+                                }
+                            ),*
+                        ],
+                    })
+                }
+            }
+
+            impl golem_wasm::FromValue for #name {
+                fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                    match value {
+                        golem_wasm::Value::Variant { case_idx, case_value } => {
+                            match case_idx {
+                                #(#from_value_cases,)*
+                                _ => Err(format!("Invalid variant case index: {}", case_idx)),
+                            }
+                        }
+                        _ => Err(format!("Expected Variant value, got {:?}", value)),
+                    }
+                }
+            }
+        })
     }
 
-    fn wit_type_to_typeref(&self, typ: &AnalysedType) -> anyhow::Result<TokenStream> {
+    fn emit_enum_typedef(&self, name: &Ident, cases: &[String]) -> anyhow::Result<TokenStream> {
+        let mut emitted_cases = Vec::new();
+        let mut into_value_cases = Vec::new();
+        let mut from_value_cases = Vec::new();
+        let mut case_names_lit = Vec::new();
+
+        for (idx, case) in cases.iter().enumerate() {
+            let case_ident = Ident::new(&self.to_rust_case_name(case), Span::call_site());
+            emitted_cases.push(quote! { #case_ident });
+            case_names_lit.push(case.clone());
+
+            into_value_cases.push(quote! {
+                Self::#case_ident => golem_wasm::Value::Enum(#idx as u32)
+            });
+
+            let idx_u32 = idx as u32;
+            from_value_cases.push(quote! {
+                #idx_u32 => Ok(Self::#case_ident)
+            });
+        }
+
+        Ok(quote! {
+            #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+            pub enum #name {
+                #(#emitted_cases),*
+            }
+
+            impl golem_wasm::IntoValue for #name {
+                fn into_value(self) -> golem_wasm::Value {
+                    match self {
+                        #(#into_value_cases),*
+                    }
+                }
+
+                fn get_type() -> golem_wasm::analysis::AnalysedType {
+                    golem_wasm::analysis::AnalysedType::Enum(golem_wasm::analysis::TypeEnum {
+                        cases: vec![#(#case_names_lit.to_string()),*],
+                        name: Some(stringify!(#name).to_string()),
+                        owner: None,
+                    })
+                }
+            }
+
+            impl golem_wasm::FromValue for #name {
+                fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                    match value {
+                        golem_wasm::Value::Enum(idx) => {
+                            match idx {
+                                #(#from_value_cases,)*
+                                _ => Err(format!("Invalid enum index: {}", idx)),
+                            }
+                        }
+                        _ => Err(format!("Expected Enum value, got {:?}", value)),
+                    }
+                }
+            }
+        })
+    }
+
+    fn emit_record_typedef(
+        &self,
+        name: &Ident,
+        fields: &[NamedFieldType],
+    ) -> anyhow::Result<TokenStream> {
+        let mut emitted_fields = Vec::new();
+        let mut field_idents = Vec::new();
+        let mut field_types = Vec::new();
+        let mut field_names_lit = Vec::new();
+        let mut into_value_fields = Vec::new();
+        let mut from_value_fields = Vec::new();
+
+        for field in fields {
+            let field_ident = Ident::new(&self.to_rust_ident(&field.name), Span::call_site());
+            let field_type = self.schema_type_to_typeref(&field.body)?;
+
+            emitted_fields.push(quote! { pub #field_ident: #field_type });
+            field_idents.push(field_ident.clone());
+            field_types.push(field_type.clone());
+            field_names_lit.push(field.name.clone());
+
+            into_value_fields.push(quote! {
+                self.#field_ident.into_value()
+            });
+
+            from_value_fields.push(quote! {
+                    let #field_ident = <#field_type as golem_wasm::FromValue>::from_value(fields.remove(0))?;
+                });
+        }
+
+        let field_count = field_idents.len();
+
+        Ok(quote! {
+            #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+            pub struct #name {
+                #(#emitted_fields),*
+            }
+
+            impl golem_wasm::IntoValue for #name {
+                fn into_value(self) -> golem_wasm::Value {
+                    golem_wasm::Value::Record(vec![
+                        #(#into_value_fields),*
+                    ])
+                }
+
+                fn get_type() -> golem_wasm::analysis::AnalysedType {
+                    use golem_wasm::analysis::analysed_type::field;
+
+                    golem_wasm::analysis::AnalysedType::Record(golem_wasm::analysis::TypeRecord {
+                        fields: vec![
+                            #(
+                                field(#field_names_lit, <#field_types as golem_wasm::IntoValue>::get_type())
+                            ),*
+                        ],
+                        name: Some(stringify!(#name).to_string()),
+                        owner: None,
+                    })
+                }
+            }
+
+            impl golem_wasm::FromValue for #name {
+                fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                    match value {
+                        golem_wasm::Value::Record(mut fields) if fields.len() == #field_count => {
+                            #(#from_value_fields)*
+                            Ok(Self {
+                                #(#field_idents),*
+                            })
+                        }
+                        golem_wasm::Value::Record(fields) => {
+                            Err(format!("Expected Record with {} fields, got {}", #field_count, fields.len()))
+                        }
+                        _ => Err(format!("Expected Record value, got {:?}", value)),
+                    }
+                }
+            }
+        })
+    }
+
+    fn schema_type_to_typeref(&self, typ: &SchemaType) -> anyhow::Result<TokenStream> {
+        // `type_naming` keys on the structural [`SchemaType`] (with named
+        // composites carried as [`SchemaType::Ref`]); look up the cached
+        // generated name directly without converting back to legacy types.
         let name = self.type_naming.type_name_for_type(typ);
         match name {
             Some(name) => match name {
@@ -840,60 +931,69 @@ impl RustBridgeGenerator {
                 }
             },
             None => match typ {
-                AnalysedType::Option(inner) => {
-                    let inner = self.wit_type_to_typeref(&inner.inner)?;
+                SchemaType::Option { inner, .. } => {
+                    let inner = self.schema_type_to_typeref(inner)?;
                     Ok(quote! { Option<#inner> })
                 }
-                AnalysedType::Str(_) => Ok(quote! { String }),
-                AnalysedType::Chr(_) => Ok(quote! { char }),
-                AnalysedType::F64(_) => Ok(quote! { f64 }),
-                AnalysedType::F32(_) => Ok(quote! { f32 }),
-                AnalysedType::U64(_) => Ok(quote! { u64 }),
-                AnalysedType::S64(_) => Ok(quote! { i64 }),
-                AnalysedType::U32(_) => Ok(quote! { u32 }),
-                AnalysedType::S32(_) => Ok(quote! { i32 }),
-                AnalysedType::U16(_) => Ok(quote! { u16 }),
-                AnalysedType::S16(_) => Ok(quote! { i16 }),
-                AnalysedType::U8(_) => Ok(quote! { u8 }),
-                AnalysedType::S8(_) => Ok(quote! { i8 }),
-                AnalysedType::Bool(_) => Ok(quote! { bool }),
-                AnalysedType::Tuple(tuple) => {
-                    let mut elements = Vec::new();
-                    for item in tuple.items.iter() {
-                        elements.push(self.wit_type_to_typeref(item)?);
+                SchemaType::String { .. } => Ok(quote! { String }),
+                SchemaType::Char { .. } => Ok(quote! { char }),
+                SchemaType::F64 { .. } => Ok(quote! { f64 }),
+                SchemaType::F32 { .. } => Ok(quote! { f32 }),
+                SchemaType::U64 { .. } => Ok(quote! { u64 }),
+                SchemaType::S64 { .. } => Ok(quote! { i64 }),
+                SchemaType::U32 { .. } => Ok(quote! { u32 }),
+                SchemaType::S32 { .. } => Ok(quote! { i32 }),
+                SchemaType::U16 { .. } => Ok(quote! { u16 }),
+                SchemaType::S16 { .. } => Ok(quote! { i16 }),
+                SchemaType::U8 { .. } => Ok(quote! { u8 }),
+                SchemaType::S8 { .. } => Ok(quote! { i8 }),
+                SchemaType::Bool { .. } => Ok(quote! { bool }),
+                SchemaType::Tuple { elements, .. } => {
+                    let mut tokens = Vec::new();
+                    for item in elements.iter() {
+                        tokens.push(self.schema_type_to_typeref(item)?);
                     }
-                    Ok(quote! { (#(#elements),*) })
+                    Ok(quote! { (#(#tokens),*) })
                 }
-                AnalysedType::List(list) => {
-                    let inner = self.wit_type_to_typeref(&list.inner)?;
+                SchemaType::List { element, .. } => {
+                    let inner = self.schema_type_to_typeref(element)?;
                     Ok(quote! { Vec<#inner> })
                 }
-                AnalysedType::Result(result) => {
-                    let ok = match result.ok.as_ref() {
-                        Some(ok) => self.wit_type_to_typeref(ok)?,
+                SchemaType::Result { spec, .. } => {
+                    let ok = match spec.ok.as_deref() {
+                        Some(ok) => self.schema_type_to_typeref(ok)?,
                         None => quote! { () },
                     };
-                    let err = match result.err.as_ref() {
-                        Some(err) => self.wit_type_to_typeref(err)?,
+                    let err = match spec.err.as_deref() {
+                        Some(err) => self.schema_type_to_typeref(err)?,
                         None => quote! { () },
                     };
                     Ok(quote! { Result<#ok, #err> })
                 }
-                AnalysedType::Handle(_)
-                | AnalysedType::Variant(_)
-                | AnalysedType::Enum(_)
-                | AnalysedType::Flags(_)
-                | AnalysedType::Record(_) => {
-                    let type_name = self.type_naming.type_name_for_type(typ);
-                    match type_name {
-                        Some(RustTypeName::Derived(name)) => {
-                            let name = Ident::new(name, Span::call_site());
-                            Ok(quote! { #name })
-                        }
-                        Some(RustTypeName::Remapped()) => todo!("implement remap"),
-                        None => Err(anyhow!("Missing type name for {:?}", typ)),
-                    }
-                }
+                SchemaType::Ref { .. }
+                | SchemaType::Variant { .. }
+                | SchemaType::Enum { .. }
+                | SchemaType::Flags { .. }
+                | SchemaType::Record { .. } => Err(anyhow!("Missing type name for {:?}", typ)),
+                // Rich schema variants without a legacy `AnalysedType`
+                // counterpart cannot round-trip through the current
+                // `IntoValue` / `FromValue` SDK contract.
+                SchemaType::FixedList { .. }
+                | SchemaType::Map { .. }
+                | SchemaType::Text { .. }
+                | SchemaType::Binary { .. }
+                | SchemaType::Path { .. }
+                | SchemaType::Url { .. }
+                | SchemaType::Datetime { .. }
+                | SchemaType::Duration { .. }
+                | SchemaType::Quantity { .. }
+                | SchemaType::Union { .. }
+                | SchemaType::Secret { .. }
+                | SchemaType::QuotaToken { .. }
+                | SchemaType::Future { .. }
+                | SchemaType::Stream { .. } => Err(anyhow!(
+                    "Cannot emit Rust type reference for unsupported schema variant: {typ:?}"
+                )),
             },
         }
     }
@@ -1830,7 +1930,9 @@ impl RustBridgeGenerator {
 
                     let decode_value = match &named_element.schema {
                         ElementSchema::ComponentModel(schema) => {
-                            let value_type = self.wit_type_to_typeref(&schema.element_type)?;
+                            let value_schema_type =
+                                self.import_analysed_type(&schema.element_type)?;
+                            let value_type = self.schema_type_to_typeref(&value_schema_type)?;
                             quote! {
                                 let value = match &named_element_value.value {
                                     golem_common::model::agent::ElementValue::ComponentModel(golem_common::model::agent::ComponentModelElementValue { value: vnt }) => {
@@ -2105,7 +2207,7 @@ impl RustBridgeGenerator {
         let mut type_definitions = Vec::new();
 
         for (typ, name) in self.type_naming.types() {
-            let def = self.wit_type_to_typedef(name, typ)?;
+            let def = self.schema_type_to_typedef(name, typ)?;
             type_definitions.push(def);
         }
 

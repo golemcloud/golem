@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::card::owner::AgentOwnerPattern;
+use golem_common::model::card::{
+    AgentResourcePattern, ClassPermissionTarget, EffectiveSurface, GrantSurface, PermissionTarget,
+};
 use golem_debugging_service::services::auth::{AuthService, AuthServiceError};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor_test_utils::TestContext;
@@ -25,14 +28,20 @@ impl AuthService for TestAuthService {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
-            token_root_card_id: None,
+            effective_surface: EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: vec![GrantSurface {
+                    positive: vec![PermissionTarget::Agent(ClassPermissionTarget {
+                        verb: None,
+                        owner: AgentOwnerPattern::AccountAgents {
+                            account: self.test_ctx.account_id.to_string(),
+                        },
+                        resource: AgentResourcePattern::Any,
+                    })],
+                    negative: Vec::new(),
+                }],
+                upper: Vec::new(),
+            },
         }))
-    }
-    async fn check_user_allowed_to_debug_in_environment(
-        &self,
-        _environment_id: EnvironmentId,
-        _auth_ctx: &AuthCtx,
-    ) -> Result<(), AuthServiceError> {
-        Ok(())
     }
 }

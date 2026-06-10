@@ -20,11 +20,12 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_value::SchemaValue;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
-use golem_wasm::analysis::AnalysedType;
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;
@@ -51,12 +52,15 @@ pub struct AgentSecretCreationRecord {
 }
 
 impl AgentSecretCreationRecord {
+    /// Construct a creation record from the in-memory schema-layer carrier.
+    ///
+    /// The persisted blob shape stores schema types directly.
     pub fn new(
         id: AgentSecretId,
         environment_id: EnvironmentId,
         path: CanonicalAgentSecretPath,
-        secret_type: AnalysedType,
-        secret_value: Option<golem_wasm::Value>,
+        secret_type: SchemaGraph,
+        secret_value: Option<SchemaValue>,
         actor: AccountId,
     ) -> Self {
         Self {
@@ -76,13 +80,13 @@ impl AgentSecretCreationRecord {
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AgentSecretData {
-    pub secret_type: AnalysedType,
+    pub secret_type: SchemaGraph,
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AgentSecretRevisionData {
-    pub secret_value: Option<golem_wasm::Value>,
+    pub secret_value: Option<SchemaValue>,
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]

@@ -32,6 +32,19 @@ use golem_wasm::analysis::{
     TypeStr, TypeTuple, TypeU8, TypeU16, TypeU32, TypeU64, TypeVariant,
 };
 
+/// Marker inserted between a base [`TypeId`] and its structural fingerprint
+/// when disambiguating two distinct legacy types that share a single
+/// `(owner, name)`. The marker is alphanumeric / underscore only, which
+/// keeps the resulting id URI-safe (it can appear in JSON Schema `$defs`
+/// keys, JSON Pointer refs, and OpenAPI component names without
+/// percent-encoding). Stripping the marker reconstructs the original base
+/// id; see [`strip_disambiguation_suffix`] and [`split_type_id`].
+///
+/// Exposed publicly so downstream consumers that re-derive `(owner, name)`
+/// from a generated `TypeId` (e.g. CLI bridge code generation) can strip
+/// the suffix using the same constant.
+pub const DISAMBIGUATION_MARKER: &str = "__g_";
+
 use crate::schema::adapters::error::{SchemaAdapterError, legacy_type_id};
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
@@ -50,13 +63,15 @@ pub fn analysed_type_to_schema_type_inline(
 /// Convert a legacy [`AnalysedType`] tree into a self-contained
 /// [`SchemaGraph`]. Named composites become [`SchemaTypeDef`] entries
 /// referenced via [`SchemaType::Ref`]; anonymous composites stay inline.
+///
+/// For converting many legacy roots that share named types — e.g. an agent's
+/// constructor plus its method inputs and outputs — use
+/// [`SchemaGraphBuilder`] directly so disambiguation runs against the union
+/// of all previously lowered types instead of independently per root.
 pub fn analysed_type_to_schema_graph(ty: &AnalysedType) -> Result<SchemaGraph, SchemaAdapterError> {
-    let mut builder = GraphBuilder::default();
+    let mut builder = SchemaGraphBuilder::new();
     let root = builder.lower(ty)?;
-    Ok(SchemaGraph {
-        defs: builder.into_defs(),
-        root,
-    })
+    Ok(builder.into_graph_with_root(root))
 }
 
 /// Reverse: extract the root inline [`SchemaType`] of a graph back into an
@@ -161,51 +176,128 @@ fn inline_no_naming(ty: &AnalysedType) -> Result<SchemaType, SchemaAdapterError>
 // Forward: AnalysedType → SchemaGraph (names preserved as defs)
 // --------------------------------------------------------------------------
 
+/// Stateful builder for [`SchemaGraph`]s assembled from one or more legacy
+/// [`AnalysedType`] roots. Use this directly when you need disambiguation
+/// to consider every previously lowered type — for example when bridge
+/// generation imports the constructor, every method's input/output, and
+/// every config field of an agent into a single shared graph. Each call to
+/// [`SchemaGraphBuilder::lower`] adds the new root's named composites as
+/// [`SchemaTypeDef`] entries and returns the schema-layer type to use as
+/// the new root.
 #[derive(Default)]
-struct GraphBuilder {
+pub struct SchemaGraphBuilder {
     defs_by_id: HashMap<TypeId, SchemaTypeDef>,
 }
 
-impl GraphBuilder {
-    fn lower(&mut self, ty: &AnalysedType) -> Result<SchemaType, SchemaAdapterError> {
+impl SchemaGraphBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Lower a single legacy [`AnalysedType`] tree into the shared graph and
+    /// return the schema-layer type that should be used as a root. Named
+    /// composites encountered along the way are registered into the
+    /// builder's def table; subsequent calls disambiguate against the
+    /// accumulated state.
+    pub fn lower(&mut self, ty: &AnalysedType) -> Result<SchemaType, SchemaAdapterError> {
+        self.lower_named(ty)
+    }
+
+    /// Snapshot the accumulated defs (sorted by id) without consuming the
+    /// builder. Use this when you need a `SchemaGraph` to resolve refs
+    /// without losing the ability to lower more roots into the same
+    /// builder.
+    pub fn snapshot_graph(&self, root: SchemaType) -> SchemaGraph {
+        let mut defs: Vec<_> = self.defs_by_id.values().cloned().collect();
+        defs.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        SchemaGraph { defs, root }
+    }
+
+    /// Resolve a `TypeId` against the accumulated defs without allocating
+    /// a `SchemaGraph`. Useful during in-progress lowering when callers
+    /// alternate between [`Self::lower`] and ref resolution; downstream
+    /// consumers that only need a snapshot at the end should still use
+    /// [`Self::snapshot_graph`] / [`Self::into_graph_with_root`].
+    pub fn lookup(&self, id: &TypeId) -> Option<&SchemaTypeDef> {
+        self.defs_by_id.get(id)
+    }
+
+    /// Consume the builder and produce a [`SchemaGraph`] anchored at `root`.
+    pub fn into_graph_with_root(self, root: SchemaType) -> SchemaGraph {
+        SchemaGraph {
+            defs: self.into_defs(),
+            root,
+        }
+    }
+
+    fn lower_named(&mut self, ty: &AnalysedType) -> Result<SchemaType, SchemaAdapterError> {
         // If the legacy type carries `name` (and optional `owner`) we register
         // it as a def and return a Ref. Otherwise lower inline.
-        let id = match legacy_id_of(ty)? {
+        let base_id = match legacy_id_of(ty)? {
             Some(id) => id,
             None => return self.lower_inline(ty),
         };
 
-        if !self.defs_by_id.contains_key(&id) {
-            // Reserve the def slot up front (anonymous body) so recursive
-            // references through the same name terminate.
+        // Legacy `AnalysedType` is tree-shaped (no `Ref` / cycles), so we can
+        // always materialise the body before deciding on the final TypeId.
+        let body = self.lower_inline(ty)?;
+        let final_id = self.assign_id(&base_id, &body);
+
+        if !self.defs_by_id.contains_key(&final_id) {
+            let display_name = analysed_type_name(ty).map(|s| s.to_string());
             self.defs_by_id.insert(
-                id.clone(),
+                final_id.clone(),
                 SchemaTypeDef {
-                    id: id.clone(),
-                    name: None,
-                    body: SchemaType::bool(), // placeholder, replaced below
+                    id: final_id.clone(),
+                    name: display_name,
+                    body,
                 },
             );
-            let body = self.lower_inline(ty)?;
-            let display_name = analysed_type_name(ty).map(|s| s.to_string());
-            let def = self.defs_by_id.get_mut(&id).unwrap();
-            def.name = display_name;
-            def.body = body;
-        } else {
-            // Same TypeId already registered. We require the body to be
-            // structurally equal — but recomputing here would lose laziness.
-            // Since legacy AnalysedType is tree-shaped, equal owner+name
-            // implies structural equality in practice; the only way to get
-            // a mismatch is hand-built `AnalysedType` graphs with the same
-            // (owner, name) on different bodies.
-            let body = self.lower_inline(ty)?;
-            let existing_body = &self.defs_by_id[&id].body;
-            if existing_body != &body {
-                return Err(SchemaAdapterError::DuplicateTypeIdConflict(id));
-            }
         }
 
-        Ok(SchemaType::ref_to(id))
+        Ok(SchemaType::ref_to(final_id))
+    }
+
+    /// Pick a TypeId for `body` given the legacy-derived `base_id`. If
+    /// `base_id` is unused, or if the existing entry under `base_id` has a
+    /// structurally identical body, return `base_id`. Otherwise disambiguate
+    /// by appending a deterministic structural fingerprint suffix using the
+    /// [`DISAMBIGUATION_MARKER`] separator.
+    ///
+    /// Same-name structural collisions occur when an SDK reuses a single
+    /// legacy name across multiple instantiations of a generic — for example
+    /// the Rust SDK emits `name = "Bound"` for every `std::ops::Bound<T>`
+    /// regardless of `T`. Returning an error in that case would block
+    /// otherwise valid agent metadata; instead, the second and subsequent
+    /// distinct bodies get a `<base_id>__g_<hash>` TypeId so each
+    /// instantiation keeps its own `SchemaTypeDef`. Stripping the marker
+    /// suffix yields the original base id so owner/name recovery in
+    /// [`split_type_id`] is unaffected.
+    fn assign_id(&self, base_id: &TypeId, body: &SchemaType) -> TypeId {
+        match self.defs_by_id.get(base_id) {
+            Some(existing) if &existing.body == body => base_id.clone(),
+            Some(_) => {
+                let fp = body_fingerprint(body);
+                let mut candidate =
+                    TypeId::new(format!("{}{DISAMBIGUATION_MARKER}{fp}", base_id.0));
+                // Pathological hash-collision guard: walk a counter suffix
+                // until either an unused id is found, or one whose body
+                // matches.
+                let mut counter: u32 = 0;
+                while let Some(existing) = self.defs_by_id.get(&candidate) {
+                    if &existing.body == body {
+                        return candidate;
+                    }
+                    counter += 1;
+                    candidate = TypeId::new(format!(
+                        "{}{DISAMBIGUATION_MARKER}{fp}_{counter}",
+                        base_id.0
+                    ));
+                }
+                candidate
+            }
+            None => base_id.clone(),
+        }
     }
 
     fn lower_inline(&mut self, ty: &AnalysedType) -> Result<SchemaType, SchemaAdapterError> {
@@ -302,6 +394,54 @@ fn legacy_id_of(ty: &AnalysedType) -> Result<Option<TypeId>, SchemaAdapterError>
         _ => (None, None),
     };
     legacy_type_id(owner, name)
+}
+
+/// Deterministic structural fingerprint over a [`SchemaType`] body, used
+/// to disambiguate same-name distinct legacy types. The output is stable
+/// across processes and Rust toolchain versions: serialisation goes
+/// through `serde_json` over `SchemaType` (which is `Serialize` and
+/// contains no hash-ordered maps), and the digest is the 64-bit FNV-1a
+/// hash of those bytes implemented inline.
+///
+/// Equal bodies always produce equal fingerprints. Distinct bodies almost
+/// always produce distinct fingerprints; a counter suffix in
+/// [`SchemaGraphBuilder::assign_id`] guards against the astronomically
+/// unlikely hash collision case.
+fn body_fingerprint(body: &SchemaType) -> String {
+    let bytes = serde_json::to_vec(body)
+        .expect("SchemaType is `Serialize` and free of map ordering; serialisation cannot fail");
+    format!("{:016x}", fnv1a_64(&bytes))
+}
+
+/// FNV-1a 64-bit hash. The constants and algorithm are public domain and
+/// stable by specification — see <http://www.isthe.com/chongo/tech/comp/fnv/>.
+/// Implemented locally to keep the fingerprint independent of std's
+/// [`std::collections::hash_map::DefaultHasher`], whose internal algorithm
+/// is not part of Rust's stability guarantees.
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+/// Return the base portion of `id` with the disambiguation suffix removed,
+/// or `id` unchanged if no suffix is present. The suffix format is
+/// `__g_<hex>` optionally followed by `_<counter>`; both follow
+/// [`assign_id`](SchemaGraphBuilder::assign_id).
+///
+/// Exposed for downstream code (CLI bridge generation, schema renderers)
+/// that re-derives `(owner, name)` from a generated `TypeId` and needs to
+/// see through the suffix.
+pub fn strip_disambiguation_suffix(id: &str) -> &str {
+    match id.rfind(DISAMBIGUATION_MARKER) {
+        Some(pos) => &id[..pos],
+        None => id,
+    }
 }
 
 fn analysed_type_name(ty: &AnalysedType) -> Option<&str> {
@@ -551,8 +691,13 @@ fn reattach_name(ty: AnalysedType, display_name: Option<&str>, id: &TypeId) -> A
 /// Split a dotted `TypeId` into `(owner, name)`. If the legacy
 /// `display_name` is present, use it as the name; otherwise the last dotted
 /// segment becomes the name and the prefix becomes the owner.
+///
+/// Disambiguation suffixes appended by [`SchemaGraphBuilder::assign_id`] are
+/// stripped before splitting so a TypeId like `std.ops.Bound__g_<hex>` with
+/// display name `Bound` still recovers `(Some("std.ops"), Some("Bound"))`
+/// rather than dropping the owner.
 fn split_type_id(id: &TypeId, display_name: Option<&str>) -> (Option<String>, Option<String>) {
-    let raw = &id.0;
+    let raw = strip_disambiguation_suffix(&id.0);
     if let Some(name) = display_name {
         // Best-effort: if the TypeId ends with `.<name>`, treat the prefix
         // as owner; otherwise leave owner empty.
@@ -568,6 +713,6 @@ fn split_type_id(id: &TypeId, display_name: Option<&str>) -> (Option<String>, Op
     // No legacy display name recorded; reconstruct from the TypeId.
     match raw.rsplit_once('.') {
         Some((owner, name)) => (Some(owner.to_string()), Some(name.to_string())),
-        None => (None, Some(raw.clone())),
+        None => (None, Some(raw.to_string())),
     }
 }

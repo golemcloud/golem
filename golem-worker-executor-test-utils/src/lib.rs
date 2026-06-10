@@ -570,7 +570,11 @@ impl TestWorkerExecutor {
             account_id: self.context.account_id,
             account_plan_id: self.context.account_plan_id,
             account_roles: self.context.account_roles.clone(),
-            token_root_card_id: None,
+            effective_surface: golem_common::model::card::EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: Vec::new(),
+                upper: Vec::new(),
+            },
         })
     }
 

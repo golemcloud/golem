@@ -19,14 +19,14 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
 use golem_common::model::diff::{Hash, Hashable};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_service_base::model::component::Component;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -627,6 +627,8 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             environment_id: value.environment_id,
             application_id: value.application_id,
             account_id: value.account_id,
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(

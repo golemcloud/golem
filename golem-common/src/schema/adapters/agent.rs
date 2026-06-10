@@ -40,22 +40,31 @@
 //!   resolve against the dependency's own
 //!   [`AgentDependencySchema::schema`].
 //!
-//! Out of scope for these adapters: `LegacyParsedAgentId` ↔ schema-layer
-//! `ParsedAgentId`. That conversion would have to map a legacy `DataValue`
-//! to a `TypedSchemaValue` and back, but there is no `DataValue` ↔
-//! `SchemaValue` adapter yet, so the agent-id adapter is intentionally
-//! deferred to a follow-up step.
+//! Includes [`legacy_parsed_agent_id_to_schema`], which walks the legacy
+//! `LegacyParsedAgentId::parameters` (a [`DataValue`]) and projects each
+//! `ComponentModelElementValue` into a [`SchemaValue`] paired with a
+//! [`SchemaType`] driven by the element's embedded `AnalysedType`.
 
-use crate::base_model::agent::{AgentConstructor, AgentDependency, AgentMethod, AgentType};
+use crate::base_model::agent::{
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, DataValue, ElementValue,
+    LegacyParsedAgentId,
+};
+use crate::schema::adapters::analysed_type::SchemaGraphBuilder;
 use crate::schema::adapters::data_schema::{
     data_schema_to_input_schema, data_schema_to_output_schema, input_schema_to_data_schema,
     output_schema_to_data_schema,
 };
 use crate::schema::adapters::error::SchemaAdapterError;
+use crate::schema::adapters::value::value_to_schema_value;
 use crate::schema::agent::{
     AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
+    ParsedAgentId,
 };
-use crate::schema::graph::SchemaGraph;
+use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
+use crate::schema::schema_type::{NamedFieldType, SchemaType, UnionBranch, UnionSpec};
+use crate::schema::schema_value::{
+    BinaryValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
+};
 
 /// Forward: legacy [`AgentConstructor`] → [`AgentConstructorSchema`].
 pub fn agent_constructor_to_schema(
@@ -212,4 +221,153 @@ pub fn schema_agent_type_to_legacy(ty: &AgentTypeSchema) -> Result<AgentType, Sc
         snapshotting: ty.snapshotting.clone(),
         config: ty.config.clone(),
     })
+}
+
+/// Project a [`LegacyParsedAgentId`] into the schema-layer [`ParsedAgentId`].
+///
+/// Walks the legacy `parameters: DataValue` and constructs a
+/// [`TypedSchemaValue`] whose root is a [`SchemaType::Record`] (for the tuple
+/// shape) or a `list<union<...> with Role::Multimodal>` (for the multimodal
+/// shape), with one element per legacy `ElementValue`. Each element's
+/// component-model body is paired with its embedded `AnalysedType`, converted
+/// in-place via [`analysed_type_to_schema_type_inline`] +
+/// [`value_to_schema_value`]. Unstructured text/binary elements become
+/// inline [`SchemaValue::Text`] / [`SchemaValue::Binary`]; URL references
+/// have no schema-layer counterpart and return
+/// [`SchemaAdapterError::LossySchemaType`].
+pub fn legacy_parsed_agent_id_to_schema(
+    parsed: &LegacyParsedAgentId,
+) -> Result<ParsedAgentId, SchemaAdapterError> {
+    let typed = legacy_data_value_to_typed_schema_value(&parsed.parameters)?;
+    Ok(ParsedAgentId::new(
+        parsed.agent_type.clone(),
+        typed,
+        parsed.phantom_id,
+    ))
+}
+
+/// Walk a legacy `DataValue` into a [`TypedSchemaValue`] using the type
+/// info embedded in each `ComponentModelElementValue::value` (a
+/// `ValueAndType`). Used by the agent-id adapter and by CLI display sites
+/// that hold a bare `DataValue` (the schema is implicitly recoverable from
+/// the values themselves).
+///
+/// Element types are lowered through a single shared [`SchemaGraphBuilder`]
+/// so legacy named composites that appear in multiple positional elements
+/// (or repeat across multimodal entries) are hoisted to one
+/// [`SchemaTypeDef`] keyed by their `(owner, name)`. This preserves the
+/// identity that per-language renderers need to print native-looking
+/// type names instead of structural anonymous bodies.
+pub fn legacy_data_value_to_typed_schema_value(
+    value: &DataValue,
+) -> Result<TypedSchemaValue, SchemaAdapterError> {
+    use crate::base_model::agent::NamedElementValues;
+    use crate::schema::metadata::{MetadataEnvelope, Role};
+    use crate::schema::schema_type::DiscriminatorRule;
+    let mut builder = SchemaGraphBuilder::new();
+    match value {
+        DataValue::Tuple(elements) => {
+            let mut fields = Vec::with_capacity(elements.elements.len());
+            let mut values = Vec::with_capacity(elements.elements.len());
+            for (i, element) in elements.elements.iter().enumerate() {
+                let (name, schema_ty, schema_value) =
+                    legacy_element_to_named(&mut builder, element, i)?;
+                fields.push(NamedFieldType {
+                    name,
+                    body: schema_ty,
+                    metadata: MetadataEnvelope::default(),
+                });
+                values.push(schema_value);
+            }
+            Ok(TypedSchemaValue::new(
+                builder.into_graph_with_root(SchemaType::record(fields)),
+                SchemaValue::Record { fields: values },
+            ))
+        }
+        DataValue::Multimodal(NamedElementValues { elements }) => {
+            let mut branches = Vec::with_capacity(elements.len());
+            let mut union_values = Vec::with_capacity(elements.len());
+            for (i, named) in elements.iter().enumerate() {
+                let (_synth_name, schema_ty, schema_value) =
+                    legacy_element_to_named(&mut builder, &named.value, i)?;
+                branches.push(UnionBranch {
+                    tag: named.name.clone(),
+                    body: schema_ty,
+                    discriminator: DiscriminatorRule::FieldAbsent {
+                        field_name: String::new(),
+                    },
+                    metadata: MetadataEnvelope::default(),
+                });
+                union_values.push(SchemaValue::Union(UnionValuePayload {
+                    tag: named.name.clone(),
+                    body: Box::new(schema_value),
+                }));
+            }
+            let mut union_ty = SchemaType::union(UnionSpec { branches });
+            union_ty.metadata_mut().role = Some(Role::Multimodal);
+            Ok(TypedSchemaValue::new(
+                builder.into_graph_with_root(SchemaType::list(union_ty)),
+                SchemaValue::List {
+                    elements: union_values,
+                },
+            ))
+        }
+    }
+}
+
+/// Returns the synthetic positional name `p{idx}`, the converted
+/// `SchemaType`, and the converted `SchemaValue` for one legacy
+/// [`ElementValue`].
+///
+/// Named legacy composites are registered into the shared
+/// [`SchemaGraphBuilder`] and returned as [`SchemaType::Ref`] so identity
+/// is preserved across all elements of the surrounding `DataValue`.
+fn legacy_element_to_named(
+    builder: &mut SchemaGraphBuilder,
+    element: &ElementValue,
+    idx: usize,
+) -> Result<(String, SchemaType, SchemaValue), SchemaAdapterError> {
+    use crate::base_model::agent::{
+        BinaryReference, BinarySource, ComponentModelElementValue, TextReference, TextSource,
+        TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    };
+    use crate::schema::schema_type::{BinaryRestrictions, TextRestrictions};
+    let name = format!("p{idx}");
+    match element {
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+            let schema_ty = builder.lower(&value.typ)?;
+            let schema_value = value_to_schema_value(&value.value, &value.typ)?;
+            Ok((name, schema_ty, schema_value))
+        }
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
+            TextReference::Inline(TextSource { data, text_type }) => {
+                let payload = TextValuePayload {
+                    text: data.clone(),
+                    language: text_type
+                        .as_ref()
+                        .map(|TextType { language_code }| language_code.clone()),
+                };
+                let schema_ty = SchemaType::text(TextRestrictions::default());
+                Ok((name, schema_ty, SchemaValue::Text(payload)))
+            }
+            TextReference::Url(_) => Err(SchemaAdapterError::LossySchemaType(
+                "URL text references cannot be projected into SchemaValue::Text".into(),
+            )),
+        },
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                    let payload = BinaryValuePayload {
+                        bytes: data.clone(),
+                        mime_type: Some(binary_type.mime_type.clone()),
+                    };
+                    let schema_ty = SchemaType::binary(BinaryRestrictions::default());
+                    Ok((name, schema_ty, SchemaValue::Binary(payload)))
+                }
+                BinaryReference::Url(_) => Err(SchemaAdapterError::LossySchemaType(
+                    "URL binary references cannot be projected into SchemaValue::Binary".into(),
+                )),
+            }
+        }
+    }
 }

@@ -490,80 +490,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: set_account_plan
-  /v1/accounts/{account_id}/roles:
-    put:
-      tags:
-      - RegistryService
-      - Account
-      summary: Set the roles of an account
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/AccountSetRoles'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Account'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: set_account_roles
   /v1/accounts/{account_id}/tokens:
     get:
       tags:
@@ -8294,7 +8220,7 @@ components:
       - email
       - planId
       - roles
-      - tokenRootCardEpoch
+      - accountRootCardId
       properties:
         id:
           type: string
@@ -8313,12 +8239,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
-        tokenRootCardId:
+        accountRootCardId:
           type: string
           format: uuid
-        tokenRootCardEpoch:
-          type: integer
-          format: uint64
     AccountCountsReport:
       type: object
       title: AccountCountsReport
@@ -8342,11 +8265,16 @@ components:
       required:
       - name
       - email
+      - roles
       properties:
         name:
           type: string
         email:
           type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountRole'
     AccountRole:
       type: string
       enum:
@@ -8366,20 +8294,6 @@ components:
         plan:
           type: string
           format: uuid
-    AccountSetRoles:
-      type: object
-      title: AccountSetRoles
-      required:
-      - currentRevision
-      - roles
-      properties:
-        currentRevision:
-          type: integer
-          format: uint64
-        roles:
-          type: array
-          items:
-            $ref: '#/components/schemas/AccountRole'
     AccountSummary:
       type: object
       title: AccountSummary
@@ -10362,6 +10276,7 @@ components:
       - id
       - revision
       - applicationId
+      - applicationName
       - name
       - diffModelVersion
       - compatibilityCheck
@@ -10379,6 +10294,8 @@ components:
         applicationId:
           type: string
           format: uuid
+        applicationName:
+          type: string
         name:
           type: string
         diffModelVersion:
@@ -11941,6 +11858,8 @@ components:
       required:
       - componentId
       - componentRevision
+      - componentName
+      - accountId
       properties:
         componentId:
           type: string
@@ -11948,6 +11867,11 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        componentName:
+          type: string
+        accountId:
+          type: string
+          format: uuid
     ResourceCapacityLimit:
       type: object
       title: ResourceCapacityLimit

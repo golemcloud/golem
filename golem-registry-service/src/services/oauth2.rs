@@ -309,7 +309,14 @@ impl OAuth2Service {
 
         let account = self
             .account_service
-            .create(AccountCreation { name, email }, &AuthCtx::system())
+            .create(
+                AccountCreation {
+                    name,
+                    email,
+                    roles: Vec::new(),
+                },
+                &AuthCtx::system(),
+            )
             .await?;
 
         Ok(account.id)

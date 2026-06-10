@@ -69,6 +69,14 @@ impl PostgresKeyValueStorage {
         match namespace {
             KeyValueStorageNamespace::RunningWorkers => "running-workers".to_string(),
             KeyValueStorageNamespace::Worker { .. } => "worker".to_string(),
+            // agent_id embedded so each agent's split status fields are an isolated key space
+            // (per-agent `keys`/`del_many` select only that agent's rows).
+            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+                format!("agent-status:{}", agent_id.to_redis_key())
+            }
+            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
+                format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
+            }
             KeyValueStorageNamespace::Promise { .. } => "promises".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
@@ -242,6 +250,30 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                 .boxed()
             })
             .await
+            .map_err(|err| err.to_safe_string())
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        let query = sqlx::query_as::<_, (String, Vec<u8>)>(
+            "SELECT key, value FROM kv_storage WHERE namespace = $1;",
+        )
+        .bind(Self::namespace(namespace));
+
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as::<(String, Vec<u8>), _>(query)
+            .await
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(key, value)| (key, Bytes::from(value)))
+                    .collect()
+            })
             .map_err(|err| err.to_safe_string())
     }
 

@@ -1,30 +1,30 @@
 use crate::mcp::{AgentTypeImplementers, CompiledMcp};
 use golem_common::base_model::domain_registration::Domain;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::model::agent::{
+    AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
+};
 
 impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
     fn from(value: CompiledMcp) -> Self {
+        let registered_agent_types = value.registered_agent_types;
+        let agent_type_implementers = registered_agent_types
+            .iter()
+            .map(|registered_agent_type| {
+                (
+                    registered_agent_type.agent_type.type_name.0.clone(),
+                    registered_agent_type.implemented_by.clone().into(),
+                )
+            })
+            .collect();
+
         Self {
             account_id: Some(value.account_id.into()),
             environment_id: Some(value.environment_id.into()),
             deployment_revision: value.deployment_revision.into(),
             domain: value.domain.0,
-            agent_type_implementers: value
-                .agent_type_implementers
-                .into_iter()
-                .map(|(name, (component_id, component_revision))| {
-                    (
-                        name.0,
-                        golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplementer {
-                            component_id: Some(component_id.into()),
-                            component_revision: component_revision.into(),
-                        },
-                    )
-                })
-                .collect(),
+            agent_type_implementers,
             security_scheme: value.security_scheme.map(|s| s.into()),
-            registered_agent_types: value
-                .registered_agent_types
+            registered_agent_types: registered_agent_types
                 .into_iter()
                 .map(|rat| rat.into())
                 .collect(),
@@ -42,16 +42,11 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
             .agent_type_implementers
             .into_iter()
             .map(|(name, implementer)| {
-                let component_id = implementer
-                    .component_id
-                    .ok_or("Missing component_id")?
-                    .try_into()
-                    .map_err(|e| format!("Invalid component_id: {}", e))?;
-                let component_revision = implementer
-                    .component_revision
-                    .try_into()
-                    .map_err(|e| format!("Invalid component_revision: {}", e))?;
-                Ok((AgentTypeName(name), (component_id, component_revision)))
+                let implementer: RegisteredAgentTypeImplementer = implementer.try_into()?;
+                Ok((
+                    AgentTypeName(name),
+                    (implementer.component_id, implementer.component_revision),
+                ))
             })
             .collect::<Result<_, String>>()?;
 

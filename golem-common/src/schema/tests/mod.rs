@@ -15,4 +15,6 @@
 pub(crate) mod strategies;
 
 #[cfg(feature = "full")]
+mod binary_codec_tests;
+#[cfg(feature = "full")]
 mod wit_tests;

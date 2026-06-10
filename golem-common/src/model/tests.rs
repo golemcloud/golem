@@ -14,12 +14,12 @@
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
+use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentMode,
-    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
-    StringFilterComparator, Timestamp, TimestampedAgentInvocation,
+    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode, AgentStatus,
+    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use golem_wasm::ValueAndType;
@@ -361,11 +361,11 @@ fn worker_filter_matches() {
 #[test]
 fn agent_status_record_has_pending_work_for_pending_invocations() {
     let mut status = AgentStatusRecord::default();
-    status.pending_invocations.push(TimestampedAgentInvocation {
+    status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
-        invocation: AgentInvocation::ManualUpdate {
-            target_revision: ComponentRevision::INITIAL,
-        },
+        oplog_index: OplogIndex::INITIAL,
+        idempotency_key: None,
+        manual_update_target_revision: Some(ComponentRevision::INITIAL),
     });
 
     assert!(status.has_pending_work());
@@ -374,15 +374,12 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
 #[test]
 fn agent_status_record_has_pending_work_for_pending_updates() {
     let mut status = AgentStatusRecord::default();
-    status
-        .pending_updates
-        .push_back(TimestampedUpdateDescription {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::INITIAL,
-            description: UpdateDescription::Automatic {
-                target_revision: ComponentRevision::INITIAL,
-            },
-        });
+    status.pending_updates.push_back(PendingUpdateRef {
+        timestamp: Timestamp::now_utc(),
+        oplog_index: OplogIndex::INITIAL,
+        target_revision: ComponentRevision::INITIAL,
+        kind: PendingUpdateKind::Automatic,
+    });
 
     assert!(status.has_pending_work());
 }
@@ -470,4 +467,35 @@ fn agent_filter_mode_protobuf_round_trip() {
     let proto: ProtoAgentFilter = composite.clone().into();
     let recovered: AgentFilter = proto.try_into().unwrap();
     assert_eq!(composite, recovered);
+}
+
+#[test]
+fn agent_status_record_agent_mode_is_not_serialized() {
+    use crate::serialization::{deserialize, serialize};
+
+    // `agent_mode` is `#[transient]`: it is excluded from the serialized status blob and stored
+    // under a separate KV key instead. A record serialized with a non-default mode must therefore
+    // deserialize back with the `Durable` default, while all other fields round-trip unchanged.
+    let original = AgentStatusRecord {
+        component_revision: ComponentRevision::new(7).unwrap(),
+        component_size: 1234,
+        agent_mode: AgentMode::Ephemeral,
+        ..AgentStatusRecord::default()
+    };
+
+    let bytes = serialize(&original).unwrap();
+    let recovered: AgentStatusRecord = deserialize(&bytes).unwrap();
+
+    assert_eq!(
+        recovered.agent_mode,
+        AgentMode::Durable,
+        "agent_mode must not be carried by the serialized blob (defaults on read)"
+    );
+
+    // Everything except the transient agent_mode must survive the round-trip.
+    let expected = AgentStatusRecord {
+        agent_mode: AgentMode::Durable,
+        ..original
+    };
+    assert_eq!(recovered, expected);
 }

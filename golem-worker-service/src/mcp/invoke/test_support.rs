@@ -27,22 +27,21 @@ use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, AgentType, AgentTypeName};
 use golem_common::model::agent::{NamedElementSchemas, Snapshotting};
-use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
-use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -57,15 +56,6 @@ impl RegistryService for NoopRegistryService {
         &self,
         _: &golem_common::model::auth::TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError> {
-        unimplemented!()
-    }
-
-    async fn get_auth_details_for_environment(
-        &self,
-        _: EnvironmentId,
-        _: bool,
-        _: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
         unimplemented!()
     }
 
@@ -274,9 +264,7 @@ impl ComponentService for StaticComponentService {
     }
 }
 
-struct AllowAllAuthService {
-    account_id: AccountId,
-}
+struct AllowAllAuthService;
 
 #[async_trait]
 impl AuthService for AllowAllAuthService {
@@ -285,18 +273,6 @@ impl AuthService for AllowAllAuthService {
         _: golem_common::model::auth::TokenSecret,
     ) -> Result<AuthCtx, AuthServiceError> {
         unimplemented!()
-    }
-
-    async fn authorize_environment_actions(
-        &self,
-        _: EnvironmentId,
-        _: EnvironmentAction,
-        _: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, AuthServiceError> {
-        Ok(AuthDetailsForEnvironment {
-            account_id_owning_environment: self.account_id,
-            environment_roles_from_shares: BTreeSet::<EnvironmentRole>::new(),
-        })
     }
 }
 
@@ -563,6 +539,8 @@ impl InvocationHarness {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id,
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 0,
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
@@ -603,7 +581,7 @@ impl InvocationHarness {
         Self {
             worker_service: Arc::new(WorkerService::new(
                 Arc::new(StaticComponentService { component }),
-                Arc::new(AllowAllAuthService { account_id }),
+                Arc::new(AllowAllAuthService),
                 Arc::new(NoopLimitService),
                 worker_client,
                 Arc::new(AgentResolutionCache::new(

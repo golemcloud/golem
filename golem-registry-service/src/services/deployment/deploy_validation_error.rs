@@ -20,8 +20,8 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::PathSegment;
-use golem_wasm::analysis::AnalysedType;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
@@ -130,8 +130,8 @@ pub enum DeployValidationError {
     )]
     AgentSecretNotCompatibleWithEnvironmentSecret {
         path: CanonicalAgentSecretPath,
-        agent_secret_type: AnalysedType,
-        environment_secret_type: AnalysedType,
+        agent_secret_type: Box<SchemaGraph>,
+        environment_secret_type: Box<SchemaGraph>,
     },
     #[error("Agent secret at path {path} has different type across deployed agents")]
     AgentSecretTypeConflict { path: CanonicalAgentSecretPath },

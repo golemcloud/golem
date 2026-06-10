@@ -20,7 +20,7 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AccountResourcePattern;
 
@@ -41,13 +41,12 @@ impl ResourcePattern for AccountResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountVerb {
     View,
     Update,
     Delete,
-    SetRoles,
     SetPlan,
 }
 impl VerbPattern for AccountVerb {
@@ -56,14 +55,13 @@ impl VerbPattern for AccountVerb {
             "view" => Some(Self::View),
             "update" => Some(Self::Update),
             "delete" => Some(Self::Delete),
-            "set-roles" => Some(Self::SetRoles),
             "set-plan" => Some(Self::SetPlan),
             _ => None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AccountClass;
 

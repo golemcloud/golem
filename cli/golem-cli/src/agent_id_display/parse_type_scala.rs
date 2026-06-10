@@ -13,41 +13,41 @@
 // limitations under the License.
 
 use super::parse_common::ParseError;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::{ResultSpec, SchemaType};
 
-pub(super) fn parse_type_scala(input: &str) -> Result<AnalysedType, ParseError> {
-    let result = parse_type_inner(input.trim())?;
-    Ok(result)
+pub(super) fn parse_type_scala(input: &str) -> Result<(SchemaGraph, SchemaType), ParseError> {
+    let ty = parse_type_inner(input.trim())?;
+    Ok((SchemaGraph::anonymous(ty.clone()), ty))
 }
 
-fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
+fn parse_type_inner(s: &str) -> Result<SchemaType, ParseError> {
     let s = s.trim();
 
     if let Some(inner) = strip_generic(s, "List", '[', ']') {
-        return Ok(analysed_type::list(parse_type_inner(inner)?));
+        return Ok(SchemaType::list(parse_type_inner(inner)?));
     }
     if let Some(inner) = strip_generic(s, "Option", '[', ']') {
-        return Ok(analysed_type::option(parse_type_inner(inner)?));
+        return Ok(SchemaType::option(parse_type_inner(inner)?));
     }
     if let Some(inner) = strip_generic(s, "WitResult", '[', ']') {
         let (ok_str, err_str) = split_at_top_level_comma(inner)?;
-        return Ok(analysed_type::result(
-            parse_type_inner(ok_str)?,
-            parse_type_inner(err_str)?,
-        ));
+        return Ok(SchemaType::result(ResultSpec {
+            ok: Some(Box::new(parse_type_inner(ok_str)?)),
+            err: Some(Box::new(parse_type_inner(err_str)?)),
+        }));
     }
 
     match s {
-        "String" => Ok(analysed_type::str()),
-        "Char" => Ok(analysed_type::chr()),
-        "Boolean" => Ok(analysed_type::bool()),
-        "Byte" => Ok(analysed_type::s8()),
-        "Short" => Ok(analysed_type::s16()),
-        "Int" => Ok(analysed_type::s32()),
-        "Long" => Ok(analysed_type::s64()),
-        "Float" => Ok(analysed_type::f32()),
-        "Double" => Ok(analysed_type::f64()),
+        "String" => Ok(SchemaType::string()),
+        "Char" => Ok(SchemaType::char()),
+        "Boolean" => Ok(SchemaType::bool()),
+        "Byte" => Ok(SchemaType::s8()),
+        "Short" => Ok(SchemaType::s16()),
+        "Int" => Ok(SchemaType::s32()),
+        "Long" => Ok(SchemaType::s64()),
+        "Float" => Ok(SchemaType::f32()),
+        "Double" => Ok(SchemaType::f64()),
         _ => Err(ParseError {
             position: 0,
             message: format!("unrecognized Scala type '{s}'"),

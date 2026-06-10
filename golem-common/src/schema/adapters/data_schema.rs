@@ -22,7 +22,8 @@
 //! - `DataSchema::Tuple(elements)` as **output** → [`OutputSchema`]:
 //!   - empty → [`OutputSchema::Unit`]
 //!   - single → [`OutputSchema::Single`] with the element's schema inline
-//!   - many → [`OutputSchema::Single`] wrapped in a [`SchemaType::Record`]
+//!   - many → error. Golem agent methods only ever return 0 or 1 element;
+//!     multi-element output tuples are not supported.
 //! - `DataSchema::Multimodal(elements)` as **input** → error
 //!   (multimodal is an output-only concern).
 //! - `DataSchema::Multimodal(elements)` as **output** →
@@ -38,11 +39,12 @@
 //!   is [`FieldSource::UserSupplied`] (legacy `DataSchema` has no notion of
 //!   auto-injected fields).
 //! - [`OutputSchema::Unit`] → empty tuple.
-//! - [`OutputSchema::Single`] with a [`SchemaType::Record`] → tuple form.
 //! - [`OutputSchema::Single`] wrapping a `list<union<…>>` where the union
 //!   carries `Role::Multimodal` → `DataSchema::Multimodal`.
-//! - Other [`OutputSchema::Single`] shapes round-trip as a single-element
-//!   tuple with the synthetic name `"value"`.
+//! - Any other [`OutputSchema::Single`] shape (including a real user-defined
+//!   [`SchemaType::Record`]) round-trips as a single-element tuple with the
+//!   synthetic name `"value"`. The single-element output is the only legal
+//!   shape, so the reverse never flattens.
 
 use crate::base_model::agent::{DataSchema, NamedElementSchema, NamedElementSchemas};
 use crate::schema::adapters::element_schema::{
@@ -52,9 +54,7 @@ use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
 use crate::schema::agent::{FieldSource, InputSchema, NamedField, OutputSchema};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::Role;
-use crate::schema::schema_type::{
-    DiscriminatorRule, NamedFieldType, SchemaType, UnionBranch, UnionSpec,
-};
+use crate::schema::schema_type::{DiscriminatorRule, SchemaType, UnionBranch, UnionSpec};
 
 /// The synthetic name used when reverse-converting an
 /// [`OutputSchema::Single`] whose body is not a record back into a
@@ -94,8 +94,8 @@ pub fn data_schema_to_input_schema(schema: &DataSchema) -> Result<InputSchema, S
 /// - `Tuple` arity 0 → [`OutputSchema::Unit`].
 /// - `Tuple` arity 1 → [`OutputSchema::Single`] containing the element's
 ///   schema directly.
-/// - `Tuple` arity ≥ 2 → [`OutputSchema::Single`] wrapping a
-///   [`SchemaType::Record`].
+/// - `Tuple` arity ≥ 2 → error. Golem agent methods only ever return 0 or 1
+///   element; multi-element output tuples are not supported.
 /// - `Multimodal` (any arity) → [`OutputSchema::Single`] wrapping a
 ///   `list<union<…>>` whose inner [`SchemaType::Union`] metadata carries
 ///   [`Role::Multimodal`].
@@ -108,19 +108,11 @@ pub fn data_schema_to_output_schema(
             [single] => Ok(OutputSchema::Single(Box::new(
                 element_schema_to_schema_type(&single.schema)?,
             ))),
-            many => {
-                let fields = many
-                    .iter()
-                    .map(|e| {
-                        Ok(NamedFieldType {
-                            name: e.name.clone(),
-                            body: element_schema_to_schema_type(&e.schema)?,
-                            metadata: Default::default(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-                Ok(OutputSchema::Single(Box::new(SchemaType::record(fields))))
-            }
+            many => Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                "output DataSchema with {} tuple elements is not supported; \
+                 Golem agent methods must declare 0 or 1 output element",
+                many.len()
+            ))),
         },
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
             if elements.is_empty() {
@@ -195,15 +187,14 @@ pub fn input_schema_to_data_schema(
 /// Reverse: project an [`OutputSchema`] back into a legacy [`DataSchema`].
 ///
 /// - `Unit` → empty `DataSchema::Tuple`.
-/// - `Single(Record)` → `DataSchema::Tuple` with one named element per
-///   record field.
 /// - `Single(list<union<…>>)` whose inner union metadata role is
 ///   [`Role::Multimodal`] → `DataSchema::Multimodal` (one alternative per
 ///   union branch, using the branch's tag as the alternative name).
-/// - any other `Single(_)` → `DataSchema::Tuple` with a single
+/// - any other `Single(_)` (including a real user-defined
+///   [`SchemaType::Record`]) → `DataSchema::Tuple` with a single
 ///   [`FALLBACK_OUTPUT_FIELD_NAME`] element. This is inherently lossy
-///   because non-record single outputs in the schema layer carry no field
-///   name, so they all rehydrate under the same synthetic name.
+///   because the schema layer carries no field name for the single output,
+///   so single outputs all rehydrate under the same synthetic name.
 pub fn output_schema_to_data_schema(
     graph: &SchemaGraph,
     output: &OutputSchema,
@@ -230,19 +221,7 @@ pub fn output_schema_to_data_schema(
                 }
                 synthetic_single_element(graph, top_ty)
             }
-            SchemaType::Record { fields, .. } => {
-                let elements = fields
-                    .iter()
-                    .map(|f| {
-                        Ok(NamedElementSchema {
-                            name: f.name.clone(),
-                            schema: schema_type_to_element_schema(graph, &f.body)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-                Ok(DataSchema::Tuple(NamedElementSchemas { elements }))
-            }
-            other => synthetic_single_element(graph, other),
+            _ => synthetic_single_element(graph, top_ty),
         },
     }
 }

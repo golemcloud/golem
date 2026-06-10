@@ -101,6 +101,12 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::Worker { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
+            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
+            }
+            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
+            }
             KeyValueStorageNamespace::Promise { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
@@ -204,6 +210,19 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         self.storage_by_namespace(&namespace)
             .await?
             .get_many(svc_name, api_name, entity_name, namespace, keys)
+            .await
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .get_all(svc_name, api_name, entity_name, namespace)
             .await
     }
 

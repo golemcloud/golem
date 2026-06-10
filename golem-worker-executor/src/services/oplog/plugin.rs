@@ -1954,6 +1954,14 @@ mod tests {
                 hash: diff::Hash::empty(),
                 application_id: ApplicationId::new(),
                 account_id: AccountId::new(),
+                application_name: golem_common::model::application::ApplicationName::try_from(
+                    "test-app".to_string(),
+                )
+                .unwrap(),
+                environment_name: golem_common::model::environment::EnvironmentName::try_from(
+                    "test-env",
+                )
+                .unwrap(),
                 component_size: 100,
                 metadata: ComponentMetadata::from_parts(
                     KnownExports::default(),
