@@ -254,6 +254,7 @@ impl AgentStreamEvent {
 #[cfg(test)]
 mod tests {
     use super::{AgentStreamEvent, AgentStreamEventKind};
+    use crate::model::worker::AgentLogStreamOptions;
     use golem_common::model::{IdempotencyKey, Timestamp};
     use std::str::FromStr;
     use test_r::test;
@@ -286,7 +287,12 @@ mod tests {
         let event = AgentStreamEvent::stdout(timestamp, "hello");
 
         assert_eq!(
-            event.render_text(true, true),
+            event.render_text(&AgentLogStreamOptions {
+                colors: false,
+                show_timestamp: true,
+                show_level: true,
+                logs_only: false,
+            }),
             "[2026-01-01T00:00:00.000Z] [STDOUT  ] hello"
         );
     }
@@ -300,7 +306,12 @@ mod tests {
             AgentStreamEvent::invocation_started(timestamp, "run".to_string(), idempotency_key);
 
         assert_eq!(
-            event.render_text(false, true),
+            event.render_text(&AgentLogStreamOptions {
+                colors: false,
+                show_timestamp: false,
+                show_level: true,
+                logs_only: false,
+            }),
             format!("[INVOKE  ] STARTED  run ({rendered_idempotency_key})")
         );
     }

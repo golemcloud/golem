@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command_handler::log::print_structured_document;
-use crate::model::agent::stream::{AgentStreamEvent, AgentStreamEventKind};
+use crate::model::agent::stream::AgentStreamEvent;
 use crate::model::format::Format;
 use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
@@ -301,10 +301,7 @@ impl WorkerStreamOutput {
         if self.format.is_structured() {
             self.machine_event(&event);
         } else {
-            self.colored(
-                event.text_log_level(),
-                &event.render_text(options),
-            );
+            self.colored(event.text_log_level(), &event.render_text(&self.options));
         }
     }
 
