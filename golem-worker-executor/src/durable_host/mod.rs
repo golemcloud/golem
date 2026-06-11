@@ -2547,7 +2547,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .map(|template| template.card_id)
             {
                 Some(card_id) => {
-                    let liveness = self.state.card_service.check_card(card_id).await?;
+                    let liveness = self
+                        .state
+                        .card_service
+                        .check_cards(vec![card_id])
+                        .await?
+                        .get(&card_id)
+                        .copied()
+                        .unwrap_or(crate::services::card::CardLiveness::Revoked {
+                            newly_detected: true,
+                        });
                     if liveness.newly_detected_revocation() {
                         self.public_state
                             .worker()

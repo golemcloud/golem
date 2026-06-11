@@ -17,7 +17,7 @@ use golem_common::SafeDisplay;
 use golem_common::model::card::CardId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +45,10 @@ impl CardLiveness {
 pub trait CardService: Send + Sync {
     fn record_revoked_cards(&self, card_ids: &[CardId]);
 
-    async fn check_card(&self, card_id: CardId) -> Result<CardLiveness, WorkerExecutorError>;
+    async fn check_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<HashMap<CardId, CardLiveness>, WorkerExecutorError>;
 }
 
 pub struct CardServiceDefault {
@@ -59,8 +62,14 @@ pub struct NoopCardService;
 impl CardService for NoopCardService {
     fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
-    async fn check_card(&self, _card_id: CardId) -> Result<CardLiveness, WorkerExecutorError> {
-        Ok(CardLiveness::Live)
+    async fn check_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<HashMap<CardId, CardLiveness>, WorkerExecutorError> {
+        Ok(card_ids
+            .into_iter()
+            .map(|card_id| (card_id, CardLiveness::Live))
+            .collect())
     }
 }
 
@@ -84,16 +93,34 @@ impl CardService for CardServiceDefault {
         self.cache_revoked_cards(card_ids);
     }
 
-    async fn check_card(&self, card_id: CardId) -> Result<CardLiveness, WorkerExecutorError> {
-        if self.revoked_cards.read().unwrap().contains(&card_id) {
-            return Ok(CardLiveness::Revoked {
-                newly_detected: false,
-            });
+    async fn check_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<HashMap<CardId, CardLiveness>, WorkerExecutorError> {
+        let revoked_cards = self.revoked_cards.read().unwrap().clone();
+        let mut result = HashMap::with_capacity(card_ids.len());
+        let mut needs_registry_lookup = Vec::new();
+
+        for card_id in card_ids {
+            if revoked_cards.contains(&card_id) {
+                result.insert(
+                    card_id,
+                    CardLiveness::Revoked {
+                        newly_detected: false,
+                    },
+                );
+            } else if !result.contains_key(&card_id) {
+                needs_registry_lookup.push(card_id);
+            }
+        }
+
+        if needs_registry_lookup.is_empty() {
+            return Ok(result);
         }
 
         let existing = self
             .registry_service
-            .batch_get_existing_cards(vec![card_id])
+            .batch_get_existing_cards(needs_registry_lookup.clone())
             .await
             .map_err(|err| {
                 WorkerExecutorError::runtime(format!(
@@ -101,15 +128,26 @@ impl CardService for CardServiceDefault {
                     err.to_safe_string()
                 ))
             })?;
+        let existing = existing.into_iter().collect::<HashSet<_>>();
+        let missing = needs_registry_lookup
+            .iter()
+            .copied()
+            .filter(|card_id| !existing.contains(card_id))
+            .collect::<Vec<_>>();
+        self.cache_revoked_cards(&missing);
 
-        if existing.contains(&card_id) {
-            Ok(CardLiveness::Live)
-        } else {
-            self.cache_revoked_cards(&[card_id]);
-            Ok(CardLiveness::Revoked {
-                newly_detected: true,
-            })
+        for card_id in needs_registry_lookup {
+            let liveness = if existing.contains(&card_id) {
+                CardLiveness::Live
+            } else {
+                CardLiveness::Revoked {
+                    newly_detected: true,
+                }
+            };
+            result.insert(card_id, liveness);
         }
+
+        Ok(result)
     }
 }
 
@@ -124,7 +162,10 @@ mod tests {
         let revoked = CardId::new();
 
         assert!(
-            futures::executor::block_on(service.check_card(revoked))
+            futures::executor::block_on(service.check_cards(vec![revoked]))
+                .unwrap()
+                .get(&revoked)
+                .copied()
                 .unwrap()
                 .is_live()
         );

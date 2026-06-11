@@ -3662,7 +3662,15 @@ impl RunningWorker {
                     newly_detected: false,
                 }
             }
-            Some(card_id) => parent.card_service().check_card(card_id).await?,
+            Some(card_id) => parent
+                .card_service()
+                .check_cards(vec![card_id])
+                .await?
+                .get(&card_id)
+                .copied()
+                .unwrap_or(crate::services::card::CardLiveness::Revoked {
+                    newly_detected: true,
+                }),
             None => crate::services::card::CardLiveness::Live,
         };
         let agent_effective_surface = match (
