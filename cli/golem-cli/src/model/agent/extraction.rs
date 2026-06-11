@@ -54,8 +54,12 @@ pub async fn extract_agent_types(
             return anyhow!(format_stderr(&stderr));
         }
 
-        println!("{}", stdout);
-        eprintln!("{}", stderr);
+        if !stdout.trim().is_empty() {
+            eprintln!("{stdout}");
+        }
+        if !stderr.trim().is_empty() {
+            eprintln!("{stderr}");
+        }
 
         err
     })
