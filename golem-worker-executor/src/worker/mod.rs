@@ -1008,6 +1008,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.granted_memory.fetch_add(delta, Ordering::Relaxed);
             Ok(())
         } else {
+            crate::metrics::workers::record_worker_memory_grow_rejected();
             Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
         }
     }

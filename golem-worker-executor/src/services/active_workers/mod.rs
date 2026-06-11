@@ -33,7 +33,7 @@ use admission::{AdmissionController, AdmissionDecision, EvictionPriority, Evicti
 use async_trait::async_trait;
 pub use component_charge::HeldComponentCharge;
 use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegistry};
-use memory_probe::default_probe;
+use memory_probe::{MemoryProbe, default_probe};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -102,6 +102,18 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
         let probe = default_probe(memory_config.system_memory_override);
+        Self::new_with_probe(probe, memory_config, storage_config)
+    }
+
+    /// Like [`Self::new`] but with an explicitly provided memory probe instead of
+    /// the one derived from the config. The in-process test harness uses this to
+    /// supply a probe with a pinned limit and current usage, so the gate's
+    /// decision is deterministic and isolated from the shared test process's RSS.
+    pub fn new_with_probe(
+        probe: Box<dyn MemoryProbe>,
+        memory_config: &MemoryConfig,
+        storage_config: &FilesystemStorageConfig,
+    ) -> Self {
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,

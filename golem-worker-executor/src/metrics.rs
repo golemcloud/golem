@@ -208,6 +208,21 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_worker_memory_grow_rejected_total",
+            "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
+            &["executor_id"]
+        )
+        .unwrap();
+    }
+
+    /// Counts one invocation interrupted because a linear-memory grow was
+    /// refused by the admission gate (the worker traps out-of-memory and is
+    /// restarted to reacquire memory).
+    pub fn record_worker_memory_grow_rejected() {
+        WORKER_MEMORY_GROW_REJECTED_TOTAL
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
     }
 
     /// Sets the gate's usable memory ceiling gauge.
@@ -269,6 +284,9 @@ pub mod workers {
         WORKER_WAITING_FOR_MEMORY_COUNT
             .with_label_values(&[id])
             .set(0.0);
+        WORKER_MEMORY_GROW_REJECTED_TOTAL
+            .with_label_values(&[id])
+            .inc_by(0.0);
     }
 
     pub fn inc_worker_memory_resident() {

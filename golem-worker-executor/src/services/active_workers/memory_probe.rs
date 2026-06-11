@@ -100,6 +100,38 @@ impl MemoryProbe for ProcessRssProbe {
     }
 }
 
+/// A probe with a fixed limit and a fixed current usage, both set at
+/// construction. Reports the same snapshot on every call regardless of the
+/// host. Used by the in-process test harness, where the executor shares its
+/// process (and therefore its real RSS) with the test framework and other
+/// services, so a process-RSS probe cannot isolate this executor's footprint.
+/// Pinning `current_bytes` to a known value (typically 0) makes the gate decide
+/// purely on the granted accounting against the pinned limit, which is exact and
+/// process-isolated, so memory-pressure tests are deterministic.
+#[derive(Debug)]
+pub struct FixedProbe {
+    limit_bytes: u64,
+    current_bytes: u64,
+}
+
+impl FixedProbe {
+    pub fn new(limit_bytes: u64, current_bytes: u64) -> Self {
+        Self {
+            limit_bytes,
+            current_bytes,
+        }
+    }
+}
+
+impl MemoryProbe for FixedProbe {
+    fn snapshot(&self) -> MemorySnapshot {
+        MemorySnapshot {
+            limit_bytes: self.limit_bytes,
+            current_bytes: self.current_bytes,
+        }
+    }
+}
+
 /// Linux cgroup v2 probe. Reads `memory.max` and `memory.current` from the
 /// process's cgroup.
 #[cfg(target_os = "linux")]

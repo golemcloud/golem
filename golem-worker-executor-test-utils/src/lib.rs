@@ -82,6 +82,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_workers::memory_probe::FixedProbe;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -536,8 +537,9 @@ fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
         // The measured-headroom admission gate requires the executor to own its
         // memory environment (cgroup/process). The in-process test harness runs
         // the executor alongside the test framework and other services, so the
-        // probe cannot isolate this executor's footprint — disable it and gate on
-        // the estimate semaphore alone, matching pre-gate behaviour.
+        // probe cannot isolate this executor's footprint. Disable the gate so
+        // admission always proceeds and tests are not subject to a memory limit
+        // derived from the shared host.
         memory: MemoryConfig {
             enable_measured_admission: false,
             ..Default::default()
@@ -705,9 +707,16 @@ pub async fn start_customized(
     apply_sqlite_storage_config(&mut config, deps, context);
     config.memory = MemoryConfig {
         system_memory_override,
-        // Measured admission disabled in the shared in-process test harness; the
-        // small system_memory_override here drives the estimate semaphore alone.
-        enable_measured_admission: false,
+        // Enable the measured-headroom gate when a test pins a memory limit, so
+        // memory-pressure tests exercise the real admission controller under that
+        // limit. The test bootstrap (create_active_workers) feeds the gate a
+        // fixed probe reporting this limit with zero current usage, so admission
+        // is decided on the granted accounting against the pinned limit and is
+        // not perturbed by the shared test process's RSS. Otherwise the gate is
+        // disabled (see make_base_test_config). The usable ratio
+        // (worker_memory_ratio, default 0.8) applies, matching the pre-gate
+        // semaphore pool size of system_memory_override * ratio.
+        enable_measured_admission: system_memory_override.is_some(),
         ..Default::default()
     };
     config.filesystem_storage = FilesystemStorageConfig {
@@ -1370,6 +1379,31 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
+        // The in-process test harness shares its process (and RSS) with the test
+        // framework and other services, so a process-RSS probe cannot isolate
+        // this executor's footprint. When a test pins a memory limit via
+        // system_memory_override, give the gate a fixed probe reporting that
+        // limit with zero current usage, so admission is decided solely on the
+        // granted accounting (exact and process-isolated) against the pinned
+        // limit. The usable_ratio (worker_memory_ratio) still applies, matching
+        // the pre-gate semaphore pool size of system_memory_override * ratio.
+        match golem_config.memory.system_memory_override {
+            Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
+                Box::new(FixedProbe::new(limit, 0)),
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+            )),
+            None => Arc::new(ActiveWorkers::new(
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+            )),
+        }
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,

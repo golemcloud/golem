@@ -161,6 +161,18 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Creates the [`ActiveWorkers`] service, including the measured-headroom
+    /// admission gate. The default builds the memory probe from the config
+    /// (cgroup/process/override). The in-process test harness overrides this to
+    /// inject a probe with a pinned limit and usage so the gate is deterministic
+    /// and isolated from the shared test process's RSS.
+    fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>> {
+        Arc::new(ActiveWorkers::<Ctx>::new(
+            &golem_config.memory,
+            &golem_config.filesystem_storage,
+        ))
+    }
+
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -769,10 +781,7 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = Arc::new(ActiveWorkers::<Ctx>::new(
-        &golem_config.memory,
-        &golem_config.filesystem_storage,
-    ));
+    let active_workers = bootstrap.create_active_workers(&golem_config);
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
