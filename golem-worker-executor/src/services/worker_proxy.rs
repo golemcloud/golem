@@ -136,6 +136,18 @@ pub trait WorkerProxy: Send + Sync {
         environment_id: Option<EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError>;
 
+    async fn lookup_invocation_status_as_system(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        environment_id: Option<EnvironmentId>,
+    ) -> Result<InvocationStatus, WorkerProxyError> {
+        let _ = (agent_id, idempotency_key, environment_id);
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::unknown("System invocation status lookup is not implemented"),
+        ))
+    }
+
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
@@ -674,6 +686,56 @@ impl WorkerProxy for RemoteWorkerProxy {
                         .unwrap_or(InvocationStatus::Unknown),
                 ),
                 None => Ok(InvocationStatus::Unknown),
+            },
+            Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
+        }
+    }
+
+    async fn lookup_invocation_status_as_system(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        environment_id: Option<EnvironmentId>,
+    ) -> Result<InvocationStatus, WorkerProxyError> {
+        let auth_ctx = AuthCtx::System;
+        let proto_mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode =
+            AgentInvocationMode::Lookup.into();
+        let proto_mode = proto_mode as i32;
+
+        let response: InvokeAgentResponse = self
+            .worker_service_client
+            .call("lookup_invocation_status_as_system", move |client| {
+                Box::pin(client.invoke_agent(InvokeAgentRequest {
+                    agent_id: Some(agent_id.clone().into()),
+                    method_name: None,
+                    method_parameters: None,
+                    mode: proto_mode,
+                    schedule_at: None,
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                    context: None,
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: Some(Principal::anonymous().into()),
+                    environment_id: environment_id.map(|id| id.into()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(invoke_agent_response::Result::Success(success)) => match success.status {
+                Some(status) => Ok(
+                    golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
+                        .map(InvocationStatus::from)
+                        .unwrap_or(InvocationStatus::Unknown),
+                ),
+                None => Err(WorkerProxyError::InternalError(
+                    WorkerExecutorError::unknown(
+                        "Empty response through the worker API".to_string(),
+                    ),
+                )),
             },
             Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(

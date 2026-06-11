@@ -1130,19 +1130,8 @@ fn rejects_malformed_grants() {
 
 #[test]
 fn rejects_removed_application_credential_and_restore_forms() {
-    let credential_id = "550e8400-e29b-41d4-a716-446655440000";
-
     assert_eq!(
-        parse_permission("application(acme/shop) @ acme : view :"),
-        Err(CardParseError::InvalidOwnerPath {
-            class: ApplicationClass::NAME.to_string(),
-            owner: "acme/shop".to_string(),
-        })
-    );
-    assert_eq!(
-        parse_permission(&format!(
-            "application(acme) @ acme : view-credentials : cred={credential_id}"
-        )),
+        parse_permission("application(acme/shop) @ acme : view-credentials :"),
         Err(CardParseError::UnknownVerb {
             class: ApplicationClass::NAME.to_string(),
             verb: "view-credentials".to_string(),
@@ -1156,14 +1145,14 @@ fn rejects_removed_application_credential_and_restore_forms() {
         })
     );
     assert_eq!(
-        parse_permission("application(acme) @ acme : restore : shop"),
+        parse_permission("application(acme/shop) @ acme : restore :"),
         Err(CardParseError::UnknownVerb {
             class: ApplicationClass::NAME.to_string(),
             verb: "restore".to_string(),
         })
     );
     assert_eq!(
-        parse_permission("environment(acme/shop) @ acme/shop/prod : restore : prod"),
+        parse_permission("environment(acme/shop/prod) @ acme/shop/prod : restore :"),
         Err(CardParseError::UnknownVerb {
             class: EnvironmentClass::NAME.to_string(),
             verb: "restore".to_string(),

@@ -445,16 +445,14 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         environment_id: EnvironmentId,
         _plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
-        caller_account_id: AccountId,
-        caller_account_email: &golem_common::model::account::AccountEmail,
+        _caller_account_id: AccountId,
+        _caller_account_email: &golem_common::model::account::AccountEmail,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.worker_proxy
-            .lookup_invocation_status(
+            .lookup_invocation_status_as_system(
                 target_agent_id,
                 idempotency_key.clone(),
-                caller_account_id,
-                caller_account_email,
                 Some(environment_id),
             )
             .await
