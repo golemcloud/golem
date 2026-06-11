@@ -746,11 +746,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             .durable_execution_state()
             .snapshotting_mode
             .is_some();
+        // The host-call `Start` nests inside the enclosing durable scope (its own opened scope, or
+        // the scope encoded in the function type), derived explicitly — never from the set of
+        // temporally-open sibling scopes. `None` for a top-level unscoped call.
+        let parent_start_index = ctx
+            .state
+            .child_parent_start_index(self.retry.function_type(), self.begin_index);
         let (start_idx, persisted) = if snapshotting {
             // Snapshotting mode persists nothing.
             (ctx.state.oplog.current_oplog_index().await, false)
         } else {
-            let parent_start_index = ctx.state.current_parent_start_index();
             let request: HostRequest = request.into();
             let request_payload =
                 ctx.state
@@ -772,7 +777,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             let idx = ctx.state.oplog.add(start).await;
             (idx, true)
         };
-        ctx.state.current_retry_point = start_idx;
+        // Group a trap during this call against the enclosing scope `Start` if there is one, so the
+        // failure is retried from the scope rather than from inside it; otherwise from this call's
+        // own `Start`.
+        ctx.state.current_retry_point = parent_start_index.unwrap_or(start_idx);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -808,7 +816,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
             .await?;
         let start_idx = replay.start_idx();
-        ctx.state.current_retry_point = start_idx;
+        // Mirror the live path: group a trap during this call against the enclosing scope `Start`
+        // if there is one, otherwise against this call's own `Start`.
+        let parent_start_index = ctx
+            .state
+            .child_parent_start_index(self.retry.function_type(), self.begin_index);
+        ctx.state.current_retry_point = parent_start_index.unwrap_or(start_idx);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,

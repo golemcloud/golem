@@ -1189,10 +1189,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<OplogIndex, WorkerExecutorError> {
         if self.state.opens_durable_scope(function_type) {
             let result = if self.is_live() {
-                let parent_start_index = self.state.current_parent_start_index();
+                // A scope `Start` is top-level with respect to other durable scopes: long-lived
+                // HTTP / RPC scopes overlap as siblings, so there is no meaningful enclosing scope
+                // to point at. Nesting is expressed by the *child* host calls pointing back at this
+                // scope's `Start` (see `child_parent_start_index`), not by chaining scope `Start`s.
                 let entry = OplogEntry::Start {
                     timestamp: Timestamp::now_utc(),
-                    parent_start_index,
+                    parent_start_index: None,
                     function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
                     request: None,
                     durable_function_type: function_type.clone(),
@@ -1364,17 +1367,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
             // The durable scope opened in `begin_function` is now closed.
-            self.state.pop_durable_scope(begin_index)?;
+            self.state.remove_durable_scope(begin_index)?;
             Ok(())
         } else {
             Ok(())
         }
     }
 
-    /// Appends a completed child host call inside the innermost open durable scope, as an eager
-    /// `Start` immediately followed by its matching `End`. Unlike [`crate::durable_host::concurrent::CallHandle::start`]
+    /// Appends a completed child host call inside a durable scope, as an eager `Start` immediately
+    /// followed by its matching `End`. Unlike [`crate::durable_host::concurrent::CallHandle::start`]
     /// this never opens a new durable scope — it records the result of a poll on an async future
     /// (HTTP / RPC) within a request/invoke scope that the caller opens and closes itself.
+    ///
+    /// `parent_start_index` is the `Start` index of the enclosing scope this poll belongs to,
+    /// threaded explicitly by the caller (the owning request/invoke resource). It must **not** be
+    /// inferred from the set of temporally-open scopes: long-lived sibling scopes overlap, so the
+    /// "innermost open scope" would frequently be a different concurrent request.
     ///
     /// Both payloads are uploaded before the `Start` is appended, so a serialization failure never
     /// leaves a dangling `Start`. The two entries are written with plain `add`s (eager model: a
@@ -1387,8 +1395,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         request: &HostRequest,
         response: &HostResponse,
         function_type: DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     ) -> Result<(), String> {
-        let parent_start_index = self.state.current_parent_start_index();
         let request_payload = self.state.oplog.upload_payload(request).await?;
         let response_payload = self.state.oplog.upload_payload(response).await?;
         let now = Timestamp::now_utc();
@@ -1439,13 +1447,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     {
         if self.is_live() {
             let (tx_id, tx) = handler.create_new().await?;
-            let parent_start_index = self.state.current_parent_start_index();
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
             // boundary. The scope `Start` index is the stable begin index for the whole transaction.
+            // Like other scope `Start`s it is top-level (`parent_start_index: None`); its child host
+            // calls point back at it via `WriteRemoteTransaction(Some(begin_index))`.
             let scope_start = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
-                parent_start_index,
+                parent_start_index: None,
                 function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
@@ -1762,7 +1771,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // The transaction scope opened in `begin_transaction_function` is now closed: the
         // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed (live)
         // or replayed, so the tip is no longer inside a jumpable scope on its account.
-        self.state.pop_durable_scope(begin_index)?;
+        self.state.remove_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -1816,7 +1825,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // The transaction scope opened in `begin_transaction_function` is now closed: the
         // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed (live)
         // or replayed, so the tip is no longer inside a jumpable scope on its account.
-        self.state.pop_durable_scope(begin_index)?;
+        self.state.remove_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -3855,106 +3864,130 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
     }
 }
 
-// TODO: optimize this and keep the relevant indices for recovering logs in the AgentStatusRecord
+/// Number of oplog entries read per backward-scan window. Sized to match the compressed oplog
+/// archive's chunk and cache sizes so that each window generally costs a single chunk decompression.
+const BACKWARD_OPLOG_SCAN_WINDOW: u64 = 4096;
+
+/// Returns the start index of the inclusive backward-scan window ending at `end`, clamped to
+/// [`OplogIndex::INITIAL`].
+fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
+    let initial = OplogIndex::INITIAL.as_u64();
+    let start = end
+        .as_u64()
+        .saturating_sub(BACKWARD_OPLOG_SCAN_WINDOW - 1)
+        .max(initial);
+    OplogIndex::from_u64(start)
+}
+
+/// Finds the most recent error of the current invocation (if any) together with its retry point and
+/// the surrounding stderr logs.
+///
+/// A possible future optimization is to maintain the relevant indices (last error, last invocation
+/// start) directly in the [`AgentStatusRecord`] so that no backward oplog scan is needed at all.
 async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
 ) -> Option<LastError> {
-    let mut idx = this
+    // Short-circuit: there is nothing to report unless the worker is currently in an error-bearing
+    // state. `last_error` otherwise scans backward to the start of the current invocation, which is
+    // unbounded for long-running invocations. A failed/retrying worker always has its error near the
+    // tail, and a non-empty `current_retry_state` means an `Error` with a tracked retry policy was
+    // recorded since the last invocation boundary; in every other case there is no error to find.
+    if !matches!(
+        latest_worker_status.status,
+        AgentStatus::Failed | AgentStatus::Retrying
+    ) && latest_worker_status.current_retry_state.is_empty()
+    {
+        return None;
+    }
+
+    let last_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
         .await;
-    if idx == OplogIndex::NONE {
-        None
-    } else {
-        let mut first_error = None;
-        let mut first_retry_from = OplogIndex::NONE;
-        let mut last_error_index = idx;
+    if last_index == OplogIndex::NONE {
+        return None;
+    }
+
+    let mut first_error = None;
+    let mut first_retry_from = OplogIndex::NONE;
+    let mut last_error_index = last_index;
+
+    // Walk the oplog backward in windows, reading each window in a single bulk range read instead of
+    // one entry at a time (the latter thrashes the compressed-archive chunk cache).
+    let mut window_end = last_index;
+    'scan: loop {
+        let window_start = backward_scan_window_start(window_end);
+        let entries = this
+            .oplog_service()
+            .read_range(owned_agent_id, agent_mode, window_start, window_end)
+            .await;
+
+        let mut idx = window_end;
         loop {
             if latest_worker_status
                 .deleted_regions
                 .is_in_deleted_region(idx)
             {
-                if idx > OplogIndex::INITIAL {
-                    idx = idx.previous();
-                    continue;
-                } else {
-                    break;
-                }
+                // Skip entries in deleted regions without consulting the read range.
             } else {
-                let oplog_entry = this
-                    .oplog_service()
-                    .read(owned_agent_id, agent_mode, idx, 1)
-                    .await;
-                match oplog_entry.first_key_value() {
-                    Some((
-                        _,
-                        OplogEntry::Error {
-                            error, retry_from, ..
-                        },
-                    )) => {
+                match entries.get(&idx) {
+                    Some(OplogEntry::Error {
+                        error, retry_from, ..
+                    }) => {
                         if first_retry_from == OplogIndex::NONE || first_retry_from == *retry_from {
                             last_error_index = idx;
                             if first_error.is_none() {
                                 first_error = Some(error.clone());
                                 first_retry_from = *retry_from;
                             }
-                            if idx > OplogIndex::INITIAL {
-                                idx = idx.previous();
-                                continue;
-                            } else {
-                                break;
-                            }
                         } else {
                             // Found an error entry belonging to another retry point
-                            break;
+                            break 'scan;
                         }
                     }
-                    Some((_, entry)) if entry.is_hint() => {
+                    Some(entry) if entry.is_hint() => {
                         // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
-                        if idx > OplogIndex::INITIAL {
-                            idx = idx.previous();
-                            continue;
-                        } else {
-                            break;
-                        }
                     }
-                    Some((
-                        _,
+                    Some(
                         OplogEntry::AgentInvocationStarted { .. }
                         | OplogEntry::AgentInvocationFinished { .. },
-                    )) => {
+                    ) => {
                         // Retry counting never gets across invocation boundaries
-                        break;
+                        break 'scan;
                     }
-                    Some((_, _)) => {
+                    Some(_) => {
                         // Skipping non-hint entries as well, but only up to the first error entry that's different, or the beginning
                         // of the last invocation
-                        if idx > OplogIndex::INITIAL {
-                            idx = idx.previous();
-                            continue;
-                        } else {
-                            break;
-                        }
                     }
                     None => {
                         // This is possible if the oplog has been deleted between the get_last_index and the read call
-                        break;
+                        break 'scan;
                     }
                 }
             }
+
+            if idx == OplogIndex::INITIAL {
+                break 'scan;
+            }
+            if idx == window_start {
+                break;
+            }
+            idx = idx.previous();
         }
-        match first_error {
-            Some(error) => Some(LastError {
-                error,
-                stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index)
-                    .await,
-                retry_from: first_retry_from,
-            }),
-            None => None,
-        }
+
+        window_end = window_start.previous();
+    }
+
+    match first_error {
+        Some(error) => Some(LastError {
+            error,
+            stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
+            retry_from: first_retry_from,
+        }),
+        None => None,
     }
 }
 
@@ -3979,76 +4012,82 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
     // have at most one pending batch we discard.
     let mut collected_count = 0;
-    let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
     let mut current_stderr_entries_batch = Vec::new();
     let mut first_seen_invocation = None;
 
-    loop {
-        // TODO: this could be read in batches to speed up the process
-        let oplog_entry = this
+    // Walk the oplog backward in windows, reading each window in a single bulk range read instead of
+    // one entry at a time.
+    let mut window_end = last_oplog_idx;
+    'scan: loop {
+        let window_start = backward_scan_window_start(window_end);
+        let entries = this
             .oplog_service()
-            .read(owned_agent_id, agent_mode, idx, 1)
+            .read_range(owned_agent_id, agent_mode, window_start, window_end)
             .await;
 
-        // Because of retries we might have multiple invocation start entries.
-        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
-        match oplog_entry.first_key_value() {
-            Some((
-                _,
-                OplogEntry::Log {
+        let mut idx = window_end;
+        loop {
+            // Because of retries we might have multiple invocation start entries.
+            // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
+            match entries.get(&idx) {
+                Some(OplogEntry::Log {
                     level,
                     message,
                     context,
                     ..
-                },
-            )) if (level == &LogLevel::Warn
-                || level == &LogLevel::Error
-                || level == &LogLevel::Critical
-                || level == &LogLevel::Stderr)
-                && collected_count < max_count =>
-            {
-                if level == &LogLevel::Stderr {
-                    current_stderr_entries_batch.push(message.clone());
-                } else {
-                    let line = format!(
-                        "[{}] [{}] {}\n",
-                        format!("{level:?}").to_uppercase(),
-                        context,
-                        message
-                    );
-                    current_stderr_entries_batch.push(line);
+                }) if (level == &LogLevel::Warn
+                    || level == &LogLevel::Error
+                    || level == &LogLevel::Critical
+                    || level == &LogLevel::Stderr)
+                    && collected_count < max_count =>
+                {
+                    if level == &LogLevel::Stderr {
+                        current_stderr_entries_batch.push(message.clone());
+                    } else {
+                        let line = format!(
+                            "[{}] [{}] {}\n",
+                            format!("{level:?}").to_uppercase(),
+                            context,
+                            message
+                        );
+                        current_stderr_entries_batch.push(line);
+                    }
+                    collected_count += 1;
                 }
-                collected_count += 1;
-            }
-            Some((
-                _,
-                OplogEntry::AgentInvocationStarted {
+                Some(OplogEntry::AgentInvocationStarted {
                     idempotency_key, ..
+                }) => match &first_seen_invocation {
+                    None => {
+                        first_seen_invocation = Some(idempotency_key.clone());
+                        stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                        if stderr_entries.len() >= max_count {
+                            break 'scan;
+                        };
+                    }
+                    Some(expected_idempotency_key)
+                        if idempotency_key == expected_idempotency_key =>
+                    {
+                        stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                        if stderr_entries.len() >= max_count {
+                            break 'scan;
+                        };
+                    }
+                    Some(_) => break 'scan,
                 },
-            )) => match &first_seen_invocation {
-                None => {
-                    first_seen_invocation = Some(idempotency_key.clone());
-                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
-                    if stderr_entries.len() >= max_count {
-                        break;
-                    };
-                }
-                Some(expected_idempotency_key) if idempotency_key == expected_idempotency_key => {
-                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
-                    if stderr_entries.len() >= max_count {
-                        break;
-                    };
-                }
-                Some(_) => break,
-            },
-            _ => {}
-        }
-        if idx > OplogIndex::INITIAL {
+                _ => {}
+            }
+
+            if idx == OplogIndex::INITIAL {
+                break 'scan;
+            }
+            if idx == window_start {
+                break;
+            }
             idx = idx.previous();
-        } else {
-            break;
         }
+
+        window_end = window_start.previous();
     }
     stderr_entries.reverse();
     stderr_entries.join("")
@@ -4381,21 +4420,21 @@ struct PrivateDurableWorkerState {
     /// from scratch.
     active_atomic_regions: Vec<ActiveAtomicRegion>,
 
-    /// Currently open durable scopes other than atomic regions, innermost last: batched / remote
-    /// writes (`Start`..`End`) and remote transactions (`Start`..`End` wrapping the transaction
-    /// markers). Maintained by `begin_function`/`end_function` and the transaction lifecycle
-    /// functions. This serves two purposes:
+    /// Currently open durable scopes other than atomic regions: batched / remote writes
+    /// (`Start`..`End`) and remote transactions (`Start`..`End` wrapping the transaction markers).
+    /// Maintained by `begin_function`/`end_function` and the transaction lifecycle functions.
     ///
-    /// 1. The innermost (last) open scope is the `parent_start_index` for any `Start` written while
-    ///    it is open (`current_parent_start_index`), giving the oplog real scope nesting.
-    /// 2. While any such scope is open, the current oplog tip sits inside it, so a later trap/replay
-    ///    can append a jump that deletes the tip — making a mid-invocation status checkpoint at the
-    ///    tip unsafe (see `at_clean_checkpoint_boundary`).
+    /// While any such scope is open, the current oplog tip sits inside it, so a later trap/replay
+    /// can append a jump that deletes the tip — making a mid-invocation status checkpoint at the tip
+    /// unsafe (see `at_clean_checkpoint_boundary`). Only the *set* of open scopes matters for this.
     ///
-    /// Durable scopes are strictly nested, so they close in LIFO order; `pop_durable_scope`
-    /// enforces this and hard-errors on a mismatch rather than silently corrupting the nesting. A
-    /// fresh state is built per worker incarnation, so a scope left open by a trap is cleared on
-    /// restart.
+    /// Durable scopes are **not** strictly nested: HTTP / RPC scopes are long-lived and overlap as
+    /// siblings (one opens while another is still pending), closing in arbitrary order. So this is
+    /// an order-independent collection, not a stack: `remove_durable_scope` removes the closed scope
+    /// wherever it is and hard-errors only if it was never open. `parent_start_index` is therefore
+    /// **not** derived from this collection (which scope is "innermost" is meaningless for siblings)
+    /// — it is threaded explicitly from the owning call/resource. A fresh state is built per worker
+    /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
@@ -4643,10 +4682,30 @@ impl PrivateDurableWorkerState {
             .is_some_and(|region| region.has_side_effects)
     }
 
-    /// The `parent_start_index` to attach to a `Start` written right now: the index of the
-    /// innermost currently open durable scope, or `None` at the top level.
-    fn current_parent_start_index(&self) -> Option<OplogIndex> {
-        self.active_durable_scopes.last().map(|s| s.start_index)
+    /// The `parent_start_index` to attach to the host-call `Start` of a durable call, given the
+    /// function type and the `begin_index` returned by `begin_function`. This is derived
+    /// *explicitly* from the call itself, never from the set of temporally-open scopes (which scope
+    /// is "innermost" is meaningless when long-lived sibling scopes overlap):
+    ///
+    /// - if the call opened its own durable scope (non-idempotent `WriteRemote` /
+    ///   `WriteRemoteBatched(None)`), its host-call `Start` nests inside that scope (`begin_index`);
+    /// - otherwise it nests inside the enclosing scope encoded in the function type
+    ///   (`WriteRemoteBatched(Some)` / `WriteRemoteTransaction(Some)`), if any;
+    /// - otherwise it is a top-level call with no parent.
+    fn child_parent_start_index(
+        &self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Option<OplogIndex> {
+        if self.opens_durable_scope(function_type) {
+            Some(begin_index)
+        } else {
+            match function_type {
+                DurableFunctionType::WriteRemoteBatched(Some(idx))
+                | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
+                _ => None,
+            }
+        }
     }
 
     /// Whether a durable function of this `function_type` opens a durable scope — a first-class
@@ -4670,37 +4729,45 @@ impl PrivateDurableWorkerState {
     }
 
     /// Opens a durable scope identified by its `Start` index. Must be balanced by
-    /// `pop_durable_scope` on the matching `End`/`Cancelled`.
+    /// `remove_durable_scope` on the matching `End`/`Cancelled`.
     fn push_durable_scope(&mut self, start_index: OplogIndex, kind: DurableScopeKind) {
         self.active_durable_scopes
             .push(ActiveDurableScope { start_index, kind });
     }
 
-    /// Closes the durable scope opened at `start_index`. Durable scopes are strictly nested, so the
-    /// closed scope must be the innermost (top of the stack); anything else means the scope stack
-    /// got out of sync and is treated as a hard error rather than silently corrupting the nesting.
-    fn pop_durable_scope(&mut self, start_index: OplogIndex) -> Result<(), WorkerExecutorError> {
-        match self.active_durable_scopes.last() {
-            Some(scope) if scope.start_index == start_index => {
-                self.active_durable_scopes.pop();
+    /// Closes the durable scope opened at `start_index`. Durable scopes are not strictly nested
+    /// (long-lived HTTP / RPC scopes overlap as siblings and close in arbitrary order), so the
+    /// closed scope is removed wherever it is in the collection. It is a hard error only if the
+    /// scope was never open, which would mean the begin/end bookkeeping got out of sync.
+    fn remove_durable_scope(&mut self, start_index: OplogIndex) -> Result<(), WorkerExecutorError> {
+        match self
+            .active_durable_scopes
+            .iter()
+            .position(|scope| scope.start_index == start_index)
+        {
+            Some(pos) => {
+                self.active_durable_scopes.remove(pos);
                 Ok(())
             }
-            other => Err(WorkerExecutorError::runtime(format!(
-                "Tried to close durable scope {start_index} but the innermost open scope is {:?}",
-                other.map(|s| s.start_index)
+            None => Err(WorkerExecutorError::runtime(format!(
+                "Tried to close durable scope {start_index} but it is not open; open scopes: {:?}",
+                self.active_durable_scopes
+                    .iter()
+                    .map(|s| s.start_index)
+                    .collect::<Vec<_>>()
             ))),
         }
     }
 
-    /// The retry point to associate with an error, with priority `atomic region > durable scope >
-    /// global`. While an atomic region is active the whole region is retried from its begin index;
-    /// otherwise, while a durable scope is open the error is grouped at the scope `Start`; otherwise
-    /// the last persisted side effect (`current_retry_point`).
+    /// The retry point to associate with an error, with priority `atomic region > global`. While an
+    /// atomic region is active the whole region is retried from its begin index; otherwise the error
+    /// is grouped at `current_retry_point`, which the durable-call machinery keeps pointing at the
+    /// enclosing scope `Start` (or the call's own `Start` when unscoped). Durable scopes do **not**
+    /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
+    /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
     fn effective_retry_point(&self) -> OplogIndex {
         if let Some(region) = self.active_atomic_regions.last() {
             region.begin_index
-        } else if let Some(scope) = self.active_durable_scopes.last() {
-            scope.start_index
         } else {
             self.current_retry_point
         }

@@ -903,7 +903,16 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         response: &HostResponse,
         function_type: DurableFunctionType,
     ) {
-        let parent_start_index = self.state.current_parent_start_index();
+        // The guest manages its own scope via separate `begin_durable_function` /
+        // `end_durable_function` calls, so this completed call does not open a scope here. Its
+        // parent is therefore only the scope explicitly encoded in the function type (batched /
+        // transaction `Some(begin_index)`); otherwise it is top-level. It must not be inferred from
+        // the set of temporally-open scopes, which may belong to unrelated concurrent operations.
+        let parent_start_index = match &function_type {
+            DurableFunctionType::WriteRemoteBatched(Some(idx))
+            | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
+            _ => None,
+        };
         self.public_state
             .worker()
             .oplog()

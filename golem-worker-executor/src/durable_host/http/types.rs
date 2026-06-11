@@ -1540,6 +1540,9 @@ async fn persist_http_response<Ctx: WorkerCtx>(
                 response: serializable_response.clone(),
             }),
             DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+            // The HTTP request always opens a `WriteRemoteBatched(None)` scope at `begin_index`
+            // (see `outgoing_handler::handle`), so this poll nests directly inside it.
+            Some(begin_index),
         )
         .await
         .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));

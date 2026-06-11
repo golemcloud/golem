@@ -1084,7 +1084,7 @@ where
                         entry.begin_index
                     ));
                 }
-                ctx.state.pop_durable_scope(entry.begin_index)?;
+                ctx.state.remove_durable_scope(entry.begin_index)?;
             } else {
                 // Crashed after `PreRollbackRemoteTransaction` but before the rollback was recorded.
                 // `begin_transaction_function` already confirmed the external rollback (otherwise it

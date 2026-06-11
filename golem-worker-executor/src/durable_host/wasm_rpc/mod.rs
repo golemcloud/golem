@@ -932,6 +932,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     SerializableInvokeResult::Pending
                 );
 
+                // The RPC invocation opens a durable scope at `begin_index` only when it is a
+                // non-idempotent `WriteRemote` (the usual case). When `assume_idempotence` is set no
+                // scope is opened and `begin_index` is just the pre-call index, not a scope `Start`,
+                // so this poll has no parent. `child_parent_start_index` resolves both cases.
+                let parent_start_index = self
+                    .state
+                    .child_parent_start_index(&DurableFunctionType::WriteRemote, begin_index);
                 self.append_completed_child_call(
                     GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
                     &HostRequest::GolemRpcInvoke(serializable_invoke_request),
@@ -939,6 +946,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         result: serializable_invoke_result,
                     }),
                     DurableFunctionType::WriteRemote,
+                    parent_start_index,
                 )
                 .await
                 .unwrap_or_else(|err| panic!("failed to serialize RPC response: {err}"));

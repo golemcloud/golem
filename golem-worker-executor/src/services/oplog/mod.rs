@@ -455,8 +455,9 @@ pub trait OplogOps: Oplog {
     /// `Cancelled`) when the call completes.
     ///
     /// `parent_start_index` is the `Start` index of the enclosing durable scope (if any). This is
-    /// an explicit parameter because the oplog cannot see the worker state's open scope stack, so
-    /// the caller must supply the innermost open scope (`current_parent_start_index`).
+    /// an explicit parameter because the oplog cannot see the worker state's open scopes, and
+    /// because the parent must be the call's own enclosing scope, not whichever sibling scope
+    /// happens to be temporally open. The caller derives it explicitly from the call.
     async fn add_completed_host_call(
         &self,
         function_name: HostFunctionName,
