@@ -14,6 +14,7 @@
 
 use crate::context::Context;
 use crate::log::logln;
+use crate::model::cli_output::{CliOutput, to_cli_output_value};
 use crate::model::format::Format;
 use crate::model::text::fmt::{
     DecoratedIndent, TextView, TruncatableTextView, to_colored_json, to_colored_yaml,
@@ -135,6 +136,24 @@ pub fn render_structured_document<S: Serialize>(
     }
 }
 
+pub fn render_cli_output_document<Output: CliOutput>(
+    format: Format,
+    colorize: bool,
+    output: &Output,
+) -> anyhow::Result<String> {
+    let value = to_cli_output_value(output)?;
+    render_structured_document(format, colorize, &value)
+}
+
+pub fn print_cli_output_document<Output: CliOutput>(
+    format: Format,
+    colorize: bool,
+    output: &Output,
+) -> anyhow::Result<()> {
+    println!("{}", render_cli_output_document(format, colorize, output)?);
+    Ok(())
+}
+
 pub fn print_structured_document<S: Serialize>(
     format: Format,
     colorize: bool,
@@ -146,7 +165,12 @@ pub fn print_structured_document<S: Serialize>(
 
 #[cfg(test)]
 mod tests {
-    use super::{TOON_FRAME_END, TOON_FRAME_START, render_toon_document};
+    use crate::command_handler::log::{
+        TOON_FRAME_END, TOON_FRAME_START, render_cli_output_document, render_toon_document,
+    };
+    use crate::model::cli_output::{CLI_OUTPUT_TYPE_FIELD, CliOutput};
+    use crate::model::format::Format;
+    use serde::Serialize;
     use serde_json::json;
 
     #[test_r::test]
@@ -156,5 +180,56 @@ mod tests {
         assert!(rendered.starts_with(TOON_FRAME_START));
         assert!(rendered.ends_with(TOON_FRAME_END));
         assert!(rendered.contains("status: ok"));
+    }
+
+    #[test_r::test]
+    fn render_cli_output_document_injects_type() {
+        #[derive(Serialize)]
+        struct TestOutput {
+            ok: bool,
+        }
+
+        impl CliOutput for TestOutput {
+            const KIND: &'static str = "test.output";
+        }
+
+        let rendered = render_cli_output_document(Format::Json, false, &TestOutput { ok: true })
+            .expect("render output");
+
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
+            json!({
+                CLI_OUTPUT_TYPE_FIELD: "test.output@1",
+                "ok": true,
+            })
+        );
+    }
+
+    #[test_r::test]
+    fn render_cli_output_document_rejects_reserved_type_field() {
+        #[derive(Serialize)]
+        struct BadOutput {
+            #[serde(rename = "$type")]
+            output_type: String,
+        }
+
+        impl CliOutput for BadOutput {
+            const KIND: &'static str = "test.bad-output";
+        }
+
+        let error = render_cli_output_document(
+            Format::Json,
+            false,
+            &BadOutput {
+                output_type: "custom".to_string(),
+            },
+        )
+        .expect_err("reserved field should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must not define reserved field $type")
+        );
     }
 }

@@ -17,6 +17,7 @@ pub mod app;
 pub mod app_raw;
 pub mod cascade;
 pub mod cli_command_metadata;
+pub mod cli_output;
 pub mod component;
 pub mod config;
 pub mod deploy;
