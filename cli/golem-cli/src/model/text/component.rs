@@ -20,7 +20,16 @@ use colored::control::SHOULD_COLORIZE;
 use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 
-impl TextView for Vec<ComponentView> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentListView {
+    pub components: Vec<ComponentView>,
+}
+
+impl CliOutput for ComponentListView {
+    const KIND: &'static str = "component.list.result";
+}
+
+impl TextView for ComponentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
@@ -29,7 +38,7 @@ impl TextView for Vec<ComponentView> {
             Column::new("Size").fixed_right(),
             Column::new("Exports").fixed_right(),
         ]);
-        for comp in self {
+        for comp in &self.components {
             table.add_row(vec![
                 comp.component_name.to_string(),
                 comp.component_revision.to_string(),
@@ -134,6 +143,10 @@ impl MessageWithFields for ComponentGetView {
     fn fields(&self) -> Vec<(String, String)> {
         component_view_fields(&self.0)
     }
+}
+
+impl CliOutput for ComponentGetView {
+    const KIND: &'static str = "component.get.result";
 }
 
 #[derive(Debug, Clone, Serialize)]

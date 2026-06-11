@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 
 use colored::Colorize;
@@ -45,6 +46,10 @@ impl MessageWithFields for TokenNewView {
     }
 }
 
+impl CliOutput for TokenNewView {
+    const KIND: &'static str = "api-token.new.result";
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenListView(pub Vec<Token>);
 
@@ -66,4 +71,8 @@ impl TextView for TokenListView {
         }
         log_table(table);
     }
+}
+
+impl CliOutput for TokenListView {
+    const KIND: &'static str = "api-token.list.result";
 }

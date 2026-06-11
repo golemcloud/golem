@@ -22,6 +22,7 @@
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::TextView;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -34,6 +35,10 @@ pub struct AgentDeleteResult {
 
 impl TextView for AgentDeleteResult {
     fn log(&self) {}
+}
+
+impl CliOutput for AgentDeleteResult {
+    const KIND: &'static str = "agent.delete.result";
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +55,10 @@ impl TextView for AgentRevertResult {
     fn log(&self) {}
 }
 
+impl CliOutput for AgentRevertResult {
+    const KIND: &'static str = "agent.revert.result";
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentPluginToggleResult {
     pub activated: bool,
@@ -62,6 +71,10 @@ impl TextView for AgentPluginToggleResult {
     fn log(&self) {}
 }
 
+impl CliOutput for AgentPluginToggleResult {
+    const KIND: &'static str = "agent.plugin-toggle.result";
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CleanResult {
     pub cleaned: bool,
@@ -71,6 +84,10 @@ impl TextView for CleanResult {
     fn log(&self) {}
 }
 
+impl CliOutput for CleanResult {
+    const KIND: &'static str = "app.clean.result";
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
     pub built: bool,
@@ -78,6 +95,10 @@ pub struct BuildResult {
 
 impl TextView for BuildResult {
     fn log(&self) {}
+}
+
+impl CliOutput for BuildResult {
+    const KIND: &'static str = "app.build.result";
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +112,10 @@ impl TextView for NewAppResult {
     fn log(&self) {}
 }
 
+impl CliOutput for NewAppResult {
+    const KIND: &'static str = "app.new.result";
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DeployResultView {
     pub deployed: bool,
@@ -100,6 +125,10 @@ impl TextView for DeployResultView {
     fn log(&self) {}
 }
 
+impl CliOutput for DeployResultView {
+    const KIND: &'static str = "app.deploy.result";
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GenerateBridgeResult {
     pub generated: bool,
@@ -107,4 +136,8 @@ pub struct GenerateBridgeResult {
 
 impl TextView for GenerateBridgeResult {
     fn log(&self) {}
+}
+
+impl CliOutput for GenerateBridgeResult {
+    const KIND: &'static str = "app.generate-bridge.result";
 }

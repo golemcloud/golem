@@ -41,8 +41,8 @@ use crate::model::text::help::{
     ParameterErrorTableView,
 };
 use crate::model::text::worker::{
-    FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
-    format_timestamp,
+    AgentOplogView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    format_agent_name_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -716,7 +716,9 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                self.ctx.log_handler().log_view(&entries)?;
+                self.ctx
+                    .log_handler()
+                    .log_view(&AgentOplogView { entries })?;
             }
 
             if cursor.is_none() {

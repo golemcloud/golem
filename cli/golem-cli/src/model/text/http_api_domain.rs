@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 
 use golem_common::model::domain_registration::DomainRegistration;
@@ -40,6 +41,10 @@ impl MessageWithFields for DomainRegistrationNewView {
     }
 }
 
+impl CliOutput for DomainRegistrationNewView {
+    const KIND: &'static str = "api.domain.register.result";
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpApiDomainListView(pub Vec<DomainRegistration>);
 
@@ -59,4 +64,8 @@ impl TextView for HttpApiDomainListView {
         }
         log_table(table);
     }
+}
+
+impl CliOutput for HttpApiDomainListView {
+    const KIND: &'static str = "api.domain.list.result";
 }

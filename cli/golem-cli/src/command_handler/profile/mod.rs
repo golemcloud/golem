@@ -25,6 +25,7 @@ use crate::log::log_error;
 use crate::log::{LogColorize, log_action, log_warn_action};
 use crate::model::ProfileView;
 use crate::model::format::Format;
+use crate::model::text::profile::ProfileListView;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -146,7 +147,9 @@ impl ProfileCommandHandler {
             })
             .collect::<Vec<_>>();
 
-        self.ctx.log_handler().log_view(&profiles)?;
+        self.ctx
+            .log_handler()
+            .log_view(&ProfileListView { profiles })?;
 
         Ok(())
     }

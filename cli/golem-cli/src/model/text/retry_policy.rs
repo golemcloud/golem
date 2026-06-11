@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use golem_common::model::retry_policy::RetryPolicyDto;
 use serde_derive::{Deserialize, Serialize};
@@ -32,6 +33,10 @@ impl MessageWithFields for RetryPolicyCreateView {
     }
 }
 
+impl CliOutput for RetryPolicyCreateView {
+    const KIND: &'static str = "retry-policy.create.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyGetView(pub RetryPolicyDto);
 
@@ -43,6 +48,10 @@ impl MessageWithFields for RetryPolicyGetView {
     fn fields(&self) -> Vec<(String, String)> {
         retry_policy_view_fields(&self.0)
     }
+}
+
+impl CliOutput for RetryPolicyGetView {
+    const KIND: &'static str = "retry-policy.get.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +70,10 @@ impl MessageWithFields for RetryPolicyUpdateView {
     }
 }
 
+impl CliOutput for RetryPolicyUpdateView {
+    const KIND: &'static str = "retry-policy.update.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyDeleteView(pub RetryPolicyDto);
 
@@ -75,6 +88,19 @@ impl MessageWithFields for RetryPolicyDeleteView {
     fn fields(&self) -> Vec<(String, String)> {
         retry_policy_view_fields(&self.0)
     }
+}
+
+impl CliOutput for RetryPolicyDeleteView {
+    const KIND: &'static str = "retry-policy.delete.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicyListView {
+    pub retry_policies: Vec<RetryPolicyDto>,
+}
+
+impl CliOutput for RetryPolicyListView {
+    const KIND: &'static str = "retry-policy.list.result";
 }
 
 fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
@@ -100,7 +126,7 @@ fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
     fields.build()
 }
 
-impl TextView for Vec<RetryPolicyDto> {
+impl TextView for RetryPolicyListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Environment ID").fixed(),
@@ -110,7 +136,7 @@ impl TextView for Vec<RetryPolicyDto> {
             Column::new("Priority").fixed_right(),
         ]);
 
-        for policy in self {
+        for policy in &self.retry_policies {
             table.add_row(vec![
                 policy.environment_id.0.to_string(),
                 policy.name.clone(),

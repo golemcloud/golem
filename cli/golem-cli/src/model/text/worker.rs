@@ -14,6 +14,7 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::log::{LogColorize, logln};
+use crate::model::cli_output::CliOutput;
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
@@ -81,6 +82,10 @@ impl MessageWithFields for WorkerCreateView {
 
         fields.build()
     }
+}
+
+impl CliOutput for WorkerCreateView {
+    const KIND: &'static str = "agent.new.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +245,18 @@ impl MessageWithFields for WorkerGetView {
 
         fields.build()
     }
+}
+
+impl CliOutput for WorkerGetView {
+    const KIND: &'static str = "agent.get.result";
+}
+
+impl CliOutput for AgentsMetadataResponseView {
+    const KIND: &'static str = "agent.list.result";
+}
+
+impl CliOutput for TryUpdateAllWorkersResult {
+    const KIND: &'static str = "agent.update.result";
 }
 
 impl TextView for AgentsMetadataResponseView {
@@ -427,9 +444,18 @@ impl TextView for InvokeResultView {
     }
 }
 
-impl TextView for Vec<(u64, PublicOplogEntry)> {
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentOplogView {
+    pub entries: Vec<(u64, PublicOplogEntry)>,
+}
+
+impl CliOutput for AgentOplogView {
+    const KIND: &'static str = "agent.oplog.result";
+}
+
+impl TextView for AgentOplogView {
     fn log(&self) {
-        for (idx, entry) in self {
+        for (idx, entry) in &self.entries {
             logln(format!("{}: ", format_main_id(&format!("#{idx:0>5}"))));
             entry.log()
         }
@@ -1215,6 +1241,10 @@ fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerFilesView {
     pub nodes: Vec<FileNodeView>,
+}
+
+impl CliOutput for WorkerFilesView {
+    const KIND: &'static str = "agent.files.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

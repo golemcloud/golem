@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 
 use golem_client::model::SecuritySchemeDto;
@@ -33,6 +34,10 @@ impl MessageWithFields for HttpSecuritySchemeCreateView {
     }
 }
 
+impl CliOutput for HttpSecuritySchemeCreateView {
+    const KIND: &'static str = "api.security-scheme.create.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeGetView(pub SecuritySchemeDto);
 
@@ -47,6 +52,10 @@ impl MessageWithFields for HttpSecuritySchemeGetView {
     fn fields(&self) -> Vec<(String, String)> {
         security_scheme_view_fields(&self.0)
     }
+}
+
+impl CliOutput for HttpSecuritySchemeGetView {
+    const KIND: &'static str = "api.security-scheme.get.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +74,10 @@ impl MessageWithFields for HttpSecuritySchemeUpdateView {
     }
 }
 
+impl CliOutput for HttpSecuritySchemeUpdateView {
+    const KIND: &'static str = "api.security-scheme.update.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeDeleteView(pub SecuritySchemeDto);
 
@@ -79,6 +92,19 @@ impl MessageWithFields for HttpSecuritySchemeDeleteView {
     fn fields(&self) -> Vec<(String, String)> {
         security_scheme_view_fields(&self.0)
     }
+}
+
+impl CliOutput for HttpSecuritySchemeDeleteView {
+    const KIND: &'static str = "api.security-scheme.delete.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpSecuritySchemeListView {
+    pub security_schemes: Vec<SecuritySchemeDto>,
+}
+
+impl CliOutput for HttpSecuritySchemeListView {
+    const KIND: &'static str = "api.security-scheme.list.result";
 }
 
 fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {
@@ -96,7 +122,7 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
     fields.build()
 }
 
-impl TextView for Vec<SecuritySchemeDto> {
+impl TextView for HttpSecuritySchemeListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name").fixed(),
@@ -107,7 +133,7 @@ impl TextView for Vec<SecuritySchemeDto> {
             Column::new("Redirect URL"),
             Column::new("Scopes"),
         ]);
-        for scheme in self {
+        for scheme in &self.security_schemes {
             table.add_row(vec![
                 scheme.name.0.clone(),
                 scheme.id.to_string(),

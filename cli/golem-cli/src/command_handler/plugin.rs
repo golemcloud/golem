@@ -21,7 +21,8 @@ use crate::model::PathBufOrStdin;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
 use crate::model::text::plugin::{
-    PluginListEntry, PluginRegistrationGetView, PluginRegistrationRegisterView, PluginSource,
+    PluginListEntry, PluginListView, PluginRegistrationGetView, PluginRegistrationRegisterView,
+    PluginSource,
 };
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::api::PluginClient;
@@ -101,7 +102,9 @@ impl PluginCommandHandler {
             }
         }
 
-        self.ctx.log_handler().log_view(&entries)?;
+        self.ctx
+            .log_handler()
+            .log_view(&PluginListView { plugins: entries })?;
 
         Ok(())
     }

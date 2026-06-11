@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::cli_output::CliOutput;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
 use crate::model::text::fmt::{Column, TextView, log_table, new_table_full_condensed};
 use golem_client::model::EnvironmentWithDetails;
+use serde::Serialize;
 
 pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
     match &environment.source {
@@ -62,7 +64,16 @@ pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIde
     }
 }
 
-impl TextView for Vec<EnvironmentWithDetails> {
+#[derive(Debug, Clone, Serialize)]
+pub struct EnvironmentListView {
+    pub environments: Vec<EnvironmentWithDetails>,
+}
+
+impl CliOutput for EnvironmentListView {
+    const KIND: &'static str = "environment.list.result";
+}
+
+impl TextView for EnvironmentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Application Name"),
@@ -70,7 +81,7 @@ impl TextView for Vec<EnvironmentWithDetails> {
             Column::new("Deployment Revision").fixed_right(),
             Column::new("Deployment Version").fixed(),
         ]);
-        for env in self {
+        for env in &self.environments {
             table.add_row(vec![
                 env.application.name.0.clone(),
                 env.environment.name.0.clone(),

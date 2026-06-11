@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
@@ -48,7 +49,16 @@ pub struct PluginListEntry {
     pub source: PluginSource,
 }
 
-impl TextView for Vec<PluginListEntry> {
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginListView {
+    pub plugins: Vec<PluginListEntry>,
+}
+
+impl CliOutput for PluginListView {
+    const KIND: &'static str = "plugin.list.result";
+}
+
+impl TextView for PluginListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
@@ -58,7 +68,7 @@ impl TextView for Vec<PluginListEntry> {
             Column::new("Description"),
             Column::new("Homepage"),
         ]);
-        for entry in self {
+        for entry in &self.plugins {
             table.add_row(vec![
                 entry.plugin.name.clone(),
                 entry.plugin.version.clone(),
@@ -111,6 +121,10 @@ impl MessageWithFields for PluginRegistrationRegisterView {
     }
 }
 
+impl CliOutput for PluginRegistrationRegisterView {
+    const KIND: &'static str = "plugin.register.result";
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginRegistrationGetView(pub PluginRegistrationDto);
 
@@ -126,6 +140,10 @@ impl MessageWithFields for PluginRegistrationGetView {
     fn fields(&self) -> Vec<(String, String)> {
         plugin_registration_fields(&self.0)
     }
+}
+
+impl CliOutput for PluginRegistrationGetView {
+    const KIND: &'static str = "plugin.get.result";
 }
 
 fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, String)> {

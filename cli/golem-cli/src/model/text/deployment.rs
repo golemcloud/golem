@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
     new_table_full_condensed,
@@ -57,14 +58,27 @@ impl MessageWithFields for DeploymentNewView {
     }
 }
 
-impl TextView for Vec<Deployment> {
+impl CliOutput for DeploymentNewView {
+    const KIND: &'static str = "deployment.create.result";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeploymentListView {
+    pub deployments: Vec<Deployment>,
+}
+
+impl CliOutput for DeploymentListView {
+    const KIND: &'static str = "deployment.list.result";
+}
+
+impl TextView for DeploymentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Deployment Revision").fixed_right(),
             Column::new("Deployment Version").fixed_right(),
             Column::new("Hash"),
         ]);
-        for dep in self {
+        for dep in &self.deployments {
             table.add_row(vec![
                 dep.revision.get().to_string(),
                 dep.version.0.clone(),

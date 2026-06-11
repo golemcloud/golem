@@ -15,13 +15,24 @@
 use crate::config::ProfileConfig;
 use crate::log::{LogColorize, logln};
 use crate::model::ProfileView;
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use colored::Colorize;
+use serde::Serialize;
 
-impl TextView for Vec<ProfileView> {
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileListView {
+    pub profiles: Vec<ProfileView>,
+}
+
+impl CliOutput for ProfileListView {
+    const KIND: &'static str = "profile.list.result";
+}
+
+impl TextView for ProfileListView {
     fn log(&self) {
         logln("Available profiles:".log_color_help_group().to_string());
-        for profile in self {
+        for profile in &self.profiles {
             logln(format!(
                 " {} {}{}",
                 if profile.is_active { "*" } else { " " },
@@ -70,6 +81,10 @@ impl MessageWithFields for ProfileView {
 
         fields.build()
     }
+}
+
+impl CliOutput for ProfileView {
+    const KIND: &'static str = "profile.get.result";
 }
 
 impl TextView for ProfileConfig {

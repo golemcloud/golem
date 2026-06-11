@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::log::{LogColorize, logln};
+use crate::model::cli_output::CliOutput;
 use crate::model::deploy::EnvironmentSetupPlan;
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
@@ -255,6 +256,10 @@ impl TextView for DeploymentDiff {
     }
 }
 
+impl CliOutput for DeploymentDiff {
+    const KIND: &'static str = "deployment.diff.result";
+}
+
 fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
     if !diff.env_changes.is_empty() {
         logln("        - env");
@@ -399,6 +404,10 @@ impl TextView for EnvironmentSetupPlanView<'_> {
     }
 }
 
+impl CliOutput for EnvironmentSetupPlanView<'_> {
+    const KIND: &'static str = "environment.setup-plan.result";
+}
+
 impl EnvironmentSetupPlanView<'_> {
     pub fn has_entries_to_apply(&self) -> bool {
         !self.0.display.to_be_applied.is_empty()
@@ -423,6 +432,10 @@ impl TextView for DeployPlanView<'_> {
             environment_setup.log();
         }
     }
+}
+
+impl CliOutput for DeployPlanView<'_> {
+    const KIND: &'static str = "app.deploy-plan.result";
 }
 
 fn is_compact_diff_path(path: &Path) -> bool {

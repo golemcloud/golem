@@ -40,7 +40,9 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::component::{ComponentGetView, ComponentManifestTraceView};
+use crate::model::text::component::{
+    ComponentGetView, ComponentListView, ComponentManifestTraceView,
+};
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -143,7 +145,9 @@ impl ComponentCommandHandler {
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&components)?;
+        self.ctx
+            .log_handler()
+            .log_view(&ComponentListView { components })?;
 
         Ok(())
     }

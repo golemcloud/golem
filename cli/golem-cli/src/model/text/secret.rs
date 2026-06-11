@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 
 use comfy_table::Cell;
@@ -39,6 +40,10 @@ impl MessageWithFields for SecretCreateView {
     }
 }
 
+impl CliOutput for SecretCreateView {
+    const KIND: &'static str = "secret.create.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretGetView {
     pub secret: AgentSecretDto,
@@ -54,6 +59,10 @@ impl MessageWithFields for SecretGetView {
     fn fields(&self) -> Vec<(String, String)> {
         secret_view_fields(&self.secret, self.show_sensitive)
     }
+}
+
+impl CliOutput for SecretGetView {
+    const KIND: &'static str = "secret.get.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +85,10 @@ impl MessageWithFields for SecretUpdateView {
     }
 }
 
+impl CliOutput for SecretUpdateView {
+    const KIND: &'static str = "secret.update-value.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretDeleteView {
     pub secret: AgentSecretDto,
@@ -94,6 +107,10 @@ impl MessageWithFields for SecretDeleteView {
     fn fields(&self) -> Vec<(String, String)> {
         secret_view_fields(&self.secret, self.show_sensitive)
     }
+}
+
+impl CliOutput for SecretDeleteView {
+    const KIND: &'static str = "secret.delete.result";
 }
 
 fn secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(String, String)> {
@@ -209,6 +226,10 @@ impl TextView for SecretListView {
         let table = self.table();
         log_table(table);
     }
+}
+
+impl CliOutput for SecretListView {
+    const KIND: &'static str = "secret.list.result";
 }
 
 #[cfg(test)]

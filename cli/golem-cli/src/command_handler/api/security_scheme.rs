@@ -21,7 +21,7 @@ use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::http_api_security::{
     HttpSecuritySchemeCreateView, HttpSecuritySchemeDeleteView, HttpSecuritySchemeGetView,
-    HttpSecuritySchemeUpdateView,
+    HttpSecuritySchemeListView, HttpSecuritySchemeUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
@@ -287,7 +287,11 @@ impl ApiSecuritySchemeCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&results)?;
+        self.ctx
+            .log_handler()
+            .log_view(&HttpSecuritySchemeListView {
+                security_schemes: results,
+            })?;
 
         Ok(())
     }

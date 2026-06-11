@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight,
     log_table, new_table_full_condensed,
@@ -33,6 +34,19 @@ impl MessageWithFields for HttpApiDeploymentGetView {
     fn fields(&self) -> Vec<(String, String)> {
         http_api_deployment_fields(&self.0)
     }
+}
+
+impl CliOutput for HttpApiDeploymentGetView {
+    const KIND: &'static str = "api.deployment.get.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpApiDeploymentListView {
+    pub deployments: Vec<HttpApiDeployment>,
+}
+
+impl CliOutput for HttpApiDeploymentListView {
+    const KIND: &'static str = "api.deployment.list.result";
 }
 
 fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> {
@@ -68,7 +82,7 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
     fields.build()
 }
 
-impl TextView for Vec<HttpApiDeployment> {
+impl TextView for HttpApiDeploymentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),
@@ -76,7 +90,7 @@ impl TextView for Vec<HttpApiDeployment> {
             Column::new("Environment ID").fixed(),
             Column::new("Revision").fixed(),
         ]);
-        for dep in self {
+        for dep in &self.deployments {
             table.add_row(vec![
                 dep.domain.to_string(),
                 dep.id.to_string(),

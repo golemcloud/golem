@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use golem_common::model::quota::ResourceDefinition;
 use serde_derive::{Deserialize, Serialize};
@@ -32,6 +33,10 @@ impl MessageWithFields for ResourceDefinitionCreateView {
     }
 }
 
+impl CliOutput for ResourceDefinitionCreateView {
+    const KIND: &'static str = "resource.create.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionUpdateView(pub ResourceDefinition);
 
@@ -46,6 +51,10 @@ impl MessageWithFields for ResourceDefinitionUpdateView {
     fn fields(&self) -> Vec<(String, String)> {
         resource_definition_fields(&self.0)
     }
+}
+
+impl CliOutput for ResourceDefinitionUpdateView {
+    const KIND: &'static str = "resource.update.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +73,10 @@ impl MessageWithFields for ResourceDefinitionDeleteView {
     }
 }
 
+impl CliOutput for ResourceDefinitionDeleteView {
+    const KIND: &'static str = "resource.delete.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionGetView(pub ResourceDefinition);
 
@@ -78,6 +91,19 @@ impl MessageWithFields for ResourceDefinitionGetView {
     fn fields(&self) -> Vec<(String, String)> {
         resource_definition_fields(&self.0)
     }
+}
+
+impl CliOutput for ResourceDefinitionGetView {
+    const KIND: &'static str = "resource.get.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceDefinitionListView {
+    pub resources: Vec<ResourceDefinition>,
+}
+
+impl CliOutput for ResourceDefinitionListView {
+    const KIND: &'static str = "resource.list.result";
 }
 
 fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
@@ -98,7 +124,7 @@ fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
     fields.build()
 }
 
-impl TextView for Vec<ResourceDefinition> {
+impl TextView for ResourceDefinitionListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
@@ -108,7 +134,7 @@ impl TextView for Vec<ResourceDefinition> {
             Column::new("Unit").fixed_right(),
             Column::new("Units").fixed_right(),
         ]);
-        for row in self {
+        for row in &self.resources {
             table.add_row(vec![
                 row.name.to_string(),
                 row.revision.to_string(),

@@ -35,14 +35,14 @@ impl LogHandler {
         Self { ctx }
     }
 
-    pub fn log_view<View: TextView + Serialize>(&self, view: &View) -> anyhow::Result<()> {
+    pub fn log_view<View: TextView + CliOutput>(&self, view: &View) -> anyhow::Result<()> {
         match self.ctx.format() {
             Format::Json
             | Format::PrettyJson
             | Format::Yaml
             | Format::PrettyYaml
             | Format::Toon => {
-                print_structured_document(self.ctx.format(), self.ctx.should_colorize(), view)?;
+                print_cli_output_document(self.ctx.format(), self.ctx.should_colorize(), view)?;
             }
             Format::Text => {
                 view.log();
@@ -127,15 +127,6 @@ pub fn print_cli_output_document<Output: CliOutput>(
     output: &Output,
 ) -> anyhow::Result<()> {
     println!("{}", render_cli_output_document(format, colorize, output)?);
-    Ok(())
-}
-
-pub fn print_structured_document<S: Serialize>(
-    format: Format,
-    colorize: bool,
-    value: &S,
-) -> anyhow::Result<()> {
-    println!("{}", render_structured_document(format, colorize, value)?);
     Ok(())
 }
 

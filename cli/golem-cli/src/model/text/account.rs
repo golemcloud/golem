@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::permission_share::PermissionShareData;
@@ -44,6 +45,10 @@ impl MessageWithFields for AccountGetView {
     }
 }
 
+impl CliOutput for AccountGetView {
+    const KIND: &'static str = "account.get.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountNewView(pub Account);
 
@@ -60,6 +65,10 @@ impl MessageWithFields for AccountNewView {
     }
 }
 
+impl CliOutput for AccountNewView {
+    const KIND: &'static str = "account.new.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountUpdateView(pub Account);
 
@@ -71,6 +80,10 @@ impl MessageWithFields for AccountUpdateView {
     fn fields(&self) -> Vec<(String, String)> {
         account_fields(&self.0)
     }
+}
+
+impl CliOutput for AccountUpdateView {
+    const KIND: &'static str = "account.update.result";
 }
 
 fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
@@ -116,6 +129,10 @@ impl MessageWithFields for PermissionShareGetView {
     }
 }
 
+impl CliOutput for PermissionShareGetView {
+    const KIND: &'static str = "account.permission-share.get.result";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionShareListView(pub Vec<PermissionShare>);
 
@@ -141,6 +158,10 @@ impl TextView for PermissionShareListView {
 
         log_table(table);
     }
+}
+
+impl CliOutput for PermissionShareListView {
+    const KIND: &'static str = "account.permission-share.list.result";
 }
 
 // TODO: atomic

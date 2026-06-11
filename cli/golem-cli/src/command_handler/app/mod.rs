@@ -51,11 +51,13 @@ use crate::model::deploy::{
     preferred_source_language_for_setup,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::text::deployment::DeploymentNewView;
+use crate::model::text::agent::AgentTypeListView;
+use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
 use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
+use crate::model::text::template::TemplateListView;
 use crate::model::worker::AgentUpdateMode;
 use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
@@ -478,7 +480,9 @@ impl AppCommandHandler {
             .map(|template| TemplateDescription::from_template(&template.0))
             .collect();
 
-        self.ctx.log_handler().log_view(&templates)?;
+        self.ctx
+            .log_handler()
+            .log_view(&TemplateListView { templates })?;
 
         Ok(())
     }
@@ -492,7 +496,9 @@ impl AppCommandHandler {
 
         let agent_types = self.list_agent_types(&environment).await?;
 
-        self.ctx.log_handler().log_view(&agent_types)?;
+        self.ctx
+            .log_handler()
+            .log_view(&AgentTypeListView { agent_types })?;
 
         Ok(())
     }
@@ -617,7 +623,7 @@ impl AppCommandHandler {
             ));
             self.ctx
                 .log_handler()
-                .log_view(&deployments)
+                .log_view(&DeploymentListView { deployments })
                 .map_err(DeployError::PrepareError)?;
             return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         }
@@ -2698,7 +2704,9 @@ impl AppCommandHandler {
             .await
             .map_service_error()?
             .values;
-        self.ctx.log_handler().log_view(&deployments)?;
+        self.ctx
+            .log_handler()
+            .log_view(&DeploymentListView { deployments })?;
 
         Ok(())
     }

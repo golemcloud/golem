@@ -14,18 +14,31 @@
 
 use crate::log::current_indent_width;
 use crate::model::TemplateDescription;
+use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use itertools::Itertools;
+use serde::Serialize;
 
-impl TextView for Vec<TemplateDescription> {
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateListView {
+    pub templates: Vec<TemplateDescription>,
+}
+
+impl CliOutput for TemplateListView {
+    const KIND: &'static str = "app.templates.result";
+}
+
+impl TextView for TemplateListView {
     fn log(&self) {
         let raw_name_width = self
+            .templates
             .iter()
             .map(|tmpl| tmpl.name.len())
             .max()
             .unwrap_or(0)
             .max("Name".len());
         let raw_description_width = self
+            .templates
             .iter()
             .map(|tmpl| tmpl.description.len())
             .max()
@@ -47,6 +60,7 @@ impl TextView for Vec<TemplateDescription> {
             description_width.max(raw_description_width.max(min_description_width));
 
         for (idx, (language, templates)) in self
+            .templates
             .iter()
             .chunk_by(|tmpl| tmpl.language)
             .into_iter()

@@ -21,7 +21,7 @@ use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::resource_definition::{
     ResourceDefinitionCreateView, ResourceDefinitionDeleteView, ResourceDefinitionGetView,
-    ResourceDefinitionUpdateView,
+    ResourceDefinitionListView, ResourceDefinitionUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::ResourcesClient;
@@ -261,7 +261,9 @@ impl ResourceDefinitionCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&results)?;
+        self.ctx
+            .log_handler()
+            .log_view(&ResourceDefinitionListView { resources: results })?;
 
         Ok(())
     }
