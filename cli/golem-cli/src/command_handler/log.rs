@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::context::Context;
-use crate::log::logln;
 use crate::model::cli_output::{CliOutput, to_cli_output_value};
 use crate::model::format::Format;
 use crate::model::text::fmt::{
@@ -34,29 +33,6 @@ pub struct LogHandler {
 impl LogHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
-    }
-
-    pub fn log_serializable<S: Serialize>(&self, value: &S) -> anyhow::Result<()> {
-        match self.ctx.format() {
-            Format::Json
-            | Format::PrettyJson
-            | Format::Yaml
-            | Format::PrettyYaml
-            | Format::Toon => {
-                print_structured_document(self.ctx.format(), self.ctx.should_colorize(), value)?;
-            }
-            Format::Text => {
-                let formatted = if self.ctx.should_colorize() {
-                    to_colored_json(value)?
-                } else {
-                    serde_json::to_string_pretty(value)?
-                };
-                for line in formatted.lines() {
-                    logln(line);
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn log_view<View: TextView + Serialize>(&self, view: &View) -> anyhow::Result<()> {

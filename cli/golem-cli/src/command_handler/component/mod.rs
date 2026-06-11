@@ -40,7 +40,7 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::component::ComponentGetView;
+use crate::model::text::component::{ComponentGetView, ComponentManifestTraceView};
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -326,13 +326,16 @@ impl ComponentCommandHandler {
                 ),
             );
             let _indent = self.ctx.log_handler().decorated_indent_primary();
-            self.ctx.log_handler().log_serializable(
-                &app_ctx
-                    .application()
-                    .component(&component_name)
-                    .layer_properties()
-                    .with_compacted_traces(),
-            )?
+            self.ctx
+                .log_handler()
+                .log_view(&ComponentManifestTraceView {
+                    component_name: component_name.clone(),
+                    properties: app_ctx
+                        .application()
+                        .component(&component_name)
+                        .layer_properties()
+                        .with_compacted_traces(),
+                })?
         }
 
         Ok(())

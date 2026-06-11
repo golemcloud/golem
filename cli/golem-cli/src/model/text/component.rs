@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app::ComponentLayerProperties;
+use crate::model::cli_output::CliOutput;
 use crate::model::component::ComponentView;
 use crate::model::text::fmt::*;
+use colored::control::SHOULD_COLORIZE;
+use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 
 impl TextView for Vec<ComponentView> {
@@ -129,6 +133,36 @@ impl MessageWithFields for ComponentGetView {
 
     fn fields(&self) -> Vec<(String, String)> {
         component_view_fields(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentManifestTraceView {
+    pub component_name: ComponentName,
+    pub properties: ComponentLayerProperties,
+}
+
+impl CliOutput for ComponentManifestTraceView {
+    const KIND: &'static str = "component.manifest-trace.result";
+}
+
+impl TextView for ComponentManifestTraceView {
+    fn log(&self) {
+        let rendered = if SHOULD_COLORIZE.should_colorize() {
+            to_colored_json(&self.properties)
+        } else {
+            serde_json::to_string_pretty(&self.properties).map_err(Into::into)
+        };
+
+        match rendered {
+            Ok(rendered) => {
+                for line in rendered.lines() {
+                    logln(line);
+                }
+            }
+            Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
+        }
     }
 }
 
