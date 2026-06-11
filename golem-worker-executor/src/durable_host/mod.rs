@@ -650,6 +650,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
             });
 
+        if self
+            .state
+            .component_service
+            .is_card_revoked(template.card_id)
+        {
+            return golem_common::model::card::EffectiveSurface::default();
+        }
+
         let context = golem_common::model::card::AgentPermissionMonomorphizationContext {
             account: component.account_email.clone(),
             application: component.application_name.clone(),
@@ -659,7 +667,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             agent_type: agent_id.agent_type.clone(),
         };
 
-        let Ok(card) = golem_common::model::card::monomorphize_agent_initial_card(
+        let Ok(mut card) = golem_common::model::card::monomorphize_agent_initial_card(
             &template.lower_positive,
             &template.lower_negative,
             &template.upper_positive,
@@ -668,6 +676,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         ) else {
             return golem_common::model::card::EffectiveSurface::default();
         };
+        card.card_id = template.card_id;
 
         golem_common::model::card::EffectiveSurface::from_cards(
             std::slice::from_ref(&card),

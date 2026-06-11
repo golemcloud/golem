@@ -16,6 +16,8 @@ use super::{
     PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
 };
 use crate::base_model::account::AccountId;
+use crate::base_model::agent::AgentTypeName;
+use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, newtype_uuid};
 use chrono::{DateTime, Utc};
@@ -29,9 +31,20 @@ declare_revision!(CardRevision);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardManagedBy {
-    AccountRoot { account_id: AccountId },
-    EnvironmentDefault { environment_id: EnvironmentId },
-    PermissionShare { permission_share_id: Uuid },
+    AccountRoot {
+        account_id: AccountId,
+    },
+    EnvironmentDefault {
+        environment_id: EnvironmentId,
+    },
+    PermissionShare {
+        permission_share_id: Uuid,
+    },
+    AgentInitial {
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        agent_type: AgentTypeName,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

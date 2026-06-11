@@ -522,6 +522,10 @@ impl From<ComponentError> for ApiError {
             ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
+            ComponentError::MissingAgentInitialPermissionTemplate(_)
+            | ComponentError::UndeclaredAgentTypeInInitialPermissionTemplate(_) => {
+                Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
+            }
             ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::LimitExceeded(inner) => inner.into(),

@@ -18,6 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::RegistryInvalidationEvent;
+use golem_common::model::card::CardId;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -141,7 +142,14 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     .invalidate_environment(*environment_id)
                     .await;
             }
-            RegistryInvalidationEvent::CardRevoked { .. } => {}
+            RegistryInvalidationEvent::CardRevoked { card_ids, .. } => {
+                let card_ids = card_ids.iter().copied().map(CardId).collect::<Vec<_>>();
+                debug!(
+                    card_count = card_ids.len(),
+                    "Received card revocation event, recording revoked card ids"
+                );
+                self.component_service.record_revoked_cards(&card_ids);
+            }
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
                 account_id,
