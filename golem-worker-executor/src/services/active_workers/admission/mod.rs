@@ -134,12 +134,36 @@ impl AdmissionController {
     /// not cover), so taking the maximum keeps the gate safe against both the
     /// grant a worker may yet fault in and any usage the grant does not capture.
     fn admissible_headroom(&self) -> u64 {
+        let granted = *self.granted.lock().unwrap();
+        self.headroom_with_granted(granted)
+    }
+
+    /// Computes admissible headroom for an already-read `granted` value. Reads
+    /// the probe and emits the ceiling/RSS metrics. Kept separate from the lock
+    /// acquisition so the decision-and-reserve sequence can hold the lock across
+    /// both steps (see [`Self::try_reserve_locked`]).
+    fn headroom_with_granted(&self, granted: u64) -> u64 {
         let snapshot = self.probe.snapshot();
         let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
-        let granted = *self.granted.lock().unwrap();
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
         crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
         ceiling.saturating_sub(snapshot.current_bytes.max(granted))
+    }
+
+    /// Atomically admits `request_bytes` if the headroom computed against the
+    /// current granted total covers it: reads `granted`, computes headroom, and
+    /// adds the reservation all under one lock so two concurrent admissions
+    /// cannot both pass the check against the same headroom and overshoot the
+    /// ceiling. Returns whether the request was admitted.
+    fn try_reserve_locked(&self, request_bytes: u64) -> bool {
+        let mut granted = self.granted.lock().unwrap();
+        if self.headroom_with_granted(*granted) >= request_bytes {
+            *granted += request_bytes;
+            crate::metrics::workers::record_worker_memory_granted(*granted);
+            true
+        } else {
+            false
+        }
     }
 
     /// Record `request_bytes` of memory granted to a newly admitted worker. The
@@ -192,9 +216,8 @@ impl AdmissionController {
         request_bytes: u64,
         source: &dyn EvictionSource,
     ) -> AdmissionDecision {
-        // Fast path: enough real headroom already, admit without evicting.
-        if self.admissible_headroom() >= request_bytes {
-            self.reserve(request_bytes);
+        // Fast path: atomically admit if there is already enough real headroom.
+        if self.try_reserve_locked(request_bytes) {
             return AdmissionDecision::Admit;
         }
 
@@ -212,9 +235,9 @@ impl AdmissionController {
 
         // Re-measure against ground truth rather than trusting the freed tally:
         // the probe is the authority, and other activity may have moved usage
-        // in either direction while we were evicting.
-        if self.admissible_headroom() >= request_bytes {
-            self.reserve(request_bytes);
+        // in either direction while we were evicting. The check-and-reserve is
+        // atomic so a concurrent admission cannot slip in between.
+        if self.try_reserve_locked(request_bytes) {
             AdmissionDecision::Admit
         } else {
             AdmissionDecision::Reject

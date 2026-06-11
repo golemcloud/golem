@@ -254,6 +254,91 @@ async fn apply_staggered_admit(
     decision
 }
 
+/// A probe with a fixed limit that always reports zero current usage, so the
+/// gate's admission decision is driven solely by the granted accounting against
+/// the ceiling. Used by the concurrency test, where the property under test is
+/// that the granted counter cannot be over-committed by racing admissions.
+#[derive(Debug)]
+struct ZeroUsageProbe {
+    limit: u64,
+}
+
+impl MemoryProbe for ZeroUsageProbe {
+    fn snapshot(&self) -> MemorySnapshot {
+        MemorySnapshot {
+            limit_bytes: self.limit,
+            current_bytes: 0,
+        }
+    }
+}
+
+/// An eviction source with nothing to evict: a rejected request stays rejected.
+struct NoEvictionSource;
+
+#[async_trait::async_trait]
+impl EvictionSource for NoEvictionSource {
+    async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+        0
+    }
+}
+
+/// Concurrent admissions must never grant more than the ceiling allows.
+///
+/// Many admit attempts of equal size race against a controller whose ceiling
+/// admits only a known number of them, with no evictable work to fall back on.
+/// Exactly `ceiling / request` requests must be admitted and the rest rejected;
+/// the total granted must never exceed the ceiling. This can only hold if each
+/// admission's "is there room? then reserve" sequence is atomic against the
+/// others — if two admits read the same headroom before either reserves, both
+/// pass and the granted total overshoots the ceiling.
+#[test]
+fn concurrent_admissions_never_overcommit_the_ceiling() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        const REQUEST: u64 = 10;
+        const CAPACITY: u64 = 50; // exactly 5 requests fit
+        const ATTEMPTS: usize = 200; // far more than fit, all racing
+
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(ZeroUsageProbe { limit: CAPACITY }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+
+        let mut handles = Vec::with_capacity(ATTEMPTS);
+        for _ in 0..ATTEMPTS {
+            let controller = controller.clone();
+            handles.push(tokio::spawn(async move {
+                controller.try_admit(REQUEST, &NoEvictionSource).await
+            }));
+        }
+
+        let mut admitted = 0usize;
+        for handle in handles {
+            if handle.await.unwrap() == AdmissionDecision::Admit {
+                admitted += 1;
+            }
+        }
+
+        let expected = (CAPACITY / REQUEST) as usize;
+        assert_eq!(
+            admitted, expected,
+            "expected exactly {expected} admissions to fit, got {admitted}"
+        );
+        // With zero measured usage, headroom is the ceiling minus granted; if it
+        // equals the full ceiling again, everything admitted was released, which
+        // never happens here. The decisive check: the admitted total fits.
+        assert!(
+            admitted as u64 * REQUEST <= CAPACITY,
+            "granted {} exceeded ceiling {CAPACITY}",
+            admitted as u64 * REQUEST
+        );
+    });
+}
+
 // ── Single-case unit tests ───────────────────────────────────────────────────
 
 #[test]
