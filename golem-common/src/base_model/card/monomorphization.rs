@@ -545,3 +545,167 @@ impl MonomorphizeOwner<ToolOwnerPattern> for PolymorphicToolOwnerPattern {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::account::AccountEmail;
+    use crate::model::agent::AgentTypeName;
+    use crate::model::application::ApplicationName;
+    use crate::model::card::recipient::RecipientPattern;
+    use crate::model::card::{
+        AgentClass, AgentResourcePattern, AgentVerb, ClassPermissionTarget, ComponentClass,
+        ComponentResourcePattern, ComponentVerb, EffectiveSurface, EnvironmentClass,
+        EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
+        PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
+    };
+    use crate::model::component::ComponentName;
+    use crate::model::component_metadata::AgentInitialPermissionTemplate;
+    use crate::model::environment::EnvironmentName;
+    use test_r::test;
+
+    fn context() -> AgentPermissionMonomorphizationContext {
+        AgentPermissionMonomorphizationContext {
+            account: AccountEmail::from("owner@example.com"),
+            application: ApplicationName::try_from("shop").unwrap(),
+            environment: EnvironmentName::try_from("prod").unwrap(),
+            component: ComponentName("cart-svc".to_string()),
+            agent_name: "Cart(alice)".to_string(),
+            agent_type: AgentTypeName("Cart".to_string()),
+        }
+    }
+
+    fn holder() -> RecipientPattern {
+        RecipientPattern::parse("owner@example.com/shop/prod/cart-svc/Cart(alice)").unwrap()
+    }
+
+    fn environment_view_target(owner: &str) -> PermissionTarget {
+        PermissionTarget::Environment(ClassPermissionTarget::<EnvironmentClass> {
+            verb: Some(EnvironmentVerb::View),
+            owner: EnvironmentOwnerPattern::parse(owner).unwrap(),
+            resource: EnvironmentResourcePattern::Any,
+        })
+    }
+
+    fn component_view_target(owner: &str) -> PermissionTarget {
+        PermissionTarget::Component(ClassPermissionTarget::<ComponentClass> {
+            verb: Some(ComponentVerb::View),
+            owner: ComponentOwnerPattern::parse(owner).unwrap(),
+            resource: ComponentResourcePattern::Any,
+        })
+    }
+
+    fn agent_target(owner: &str, verb: AgentVerb) -> PermissionTarget {
+        PermissionTarget::Agent(ClassPermissionTarget::<AgentClass> {
+            verb: Some(verb),
+            owner: AgentOwnerPattern::parse(owner).unwrap(),
+            resource: AgentResourcePattern::Any,
+        })
+    }
+
+    #[test]
+    fn monomorphizes_holder_relative_agent_initial_template_slots() {
+        let context = context();
+        let recipient = RecipientPattern::Any;
+        let card = monomorphize_agent_initial_card(
+            &[
+                PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
+                    owner: PolymorphicEnvironmentOwnerPattern::Env,
+                    recipient: recipient.clone(),
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }),
+                PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
+                    owner: PolymorphicComponentOwnerPattern::Component,
+                    recipient: recipient.clone(),
+                    verb: Some(ComponentVerb::View),
+                    resource: ComponentResourcePattern::Any,
+                }),
+                PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
+                    owner: PolymorphicAgentOwnerPattern::Agent,
+                    recipient,
+                    verb: Some(AgentVerb::View),
+                    resource: AgentResourcePattern::Any,
+                }),
+            ],
+            &[],
+            &[],
+            &[],
+            &context,
+        )
+        .unwrap();
+
+        assert_eq!(card.card_id, CardId(uuid::Uuid::nil()));
+        assert_eq!(card.lower_positive.len(), 3);
+        assert!(
+            card.lower_positive[0]
+                .subsumes_target(&environment_view_target("owner@example.com/shop/prod"))
+        );
+        assert!(
+            card.lower_positive[1].subsumes_target(&component_view_target(
+                "owner@example.com/shop/prod/cart-svc"
+            ))
+        );
+        assert!(card.lower_positive[2].subsumes_target(&agent_target(
+            "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+            AgentVerb::View,
+        )));
+        assert!(!card.lower_positive[2].subsumes_target(&agent_target(
+            "owner@example.com/shop/prod/cart-svc/Cart(bob)",
+            AgentVerb::View,
+        )));
+    }
+
+    #[test]
+    fn default_agent_initial_template_is_current_component_scoped() {
+        let context = context();
+        let template =
+            AgentInitialPermissionTemplate::default_for(&context.environment, &context.component);
+        let card = monomorphize_agent_initial_card(
+            &template.lower_positive,
+            &template.lower_negative,
+            &template.upper_positive,
+            &template.upper_negative,
+            &context,
+        )
+        .unwrap();
+        let surface = EffectiveSurface::from_cards(&[card], &holder()).unwrap();
+
+        assert!(
+            surface
+                .authorize(&environment_view_target("owner@example.com/shop/prod"))
+                .unwrap()
+        );
+        assert!(
+            surface
+                .authorize(&component_view_target(
+                    "owner@example.com/shop/prod/cart-svc"
+                ))
+                .unwrap()
+        );
+        assert!(
+            surface
+                .authorize(&agent_target(
+                    "owner@example.com/shop/prod/cart-svc/Cart(bob)",
+                    AgentVerb::Invoke,
+                ))
+                .unwrap()
+        );
+        assert!(
+            !surface
+                .authorize(&agent_target(
+                    "owner@example.com/shop/prod/inventory-svc/Inventory(bob)",
+                    AgentVerb::Invoke,
+                ))
+                .unwrap()
+        );
+        assert!(
+            !surface
+                .authorize(&agent_target(
+                    "owner@example.com/shop/dev/cart-svc/Cart(bob)",
+                    AgentVerb::Invoke,
+                ))
+                .unwrap()
+        );
+    }
+}
