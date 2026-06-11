@@ -20,7 +20,6 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -29,9 +28,7 @@ use golem_service_base::model::component::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_service_base::storage::blob::BlobStorage;
-use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
@@ -89,19 +86,6 @@ pub trait ComponentService: Send + Sync {
     async fn invalidate_all(&self) {
         self.invalidate_current_deployed_metadata().await
     }
-
-    fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
-
-    fn is_card_revoked(&self, _card_id: CardId) -> bool {
-        false
-    }
-
-    async fn existing_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        Ok(card_ids)
-    }
 }
 
 pub fn configured(
@@ -128,7 +112,6 @@ pub struct ComponentServiceDefault {
     current_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
-    revoked_cards: Arc<RwLock<HashSet<CardId>>>,
 }
 
 impl ComponentServiceDefault {
@@ -151,7 +134,6 @@ impl ComponentServiceDefault {
                 time_to_idle,
             ),
             compiled_component_service,
-            revoked_cards: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 }
@@ -411,37 +393,6 @@ impl ComponentService for ComponentServiceDefault {
         for key in metadata_keys {
             self.component_metadata_cache.remove(&key).await;
         }
-    }
-
-    fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        let mut revoked_cards = self.revoked_cards.write().unwrap();
-        revoked_cards.extend(card_ids.iter().copied());
-    }
-
-    fn is_card_revoked(&self, card_id: CardId) -> bool {
-        self.revoked_cards.read().unwrap().contains(&card_id)
-    }
-
-    async fn existing_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        let existing = self
-            .registry_client
-            .batch_get_existing_cards(card_ids.clone())
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed checking card existence: {}",
-                    err.to_safe_string()
-                ))
-            })?;
-        let missing = card_ids
-            .into_iter()
-            .filter(|card_id| !existing.contains(card_id))
-            .collect::<Vec<_>>();
-        self.record_revoked_cards(&missing);
-        Ok(existing)
     }
 }
 
@@ -849,24 +800,5 @@ mod tests {
             1,
             "other environments should stay cached"
         );
-    }
-
-    #[test]
-    fn records_revoked_card_ids() {
-        let service = ComponentServiceDefault::new(
-            Arc::new(MockRegistryService::new([])),
-            1,
-            8,
-            Duration::from_secs(60),
-            Arc::new(CompiledComponentServiceDisabled::new()),
-        );
-        let revoked = CardId::new();
-        let live = CardId::new();
-
-        assert!(!service.is_card_revoked(revoked));
-        service.record_revoked_cards(&[revoked]);
-
-        assert!(service.is_card_revoked(revoked));
-        assert!(!service.is_card_revoked(live));
     }
 }

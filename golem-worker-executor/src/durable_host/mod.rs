@@ -51,6 +51,7 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -337,6 +338,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
@@ -502,6 +504,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 blob_store_service,
                 rdbms_service,
                 quota_service,
+                card_service,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -650,11 +653,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
             });
 
-        if self
-            .state
-            .component_service
-            .is_card_revoked(template.card_id)
-        {
+        if self.state.card_service.is_card_revoked(template.card_id) {
             return golem_common::model::card::EffectiveSurface::default();
         }
 
@@ -760,6 +759,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_service(&self) -> Arc<dyn ComponentService> {
         self.state.component_service.clone()
+    }
+
+    pub fn card_service(&self) -> Arc<dyn CardService> {
+        self.state.card_service.clone()
     }
 
     pub fn agent_types_service(&self) -> Arc<dyn AgentTypesService> {
@@ -4424,6 +4427,7 @@ struct PrivateDurableWorkerState {
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
     quota_service: Arc<dyn QuotaService>,
+    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -4604,6 +4608,7 @@ impl PrivateDurableWorkerState {
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -4664,6 +4669,7 @@ impl PrivateDurableWorkerState {
             blob_store_service,
             rdbms_service,
             quota_service,
+            card_service,
             component_service,
             agent_types_service,
             environment_state_service,

@@ -25,6 +25,7 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::FileLoader;
@@ -863,6 +864,7 @@ impl WorkerCtx for Context {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -898,6 +900,7 @@ impl WorkerCtx for Context {
             scheduler_service,
             rpc,
             worker_proxy,
+            card_service,
             component_service,
             account_resource_limits.clone(),
             config.clone(),
@@ -978,6 +981,10 @@ impl WorkerCtx for Context {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn card_service(&self) -> Arc<dyn CardService> {
+        self.durable_ctx.card_service()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {

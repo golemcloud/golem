@@ -39,12 +39,12 @@ use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents,
-    HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog,
-    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
-    HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    UsesAllDeps,
+    HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
+    HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
+    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
+    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
+    HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
@@ -3645,8 +3645,8 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let component_service = parent.component_service();
-        component_service.record_revoked_cards(
+        let card_service = parent.card_service();
+        card_service.record_revoked_cards(
             &worker_metadata
                 .last_known_status
                 .revoked_cards
@@ -3661,8 +3661,8 @@ impl RunningWorker {
                 .agent_type_initial_permission_template(&agent_id.agent_type)
                 .map(|template| template.card_id)
         }) {
-            let exists = !component_service.is_card_revoked(card_id)
-                && component_service
+            let exists = !card_service.is_card_revoked(card_id)
+                && card_service
                     .existing_cards(vec![card_id])
                     .await?
                     .contains(&card_id);
@@ -3672,7 +3672,7 @@ impl RunningWorker {
                     .revoked_cards
                     .contains(&card_id)
             {
-                component_service.record_revoked_cards(&[card_id]);
+                card_service.record_revoked_cards(&[card_id]);
                 parent
                     .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
                     .await;
@@ -3735,6 +3735,7 @@ impl RunningWorker {
             parent.scheduler_service(),
             parent.rpc(),
             parent.worker_proxy(),
+            parent.card_service(),
             parent.component_service(),
             parent.extra_deps(),
             parent.config(),

@@ -89,6 +89,7 @@ use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
+use golem_worker_executor::services::card::CardService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, NoOpDirectInvocationAuthService,
@@ -1482,6 +1483,7 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -1534,6 +1536,7 @@ impl WorkerCtx for TestWorkerCtx {
             scheduler_service,
             rpc,
             worker_proxy,
+            card_service,
             component_service,
             account_resource_limits,
             config,
@@ -1616,6 +1619,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn card_service(&self) -> Arc<dyn CardService> {
+        self.durable_ctx.card_service()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {
