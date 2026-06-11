@@ -24,6 +24,7 @@
 
 use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::TextView;
+use golem_common::model::component::ComponentName;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -57,6 +58,35 @@ impl TextView for AgentRevertResult {
 
 impl CliOutput for AgentRevertResult {
     const KIND: &'static str = "agent.revert.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentCancelInvocationResult {
+    pub canceled: bool,
+    pub agent: String,
+    pub idempotency_key: String,
+}
+
+impl TextView for AgentCancelInvocationResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AgentCancelInvocationResult {
+    const KIND: &'static str = "agent.cancel-invocation.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRedeployResult {
+    pub redeployed: bool,
+    pub components: Vec<ComponentName>,
+}
+
+impl TextView for AgentRedeployResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AgentRedeployResult {
+    const KIND: &'static str = "agent.redeploy.result";
 }
 
 #[derive(Debug, Clone, Serialize)]

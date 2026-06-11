@@ -15,7 +15,7 @@
 use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 
-use golem_common::model::domain_registration::DomainRegistration;
+use golem_common::model::domain_registration::{Domain, DomainRegistration, DomainRegistrationId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,6 +43,21 @@ impl MessageWithFields for DomainRegistrationNewView {
 
 impl CliOutput for DomainRegistrationNewView {
     const KIND: &'static str = "api.domain.register.result";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DomainRegistrationDeleteResult {
+    pub deleted: bool,
+    pub domain: Domain,
+    pub id: DomainRegistrationId,
+}
+
+impl TextView for DomainRegistrationDeleteResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for DomainRegistrationDeleteResult {
+    const KIND: &'static str = "api.domain.delete.result";
 }
 
 #[derive(Debug, Serialize, Deserialize)]

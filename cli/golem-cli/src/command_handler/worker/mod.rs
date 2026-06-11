@@ -33,7 +33,7 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::action_result::{
-    AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
+    AgentCancelInvocationResult, AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
 };
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
@@ -828,12 +828,19 @@ impl WorkerCommandHandler {
             .map(|result| result.canceled)
             .map_service_error()?;
 
-        // TODO: json / yaml response?
         if canceled {
             log_action("Canceled", "");
         } else {
             log_warn_action("Failed", "to cancel, invocation already started");
         }
+
+        self.ctx
+            .log_handler()
+            .log_view(&AgentCancelInvocationResult {
+                canceled,
+                agent: agent_name.0,
+                idempotency_key: idempotency_key.value,
+            })?;
 
         Ok(())
     }

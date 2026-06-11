@@ -15,7 +15,9 @@
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
-use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDomainListView};
+use crate::model::text::http_api_domain::{
+    DomainRegistrationDeleteResult, DomainRegistrationNewView, HttpApiDomainListView,
+};
 
 use crate::command::api::domain::ApiDomainSubcommand;
 use crate::error::NonSuccessfulExit;
@@ -114,7 +116,7 @@ impl ApiDomainCommandHandler {
 
         let domains = self.list_domains(&environment.environment_id).await?;
 
-        let Some(domain_to_delete) = domains.iter().find(|d| d.domain == domain) else {
+        let Some(domain_to_delete) = domains.iter().find(|d| d.domain == domain).cloned() else {
             log_error(format!(
                 "Domain {} not found",
                 domain.0.log_color_highlight()
@@ -157,7 +159,18 @@ impl ApiDomainCommandHandler {
                 environment.text_format()
             ),
         );
-        log_action("Deleted", "domain {}");
+        log_action(
+            "Deleted",
+            format!("domain registration {}", domain.0.log_color_highlight()),
+        );
+
+        self.ctx
+            .log_handler()
+            .log_view(&DomainRegistrationDeleteResult {
+                deleted: true,
+                domain,
+                id: domain_to_delete.id,
+            })?;
 
         Ok(())
     }

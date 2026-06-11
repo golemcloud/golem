@@ -21,7 +21,9 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_warn_action;
 use crate::model::text::account::{
-    AccountGetView, AccountNewView, PermissionShareGetView, PermissionShareListView,
+    AccountDeleteResult, AccountGetView, AccountNewView, AccountUpdateView,
+    PermissionShareDeleteResult, PermissionShareGetView, PermissionShareListView,
+    PermissionShareNewView, PermissionShareUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::{AccountClient, PermissionSharesClient};
@@ -139,7 +141,9 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&AccountGetView(account))?;
+        self.ctx
+            .log_handler()
+            .log_view(&AccountUpdateView(account))?;
 
         Ok(())
     }
@@ -182,6 +186,11 @@ impl AccountCommandHandler {
             .map_service_error()?;
 
         log_warn_action("Deleted", "account");
+
+        self.ctx.log_handler().log_view(&AccountDeleteResult {
+            deleted: true,
+            account_id: account.id,
+        })?;
 
         Ok(())
     }
@@ -279,7 +288,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share))?;
+            .log_view(&PermissionShareNewView(share))?;
 
         Ok(())
     }
@@ -310,7 +319,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&PermissionShareGetView(share))?;
+            .log_view(&PermissionShareUpdateView(share))?;
 
         Ok(())
     }
@@ -329,6 +338,13 @@ impl AccountCommandHandler {
             .map_service_error()?;
 
         log_warn_action("Deleted", "permission share");
+
+        self.ctx
+            .log_handler()
+            .log_view(&PermissionShareDeleteResult {
+                deleted: true,
+                permission_share_id,
+            })?;
 
         Ok(())
     }

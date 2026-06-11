@@ -40,6 +40,7 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
+use crate::model::text::action_result::AgentRedeployResult;
 use crate::model::text::component::{
     ComponentGetView, ComponentListView, ComponentManifestTraceView,
 };
@@ -403,8 +404,15 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        // TODO: json / yaml output?
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        self.ctx.log_handler().log_view(&AgentRedeployResult {
+            redeployed: true,
+            components: components
+                .iter()
+                .map(|component| component.component_name.clone())
+                .collect(),
+        })?;
+
         Ok(())
     }
 

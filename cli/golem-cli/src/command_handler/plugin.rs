@@ -22,7 +22,7 @@ use crate::model::environment::EnvironmentResolveMode;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
 use crate::model::text::plugin::{
     PluginListEntry, PluginListView, PluginRegistrationGetView, PluginRegistrationRegisterView,
-    PluginSource,
+    PluginSource, PluginUnregisterResult,
 };
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::api::PluginClient;
@@ -197,6 +197,13 @@ impl PluginCommandHandler {
                 result.version.log_color_highlight()
             ),
         );
+
+        self.ctx.log_handler().log_view(&PluginUnregisterResult {
+            unregistered: true,
+            plugin_id: id,
+            name: result.name,
+            version: result.version,
+        })?;
 
         Ok(())
     }

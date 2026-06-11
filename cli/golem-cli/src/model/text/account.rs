@@ -15,7 +15,8 @@
 use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
-use golem_common::model::permission_share::PermissionShareData;
+use golem_common::model::account::AccountId;
+use golem_common::model::permission_share::{PermissionShareData, PermissionShareId};
 use serde::{Deserialize, Serialize};
 
 fn account_fields(account: &Account) -> Vec<(String, String)> {
@@ -86,6 +87,20 @@ impl CliOutput for AccountUpdateView {
     const KIND: &'static str = "account.update.result";
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountDeleteResult {
+    pub deleted: bool,
+    pub account_id: AccountId,
+}
+
+impl TextView for AccountDeleteResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AccountDeleteResult {
+    const KIND: &'static str = "account.delete.result";
+}
+
 fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 
@@ -131,6 +146,60 @@ impl MessageWithFields for PermissionShareGetView {
 
 impl CliOutput for PermissionShareGetView {
     const KIND: &'static str = "account.permission-share.get.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareNewView(pub PermissionShare);
+
+impl MessageWithFields for PermissionShareNewView {
+    fn message(&self) -> String {
+        format!(
+            "Created permission share {}",
+            format_message_highlight(&self.0.id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        permission_share_fields(&self.0)
+    }
+}
+
+impl CliOutput for PermissionShareNewView {
+    const KIND: &'static str = "account.permission-share.new.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareUpdateView(pub PermissionShare);
+
+impl MessageWithFields for PermissionShareUpdateView {
+    fn message(&self) -> String {
+        format!(
+            "Updated permission share {}",
+            format_message_highlight(&self.0.id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        permission_share_fields(&self.0)
+    }
+}
+
+impl CliOutput for PermissionShareUpdateView {
+    const KIND: &'static str = "account.permission-share.update.result";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareDeleteResult {
+    pub deleted: bool,
+    pub permission_share_id: PermissionShareId,
+}
+
+impl TextView for PermissionShareDeleteResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for PermissionShareDeleteResult {
+    const KIND: &'static str = "account.permission-share.delete.result";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

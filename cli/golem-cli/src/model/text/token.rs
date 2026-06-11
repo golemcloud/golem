@@ -17,6 +17,7 @@ use crate::model::text::fmt::*;
 
 use colored::Colorize;
 use golem_client::model::{Token, TokenWithSecret};
+use golem_common::model::auth::TokenId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,4 +76,18 @@ impl TextView for TokenListView {
 
 impl CliOutput for TokenListView {
     const KIND: &'static str = "api-token.list.result";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenDeleteResult {
+    pub deleted: bool,
+    pub token_id: TokenId,
+}
+
+impl TextView for TokenDeleteResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for TokenDeleteResult {
+    const KIND: &'static str = "api-token.delete.result";
 }

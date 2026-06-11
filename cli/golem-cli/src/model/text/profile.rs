@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::config::ProfileConfig;
+use crate::config::ProfileName;
 use crate::log::{LogColorize, logln};
 use crate::model::ProfileView;
 use crate::model::cli_output::CliOutput;
+use crate::model::format::Format;
 use crate::model::text::fmt::*;
 use colored::Colorize;
 use serde::Serialize;
@@ -85,6 +87,64 @@ impl MessageWithFields for ProfileView {
 
 impl CliOutput for ProfileView {
     const KIND: &'static str = "profile.get.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileCreateResult {
+    pub created: bool,
+    pub profile: ProfileName,
+    pub set_active: bool,
+}
+
+impl TextView for ProfileCreateResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for ProfileCreateResult {
+    const KIND: &'static str = "profile.new.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileSwitchResult {
+    pub switched: bool,
+    pub profile: ProfileName,
+}
+
+impl TextView for ProfileSwitchResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for ProfileSwitchResult {
+    const KIND: &'static str = "profile.switch.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileDeleteResult {
+    pub deleted: bool,
+    pub profile: ProfileName,
+}
+
+impl TextView for ProfileDeleteResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for ProfileDeleteResult {
+    const KIND: &'static str = "profile.delete.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileConfigSetFormatResult {
+    pub updated: bool,
+    pub profile: ProfileName,
+    pub format: Format,
+}
+
+impl TextView for ProfileConfigSetFormatResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for ProfileConfigSetFormatResult {
+    const KIND: &'static str = "profile.config.set-format.result";
 }
 
 impl TextView for ProfileConfig {

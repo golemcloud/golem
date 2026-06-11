@@ -19,6 +19,7 @@ use crate::model::text::fmt::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationDto;
 use serde_derive::Serialize;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PluginNameAndVersion {
@@ -144,6 +145,22 @@ impl MessageWithFields for PluginRegistrationGetView {
 
 impl CliOutput for PluginRegistrationGetView {
     const KIND: &'static str = "plugin.get.result";
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginUnregisterResult {
+    pub unregistered: bool,
+    pub plugin_id: Uuid,
+    pub name: String,
+    pub version: String,
+}
+
+impl TextView for PluginUnregisterResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for PluginUnregisterResult {
+    const KIND: &'static str = "plugin.unregister.result";
 }
 
 fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, String)> {
