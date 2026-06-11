@@ -29,6 +29,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentDeleteResult {
     pub deleted: bool,
     pub agent: String,
@@ -43,6 +44,7 @@ impl CliOutput for AgentDeleteResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentRevertResult {
     pub reverted: bool,
     pub agent: String,
@@ -61,6 +63,7 @@ impl CliOutput for AgentRevertResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentCancelInvocationResult {
     pub canceled: bool,
     pub agent: String,
@@ -76,6 +79,7 @@ impl CliOutput for AgentCancelInvocationResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentRedeployResult {
     pub redeployed: bool,
     pub components: Vec<ComponentName>,
@@ -90,6 +94,7 @@ impl CliOutput for AgentRedeployResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentPluginToggleResult {
     pub activated: bool,
     pub agent: String,
@@ -106,6 +111,7 @@ impl CliOutput for AgentPluginToggleResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CleanResult {
     pub cleaned: bool,
 }
@@ -119,6 +125,7 @@ impl CliOutput for CleanResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BuildResult {
     pub built: bool,
 }
@@ -132,6 +139,7 @@ impl CliOutput for BuildResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewAppResult {
     pub created: bool,
     pub application_name: String,
@@ -147,6 +155,7 @@ impl CliOutput for NewAppResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeployResultView {
     pub deployed: bool,
 }
@@ -160,6 +169,7 @@ impl CliOutput for DeployResultView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenerateBridgeResult {
     pub generated: bool,
 }

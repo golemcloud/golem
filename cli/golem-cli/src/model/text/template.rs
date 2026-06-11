@@ -20,6 +20,7 @@ use itertools::Itertools;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TemplateListView {
     pub templates: Vec<TemplateDescription>,
 }

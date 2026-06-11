@@ -79,6 +79,7 @@ impl CliOutput for TokenListView {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TokenDeleteResult {
     pub deleted: bool,
     pub token_id: TokenId,

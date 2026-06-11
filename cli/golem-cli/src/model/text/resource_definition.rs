@@ -98,6 +98,7 @@ impl CliOutput for ResourceDefinitionGetView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceDefinitionListView {
     pub resources: Vec<ResourceDefinition>,
 }

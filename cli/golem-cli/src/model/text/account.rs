@@ -88,6 +88,7 @@ impl CliOutput for AccountUpdateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountDeleteResult {
     pub deleted: bool,
     pub account_id: AccountId,
@@ -189,6 +190,7 @@ impl CliOutput for PermissionShareUpdateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PermissionShareDeleteResult {
     pub deleted: bool,
     pub permission_share_id: PermissionShareId,

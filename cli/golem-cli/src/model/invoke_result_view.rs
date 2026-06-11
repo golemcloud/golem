@@ -25,6 +25,7 @@ use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InvokeResultView {
     pub idempotency_key: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]

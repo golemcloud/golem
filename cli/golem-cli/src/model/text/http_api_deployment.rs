@@ -41,6 +41,7 @@ impl CliOutput for HttpApiDeploymentGetView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HttpApiDeploymentListView {
     pub deployments: Vec<HttpApiDeployment>,
 }

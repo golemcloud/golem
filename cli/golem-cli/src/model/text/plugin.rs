@@ -45,12 +45,14 @@ impl std::fmt::Display for PluginSource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginListEntry {
     pub plugin: PluginRegistrationDto,
     pub source: PluginSource,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginListView {
     pub plugins: Vec<PluginListEntry>,
 }
@@ -148,6 +150,7 @@ impl CliOutput for PluginRegistrationGetView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginUnregisterResult {
     pub unregistered: bool,
     pub plugin_id: Uuid,

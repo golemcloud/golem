@@ -95,6 +95,7 @@ impl CliOutput for RetryPolicyDeleteView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RetryPolicyListView {
     pub retry_policies: Vec<RetryPolicyDto>,
 }

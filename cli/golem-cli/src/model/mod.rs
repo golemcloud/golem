@@ -242,6 +242,7 @@ impl FromStr for PathBufOrStdin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileView {
     pub is_active: bool,
     pub name: ProfileName,

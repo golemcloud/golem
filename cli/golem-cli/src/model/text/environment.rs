@@ -65,6 +65,7 @@ pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIde
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvironmentListView {
     pub environments: Vec<EnvironmentWithDetails>,
 }

@@ -51,6 +51,7 @@ impl From<&DeployedRegisteredAgentType> for AgentTypeView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentTypeListView {
     pub agent_types: Vec<DeployedRegisteredAgentType>,
 }

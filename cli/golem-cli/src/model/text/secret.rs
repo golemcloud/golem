@@ -21,6 +21,7 @@ use golem_common::model::agent_secret::AgentSecretDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SecretCreateView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
@@ -45,6 +46,7 @@ impl CliOutput for SecretCreateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SecretGetView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
@@ -66,6 +68,7 @@ impl CliOutput for SecretGetView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SecretUpdateView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
@@ -90,6 +93,7 @@ impl CliOutput for SecretUpdateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SecretDeleteView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
@@ -165,6 +169,7 @@ fn wrap_uuid_for_table(uuid: &str) -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SecretListView {
     pub secrets: Vec<AgentSecretDto>,
     #[serde(skip)]

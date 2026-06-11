@@ -23,6 +23,7 @@ use colored::Colorize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileListView {
     pub profiles: Vec<ProfileView>,
 }
@@ -90,6 +91,7 @@ impl CliOutput for ProfileView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileCreateResult {
     pub created: bool,
     pub profile: ProfileName,
@@ -105,6 +107,7 @@ impl CliOutput for ProfileCreateResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileSwitchResult {
     pub switched: bool,
     pub profile: ProfileName,
@@ -119,6 +122,7 @@ impl CliOutput for ProfileSwitchResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileDeleteResult {
     pub deleted: bool,
     pub profile: ProfileName,
@@ -133,6 +137,7 @@ impl CliOutput for ProfileDeleteResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileConfigSetFormatResult {
     pub updated: bool,
     pub profile: ProfileName,

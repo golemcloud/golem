@@ -51,6 +51,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerCreateView {
     pub component_name: ComponentName,
     pub agent_name: Option<RawAgentId>,
@@ -89,6 +90,7 @@ impl CliOutput for WorkerCreateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerGetView {
     pub metadata: AgentMetadataView,
     pub precise: bool,
@@ -445,6 +447,7 @@ impl TextView for InvokeResultView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentOplogView {
     pub entries: Vec<(u64, PublicOplogEntry)>,
 }
@@ -1239,6 +1242,7 @@ fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerFilesView {
     pub nodes: Vec<FileNodeView>,
 }
@@ -1248,6 +1252,7 @@ impl CliOutput for WorkerFilesView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileNodeView {
     pub name: String,
     pub last_modified: String, // Human-readable timestamp

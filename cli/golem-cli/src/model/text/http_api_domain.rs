@@ -46,6 +46,7 @@ impl CliOutput for DomainRegistrationNewView {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DomainRegistrationDeleteResult {
     pub deleted: bool,
     pub domain: Domain,

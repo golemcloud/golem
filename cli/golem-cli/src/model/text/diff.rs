@@ -328,6 +328,7 @@ pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
 pub struct EnvironmentSetupPlanView<'a>(pub &'a EnvironmentSetupPlan);
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeployPlanView<'a> {
     pub deployment_diff: &'a DeploymentDiff,
     pub environment_setup: Option<&'a EnvironmentSetupPlan>,

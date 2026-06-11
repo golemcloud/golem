@@ -231,6 +231,7 @@ impl AgentMetadata {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentsMetadataResponseView {
     pub agents: Vec<AgentMetadataView>,
     pub cursors: BTreeMap<String, String>,

@@ -99,6 +99,7 @@ impl CliOutput for HttpSecuritySchemeDeleteView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HttpSecuritySchemeListView {
     pub security_schemes: Vec<SecuritySchemeDto>,
 }

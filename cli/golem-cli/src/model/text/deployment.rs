@@ -24,6 +24,7 @@ use golem_common::model::environment::EnvironmentName;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentNewView {
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
@@ -63,6 +64,7 @@ impl CliOutput for DeploymentNewView {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentListView {
     pub deployments: Vec<Deployment>,
 }
