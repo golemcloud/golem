@@ -29,102 +29,102 @@ benchmarks:
   # size   = number of workers per implementation (×6 implementations total)
   # length = unused for echo
   - name: throughput-echo
-    iterations: 3
+    iterations: 1
     clusterSize: [2]
-    size: [1, 10, 50, 100, 250]
+    size: [1, 50, 100, 250]
     length: [1000]
 
-  # # size   = number of workers per implementation
-  # # length = payload size in bytes sent to large_input
-  # # NOTE: large payloads grow worker linear memory, so this is the throughput
-  # # benchmark most relevant to the memory-admission investigation — sized to
-  # # match throughput-echo so it exercises real density.
-  # - name: throughput-large-input
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 50, 100, 250]
-  #   length: [100, 10000]
+  # size   = number of workers per implementation
+  # length = payload size in bytes sent to large_input
+  # NOTE: large payloads grow worker linear memory, so this is the throughput
+  # benchmark most relevant to the memory-admission investigation — sized to
+  # match throughput-echo so it exercises real density.
+  - name: throughput-large-input
+    iterations: 1
+    clusterSize: [2]
+    size: [1, 50, 100, 250]
+    length: [100, 10000]
 
-  # # size   = number of workers per implementation
-  # # length = CPU work length passed to cpu_intensive
-  # - name: throughput-cpu-intensive
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 50, 100, 250]
-  #   length: [100]
+  # size   = number of workers per implementation
+  # length = CPU work length passed to cpu_intensive
+  - name: throughput-cpu-intensive
+    iterations: 1
+    clusterSize: [2]
+    size: [1, 50, 100, 250]
+    length: [100]
 
-  # # Cold-start: compilation cache disabled — measures true cold-start latency
-  # # with no warm compiled artefact available.
-  # # size   = number of unique components created (each in its own env)
-  # # length = seconds to wait per component for pre-compilation warm-up
-  # - name: cold-start-unknown-small
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 25, 50]
-  #   length: [2]
-  #   disableCompilationCache: true
+  # Cold-start: compilation cache disabled — measures true cold-start latency
+  # with no warm compiled artefact available.
+  # size   = number of unique components created (each in its own env)
+  # length = seconds to wait per component for pre-compilation warm-up
+  - name: cold-start-unknown-small
+    iterations: 1
+    clusterSize: [2]
+    size: [1, 5, 25, 50]
+    length: [2]
+    disableCompilationCache: true
 
-  # - name: cold-start-unknown-medium
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 25, 50]
-  #   length: [5]
-  #   disableCompilationCache: true
+  - name: cold-start-unknown-medium
+    iterations: 1
+    clusterSize: [2]
+    size: [1, 5, 25, 50]
+    length: [5]
+    disableCompilationCache: true
 
-  # # Cold-start: compilation cache enabled — measures latency once the compiled
-  # # artefact is available in the cache.
-  # # size   = number of unique components created (each in its own env)
-  # # length = seconds to wait per component for pre-compilation warm-up
-  # # NOTE: if results here are close to the cache-disabled entries above, the
-  # # warm-up wait is too short and compilation hasn't finished — bump length.
-  # - name: cold-start-unknown-small
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 25, 50]
-  #   length: [2]
+  # Cold-start: compilation cache enabled — measures latency once the compiled
+  # artefact is available in the cache.
+  # size   = number of unique components created (each in its own env)
+  # length = seconds to wait per component for pre-compilation warm-up
+  # NOTE: if results here are close to the cache-disabled entries above, the
+  # warm-up wait is too short and compilation hasn't finished — bump length.
+  - name: cold-start-unknown-small
+    iterations: 1
+    clusterSize: [2]
+    size: [1, 5, 25, 50]
+    length: [2]
 
-  # - name: cold-start-unknown-medium
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 25, 50]
-  #   length: [5]
+  - name: cold-start-unknown-medium
+    iterations: 1
+    clusterSize: [2]
+    size: [1, 5, 25, 50]
+    length: [5]
 
-  # # Invocation latency — hot and cold paths through the Gateway NLB.
-  # # Large worker counts to stress the load balancer and connection pool.
-  # # size   = number of workers created
-  # # length = number of hot invocations per worker after the first cold one
-  # - name: latency-small
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [100, 500, 1000, 2000, 5000]
-  #   length: [2]
+  # Invocation latency — hot and cold paths through the Gateway NLB.
+  # Large worker counts to stress the load balancer and connection pool.
+  # size   = number of workers created
+  # length = number of hot invocations per worker after the first cold one
+  - name: latency-small
+    iterations: 1
+    clusterSize: [2]
+    size: [100, 500, 1000, 2000, 5000]
+    length: [2]
 
-  # - name: latency-medium
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [100, 500, 1000, 2000]
-  #   length: [5]
+  - name: latency-medium
+    iterations: 1
+    clusterSize: [2]
+    size: [100, 500, 1000, 2000]
+    length: [5]
 
-  # # Sleep — measures worker suspension and resumption under real network
-  # # conditions. High residency: all `size` workers held in memory sleeping at
-  # # once, so this also probes how many resident workers fit (memory-admission
-  # # relevant) — pushed past the ~2000 echo proved out.
-  # # size   = number of workers launched in parallel
-  # # length = sleep duration in milliseconds
-  # - name: sleep
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [10, 100, 500, 1000, 2000]
-  #   length: [10000]
+  # Sleep — measures worker suspension and resumption under real network
+  # conditions. High residency: all `size` workers held in memory sleeping at
+  # once, so this also probes how many resident workers fit (memory-admission
+  # relevant) — pushed past the ~2000 echo proved out.
+  # size   = number of workers launched in parallel
+  # length = sleep duration in milliseconds
+  - name: sleep
+    iterations: 1
+    clusterSize: [2]
+    size: [10, 100, 500, 1000, 2000]
+    length: [10000]
 
-  # # Durability overhead — measures the cost of durable vs ephemeral execution
-  # # across four variants (durable-persistent, durable-non-persistent,
-  # # ephemeral, durable-persistent-commit). size workers concurrent per phase;
-  # # sized up to put real load on the oplog/persistence/storage path.
-  # # size   = number of workers per variant
-  # # length = loop iteration count passed to oplog_heavy
-  # - name: durability-overhead
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [10, 50, 100, 250]
-  #   length: [5000]
+  # Durability overhead — measures the cost of durable vs ephemeral execution
+  # across four variants (durable-persistent, durable-non-persistent,
+  # ephemeral, durable-persistent-commit). size workers concurrent per phase;
+  # sized up to put real load on the oplog/persistence/storage path.
+  # size   = number of workers per variant
+  # length = loop iteration count passed to oplog_heavy
+  - name: durability-overhead
+    iterations: 1
+    clusterSize: [2]
+    size: [10, 50, 100, 250]
+    length: [5000]
