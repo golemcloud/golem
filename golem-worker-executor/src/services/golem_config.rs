@@ -979,22 +979,6 @@ pub struct MemoryConfig {
 }
 
 impl MemoryConfig {
-    /// The memory limit this executor must stay under, resolved through the same
-    /// probe the admission gate uses: the cgroup `memory.max` of the pod on a
-    /// constrained Linux deployment, the configured override when set, and host
-    /// RAM only when the process is genuinely unconstrained. In a container this
-    /// is the pod's ceiling, not the host's total RAM.
-    pub fn total_system_memory(&self) -> u64 {
-        crate::services::active_workers::memory_probe::default_probe(self.system_memory_override)
-            .limit_bytes()
-    }
-
-    pub fn system_memory(&self) -> u64 {
-        let mut sysinfo = sysinfo::System::new();
-        sysinfo.refresh_memory();
-        sysinfo.available_memory()
-    }
-
     /// The admission policy for the measured-headroom gate. Reuses
     /// `worker_memory_ratio` as the usable fraction of the measured limit (the
     /// host keeps the remainder).
