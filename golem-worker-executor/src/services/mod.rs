@@ -469,7 +469,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         Arc::downgrade(&self.leak_sentinel)
     }
 
-    pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
+    pub fn from_other<T: HasAll<Ctx> + HasCardService>(this: &T) -> All<Ctx> {
         All::new(
             this.active_workers(),
             this.agent_types(),

@@ -20,20 +20,36 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardLiveness {
+    Live,
+    Revoked { newly_detected: bool },
+}
+
+impl CardLiveness {
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Live)
+    }
+
+    pub fn newly_detected_revocation(self) -> bool {
+        matches!(
+            self,
+            Self::Revoked {
+                newly_detected: true
+            }
+        )
+    }
+}
+
 #[async_trait]
 pub trait CardService: Send + Sync {
     fn record_revoked_cards(&self, card_ids: &[CardId]);
 
-    fn is_card_revoked(&self, card_id: CardId) -> bool;
-
-    async fn existing_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<Vec<CardId>, WorkerExecutorError>;
+    async fn check_card(&self, card_id: CardId) -> Result<CardLiveness, WorkerExecutorError>;
 }
 
 pub struct CardServiceDefault {
-    registry_service: Option<Arc<dyn RegistryService>>,
+    registry_service: Arc<dyn RegistryService>,
     revoked_cards: RwLock<HashSet<CardId>>,
 }
 
@@ -43,52 +59,41 @@ pub struct NoopCardService;
 impl CardService for NoopCardService {
     fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
-    fn is_card_revoked(&self, _card_id: CardId) -> bool {
-        false
-    }
-
-    async fn existing_cards(&self, card_ids: Vec<CardId>) -> Result<Vec<CardId>, WorkerExecutorError> {
-        Ok(card_ids)
+    async fn check_card(&self, _card_id: CardId) -> Result<CardLiveness, WorkerExecutorError> {
+        Ok(CardLiveness::Live)
     }
 }
 
 impl CardServiceDefault {
     pub fn new(registry_service: Arc<dyn RegistryService>) -> Self {
         Self {
-            registry_service: Some(registry_service),
+            registry_service,
             revoked_cards: RwLock::new(HashSet::new()),
         }
     }
 
-    #[cfg(test)]
-    fn for_tests() -> Self {
-        Self {
-            registry_service: None,
-            revoked_cards: RwLock::new(HashSet::new()),
-        }
+    fn cache_revoked_cards(&self, card_ids: &[CardId]) {
+        let mut revoked_cards = self.revoked_cards.write().unwrap();
+        revoked_cards.extend(card_ids.iter().copied());
     }
 }
 
 #[async_trait]
 impl CardService for CardServiceDefault {
     fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        let mut revoked_cards = self.revoked_cards.write().unwrap();
-        revoked_cards.extend(card_ids.iter().copied());
+        self.cache_revoked_cards(card_ids);
     }
 
-    fn is_card_revoked(&self, card_id: CardId) -> bool {
-        self.revoked_cards.read().unwrap().contains(&card_id)
-    }
+    async fn check_card(&self, card_id: CardId) -> Result<CardLiveness, WorkerExecutorError> {
+        if self.revoked_cards.read().unwrap().contains(&card_id) {
+            return Ok(CardLiveness::Revoked {
+                newly_detected: false,
+            });
+        }
 
-    async fn existing_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        let Some(registry_service) = &self.registry_service else {
-            return Ok(card_ids);
-        };
-        let existing = registry_service
-            .batch_get_existing_cards(card_ids.clone())
+        let existing = self
+            .registry_service
+            .batch_get_existing_cards(vec![card_id])
             .await
             .map_err(|err| {
                 WorkerExecutorError::runtime(format!(
@@ -96,12 +101,15 @@ impl CardService for CardServiceDefault {
                     err.to_safe_string()
                 ))
             })?;
-        let missing = card_ids
-            .into_iter()
-            .filter(|card_id| !existing.contains(card_id))
-            .collect::<Vec<_>>();
-        self.record_revoked_cards(&missing);
-        Ok(existing)
+
+        if existing.contains(&card_id) {
+            Ok(CardLiveness::Live)
+        } else {
+            self.cache_revoked_cards(&[card_id]);
+            Ok(CardLiveness::Revoked {
+                newly_detected: true,
+            })
+        }
     }
 }
 
@@ -111,15 +119,14 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn records_revoked_card_ids() {
-        let service = CardServiceDefault::for_tests();
+    fn noop_card_service_treats_cards_as_live() {
+        let service = NoopCardService;
         let revoked = CardId::new();
-        let live = CardId::new();
 
-        assert!(!service.is_card_revoked(revoked));
-        service.record_revoked_cards(&[revoked]);
-
-        assert!(service.is_card_revoked(revoked));
-        assert!(!service.is_card_revoked(live));
+        assert!(
+            futures::executor::block_on(service.check_card(revoked))
+                .unwrap()
+                .is_live()
+        );
     }
 }
