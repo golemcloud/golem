@@ -40,8 +40,9 @@
 
 use golem_common::model::AgentInvocation;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::agent::{AgentMethod, AgentTypeName, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentMethod, AgentTypeName, Principal};
 use golem_common::model::component::ComponentRevision;
+use golem_common::schema::SchemaValue;
 use golem_common::model::component_metadata::ComponentMetadata;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -156,11 +157,11 @@ pub fn classify_invocation(
     }
 }
 
-/// Canonical byte encoding of an [`UntypedDataValue`] for the cache digest.
+/// Canonical byte encoding of a [`SchemaValue`] for the cache digest.
 /// Uses `desert_rust`'s deterministic `BinaryCodec` serialization, so equal
 /// inputs collide and tuple-order / multimodal-name differences do not.
-pub fn canonicalize_untyped_data_value(input: &UntypedDataValue) -> Vec<u8> {
-    desert_rust::serialize_to_byte_vec(input).expect("UntypedDataValue serialization is infallible")
+pub fn canonicalize_schema_value(input: &SchemaValue) -> Vec<u8> {
+    desert_rust::serialize_to_byte_vec(input).expect("SchemaValue serialization is infallible")
 }
 
 pub fn principal_bytes(principal: &Principal) -> Vec<u8> {
@@ -174,12 +175,12 @@ pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
 /// Builds the cache key for a read-only invocation.
 pub fn build_read_only_cache_key(
     method_name: &str,
-    input: &UntypedDataValue,
+    input: &SchemaValue,
     principal: Option<&Principal>,
     component_revision: ComponentRevision,
     epoch: u64,
 ) -> ReadOnlyCacheKey {
-    let input_bytes = canonicalize_untyped_data_value(input);
+    let input_bytes = canonicalize_schema_value(input);
     let input_digest = digest_bytes(&input_bytes);
     let principal_digest = principal.map(|p| digest_bytes(&principal_bytes(p)));
     ReadOnlyCacheKey {
@@ -199,11 +200,11 @@ mod tests {
     use golem_common::model::AgentId;
     use golem_common::model::agent::{
         AgentConstructor, AgentMode, AgentPrincipal, AgentType, AgentTypeName, CachePolicy,
-        DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting, UntypedElementValue,
-        UntypedNamedElementValue,
+        DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting,
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::schema::UnionValuePayload;
     use golem_wasm::Value;
     use std::collections::BTreeMap;
     use test_r::test;
@@ -268,25 +269,43 @@ mod tests {
         Principal::Agent(AgentPrincipal { agent_id })
     }
 
-    fn tuple(values: Vec<Value>) -> UntypedDataValue {
-        UntypedDataValue::Tuple(
-            values
-                .into_iter()
-                .map(UntypedElementValue::ComponentModel)
-                .collect(),
-        )
+    fn value_to_schema(value: Value) -> SchemaValue {
+        match value {
+            Value::Bool(v) => SchemaValue::Bool(v),
+            Value::U8(v) => SchemaValue::U8(v),
+            Value::U16(v) => SchemaValue::U16(v),
+            Value::U32(v) => SchemaValue::U32(v),
+            Value::U64(v) => SchemaValue::U64(v),
+            Value::S8(v) => SchemaValue::S8(v),
+            Value::S16(v) => SchemaValue::S16(v),
+            Value::S32(v) => SchemaValue::S32(v),
+            Value::S64(v) => SchemaValue::S64(v),
+            Value::F32(v) => SchemaValue::F32(v),
+            Value::F64(v) => SchemaValue::F64(v),
+            Value::Char(v) => SchemaValue::Char(v),
+            Value::String(v) => SchemaValue::String(v),
+            other => panic!("unsupported test value: {other:?}"),
+        }
     }
 
-    fn multimodal(values: Vec<(&str, Value)>) -> UntypedDataValue {
-        UntypedDataValue::Multimodal(
-            values
+    fn tuple(values: Vec<Value>) -> SchemaValue {
+        SchemaValue::Record {
+            fields: values.into_iter().map(value_to_schema).collect(),
+        }
+    }
+
+    fn multimodal(values: Vec<(&str, Value)>) -> SchemaValue {
+        SchemaValue::List {
+            elements: values
                 .into_iter()
-                .map(|(name, value)| UntypedNamedElementValue {
-                    name: name.to_string(),
-                    value: UntypedElementValue::ComponentModel(value),
+                .map(|(name, value)| {
+                    SchemaValue::Union(UnionValuePayload {
+                        tag: name.to_string(),
+                        body: Box::new(value_to_schema(value)),
+                    })
                 })
                 .collect(),
-        )
+        }
     }
 
     #[test]

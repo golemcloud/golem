@@ -560,7 +560,8 @@ mod tests {
     use chrono::DateTime;
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue};
+    use golem_common::model::agent::{AgentMode, Principal};
+    use golem_common::schema::SchemaValue;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::InvocationContextStack;
@@ -773,7 +774,7 @@ mod tests {
         AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
             method_name: "run".to_string(),
-            input: UntypedDataValue::Tuple(vec![]),
+            input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
         }

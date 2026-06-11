@@ -82,6 +82,7 @@ pub mod oplog_processor_plugin {
         wasmtime_crate: ::wasmtime,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:core/types@2.0.0": golem_wasm::golem_core_2_0_x::types,
             "golem:api/host": crate::preview2::golem::api1_5_0::host,
             "golem:api/oplog": crate::preview2::golem::api1_5_0::oplog,
             "golem:api/context": crate::preview2::golem::api1_5_0::context,

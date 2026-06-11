@@ -26,11 +26,12 @@
 //! themselves can be implemented by hand for any type that needs a custom
 //! mapping.
 
-use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
+use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
-use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
+    VariantValuePayload,
 };
 use crate::schema::validation::{SchemaError, validate_graph};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -78,6 +79,36 @@ pub fn try_into_schema_graph<T: IntoSchema + ?Sized>() -> Result<SchemaGraph, Sc
     match validate_graph(&graph) {
         Ok(()) => Ok(graph),
         Err(mut errors) => Err(errors.remove(0)),
+    }
+}
+
+/// Build a [`TypedSchemaValue`] — a self-contained [`SchemaGraph`] paired with
+/// the encoded [`SchemaValue`] tree — from a value whose type implements
+/// [`IntoSchema`].
+///
+/// This is the schema-native counterpart of the legacy
+/// `golem_wasm::IntoValueAndType::into_value_and_type`: where that produced a
+/// `ValueAndType` (an `AnalysedType` + `Value`), this produces a
+/// `TypedSchemaValue` (a `SchemaGraph` + `SchemaValue`). It is the bridge used
+/// at boundaries that still need a value carrying its own type (e.g. the public
+/// oplog / oplog-processor surface).
+pub fn try_into_typed_schema_value<T: IntoSchema + ?Sized>(
+    value: &T,
+) -> Result<TypedSchemaValue, SchemaError> {
+    let graph = try_into_schema_graph::<T>()?;
+    Ok(TypedSchemaValue::new(graph, value.to_value()))
+}
+
+/// Ergonomic `value.into_typed_schema_value()?` form of
+/// [`try_into_typed_schema_value`], mirroring the legacy
+/// `IntoValueAndType::into_value_and_type` method shape.
+pub trait IntoTypedSchemaValue: IntoSchema {
+    fn into_typed_schema_value(&self) -> Result<TypedSchemaValue, SchemaError>;
+}
+
+impl<T: IntoSchema + ?Sized> IntoTypedSchemaValue for T {
+    fn into_typed_schema_value(&self) -> Result<TypedSchemaValue, SchemaError> {
+        try_into_typed_schema_value(self)
     }
 }
 
@@ -973,6 +1004,572 @@ impl FromSchema for chrono::Duration {
                 "duration",
                 value_kind(other),
                 "chrono::Duration",
+            )),
+        }
+    }
+}
+
+// A `uuid::Uuid` is modelled as a nominal record of two `u64`s (the high and
+// low 64-bit halves), mirroring the legacy `golem_wasm::IntoValue for Uuid`
+// representation so existing consumers see the same shape.
+impl IntoSchema for uuid::Uuid {
+    fn type_id() -> TypeId {
+        TypeId::new("uuid.Uuid")
+    }
+    fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
+        let id = <Self as IntoSchema>::type_id();
+        if builder.is_registered(&id) {
+            return SchemaType::ref_to(id);
+        }
+        builder.reserve(id.clone());
+        let body = SchemaType::record(vec![
+            NamedFieldType {
+                name: "high-bits".to_string(),
+                body: SchemaType::u64(),
+                metadata: MetadataEnvelope::default(),
+            },
+            NamedFieldType {
+                name: "low-bits".to_string(),
+                body: SchemaType::u64(),
+                metadata: MetadataEnvelope::default(),
+            },
+        ]);
+        builder.commit(
+            id.clone(),
+            Some("uuid".to_string()),
+            MetadataEnvelope::default(),
+            body,
+        );
+        SchemaType::ref_to(id)
+    }
+    fn to_value(&self) -> SchemaValue {
+        let (hi, lo) = self.as_u64_pair();
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U64(hi), SchemaValue::U64(lo)],
+        }
+    }
+}
+
+impl FromSchema for uuid::Uuid {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::Record { fields } if fields.len() == 2 => {
+                let hi = match &fields[0] {
+                    SchemaValue::U64(x) => *x,
+                    other => {
+                        return Err(FromSchemaError::shape_mismatch(
+                            "u64",
+                            value_kind(other),
+                            "Uuid.high-bits",
+                        ));
+                    }
+                };
+                let lo = match &fields[1] {
+                    SchemaValue::U64(x) => *x,
+                    other => {
+                        return Err(FromSchemaError::shape_mismatch(
+                            "u64",
+                            value_kind(other),
+                            "Uuid.low-bits",
+                        ));
+                    }
+                };
+                Ok(uuid::Uuid::from_u64_pair(hi, lo))
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "record",
+                value_kind(other),
+                "Uuid",
+            )),
+        }
+    }
+}
+
+// =====================================================================
+// Foreign value types used by the oplog payloads (schema-native A2 shapes)
+// =====================================================================
+//
+// These mirror the legacy `golem_wasm::IntoValue` impls for the same types but
+// use the simplest schema-native representation (the oplog persisted/public
+// format is being reset by the cutover, so byte-for-byte fidelity to the legacy
+// shapes is not required — see the seam-cutover charter §0.5 / A2 decision).
+
+impl IntoSchema for bigdecimal::BigDecimal {
+    fn type_id() -> TypeId {
+        TypeId::new("bigdecimal.BigDecimal")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.to_string())
+    }
+}
+
+impl FromSchema for bigdecimal::BigDecimal {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => s
+                .parse()
+                .map_err(|e| FromSchemaError::custom(format!("invalid BigDecimal: {e}"))),
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "BigDecimal",
+            )),
+        }
+    }
+}
+
+impl IntoSchema for bit_vec::BitVec {
+    fn type_id() -> TypeId {
+        TypeId::new("bit_vec.BitVec")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::list(SchemaType::bool())
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::List {
+            elements: self.iter().map(SchemaValue::Bool).collect(),
+        }
+    }
+}
+
+impl FromSchema for bit_vec::BitVec {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::List { elements } => {
+                let mut bv = bit_vec::BitVec::with_capacity(elements.len());
+                for e in elements {
+                    match e {
+                        SchemaValue::Bool(b) => bv.push(*b),
+                        other => {
+                            return Err(FromSchemaError::shape_mismatch(
+                                "bool",
+                                value_kind(other),
+                                "BitVec",
+                            ));
+                        }
+                    }
+                }
+                Ok(bv)
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "list",
+                value_kind(other),
+                "BitVec",
+            )),
+        }
+    }
+}
+
+impl IntoSchema for serde_json::Value {
+    fn type_id() -> TypeId {
+        TypeId::new("serde_json.Value")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.to_string())
+    }
+}
+
+impl FromSchema for serde_json::Value {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => serde_json::from_str(s)
+                .map_err(|e| FromSchemaError::custom(format!("invalid JSON: {e}"))),
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "serde_json::Value",
+            )),
+        }
+    }
+}
+
+const NAIVE_DATE_FMT: &str = "%Y-%m-%d";
+const NAIVE_DATE_TIME_FMT: &str = "%Y-%m-%dT%H:%M:%S%.9f";
+const NAIVE_TIME_FMT: &str = "%H:%M:%S%.9f";
+
+impl IntoSchema for chrono::NaiveDate {
+    fn type_id() -> TypeId {
+        TypeId::new("chrono.NaiveDate")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.format(NAIVE_DATE_FMT).to_string())
+    }
+}
+
+impl FromSchema for chrono::NaiveDate {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => chrono::NaiveDate::parse_from_str(s, NAIVE_DATE_FMT)
+                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDate: {e}"))),
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "NaiveDate",
+            )),
+        }
+    }
+}
+
+impl IntoSchema for chrono::NaiveDateTime {
+    fn type_id() -> TypeId {
+        TypeId::new("chrono.NaiveDateTime")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.format(NAIVE_DATE_TIME_FMT).to_string())
+    }
+}
+
+impl FromSchema for chrono::NaiveDateTime {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => {
+                chrono::NaiveDateTime::parse_from_str(s, NAIVE_DATE_TIME_FMT)
+                    .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDateTime: {e}")))
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "NaiveDateTime",
+            )),
+        }
+    }
+}
+
+impl IntoSchema for chrono::NaiveTime {
+    fn type_id() -> TypeId {
+        TypeId::new("chrono.NaiveTime")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.format(NAIVE_TIME_FMT).to_string())
+    }
+}
+
+impl FromSchema for chrono::NaiveTime {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => chrono::NaiveTime::parse_from_str(s, NAIVE_TIME_FMT)
+                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveTime: {e}"))),
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "NaiveTime",
+            )),
+        }
+    }
+}
+
+// `usize` is modelled as a `u64` (the schema model has no platform-width
+// integer; oplog payloads never need values above `u64::MAX`).
+impl IntoSchema for usize {
+    fn type_id() -> TypeId {
+        TypeId::new("usize")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::u64()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::U64(*self as u64)
+    }
+}
+
+impl FromSchema for usize {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::U64(x) => Ok(*x as usize),
+            other => Err(FromSchemaError::shape_mismatch(
+                "u64",
+                value_kind(other),
+                "usize",
+            )),
+        }
+    }
+}
+
+// `std::ops::Bound<T>` mirrors the legacy `golem_wasm::IntoValue for Bound<T>`
+// shape: a 3-case variant `included(T) | excluded(T) | unbounded` with the same
+// case order/indices, so existing consumers see the same structure.
+impl<T: IntoSchema> IntoSchema for std::ops::Bound<T> {
+    fn type_id() -> TypeId {
+        type_id_with_args("core.ops.range.Bound", &[T::type_id()])
+    }
+    fn register_in(b: &mut SchemaBuilder) -> SchemaType {
+        let inner = T::register_in(b);
+        SchemaType::variant(vec![
+            VariantCaseType {
+                name: "included".to_string(),
+                payload: Some(inner.clone()),
+                metadata: MetadataEnvelope::default(),
+            },
+            VariantCaseType {
+                name: "excluded".to_string(),
+                payload: Some(inner),
+                metadata: MetadataEnvelope::default(),
+            },
+            VariantCaseType {
+                name: "unbounded".to_string(),
+                payload: None,
+                metadata: MetadataEnvelope::default(),
+            },
+        ])
+    }
+    fn to_value(&self) -> SchemaValue {
+        match self {
+            std::ops::Bound::Included(t) => SchemaValue::Variant(VariantValuePayload {
+                case: 0,
+                payload: Some(Box::new(t.to_value())),
+            }),
+            std::ops::Bound::Excluded(t) => SchemaValue::Variant(VariantValuePayload {
+                case: 1,
+                payload: Some(Box::new(t.to_value())),
+            }),
+            std::ops::Bound::Unbounded => SchemaValue::Variant(VariantValuePayload {
+                case: 2,
+                payload: None,
+            }),
+        }
+    }
+}
+
+impl<T: FromSchema> FromSchema for std::ops::Bound<T> {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::Variant(VariantValuePayload { case, payload }) => match case {
+                0 => {
+                    let p = payload.as_ref().ok_or_else(|| {
+                        FromSchemaError::custom("Bound::Included requires a payload")
+                    })?;
+                    Ok(std::ops::Bound::Included(T::from_value(p)?))
+                }
+                1 => {
+                    let p = payload.as_ref().ok_or_else(|| {
+                        FromSchemaError::custom("Bound::Excluded requires a payload")
+                    })?;
+                    Ok(std::ops::Bound::Excluded(T::from_value(p)?))
+                }
+                2 => Ok(std::ops::Bound::Unbounded),
+                other => Err(FromSchemaError::out_of_range(*other, 3, "Bound")),
+            },
+            other => Err(FromSchemaError::shape_mismatch(
+                "variant",
+                value_kind(other),
+                "Bound",
+            )),
+        }
+    }
+}
+
+// The `golem_api_grpc` proto `UpdateMode` enum mirrors the legacy
+// `golem_wasm::IntoValue` impl: a 2-case enum with the same indices and the
+// same case names (`automatic` / `snapshot-based`). Gated on `full` because
+// the `golem-api-grpc` dependency is only present with that feature.
+#[cfg(feature = "full")]
+impl IntoSchema for golem_api_grpc::proto::golem::worker::UpdateMode {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_api_grpc.proto.golem.worker.UpdateMode")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::r#enum(vec!["automatic".to_string(), "snapshot-based".to_string()])
+    }
+    fn to_value(&self) -> SchemaValue {
+        use golem_api_grpc::proto::golem::worker::UpdateMode;
+        match self {
+            UpdateMode::Automatic => SchemaValue::Enum { case: 0 },
+            UpdateMode::Manual => SchemaValue::Enum { case: 1 },
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl FromSchema for golem_api_grpc::proto::golem::worker::UpdateMode {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        use golem_api_grpc::proto::golem::worker::UpdateMode;
+        match v {
+            SchemaValue::Enum { case: 0 } => Ok(UpdateMode::Automatic),
+            SchemaValue::Enum { case: 1 } => Ok(UpdateMode::Manual),
+            SchemaValue::Enum { case } => Err(FromSchemaError::out_of_range(*case, 2, "UpdateMode")),
+            other => Err(FromSchemaError::shape_mismatch(
+                "enum",
+                value_kind(other),
+                "UpdateMode",
+            )),
+        }
+    }
+}
+
+// =====================================================================
+// Model newtype wrappers (schema-native A2 shapes)
+// =====================================================================
+//
+// These mirror the legacy `golem_wasm::IntoValue` impls for the same wrapper
+// types but use the simplest schema-native representation. They live here
+// (rather than at each type's definition site) because the wrapped types are
+// generated by the `newtype_uuid!` / `declare_revision!` macros, which hand-
+// implement the legacy value traits (so a derive cannot be attached at the
+// macro call site).
+
+// A `url::Url` is modelled as its string form, mirroring the legacy
+// `golem_wasm::IntoValue for Url` representation.
+impl IntoSchema for url::Url {
+    fn type_id() -> TypeId {
+        TypeId::new("url.Url")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.to_string())
+    }
+}
+
+impl FromSchema for url::Url {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => {
+                url::Url::parse(s).map_err(|e| FromSchemaError::custom(format!("invalid Url: {e}")))
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "Url",
+            )),
+        }
+    }
+}
+
+// UUID newtypes generated by `newtype_uuid!`: a nominal record wrapping the
+// inner `uuid::Uuid`, mirroring the legacy `get_type()` shape
+// (`record([field("uuid", uuid)])`).
+macro_rules! impl_schema_for_uuid_newtype {
+    ($ty:ty, $type_id:literal, $name:literal) => {
+        impl IntoSchema for $ty {
+            fn type_id() -> TypeId {
+                TypeId::new($type_id)
+            }
+            fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
+                let id = <Self as IntoSchema>::type_id();
+                if builder.is_registered(&id) {
+                    return SchemaType::ref_to(id);
+                }
+                builder.reserve(id.clone());
+                let uuid_ty = <uuid::Uuid as IntoSchema>::register_in(builder);
+                let body = SchemaType::record(vec![NamedFieldType {
+                    name: "uuid".to_string(),
+                    body: uuid_ty,
+                    metadata: MetadataEnvelope::default(),
+                }]);
+                builder.commit(
+                    id.clone(),
+                    Some($name.to_string()),
+                    MetadataEnvelope::default(),
+                    body,
+                );
+                SchemaType::ref_to(id)
+            }
+            fn to_value(&self) -> SchemaValue {
+                SchemaValue::Record {
+                    fields: vec![<uuid::Uuid as IntoSchema>::to_value(&self.0)],
+                }
+            }
+        }
+
+        impl FromSchema for $ty {
+            fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+                match v {
+                    SchemaValue::Record { fields } if fields.len() == 1 => {
+                        let inner = <uuid::Uuid as FromSchema>::from_value(&fields[0])?;
+                        Ok(<$ty>::from(inner))
+                    }
+                    other => Err(FromSchemaError::shape_mismatch(
+                        "record",
+                        value_kind(other),
+                        $type_id,
+                    )),
+                }
+            }
+        }
+    };
+}
+
+impl_schema_for_uuid_newtype!(
+    crate::base_model::AgentFingerprint,
+    "golem_common.base_model.AgentFingerprint",
+    "agent-fingerprint"
+);
+impl_schema_for_uuid_newtype!(
+    crate::base_model::component::ComponentId,
+    "golem_common.base_model.component.ComponentId",
+    "component-id"
+);
+impl_schema_for_uuid_newtype!(
+    crate::base_model::environment::EnvironmentId,
+    "golem_common.base_model.environment.EnvironmentId",
+    "environment-id"
+);
+impl_schema_for_uuid_newtype!(
+    crate::base_model::quota::ResourceDefinitionId,
+    "golem_common.base_model.quota.ResourceDefinitionId",
+    "resource-definition-id"
+);
+
+// `ComponentRevision` (generated by `declare_revision!`) wraps a `u64`; its
+// schema-native shape mirrors the single-field tuple-struct shape the derive
+// produces for the other numeric newtypes (e.g. `OplogIndex`).
+impl IntoSchema for crate::base_model::component::ComponentRevision {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.base_model.component.ComponentRevision")
+    }
+    fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
+        let id = <Self as IntoSchema>::type_id();
+        if builder.is_registered(&id) {
+            return SchemaType::ref_to(id);
+        }
+        builder.reserve(id.clone());
+        let body = SchemaType::tuple(vec![SchemaType::u64()]);
+        builder.commit(
+            id.clone(),
+            Some("component-revision".to_string()),
+            MetadataEnvelope::default(),
+            body,
+        );
+        SchemaType::ref_to(id)
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::Tuple {
+            elements: vec![SchemaValue::U64(self.get())],
+        }
+    }
+}
+
+impl FromSchema for crate::base_model::component::ComponentRevision {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::Tuple { elements } if elements.len() == 1 => match &elements[0] {
+                SchemaValue::U64(x) => Ok(crate::base_model::component::ComponentRevision(*x)),
+                other => Err(FromSchemaError::shape_mismatch(
+                    "u64",
+                    value_kind(other),
+                    "ComponentRevision",
+                )),
+            },
+            other => Err(FromSchemaError::shape_mismatch(
+                "tuple",
+                value_kind(other),
+                "ComponentRevision",
             )),
         }
     }

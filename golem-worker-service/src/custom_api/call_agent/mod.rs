@@ -34,14 +34,19 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
-    BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
-    ElementValues, LegacyParsedAgentId, OidcPrincipal, Principal, ReadOnlyConfig, TextReference,
-    TextReferenceValue, UntypedDataValue, UntypedElementValue,
+    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, ElementValues,
+    LegacyParsedAgentId, OidcPrincipal, Principal, ReadOnlyConfig, TextReference,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
 };
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
-use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
+use golem_common::schema::adapters::legacy_data_value_to_typed_schema_value;
+use golem_service_base::custom_api::{
+    CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
+};
+use golem_service_base::model::SafeIndex;
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::ValueAndType;
+use golem_wasm::analysis::{AnalysedType, TypeRecord};
 use http::{Method, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -92,10 +97,21 @@ impl CallAgentHandler {
 
         debug!("Invoking agent {agent_id}");
 
-        let method_params_data_value = UntypedDataValue::Tuple(method_params);
+        let method_params_data_value = DataValue::Tuple(ElementValues {
+            elements: method_params,
+        });
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
-            method_params_data_value.into();
+        let (_graph, method_params_value) =
+            legacy_data_value_to_typed_schema_value(&method_params_data_value)
+                .map_err(|err| {
+                    RequestHandlerError::InternalError(anyhow!(
+                        "Failed to convert method parameters: {err}"
+                    ))
+                })?
+                .into_parts();
+
+        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+            method_params_value.into();
 
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
@@ -315,7 +331,7 @@ impl CallAgentHandler {
         request: &RichRequest,
         behaviour: &CallAgentBehaviour,
         mut body: ParsedRequestBody,
-    ) -> Result<Vec<UntypedElementValue>, RequestHandlerError> {
+    ) -> Result<Vec<ElementValue>, RequestHandlerError> {
         let query_params = request.query_params();
         let headers = request.headers();
 
@@ -331,7 +347,9 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    parse_path_segment_value(raw, parameter_type)?
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: parse_path_segment_value(raw, parameter_type)?,
+                    })
                 }
 
                 MethodParameter::Query {
@@ -341,7 +359,9 @@ impl CallAgentHandler {
                     let empty = Vec::new();
                     let vals = query_params.get(query_parameter_name).unwrap_or(&empty);
 
-                    parse_query_or_header_value(vals, parameter_type)?
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: parse_query_or_header_value(vals, parameter_type)?,
+                    })
                 }
 
                 MethodParameter::Header {
@@ -360,14 +380,20 @@ impl CallAgentHandler {
                         })
                         .collect::<Result<Vec<_>, _>>()?;
 
-                    parse_query_or_header_value(&vals, parameter_type)?
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: parse_query_or_header_value(&vals, parameter_type)?,
+                    })
                 }
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
                     ParsedRequestBody::JsonBody(golem_wasm::Value::Record(fields)) => {
-                        UntypedElementValue::ComponentModel(
-                            fields[usize::from(*field_index)].clone(),
-                        )
+                        let field_type = json_body_field_type(&resolved_route.route.body, *field_index)?;
+                        ElementValue::ComponentModel(ComponentModelElementValue {
+                            value: ValueAndType::new(
+                                fields[usize::from(*field_index)].clone(),
+                                field_type,
+                            ),
+                        })
                     }
 
                     ParsedRequestBody::JsonBody(_) => {
@@ -391,8 +417,9 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
                             value: BinaryReference::Inline(binary_source),
+                            descriptor: Default::default(),
                         })
                     }
 
@@ -411,8 +438,9 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        UntypedElementValue::UnstructuredText(TextReferenceValue {
+                        ElementValue::UnstructuredText(UnstructuredTextElementValue {
                             value: TextReference::Inline(text_source),
+                            descriptor: Default::default(),
                         })
                     }
 
@@ -428,6 +456,30 @@ impl CallAgentHandler {
         }
 
         Ok(values)
+    }
+}
+
+/// Look up the [`AnalysedType`] of a JSON-object body field by index from the
+/// route's request body schema, used to type the corresponding component-model
+/// method parameter before lifting it into a schema-native value.
+fn json_body_field_type(
+    body: &RequestBodySchema,
+    field_index: SafeIndex,
+) -> Result<AnalysedType, RequestHandlerError> {
+    match body {
+        RequestBodySchema::JsonBody {
+            expected_type: AnalysedType::Record(TypeRecord { fields, .. }),
+        } => fields
+            .get(usize::from(field_index))
+            .map(|pair| pair.typ.clone())
+            .ok_or_else(|| {
+                RequestHandlerError::invariant_violated(
+                    "JSON body field index out of range for body schema",
+                )
+            }),
+        _ => Err(RequestHandlerError::invariant_violated(
+            "JSON field parameter but body schema is not a JSON record",
+        )),
     }
 }
 

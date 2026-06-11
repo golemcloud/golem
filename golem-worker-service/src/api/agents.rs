@@ -3,7 +3,9 @@ use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
-use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::schema::TypedSchemaValue;
+use serde_json::Value as JsonValue;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
@@ -120,10 +122,10 @@ pub struct AgentInvocationRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: UntypedJsonDataValue,
+    pub parameters: JsonValue,
     pub phantom_id: Option<Uuid>,
     pub method_name: String,
-    pub method_parameters: UntypedJsonDataValue,
+    pub method_parameters: JsonValue,
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
@@ -136,7 +138,7 @@ pub struct AgentInvocationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
     pub agent_id: AgentId,
-    pub result: Option<UntypedJsonDataValue>,
+    pub result: Option<TypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
 }
 
@@ -147,7 +149,7 @@ pub struct CreateAgentRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: UntypedJsonDataValue,
+    pub parameters: JsonValue,
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]

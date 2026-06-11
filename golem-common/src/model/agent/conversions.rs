@@ -178,9 +178,9 @@ impl From<DataSchema> for gc15::DataSchema {
 impl From<DataValue> for gc15::DataValue {
     fn from(value: DataValue) -> Self {
         match value {
-            DataValue::Tuple(tuple) => gc15::DataValue::Tuple(
-                tuple.elements.into_iter().map(ElementValue::into).collect(),
-            ),
+            DataValue::Tuple(tuple) => {
+                gc15::DataValue::Tuple(tuple.elements.into_iter().map(ElementValue::into).collect())
+            }
             DataValue::Multimodal(multimodal) => gc15::DataValue::Multimodal(
                 multimodal
                     .elements

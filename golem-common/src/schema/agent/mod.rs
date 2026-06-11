@@ -32,12 +32,13 @@
 //! the value tree.
 
 use crate::base_model::agent::{
-    AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
+    AgentConfigSource, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
     ReadOnlyConfig, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::SchemaType;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -46,7 +47,9 @@ use uuid::Uuid;
 /// The single [`InputSchema::Parameters`] case carries an ordered list of
 /// [`NamedField`]s. Each field carries its name, its schema, its metadata,
 /// and a [`FieldSource`] that tells the runtime where the value comes from.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
 pub enum InputSchema {
     Parameters(Vec<NamedField>),
@@ -72,7 +75,9 @@ impl InputSchema {
 /// Multimodal outputs are expressed as
 /// `Single(list<variant<…>> with role = Multimodal)`, not as a separate enum
 /// case.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
 pub enum OutputSchema {
     /// Method returns no value.
@@ -92,7 +97,9 @@ impl OutputSchema {
 }
 
 /// A single named field inside [`InputSchema::Parameters`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct NamedField {
     /// Field name in the input parameter list. Unique within the enclosing
     /// [`InputSchema::Parameters`].
@@ -134,7 +141,9 @@ impl NamedField {
 }
 
 /// Where the value for a field comes from at invocation time.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
 pub enum FieldSource {
     /// The caller provides the value when invoking the constructor or method.
@@ -149,7 +158,9 @@ pub enum FieldSource {
 ///
 /// Today this is limited to [`Principal`](AutoInjectedKind::Principal). New
 /// kinds are added here as the auto-injection surface grows.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "kebab-case")]
 pub enum AutoInjectedKind {
     /// The authenticated principal of the calling identity.
@@ -161,7 +172,9 @@ pub enum AutoInjectedKind {
 /// Carries the constructor parameters as a self-contained
 /// [`TypedSchemaValue`] pair so receivers can interpret the parameter values
 /// without an external schema registry.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ParsedAgentId {
     /// Agent type identifier (e.g. `"weather-agent"`).
     pub agent_type: AgentTypeName,
@@ -191,7 +204,9 @@ impl ParsedAgentId {
 ///
 /// Mirrors the legacy `AgentConstructor`, with `input_schema` replaced by the
 /// new [`InputSchema`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AgentConstructorSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -208,7 +223,9 @@ pub struct AgentConstructorSchema {
 /// (`http_endpoint`, `read_only`) are carried verbatim from the legacy
 /// representation during the transition; they are not part of the schema
 /// layer's core concern.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AgentMethodSchema {
     pub name: String,
     pub description: String,
@@ -228,7 +245,9 @@ pub struct AgentMethodSchema {
 /// published, so it brings a self-contained graph rather than sharing a
 /// namespace with the parent agent. Constructor and method input/output
 /// bodies may use [`SchemaType::Ref`] resolving against `schema.defs`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AgentDependencySchema {
     pub type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,7 +277,9 @@ pub struct AgentDependencySchema {
 /// agents that coincidentally define a same-named type do not share
 /// definitions, and a dependency cannot reference defs from its parent
 /// agent's graph.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AgentTypeSchema {
     pub type_name: AgentTypeName,
     pub description: String,
@@ -283,13 +304,31 @@ pub struct AgentTypeSchema {
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub config: Vec<AgentConfigDeclaration>,
+    pub config: Vec<AgentConfigDeclarationSchema>,
+}
+
+/// Schema-layer form of an agent config declaration.
+///
+/// Mirrors the legacy [`AgentConfigDeclaration`](crate::base_model::agent::AgentConfigDeclaration),
+/// with the `value_type` carried as a schema-native [`SchemaType`] instead of
+/// the legacy `AnalysedType`. This keeps [`AgentTypeSchema`] free of the legacy
+/// value/type carriers (the shared [`AgentConfigDeclaration`](crate::base_model::agent::AgentConfigDeclaration)
+/// stays in place for the legacy `AgentType` path — see N1/A3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct AgentConfigDeclarationSchema {
+    pub source: AgentConfigSource,
+    pub path: Vec<String>,
+    pub value_type: SchemaType,
 }
 
 /// Schema-model form of a registered agent type. Mirrors the legacy
 /// `RegisteredAgentType`, with `agent_type` replaced by [`AgentTypeSchema`].
 /// Used by the MCP export path (`CompiledMcp`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct RegisteredAgentTypeSchema {
     pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,

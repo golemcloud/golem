@@ -17,8 +17,9 @@ use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
     PublicAgentInvocation, PublicAttribute, PublicAttributeValue, StringAttributeValue,
 };
-use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use crate::schema::graph::SchemaGraph;
+use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_value::{ResultValuePayload, SchemaValue};
 
 impl PublicOplogEntry {
     pub fn matches(&self, query: &Query) -> bool {
@@ -80,14 +81,12 @@ impl PublicOplogEntry {
             let mut new_path: Vec<String> = path_stack.to_vec();
             new_path.push(key.clone());
 
-            let vnt = match value {
+            match value {
                 PublicAttributeValue::String(StringAttributeValue { value }) => {
-                    value.clone().into_value_and_type()
+                    if Self::string_match(value, &new_path, query_path, query) {
+                        return true;
+                    }
                 }
-            };
-
-            if Self::match_value(&vnt, &new_path, query_path, query) {
-                return true;
             }
         }
         false
@@ -103,8 +102,8 @@ impl PublicOplogEntry {
                     || Self::string_match("host-call", &[], query_path, query)
                     || Self::string_match("imported-function", &[], query_path, query)
                     || Self::string_match(&params.function_name, &[], query_path, query)
-                    || Self::match_value(&params.request, &[], query_path, query)
-                    || Self::match_value(&params.response, &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.request, &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.response, &[], query_path, query)
             }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 Self::string_match("agentinvocationstarted", &[], query_path, query)
@@ -404,178 +403,299 @@ impl PublicOplogEntry {
         }
     }
 
-    fn match_value(
-        value: &ValueAndType,
+    /// Walks a schema-native [`TypedSchemaValue`] for the public-oplog text
+    /// matcher, recursing over the paired `(SchemaGraph, SchemaType,
+    /// SchemaValue)` directly. Names (record fields, variant/enum/flags cases,
+    /// union tags) come from the schema; the value tree carries only payloads.
+    fn match_typed_schema_value(
+        value: &crate::schema::TypedSchemaValue,
         path_stack: &[String],
         query_path: &[String],
         query: &LeafQuery,
     ) -> bool {
-        match (&value.value, &value.typ) {
-            (Value::Bool(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+        Self::match_schema_value(
+            value.graph(),
+            value.root_type(),
+            value.value(),
+            path_stack,
+            query_path,
+            query,
+        )
+    }
+
+    /// Follows [`SchemaType::Ref`] chains to the underlying definition body so
+    /// composites behind named refs match. Bounded to avoid looping on a
+    /// malformed graph.
+    fn resolve_type<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
+        let mut guard = 0;
+        while let SchemaType::Ref { id, .. } = ty {
+            match graph.lookup(id) {
+                Some(def) => {
+                    ty = &def.body;
+                    guard += 1;
+                    if guard > 1024 {
+                        break;
+                    }
+                }
+                None => break,
             }
-            (Value::U8(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+        }
+        ty
+    }
+
+    fn match_schema_value(
+        graph: &SchemaGraph,
+        ty: &SchemaType,
+        value: &SchemaValue,
+        path_stack: &[String],
+        query_path: &[String],
+        query: &LeafQuery,
+    ) -> bool {
+        let ty = Self::resolve_type(graph, ty);
+        match value {
+            SchemaValue::Bool(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::U16(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::S8(v) => Self::string_match(&v.to_string(), path_stack, query_path, query),
+            SchemaValue::S16(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::U32(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::S32(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::U64(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::S64(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::S8(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::U8(v) => Self::string_match(&v.to_string(), path_stack, query_path, query),
+            SchemaValue::U16(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::S16(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::U32(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::S32(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::U64(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::S64(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::F32(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::F32(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::F64(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::F64(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            SchemaValue::Char(v) => {
+                Self::string_match(&v.to_string(), path_stack, query_path, query)
             }
-            (Value::Char(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
-            }
-            (Value::String(value), _) => {
-                Self::string_match(&value.to_string(), path_stack, query_path, query)
-            }
-            (Value::List(elems), AnalysedType::List(list)) => elems.iter().any(|v| {
-                Self::match_value(
-                    &ValueAndType::new(v.clone(), (*list.inner).clone()),
-                    path_stack,
-                    query_path,
-                    query,
-                )
-            }),
-            (Value::Tuple(elems), AnalysedType::Tuple(tuple)) => {
-                if elems.len() != tuple.items.len() {
-                    false
-                } else {
-                    elems
-                        .iter()
-                        .zip(tuple.items.iter())
-                        .enumerate()
-                        .any(|(idx, (v, t))| {
+            SchemaValue::String(v) => Self::string_match(v, path_stack, query_path, query),
+            SchemaValue::Record { fields } => {
+                if let SchemaType::Record {
+                    fields: field_types,
+                    ..
+                } = ty
+                {
+                    fields.len() == field_types.len()
+                        && fields.iter().zip(field_types.iter()).any(|(v, f)| {
                             let mut new_path: Vec<String> = path_stack.to_vec();
-                            new_path.push(idx.to_string());
-                            Self::match_value(
-                                &ValueAndType::new(v.clone(), t.clone()),
+                            new_path.push(f.name.clone());
+                            Self::match_schema_value(
+                                graph, &f.body, v, &new_path, query_path, query,
+                            )
+                        })
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Tuple { elements } => {
+                if let SchemaType::Tuple {
+                    elements: elem_types,
+                    ..
+                } = ty
+                {
+                    elements.len() == elem_types.len()
+                        && elements.iter().zip(elem_types.iter()).enumerate().any(
+                            |(idx, (v, t))| {
+                                let mut new_path: Vec<String> = path_stack.to_vec();
+                                new_path.push(idx.to_string());
+                                Self::match_schema_value(graph, t, v, &new_path, query_path, query)
+                            },
+                        )
+                } else {
+                    false
+                }
+            }
+            SchemaValue::List { elements } => {
+                if let SchemaType::List { element, .. } = ty {
+                    elements.iter().any(|v| {
+                        Self::match_schema_value(graph, element, v, path_stack, query_path, query)
+                    })
+                } else {
+                    false
+                }
+            }
+            SchemaValue::FixedList { elements } => {
+                if let SchemaType::FixedList { element, .. } = ty {
+                    elements.iter().any(|v| {
+                        Self::match_schema_value(graph, element, v, path_stack, query_path, query)
+                    })
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Map { entries } => {
+                if let SchemaType::Map {
+                    key, value: val_ty, ..
+                } = ty
+                {
+                    entries.iter().any(|(k, v)| {
+                        Self::match_schema_value(graph, key, k, path_stack, query_path, query)
+                            || Self::match_schema_value(
+                                graph, val_ty, v, path_stack, query_path, query,
+                            )
+                    })
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Option { inner } => match (inner, ty) {
+                (
+                    Some(v),
+                    SchemaType::Option {
+                        inner: inner_ty, ..
+                    },
+                ) => Self::match_schema_value(graph, inner_ty, v, path_stack, query_path, query),
+                _ => false,
+            },
+            SchemaValue::Result(payload) => {
+                if let SchemaType::Result { spec, .. } = ty {
+                    match payload {
+                        ResultValuePayload::Ok { value: Some(v) } => spec
+                            .ok
+                            .as_ref()
+                            .map(|ok_ty| {
+                                let mut new_path: Vec<String> = path_stack.to_vec();
+                                new_path.push("ok".to_string());
+                                Self::match_schema_value(
+                                    graph, ok_ty, v, &new_path, query_path, query,
+                                )
+                            })
+                            .unwrap_or(false),
+                        ResultValuePayload::Err { value: Some(v) } => spec
+                            .err
+                            .as_ref()
+                            .map(|err_ty| {
+                                let mut new_path: Vec<String> = path_stack.to_vec();
+                                new_path.push("err".to_string());
+                                Self::match_schema_value(
+                                    graph, err_ty, v, &new_path, query_path, query,
+                                )
+                            })
+                            .unwrap_or(false),
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Variant(payload) => {
+                if let SchemaType::Variant { cases, .. } = ty {
+                    match cases.get(payload.case as usize) {
+                        Some(case) => match (&payload.payload, &case.payload) {
+                            (Some(v), Some(case_ty)) => {
+                                let mut new_path: Vec<String> = path_stack.to_vec();
+                                new_path.push(case.name.clone());
+                                Self::match_schema_value(
+                                    graph, case_ty, v, &new_path, query_path, query,
+                                )
+                            }
+                            _ => false,
+                        },
+                        None => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Enum { case } => {
+                if let SchemaType::Enum { cases, .. } = ty {
+                    match cases.get(*case as usize) {
+                        Some(name) => Self::string_match(name, path_stack, query_path, query),
+                        None => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Flags { bits } => {
+                if let SchemaType::Flags { flags, .. } = ty {
+                    bits.iter()
+                        .enumerate()
+                        .filter_map(|(idx, set)| if *set { flags.get(idx) } else { None })
+                        .any(|name| Self::string_match(name, path_stack, query_path, query))
+                } else {
+                    false
+                }
+            }
+            SchemaValue::Union(payload) => {
+                let body_matches = if let SchemaType::Union { spec, .. } = ty {
+                    spec.branches
+                        .iter()
+                        .find(|b| b.tag == payload.tag)
+                        .map(|b| {
+                            let mut new_path: Vec<String> = path_stack.to_vec();
+                            new_path.push(payload.tag.clone());
+                            Self::match_schema_value(
+                                graph,
+                                &b.body,
+                                &payload.body,
                                 &new_path,
                                 query_path,
                                 query,
                             )
                         })
-                }
-            }
-            (Value::Record(fields), AnalysedType::Record(record)) => {
-                if fields.len() != record.fields.len() {
-                    false
-                } else {
-                    fields.iter().zip(record.fields.iter()).any(|(v, t)| {
-                        let mut new_path: Vec<String> = path_stack.to_vec();
-                        new_path.push(t.name.clone());
-                        Self::match_value(
-                            &ValueAndType::new(v.clone(), t.typ.clone()),
-                            &new_path,
-                            path_stack,
-                            query,
-                        )
-                    })
-                }
-            }
-            (
-                Value::Variant {
-                    case_value,
-                    case_idx,
-                },
-                AnalysedType::Variant(variant),
-            ) => {
-                let case = variant.cases.get(*case_idx as usize);
-                match (case_value, case) {
-                    (
-                        Some(value),
-                        Some(NameOptionTypePair {
-                            typ: Some(typ),
-                            name,
-                        }),
-                    ) => {
-                        let mut new_path: Vec<String> = path_stack.to_vec();
-                        new_path.push(name.clone());
-                        Self::match_value(
-                            &ValueAndType::new((**value).clone(), typ.clone()),
-                            &new_path,
-                            query_path,
-                            query,
-                        )
-                    }
-                    _ => false,
-                }
-            }
-            (Value::Enum(value), AnalysedType::Enum(typ)) => {
-                if let Some(case) = typ.cases.get(*value as usize) {
-                    Self::string_match(case, path_stack, query_path, query)
+                        .unwrap_or(false)
                 } else {
                     false
-                }
+                };
+                Self::string_match(&payload.tag, path_stack, query_path, query) || body_matches
             }
-            (Value::Flags(bitmap), AnalysedType::Flags(flags)) => {
-                let names = bitmap
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, set)| if *set { flags.names.get(idx) } else { None })
-                    .collect::<Vec<_>>();
-                names
-                    .iter()
-                    .any(|name| Self::string_match(name, path_stack, query_path, query))
+            SchemaValue::Text(payload) => {
+                Self::string_match(&payload.text, path_stack, query_path, query)
+                    || payload
+                        .language
+                        .as_ref()
+                        .map(|l| Self::string_match(l, path_stack, query_path, query))
+                        .unwrap_or(false)
             }
-            (Value::Option(Some(value)), AnalysedType::Option(typ)) => Self::match_value(
-                &ValueAndType::new((**value).clone(), (*typ.inner).clone()),
+            SchemaValue::Binary(payload) => payload
+                .mime_type
+                .as_ref()
+                .map(|m| Self::string_match(m, path_stack, query_path, query))
+                .unwrap_or(false),
+            SchemaValue::Path { path } => Self::string_match(path, path_stack, query_path, query),
+            SchemaValue::Url { url } => Self::string_match(url, path_stack, query_path, query),
+            SchemaValue::Datetime { value } => {
+                Self::string_match(&value.to_rfc3339(), path_stack, query_path, query)
+            }
+            SchemaValue::Duration(payload) => Self::string_match(
+                &payload.nanoseconds.to_string(),
                 path_stack,
                 query_path,
                 query,
             ),
-            (Value::Result(value), AnalysedType::Result(typ)) => match value {
-                Ok(Some(value)) if typ.ok.is_some() => {
-                    let mut new_path = path_stack.to_vec();
-                    new_path.push("ok".to_string());
-                    Self::match_value(
-                        &ValueAndType::new(
-                            (**value).clone(),
-                            (**(typ.ok.as_ref().unwrap())).clone(),
-                        ),
-                        &new_path,
+            SchemaValue::Quantity(quantity) => {
+                Self::string_match(&quantity.unit, path_stack, query_path, query)
+                    || Self::string_match(
+                        &quantity.mantissa.to_string(),
+                        path_stack,
                         query_path,
                         query,
                     )
-                }
-                Err(Some(value)) if typ.err.is_some() => {
-                    let mut new_path = path_stack.to_vec();
-                    new_path.push("err".to_string());
-                    Self::match_value(
-                        &ValueAndType::new(
-                            (**value).clone(),
-                            (**(typ.err.as_ref().unwrap())).clone(),
-                        ),
-                        &new_path,
-                        query_path,
-                        query,
-                    )
-                }
-                _ => false,
-            },
-            (Value::Handle { .. }, _) => false,
-            _ => false,
+            }
+            SchemaValue::Secret(payload) => {
+                Self::string_match(&payload.secret_ref, path_stack, query_path, query)
+            }
+            SchemaValue::QuotaToken(payload) => {
+                Self::string_match(&payload.resource_name, path_stack, query_path, query)
+            }
         }
     }
 }

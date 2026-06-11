@@ -47,6 +47,8 @@ impl ResourceDefinition {
     IntoValue,
     FromValue,
     BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[desert(transparent)]
 pub struct LeaseEpoch(pub u64);
@@ -70,7 +72,16 @@ impl Display for LeaseEpoch {
 /// A granted reservation of capacity for a bounded resource, or an unlimited
 /// token for an unconstrained resource.
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, IntoValue, FromValue, BinaryCodec,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    IntoValue,
+    FromValue,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
 pub enum Reservation {
@@ -86,7 +97,16 @@ pub enum Reservation {
 
 /// Result of a `reserve` call on a quota token.
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, IntoValue, FromValue, BinaryCodec,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    IntoValue,
+    FromValue,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
 pub enum ReserveResult {

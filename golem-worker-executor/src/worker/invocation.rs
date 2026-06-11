@@ -21,15 +21,11 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
-use golem_common::model::agent::{
-    AgentMode, AgentType, DataSchema, LegacyParsedAgentId, UntypedDataValue,
-};
+use golem_common::model::agent::{AgentMode, AgentType, LegacyParsedAgentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
-use golem_common::schema::adapters::untyped::{
-    typed_output_value_to_untyped_data_value, untyped_data_value_to_input_value,
-};
+use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::wit::decode_agent_error;
 use golem_common::schema::wit::wire as core_wire;
 use golem_common::schema::wit::{decode_value, encode_value};
@@ -197,7 +193,6 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             method_name,
             input,
             principal,
-            output_schema,
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
@@ -208,7 +203,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
                 Ok(Ok(maybe_output)) => {
-                    let output = decode_invoke_output(maybe_output, &output_schema)?;
+                    let output = decode_invoke_output(maybe_output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
                         result: AgentInvocationResult::AgentMethod { output },
@@ -332,23 +327,23 @@ fn invoke_result_from_agent_error(
     })
 }
 
-/// Decodes the `option<schema-value-tree>` output of `invoke` into the legacy
-/// [`UntypedDataValue`] consumed by the (later-wave) gRPC / oplog boundary.
+/// Decodes the `option<schema-value-tree>` output of `invoke` into the
+/// schema-native [`SchemaValue`] carried across the gRPC / oplog boundary.
+///
+/// A `none` result (the declared `unit` output) is represented by the
+/// canonical empty tuple, matching the `unit` projection used on the caller
+/// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
 fn decode_invoke_output(
     maybe_output: Option<core_wire::SchemaValueTree>,
-    output_schema: &DataSchema,
-) -> Result<UntypedDataValue, WorkerExecutorError> {
+) -> Result<SchemaValue, WorkerExecutorError> {
     match maybe_output {
         // `none` is the declared `unit` output.
-        None => Ok(UntypedDataValue::Tuple(Vec::new())),
-        Some(tree) => {
-            let value = decode_value(&tree).map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
-            })?;
-            typed_output_value_to_untyped_data_value(value, output_schema).map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed to convert agent method output: {e}"))
-            })
-        }
+        None => Ok(SchemaValue::Tuple {
+            elements: Vec::new(),
+        }),
+        Some(tree) => decode_value(&tree).map_err(|e| {
+            WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
+        }),
     }
 }
 
@@ -572,7 +567,6 @@ enum LoweredCall {
         method_name: String,
         input: core_wire::SchemaValueTree,
         principal: golem_agent::common::Principal,
-        output_schema: DataSchema,
     },
     SaveSnapshot,
     LoadSnapshot {
@@ -599,20 +593,15 @@ pub fn lower_invocation(
             input, principal, ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
-            let input_value =
-                untyped_data_value_to_input_value(input, &agent_type.constructor.input_schema)
-                    .map_err(|e| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "Invalid initialize input for agent type '{}': {e}",
-                            agent_type.type_name
-                        ))
-                    })?;
+            // The input carrier is already the schema-native parameter-record
+            // value the guest export expects, so it is encoded to the wire
+            // tree directly without any schema-driven re-lowering.
             Ok(LoweredInvocation {
                 display_name: "initialize".to_string(),
                 read_only_method: None,
                 call: LoweredCall::Initialize {
                     agent_type: agent_type.type_name.to_string(),
-                    input: encode_value(&input_value),
+                    input: encode_value(&input),
                     principal: principal.into(),
                 },
             })
@@ -624,12 +613,12 @@ pub fn lower_invocation(
             ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
-            // `agent_type` is owned, so consume `methods` and move the matched
-            // method's `output_schema` into the lowered call rather than cloning
-            // it on every invocation.
+            // The method is resolved only to classify read-only methods; the
+            // input carrier is already the schema-native parameter record and
+            // is encoded to the wire tree directly.
             let method = agent_type
                 .methods
-                .into_iter()
+                .iter()
                 .find(|m| m.name == method_name)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
@@ -640,21 +629,13 @@ pub fn lower_invocation(
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
 
-            let input_value =
-                untyped_data_value_to_input_value(input, &method.input_schema).map_err(|e| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "Invalid input for method '{method_name}': {e}"
-                    ))
-                })?;
-
             Ok(LoweredInvocation {
                 display_name: method_name.clone(),
                 read_only_method,
                 call: LoweredCall::Invoke {
                     method_name,
-                    input: encode_value(&input_value),
+                    input: encode_value(&input),
                     principal: principal.into(),
-                    output_schema: method.output_schema,
                 },
             })
         }

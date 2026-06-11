@@ -144,12 +144,22 @@ impl poem_openapi::types::ToJSON for SpanId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
+#[schema(named = "attribute-value")]
 pub enum AttributeValue {
     String(String),
 }
 
+// Legacy `golem_wasm` value-trait impls retained additively during the Wave 3
+// oplog cutover; removed once the macros/consumers no longer reference them.
 impl golem_wasm::IntoValue for AttributeValue {
     fn into_value(self) -> golem_wasm::Value {
         match self {

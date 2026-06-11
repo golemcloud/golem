@@ -42,6 +42,7 @@ use golem_common::model::oplog::{
     PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
+use golem_common::schema::TypedSchemaValue;
 use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
@@ -479,11 +480,11 @@ impl TextView for PublicOplogEntry {
                 ));
                 logln(format!(
                     "{pad}input:             {}",
-                    value_to_string(&params.request)
+                    typed_schema_value_to_string(&params.request)
                 ));
                 logln(format!(
                     "{pad}result:            {}",
-                    value_to_string(&params.response)
+                    typed_schema_value_to_string(&params.response)
                 ));
             }
             PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
@@ -502,7 +503,7 @@ impl TextView for PublicOplogEntry {
                         format_id(&inner.idempotency_key),
                     ));
                     logln(format!("{pad}input:"));
-                    log_data_value(pad, &inner.function_input, &SourceLanguage::default());
+                    log_typed_schema_value(pad, &inner.function_input, &SourceLanguage::default());
                 }
                 other => {
                     logln(format!(
@@ -542,7 +543,7 @@ impl TextView for PublicOplogEntry {
                     PublicAgentInvocationResult::AgentInitialization(output)
                     | PublicAgentInvocationResult::AgentMethod(output) => {
                         logln(format!("{pad}output:"));
-                        log_data_value(pad, &output.output, &SourceLanguage::default());
+                        log_typed_schema_value(pad, &output.output, &SourceLanguage::default());
                     }
                     PublicAgentInvocationResult::ManualUpdate(_) => {}
                     PublicAgentInvocationResult::LoadSnapshot(fallible) => {
@@ -1084,11 +1085,26 @@ fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).expect("Failed to convert value to string")
 }
 
+fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
+    golem_common::schema::render::value_to_cli_text(
+        value.graph(),
+        value.root_type(),
+        value.value(),
+    )
+    .unwrap_or_else(|err| format!("<rendering error: {err}>"))
+}
+
+fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue, source_language: &SourceLanguage) {
+    let rendered = crate::agent_id_display::render_typed_schema_value(value, source_language);
+    logln(format!("{pad}  {rendered}"));
+}
+
 // TODO: pretty print
 fn format_agent_name(agent_name: &RawAgentId) -> String {
     textwrap::wrap(&agent_name.to_string(), 80).join("\n")
 }
 
+#[allow(dead_code)]
 fn log_data_value(pad: &str, value: &DataValue, source_language: &SourceLanguage) {
     if source_language.is_known() {
         // Adapt at the boundary: walk the legacy DataValue into a

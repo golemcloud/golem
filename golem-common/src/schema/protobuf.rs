@@ -27,23 +27,30 @@
 //! between `base_model::agent` and the `golem.component` / `golem.registry`
 //! proto packages.
 
-use crate::base_model::agent::{AgentTypeName, Snapshotting};
+use crate::base_model::agent::{AgentConfigSource, AgentTypeName, Snapshotting};
 use crate::model::Empty as ModelEmpty;
 use crate::schema::agent::{
-    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-    AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
+    AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
+    AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
     RegisteredAgentTypeSchema,
 };
-use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
+use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
     PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
     SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
+use crate::schema::schema_value::{
+    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
+    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+};
+use chrono::{DateTime, TimeZone, Utc};
 use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
 use golem_api_grpc::proto::golem::schema as proto;
+use golem_api_grpc::proto::golem::schema::result_value::Result as ResultBody;
 use golem_api_grpc::proto::golem::schema::schema_type::Body;
+use golem_api_grpc::proto::golem::schema::schema_value::Value as ValueBody;
 
 // --- small helpers -----------------------------------------------------------
 
@@ -93,6 +100,69 @@ fn req_box_from_proto(
     ctx: &str,
 ) -> Result<Box<SchemaType>, String> {
     box_from_proto(value.ok_or_else(|| format!("Missing field: {ctx}"))?)
+}
+
+// --- value-side helpers ------------------------------------------------------
+
+fn box_value_to_proto(value: Box<SchemaValue>) -> Box<proto::SchemaValue> {
+    Box::new((*value).into())
+}
+
+fn opt_box_value_from_proto(
+    value: Option<Box<proto::SchemaValue>>,
+) -> Result<Option<Box<SchemaValue>>, String> {
+    value
+        .map(|b| Ok::<_, String>(Box::new((*b).try_into()?)))
+        .transpose()
+}
+
+fn req_box_value_from_proto(
+    value: Option<Box<proto::SchemaValue>>,
+    ctx: &str,
+) -> Result<Box<SchemaValue>, String> {
+    let b = value.ok_or_else(|| format!("Missing field: {ctx}"))?;
+    Ok(Box::new((*b).try_into()?))
+}
+
+fn datetime_to_proto(dt: DateTime<Utc>) -> proto::DatetimeValue {
+    proto::DatetimeValue {
+        seconds: dt.timestamp(),
+        nanoseconds: dt.timestamp_subsec_nanos(),
+    }
+}
+
+fn datetime_from_proto(d: proto::DatetimeValue) -> Result<DateTime<Utc>, String> {
+    Utc.timestamp_opt(d.seconds, d.nanoseconds)
+        .single()
+        .ok_or_else(|| format!("Invalid datetime: {}s {}ns", d.seconds, d.nanoseconds))
+}
+
+fn map_entry_from_proto(e: proto::MapEntry) -> Result<(SchemaValue, SchemaValue), String> {
+    let key = e
+        .key
+        .ok_or_else(|| "Missing field: MapEntry.key".to_string())?
+        .try_into()?;
+    let value = e
+        .value
+        .ok_or_else(|| "Missing field: MapEntry.value".to_string())?
+        .try_into()?;
+    Ok((key, value))
+}
+
+fn result_value_from_proto(rv: proto::ResultValue) -> Result<ResultValuePayload, String> {
+    let r = rv
+        .result
+        .ok_or_else(|| "Missing field: ResultValue.result".to_string())?;
+    Ok(match r {
+        ResultBody::Ok(v) => ResultValuePayload::Ok {
+            value: Some(Box::new((*v).try_into()?)),
+        },
+        ResultBody::Err(v) => ResultValuePayload::Err {
+            value: Some(Box::new((*v).try_into()?)),
+        },
+        ResultBody::OkUnit(_) => ResultValuePayload::Ok { value: None },
+        ResultBody::ErrUnit(_) => ResultValuePayload::Err { value: None },
+    })
 }
 
 // --- MetadataEnvelope / Role -------------------------------------------------
@@ -765,6 +835,252 @@ impl TryFrom<proto::SchemaTypeDef> for SchemaTypeDef {
     }
 }
 
+// --- SchemaValue / TypedSchemaValue ------------------------------------------
+
+impl From<SchemaValue> for proto::SchemaValue {
+    fn from(value: SchemaValue) -> Self {
+        let body = match value {
+            SchemaValue::Bool(b) => ValueBody::BoolValue(b),
+            SchemaValue::S8(v) => ValueBody::S8Value(v as i32),
+            SchemaValue::S16(v) => ValueBody::S16Value(v as i32),
+            SchemaValue::S32(v) => ValueBody::S32Value(v),
+            SchemaValue::S64(v) => ValueBody::S64Value(v),
+            SchemaValue::U8(v) => ValueBody::U8Value(v as u32),
+            SchemaValue::U16(v) => ValueBody::U16Value(v as u32),
+            SchemaValue::U32(v) => ValueBody::U32Value(v),
+            SchemaValue::U64(v) => ValueBody::U64Value(v),
+            SchemaValue::F32(v) => ValueBody::F32Value(v),
+            SchemaValue::F64(v) => ValueBody::F64Value(v),
+            SchemaValue::Char(c) => ValueBody::CharValue(c as u32),
+            SchemaValue::String(s) => ValueBody::StringValue(s),
+            SchemaValue::Record { fields } => ValueBody::RecordValue(proto::RecordValue {
+                fields: fields.into_iter().map(Into::into).collect(),
+            }),
+            SchemaValue::Variant(p) => ValueBody::VariantValue(Box::new(proto::VariantValue {
+                case: p.case,
+                payload: p.payload.map(box_value_to_proto),
+            })),
+            SchemaValue::Enum { case } => ValueBody::EnumValue(case),
+            SchemaValue::Flags { bits } => ValueBody::FlagsValue(proto::FlagsValue { bits }),
+            SchemaValue::Tuple { elements } => ValueBody::TupleValue(proto::TupleValue {
+                elements: elements.into_iter().map(Into::into).collect(),
+            }),
+            SchemaValue::List { elements } => ValueBody::ListValue(proto::ListValue {
+                elements: elements.into_iter().map(Into::into).collect(),
+            }),
+            SchemaValue::FixedList { elements } => {
+                ValueBody::FixedListValue(proto::FixedListValue {
+                    elements: elements.into_iter().map(Into::into).collect(),
+                })
+            }
+            SchemaValue::Map { entries } => ValueBody::MapValue(proto::MapValue {
+                entries: entries
+                    .into_iter()
+                    .map(|(k, v)| proto::MapEntry {
+                        key: Some(k.into()),
+                        value: Some(v.into()),
+                    })
+                    .collect(),
+            }),
+            SchemaValue::Option { inner } => ValueBody::OptionValue(Box::new(proto::OptionValue {
+                inner: inner.map(box_value_to_proto),
+            })),
+            SchemaValue::Result(r) => ValueBody::ResultValue(Box::new(proto::ResultValue {
+                result: Some(match r {
+                    ResultValuePayload::Ok { value } => match value {
+                        Some(v) => ResultBody::Ok(box_value_to_proto(v)),
+                        None => ResultBody::OkUnit(ProtoEmpty {}),
+                    },
+                    ResultValuePayload::Err { value } => match value {
+                        Some(v) => ResultBody::Err(box_value_to_proto(v)),
+                        None => ResultBody::ErrUnit(ProtoEmpty {}),
+                    },
+                }),
+            })),
+            SchemaValue::Text(t) => ValueBody::TextValue(proto::TextValue {
+                text: t.text,
+                language: t.language,
+            }),
+            SchemaValue::Binary(b) => ValueBody::BinaryValue(proto::BinaryValue {
+                bytes: b.bytes,
+                mime_type: b.mime_type,
+            }),
+            SchemaValue::Path { path } => ValueBody::PathValue(path),
+            SchemaValue::Url { url } => ValueBody::UrlValue(url),
+            SchemaValue::Datetime { value } => ValueBody::DatetimeValue(datetime_to_proto(value)),
+            SchemaValue::Duration(d) => ValueBody::DurationValue(proto::DurationValue {
+                nanoseconds: d.nanoseconds,
+            }),
+            SchemaValue::Quantity(q) => ValueBody::QuantityValue(q.into()),
+            SchemaValue::Union(u) => ValueBody::UnionValue(Box::new(proto::UnionValue {
+                tag: u.tag,
+                body: Some(box_value_to_proto(u.body)),
+            })),
+            SchemaValue::Secret(s) => ValueBody::SecretValue(proto::SecretValue {
+                secret_ref: s.secret_ref,
+            }),
+            SchemaValue::QuotaToken(q) => ValueBody::QuotaTokenValue(proto::QuotaTokenValue {
+                environment_id: Some(q.environment_id.into()),
+                resource_name: q.resource_name,
+                expected_use: q.expected_use,
+                last_credit: q.last_credit,
+                last_credit_at: Some(datetime_to_proto(q.last_credit_at)),
+            }),
+        };
+        Self { value: Some(body) }
+    }
+}
+
+impl TryFrom<proto::SchemaValue> for SchemaValue {
+    type Error = String;
+
+    fn try_from(value: proto::SchemaValue) -> Result<Self, Self::Error> {
+        let body = value
+            .value
+            .ok_or_else(|| "Missing field: SchemaValue.value".to_string())?;
+        let result = match body {
+            ValueBody::BoolValue(b) => SchemaValue::Bool(b),
+            ValueBody::S8Value(v) => {
+                SchemaValue::S8(i8::try_from(v).map_err(|_| format!("s8 out of range: {v}"))?)
+            }
+            ValueBody::S16Value(v) => {
+                SchemaValue::S16(i16::try_from(v).map_err(|_| format!("s16 out of range: {v}"))?)
+            }
+            ValueBody::S32Value(v) => SchemaValue::S32(v),
+            ValueBody::S64Value(v) => SchemaValue::S64(v),
+            ValueBody::U8Value(v) => {
+                SchemaValue::U8(u8::try_from(v).map_err(|_| format!("u8 out of range: {v}"))?)
+            }
+            ValueBody::U16Value(v) => {
+                SchemaValue::U16(u16::try_from(v).map_err(|_| format!("u16 out of range: {v}"))?)
+            }
+            ValueBody::U32Value(v) => SchemaValue::U32(v),
+            ValueBody::U64Value(v) => SchemaValue::U64(v),
+            ValueBody::F32Value(v) => SchemaValue::F32(v),
+            ValueBody::F64Value(v) => SchemaValue::F64(v),
+            ValueBody::CharValue(v) => {
+                SchemaValue::Char(char::from_u32(v).ok_or_else(|| format!("invalid char: {v}"))?)
+            }
+            ValueBody::StringValue(s) => SchemaValue::String(s),
+            ValueBody::RecordValue(rv) => SchemaValue::Record {
+                fields: rv
+                    .fields
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+            ValueBody::VariantValue(vv) => {
+                let vv = *vv;
+                SchemaValue::Variant(VariantValuePayload {
+                    case: vv.case,
+                    payload: opt_box_value_from_proto(vv.payload)?,
+                })
+            }
+            ValueBody::EnumValue(case) => SchemaValue::Enum { case },
+            ValueBody::FlagsValue(fv) => SchemaValue::Flags { bits: fv.bits },
+            ValueBody::TupleValue(tv) => SchemaValue::Tuple {
+                elements: tv
+                    .elements
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+            ValueBody::ListValue(lv) => SchemaValue::List {
+                elements: lv
+                    .elements
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+            ValueBody::FixedListValue(fv) => SchemaValue::FixedList {
+                elements: fv
+                    .elements
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            },
+            ValueBody::MapValue(mv) => SchemaValue::Map {
+                entries: mv
+                    .entries
+                    .into_iter()
+                    .map(map_entry_from_proto)
+                    .collect::<Result<_, _>>()?,
+            },
+            ValueBody::OptionValue(ov) => SchemaValue::Option {
+                inner: opt_box_value_from_proto(ov.inner)?,
+            },
+            ValueBody::ResultValue(rv) => SchemaValue::Result(result_value_from_proto(*rv)?),
+            ValueBody::TextValue(t) => SchemaValue::Text(TextValuePayload {
+                text: t.text,
+                language: t.language,
+            }),
+            ValueBody::BinaryValue(b) => SchemaValue::Binary(BinaryValuePayload {
+                bytes: b.bytes,
+                mime_type: b.mime_type,
+            }),
+            ValueBody::PathValue(p) => SchemaValue::Path { path: p },
+            ValueBody::UrlValue(u) => SchemaValue::Url { url: u },
+            ValueBody::DatetimeValue(d) => SchemaValue::Datetime {
+                value: datetime_from_proto(d)?,
+            },
+            ValueBody::DurationValue(d) => SchemaValue::Duration(DurationValuePayload {
+                nanoseconds: d.nanoseconds,
+            }),
+            ValueBody::QuantityValue(q) => SchemaValue::Quantity(q.into()),
+            ValueBody::UnionValue(uv) => {
+                let uv = *uv;
+                SchemaValue::Union(UnionValuePayload {
+                    tag: uv.tag,
+                    body: req_box_value_from_proto(uv.body, "UnionValue.body")?,
+                })
+            }
+            ValueBody::SecretValue(s) => SchemaValue::Secret(SecretValuePayload {
+                secret_ref: s.secret_ref,
+            }),
+            ValueBody::QuotaTokenValue(q) => SchemaValue::QuotaToken(QuotaTokenValuePayload {
+                environment_id: q
+                    .environment_id
+                    .ok_or_else(|| "Missing field: QuotaTokenValue.environment_id".to_string())?
+                    .into(),
+                resource_name: q.resource_name,
+                expected_use: q.expected_use,
+                last_credit: q.last_credit,
+                last_credit_at: datetime_from_proto(
+                    q.last_credit_at
+                        .ok_or_else(|| "Missing field: QuotaTokenValue.last_credit_at".to_string())?,
+                )?,
+            }),
+        };
+        Ok(result)
+    }
+}
+
+impl From<TypedSchemaValue> for proto::TypedSchemaValue {
+    fn from(value: TypedSchemaValue) -> Self {
+        let (graph, val) = value.into_parts();
+        Self {
+            graph: Some(graph.into()),
+            value: Some(val.into()),
+        }
+    }
+}
+
+impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
+    type Error = String;
+
+    fn try_from(value: proto::TypedSchemaValue) -> Result<Self, Self::Error> {
+        let graph = value
+            .graph
+            .ok_or_else(|| "Missing field: TypedSchemaValue.graph".to_string())?
+            .try_into()?;
+        let val = value
+            .value
+            .ok_or_else(|| "Missing field: TypedSchemaValue.value".to_string())?
+            .try_into()?;
+        Ok(TypedSchemaValue::new(graph, val))
+    }
+}
+
 // --- agent input/output layer ------------------------------------------------
 
 impl From<InputSchema> for proto::InputSchema {
@@ -1063,6 +1379,33 @@ impl TryFrom<proto::AgentTypeSchema> for AgentTypeSchema {
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<AgentConfigDeclarationSchema> for proto::AgentConfigDeclarationSchema {
+    fn from(value: AgentConfigDeclarationSchema) -> Self {
+        Self {
+            source: golem_api_grpc::proto::golem::component::AgentConfigSource::from(value.source)
+                as i32,
+            path: value.path,
+            value_type: Some(value.value_type.into()),
+        }
+    }
+}
+
+impl TryFrom<proto::AgentConfigDeclarationSchema> for AgentConfigDeclarationSchema {
+    type Error = String;
+
+    fn try_from(value: proto::AgentConfigDeclarationSchema) -> Result<Self, Self::Error> {
+        let source = AgentConfigSource::try_from(value.source())?;
+        Ok(Self {
+            source,
+            path: value.path,
+            value_type: value
+                .value_type
+                .ok_or_else(|| "Missing field: AgentConfigDeclarationSchema.value_type".to_string())?
+                .try_into()?,
         })
     }
 }

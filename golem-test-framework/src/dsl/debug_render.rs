@@ -21,6 +21,8 @@ use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
     PublicUpdateDescription, StringAttributeValue,
 };
+use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::render::value_to_cli_text;
 use golem_wasm::{ValueAndType, print_value_and_type};
 use std::fmt::Write;
 
@@ -62,12 +64,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(
                 result,
                 "{pad}input:             {}",
-                value_to_string(&params.request)
+                typed_schema_value_to_string(&params.request)
             );
             let _ = writeln!(
                 result,
                 "{pad}result:            {}",
-                value_to_string(&params.response)
+                typed_schema_value_to_string(&params.response)
             );
         }
         PublicOplogEntry::AgentInvocationStarted(params) => {
@@ -471,6 +473,11 @@ fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstalla
 
 fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
+}
+
+fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
+    value_to_cli_text(value.graph(), value.root_type(), value.value())
+        .unwrap_or_else(|_| format!("{value:?}"))
 }
 
 #[allow(dead_code)]

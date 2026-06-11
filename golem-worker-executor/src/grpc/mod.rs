@@ -52,7 +52,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -65,6 +65,7 @@ use golem_common::model::{
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PendingUpdateKind, ScanCursor, ScheduledAction, ShardId, Timestamp,
 };
+use golem_common::schema::SchemaValue;
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
@@ -1866,7 +1867,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "method_name is required for non-lookup invocations",
                 ))?;
 
-        let method_parameters: UntypedDataValue = request
+        let method_parameters: SchemaValue = request
             .method_parameters
             .clone()
             .ok_or(WorkerExecutorError::invalid_request(

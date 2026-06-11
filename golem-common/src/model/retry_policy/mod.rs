@@ -30,9 +30,20 @@ use std::time::Duration;
 
 const RETRY_WIT_OWNER: &str = "golem:api@1.5.0/retry";
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 #[wit(name = "predicate-value", owner = "golem:api@1.5.0/retry")]
+#[schema(named = "predicate-value")]
 /// A typed value used in retry predicate comparisons.
 pub enum PredicateValue {
     /// A UTF-8 string value.
@@ -65,7 +76,14 @@ impl PredicateValue {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 /// A boolean predicate evaluated against [`RetryProperties`] to decide whether a
 /// semantic retry policy applies to a given error context.
@@ -125,7 +143,14 @@ pub enum Predicate {
     False,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 /// A composable semantic retry policy that determines delay schedules and
 /// termination conditions for in-function and background-task retries.
@@ -888,10 +913,22 @@ impl<'de> Deserialize<'de> for RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[wit(name = "named-retry-policy", owner = "golem:api@1.5.0/retry")]
+#[schema(named = "named-retry-policy")]
 /// A retry policy paired with a name, priority, and a predicate that determines
 /// when it applies. The highest-priority matching policy is selected at retry time.
 pub struct NamedRetryPolicy {

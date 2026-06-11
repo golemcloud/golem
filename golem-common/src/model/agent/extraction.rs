@@ -136,12 +136,10 @@ pub async fn extract_agent_types_with_streams(
         Ok(results) => {
             let mut agent_types: Vec<AgentType> = Vec::with_capacity(results.len());
             for wire_type in results {
-                let schema = decode_agent_type(&wire_type).map_err(|e| {
-                    anyhow!("Failed to decode discovered agent type: {e:?}")
-                })?;
-                let agent_type = schema_agent_type_to_legacy(&schema).map_err(|e| {
-                    anyhow!("Failed to convert discovered agent type: {e:?}")
-                })?;
+                let schema = decode_agent_type(&wire_type)
+                    .map_err(|e| anyhow!("Failed to decode discovered agent type: {e:?}"))?;
+                let agent_type = schema_agent_type_to_legacy(&schema)
+                    .map_err(|e| anyhow!("Failed to convert discovered agent type: {e:?}"))?;
                 agent_type.validate().map_err(|e| {
                     anyhow!("Invalid agent type returned by discover-agent-types: {e}")
                 })?;

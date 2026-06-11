@@ -29,6 +29,8 @@ pub mod derive;
 pub mod graph;
 pub mod metadata;
 #[cfg(feature = "full")]
+pub mod poem;
+#[cfg(feature = "full")]
 pub mod protobuf;
 pub mod render;
 pub mod schema_type;
@@ -52,8 +54,8 @@ pub use agent::{
     RegisteredAgentTypeSchema,
 };
 pub use conversion::{
-    DecodeError, FromSchema, FromSchemaError, IntoSchema, MergeError, SchemaBuilder,
-    merge_agent_graphs, try_into_schema_graph,
+    DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
+    SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
 };
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};

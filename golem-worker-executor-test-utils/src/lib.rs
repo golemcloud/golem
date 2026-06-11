@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -51,6 +51,8 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
 };
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::schema::SchemaValue;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -70,7 +72,6 @@ use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_wasm::Uri;
-use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -3224,13 +3225,13 @@ impl Rpc for FailingRpc {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-    ) -> Result<UntypedDataValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -3261,7 +3262,7 @@ impl Rpc for FailingRpc {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,

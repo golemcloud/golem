@@ -15,6 +15,7 @@
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
 /// A self-contained schema graph in the recursive in-memory form.
@@ -41,9 +42,10 @@ use serde::{Deserialize, Serialize};
 /// field is a sentinel (see [`SchemaGraph::empty`]). Such carriers must
 /// not be passed to root-oriented walkers/renderers as if `root` were the
 /// payload root.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[schema(named = "schema-graph")]
 pub struct SchemaGraph {
     /// Named type definitions in this graph. The defining set is exactly the
     /// types reachable from `root` (directly or transitively) that need to be
@@ -94,9 +96,10 @@ impl SchemaGraph {
 /// The def itself does not carry metadata; metadata lives on the
 /// [`SchemaType`] body so there is one source of truth for docs / aliases /
 /// examples / deprecation / role per type.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[schema(named = "schema-type-def")]
 pub struct SchemaTypeDef {
     /// Stable identifier; unique within the enclosing graph.
     pub id: TypeId,
@@ -113,9 +116,10 @@ pub struct SchemaTypeDef {
 ///
 /// The pair is the only public form for typed values; there is no bare-value
 /// overload of any walker / renderer / encoder API.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[schema(named = "typed-schema-value")]
 pub struct TypedSchemaValue {
     graph: SchemaGraph,
     value: SchemaValue,

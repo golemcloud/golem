@@ -18,8 +18,12 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, LegacyParsedAgentId};
-use golem_common::model::agent::{DataValue, ElementValues};
+use golem_common::model::agent::{AgentMode, AgentTypeName, DataSchema, LegacyParsedAgentId};
+use golem_common::schema::adapters::{
+    data_schema_to_input_schema, data_schema_to_output_schema,
+    legacy_data_value_to_typed_schema_value, value_and_type_to_typed_schema_value,
+};
+use golem_common::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
@@ -45,15 +49,14 @@ use golem_common::model::oplog::{
     MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    UpdateDescription,
+    PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::IntoValueAndType;
 use std::sync::Arc;
 
 pub struct PublicOplogChunk {
@@ -280,7 +283,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 let local_agent_config = local_agent_config
                     .into_iter()
-                    .map(|lac| lac.enrich_with_type(&metadata.metadata, agent_type_name))
+                    .map(|lac| {
+                        let typed =
+                            lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
+                        let value = value_and_type_to_typed_schema_value(&typed.value)
+                            .map_err(|e| e.to_string())?;
+                        Ok::<_, String>(PublicTypedAgentConfigEntry {
+                            path: typed.path,
+                            value,
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(PublicOplogEntry::Create(CreateParams {
@@ -330,8 +342,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::HostCall(HostCallParams {
                     timestamp,
                     function_name: function_name.to_string(),
-                    request: host_request.into_value_and_type(),
-                    response: host_response.into_value_and_type(),
+                    request: host_request
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                    response: host_response
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
                     durable_function_type: durable_function_type.into(),
                 }))
             }
@@ -375,6 +391,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::AgentInvocationFinished {
                 timestamp,
                 result,
+                method_name,
                 consumed_fuel,
                 component_revision: entry_component_revision,
             } => {
@@ -386,6 +403,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     components.clone(),
                     owned_agent_id,
                     component_revision,
+                    method_name.clone(),
                     invocation_result,
                 )
                 .await?;
@@ -394,6 +412,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     AgentInvocationFinishedParams {
                         timestamp,
                         result: public_result,
+                        method_name,
                         consumed_fuel,
                         component_revision: entry_component_revision,
                     },
@@ -912,7 +931,9 @@ async fn enrich_golem_rpc_invoke(
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
+    payload.remote_agent_parameters = agent_id.and_then(|agent_id| {
+        legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok()
+    });
     payload
 }
 
@@ -924,7 +945,9 @@ async fn enrich_golem_rpc_scheduled_invocation(
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
+    payload.remote_agent_parameters = agent_id.and_then(|agent_id| {
+        legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok()
+    });
     payload
 }
 
@@ -935,6 +958,57 @@ fn resolve_agent_type_from_worker_name(
     LegacyParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
         .and_then(|type_name| metadata.find_agent_type_by_name(&type_name))
+}
+
+/// A schema-native empty value (`()`), used as the best-effort fallback when
+/// the driving schema cannot be resolved from the component metadata. Mirrors
+/// the previous `DataValue::Tuple(empty)` fallback in the legacy renderer.
+fn empty_typed_schema_value() -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+        SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+    )
+}
+
+/// Pair a schema-native invocation **input** value (a parameter record, see
+/// [`crate::worker::invocation::lower_invocation`]) with the record schema
+/// derived from the agent's declared input [`DataSchema`].
+fn input_value_to_typed_schema_value(
+    input_schema: &DataSchema,
+    value: SchemaValue,
+) -> Result<TypedSchemaValue, String> {
+    let input = data_schema_to_input_schema(input_schema).map_err(|e| e.to_string())?;
+    let fields = input
+        .fields()
+        .iter()
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    Ok(TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(fields)),
+        value,
+    ))
+}
+
+/// Pair a schema-native invocation **output** value with the schema derived
+/// from the agent method's declared output [`DataSchema`]. A `unit` output is
+/// represented by the canonical empty tuple (see
+/// [`crate::worker::invocation::decode_invoke_output`]).
+fn output_value_to_typed_schema_value(
+    output_schema: &DataSchema,
+    value: SchemaValue,
+) -> Result<TypedSchemaValue, String> {
+    let output = data_schema_to_output_schema(output_schema).map_err(|e| e.to_string())?;
+    let root = match output.schema() {
+        Some(ty) => ty.clone(),
+        None => SchemaType::tuple(Vec::new()),
+    };
+    Ok(TypedSchemaValue::new(SchemaGraph::anonymous(root), value))
 }
 
 async fn agent_invocation_to_public(
@@ -966,9 +1040,9 @@ async fn agent_invocation_to_public(
             let constructor_schema = agent_type.map(|at| at.constructor.input_schema.clone());
 
             let constructor_parameters = match constructor_schema {
-                Some(schema) => DataValue::try_from_untyped(input, schema)
-                    .unwrap_or_else(|_| DataValue::Tuple(ElementValues { elements: vec![] })),
-                None => DataValue::Tuple(ElementValues { elements: vec![] }),
+                Some(schema) => input_value_to_typed_schema_value(&schema, input)
+                    .unwrap_or_else(|_| empty_typed_schema_value()),
+                None => empty_typed_schema_value(),
             };
 
             let span_data = invocation_context.to_oplog_data();
@@ -1008,9 +1082,9 @@ async fn agent_invocation_to_public(
                 .map(|m| m.input_schema.clone());
 
             let function_input = match method_schema {
-                Some(schema) => DataValue::try_from_untyped(input, schema)
-                    .unwrap_or_else(|_| DataValue::Tuple(ElementValues { elements: vec![] })),
-                None => DataValue::Tuple(ElementValues { elements: vec![] }),
+                Some(schema) => input_value_to_typed_schema_value(&schema, input)
+                    .unwrap_or_else(|_| empty_typed_schema_value()),
+                None => empty_typed_schema_value(),
             };
 
             let span_data = invocation_context.to_oplog_data();
@@ -1047,6 +1121,7 @@ async fn agent_invocation_result_to_public(
     components: Arc<dyn ComponentService>,
     owned_agent_id: &OwnedAgentId,
     component_revision: ComponentRevision,
+    method_name: Option<String>,
     result: AgentInvocationResult,
 ) -> Result<PublicAgentInvocationResult, String> {
     match result {
@@ -1054,23 +1129,44 @@ async fn agent_invocation_result_to_public(
             let _ = components;
             let _ = owned_agent_id;
             let _ = component_revision;
-            let output_data = DataValue::Tuple(ElementValues { elements: vec![] });
 
             Ok(PublicAgentInvocationResult::AgentInitialization(
                 AgentInvocationOutputParameters {
-                    output: output_data,
+                    output: empty_typed_schema_value(),
                 },
             ))
         }
         AgentInvocationResult::AgentMethod { output } => {
-            // We don't have the method name in the result, so we can't look up the specific schema.
-            let output_data = DataValue::Tuple(ElementValues { elements: vec![] });
-            let _ = output;
+            // The persisted `method_name` lets us resolve the method's declared
+            // output schema and pair it with the schema-native output value.
+            let output_schema = match &method_name {
+                Some(method_name) => {
+                    let metadata = components
+                        .get_metadata(
+                            owned_agent_id.agent_id.component_id,
+                            Some(component_revision),
+                        )
+                        .await
+                        .map_err(|err| err.to_string())?;
+
+                    resolve_agent_type_from_worker_name(
+                        &metadata.metadata,
+                        &owned_agent_id.agent_id.agent_id,
+                    )
+                    .and_then(|at| at.methods.iter().find(|m| m.name == *method_name).cloned())
+                    .map(|m| m.output_schema.clone())
+                }
+                None => None,
+            };
+
+            let output = match output_schema {
+                Some(schema) => output_value_to_typed_schema_value(&schema, output)
+                    .unwrap_or_else(|_| empty_typed_schema_value()),
+                None => empty_typed_schema_value(),
+            };
 
             Ok(PublicAgentInvocationResult::AgentMethod(
-                AgentInvocationOutputParameters {
-                    output: output_data,
-                },
+                AgentInvocationOutputParameters { output },
             ))
         }
         AgentInvocationResult::ManualUpdate => {

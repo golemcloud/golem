@@ -19,8 +19,10 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
 use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::schema::SchemaValue;
 use golem_common::schema::adapters::{
     schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
+    schema_output_value_to_legacy_data_value,
 };
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
@@ -90,10 +92,10 @@ pub async fn invoke_resource(
         ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
     })?;
 
-    let method_params_data_value = UntypedDataValue::Tuple(vec![]);
+    let method_parameters = SchemaValue::Record { fields: vec![] };
 
-    let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
-        method_params_data_value.into();
+    let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        method_parameters.into();
 
     let principal = Principal::anonymous();
     let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
@@ -142,19 +144,19 @@ pub async fn invoke_resource(
 }
 
 fn map_agent_response_to_resource_contents(
-    invoke_result: Option<UntypedDataValue>,
+    invoke_result: Option<SchemaValue>,
     expected_type: &DataSchema,
     uri: &str,
 ) -> Result<Vec<ResourceContents>, ErrorData> {
     match invoke_result {
-        Some(untyped_data_value) => {
-            let typed_value = DataValue::try_from_untyped(
-                untyped_data_value,
-                expected_type.clone(),
-            )
-            .map_err(|error| {
-                ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
-            })?;
+        Some(schema_value) => {
+            let typed_value = schema_output_value_to_legacy_data_value(schema_value, expected_type)
+                .map_err(|error| {
+                    ErrorData::internal_error(
+                        format!("Agent response type mismatch: {error}"),
+                        None,
+                    )
+                })?;
 
             data_value_to_resource_contents(typed_value, uri)
         }
@@ -257,14 +259,14 @@ mod tests {
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{
         AgentMode, AgentTypeName, BinaryDescriptor, ComponentModelElementSchema, DataSchema,
-        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
-        UntypedNamedElementValue, Url as AgentUrl,
+        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, Url as AgentUrl,
     };
     use golem_common::model::AgentInvocationOutput;
-    use golem_common::schema::InputSchema;
     use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
     use golem_common::schema::graph::SchemaGraph;
-    use golem_wasm::Value;
+    use golem_common::schema::{
+        BinaryValuePayload, InputSchema, TextValuePayload, VariantValuePayload,
+    };
     use golem_wasm::analysis::analysed_type::str;
     use rmcp::model::{Annotated, RawResource};
     use serde_json::json;
@@ -285,9 +287,7 @@ mod tests {
 
     #[test]
     fn component_model_to_text_resource_json() {
-        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-            Value::String("sunny".to_string()),
-        )]);
+        let response = SchemaValue::String("sunny".to_string());
         let contents =
             map_agent_response_to_resource_contents(Some(response), &str_output_schema(), TEST_URI)
                 .unwrap();
@@ -316,14 +316,10 @@ mod tests {
                 schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
             }],
         });
-        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
-            TextReferenceValue {
-                value: TextReference::Inline(TextSource {
-                    data: "rainy day".to_string(),
-                    text_type: None,
-                }),
-            },
-        )]);
+        let response = SchemaValue::Text(TextValuePayload {
+            text: "rainy day".to_string(),
+            language: None,
+        });
         let contents =
             map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
         assert_eq!(contents.len(), 1);
@@ -343,16 +339,10 @@ mod tests {
                 schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
             }],
         });
-        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredBinary(
-            BinaryReferenceValue {
-                value: BinaryReference::Inline(BinarySource {
-                    data: vec![1, 2, 3],
-                    binary_type: BinaryType {
-                        mime_type: "image/png".to_string(),
-                    },
-                }),
-            },
-        )]);
+        let response = SchemaValue::Binary(BinaryValuePayload {
+            bytes: vec![1, 2, 3],
+            mime_type: Some("image/png".to_string()),
+        });
         let contents =
             map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
         assert_eq!(contents.len(), 1);
@@ -390,28 +380,24 @@ mod tests {
                 },
             ],
         });
-        let response = UntypedDataValue::Multimodal(vec![
-            UntypedNamedElementValue {
-                name: "text".to_string(),
-                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "snow report".to_string(),
-                        text_type: None,
-                    }),
+        let response = SchemaValue::List {
+            elements: vec![
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 0,
+                    payload: Some(Box::new(SchemaValue::Text(TextValuePayload {
+                        text: "snow report".to_string(),
+                        language: None,
+                    }))),
                 }),
-            },
-            UntypedNamedElementValue {
-                name: "img".to_string(),
-                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: vec![1, 2, 3],
-                        binary_type: BinaryType {
-                            mime_type: "image/png".to_string(),
-                        },
-                    }),
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 1,
+                    payload: Some(Box::new(SchemaValue::Binary(BinaryValuePayload {
+                        bytes: vec![1, 2, 3],
+                        mime_type: Some("image/png".to_string()),
+                    }))),
                 }),
-            },
-        ]);
+            ],
+        };
         let contents =
             map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
         assert_eq!(contents.len(), 2);

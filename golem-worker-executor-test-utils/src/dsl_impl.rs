@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
     revert_worker_response, search_oplog_response, update_worker_response,
 };
-use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId, UntypedDataValue};
+use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
@@ -46,6 +46,10 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::adapters::{
+    legacy_data_value_to_typed_schema_value, schema_output_value_to_legacy_data_value,
+};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
@@ -410,13 +414,15 @@ impl TestDsl for TestWorkerExecutor {
         let agent_id = AgentId::from_agent_id(component.id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
 
+        let proto_method_parameters = data_value_to_proto_schema_value(params)?;
+
         let result = self
             .client
             .clone()
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(agent_id.clone().into()),
                 method_name: Some(method_name.to_string()),
-                method_parameters: Some(UntypedDataValue::from(params).into()),
+                method_parameters: Some(proto_method_parameters),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
                 schedule_at: None,
                 idempotency_key: Some(idempotency_key.clone().into()),
@@ -458,13 +464,15 @@ impl TestDsl for TestWorkerExecutor {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
+        let proto_method_parameters = data_value_to_proto_schema_value(params)?;
+
         let result = self
             .client
             .clone()
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(worker_agent_id.clone().into()),
                 method_name: Some(method_name.to_string()),
-                method_parameters: Some(UntypedDataValue::from(params).into()),
+                method_parameters: Some(proto_method_parameters),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: Some(key.into()),
@@ -485,8 +493,8 @@ impl TestDsl for TestWorkerExecutor {
             Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => {
                 match success.result {
                     Some(proto_val) => {
-                        let untyped_data_value = UntypedDataValue::try_from(proto_val)
-                            .map_err(|err| anyhow!("UntypedDataValue conversion error: {err}"))?;
+                        let schema_value = SchemaValue::try_from(proto_val)
+                            .map_err(|err| anyhow!("SchemaValue conversion error: {err}"))?;
 
                         let component_revision = success
                             .component_revision
@@ -517,9 +525,9 @@ impl TestDsl for TestWorkerExecutor {
                                 anyhow!("Agent method not found: {}", method_name)
                             })?;
 
-                        DataValue::try_from_untyped(
-                            untyped_data_value,
-                            agent_method.output_schema.clone(),
+                        schema_output_value_to_legacy_data_value(
+                            schema_value,
+                            &agent_method.output_schema,
                         )
                         .map_err(|err| anyhow!("DataValue conversion error: {err}"))
                     }
@@ -1239,4 +1247,17 @@ fn parse_provision_config_from_agent_type(
             })
         })
         .collect()
+}
+
+/// Convert a typed legacy [`DataValue`] (carrying per-element component-model
+/// type info) into the schema-native protobuf `SchemaValue` used by the
+/// executor invoke request. The schema is recovered from the embedded
+/// `ValueAndType`s, so no external `DataSchema` is needed.
+fn data_value_to_proto_schema_value(
+    value: DataValue,
+) -> anyhow::Result<golem_api_grpc::proto::golem::schema::SchemaValue> {
+    let (_graph, schema_value) = legacy_data_value_to_typed_schema_value(&value)
+        .map_err(|err| anyhow!("SchemaValue conversion error: {err}"))?
+        .into_parts();
+    Ok(schema_value.into())
 }

@@ -98,7 +98,7 @@ use wasmtime::{Store, UpdateDeadline};
 #[derive(Clone)]
 struct ReadOnlyContext {
     method_name: String,
-    input: golem_common::model::agent::UntypedDataValue,
+    input: golem_common::schema::SchemaValue,
     principal: Principal,
     cfg: golem_common::base_model::agent::ReadOnlyConfig,
     component_revision: ComponentRevision,
@@ -518,10 +518,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && last_oplog_idx <= OplogIndex::from_u64(2)
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
+            let init_input =
+                golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(
+                    &agent_id.parameters,
+                )
+                .map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to convert agent constructor parameters to schema value: {e}"
+                    ))
+                })?
+                .into_parts()
+                .1;
             worker
                 .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                     idempotency_key: init_idempotency_key,
-                    input: agent_id.parameters.clone().into(),
+                    input: init_input,
                     invocation_context: invocation_context_stack.clone(),
                     principal,
                 })

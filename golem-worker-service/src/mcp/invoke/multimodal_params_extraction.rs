@@ -13,32 +13,57 @@
 // limitations under the License.
 
 use golem_common::base_model::agent::{
-    ComponentModelElementSchema, ElementSchema, UntypedElementValue,
+    BinaryReference, ComponentModelElementSchema, ElementSchema, TextReference,
 };
+use golem_common::schema::adapters::value_to_schema_value;
+use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload};
 
 pub fn extract_multimodal_element_value(
     name: &str,
     value_json: &serde_json::Value,
     elem_schema: &ElementSchema,
     index: usize,
-) -> Result<UntypedElementValue, String> {
+) -> Result<SchemaValue, String> {
     match elem_schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
             let value = crate::mcp::invoke::parse_component_model_value(value_json, element_type)
                 .map_err(|e| {
                 format!("parts[{}] '{}': failed to parse value: {}", index, name, e)
             })?;
-            Ok(UntypedElementValue::ComponentModel(value))
+            value_to_schema_value(&value, element_type).map_err(|e| {
+                format!(
+                    "parts[{}] '{}': failed to convert value: {}",
+                    index, name, e
+                )
+            })
         }
         ElementSchema::UnstructuredText(descriptor) => {
             let value = crate::mcp::invoke::parse_unstructured_text(value_json, descriptor)
                 .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))?;
-            Ok(UntypedElementValue::UnstructuredText(value))
+            match value.value {
+                TextReference::Inline(source) => Ok(SchemaValue::Text(TextValuePayload {
+                    text: source.data,
+                    language: source.text_type.map(|text_type| text_type.language_code),
+                })),
+                TextReference::Url(_) => Err(format!(
+                    "parts[{}] '{}': URL text references cannot be converted to SchemaValue",
+                    index, name
+                )),
+            }
         }
         ElementSchema::UnstructuredBinary(descriptor) => {
             let value = crate::mcp::invoke::parse_unstructured_binary(value_json, descriptor)
                 .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))?;
-            Ok(UntypedElementValue::UnstructuredBinary(value))
+            match value.value {
+                BinaryReference::Inline(source) => Ok(SchemaValue::Binary(BinaryValuePayload {
+                    bytes: source.data,
+                    mime_type: Some(source.binary_type.mime_type),
+                })),
+                BinaryReference::Url(_) => Err(format!(
+                    "parts[{}] '{}': URL binary references cannot be converted to SchemaValue",
+                    index, name
+                )),
+            }
         }
     }
 }
@@ -46,9 +71,7 @@ pub fn extract_multimodal_element_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::base_model::agent::{
-        BinaryDescriptor, BinaryReference, BinaryType, TextDescriptor, TextReference, TextType,
-    };
+    use golem_common::base_model::agent::{BinaryDescriptor, BinaryType, TextDescriptor, TextType};
     use golem_wasm::analysis::analysed_type::str;
     use serde_json::json;
     use test_r::test;
@@ -60,7 +83,7 @@ mod tests {
         });
         let value = json!("hello");
         let result = extract_multimodal_element_value("msg", &value, &schema, 0).unwrap();
-        assert!(matches!(result, UntypedElementValue::ComponentModel(_)));
+        assert!(matches!(result, SchemaValue::String(s) if s == "hello"));
     }
 
     #[test]
@@ -69,13 +92,10 @@ mod tests {
         let value = json!({"text": "some text"});
         let result = extract_multimodal_element_value("note", &value, &schema, 0).unwrap();
         match result {
-            UntypedElementValue::UnstructuredText(t) => match t.value {
-                TextReference::Inline(src) => {
-                    assert_eq!(src.data, "some text");
-                    assert!(src.text_type.is_none());
-                }
-                _ => panic!("expected inline"),
-            },
+            SchemaValue::Text(t) => {
+                assert_eq!(t.text, "some text");
+                assert!(t.language.is_none());
+            }
             _ => panic!("expected text"),
         }
     }
@@ -86,13 +106,10 @@ mod tests {
         let value = json!({"text": "bonjour", "language": "fr"});
         let result = extract_multimodal_element_value("note", &value, &schema, 0).unwrap();
         match result {
-            UntypedElementValue::UnstructuredText(t) => match t.value {
-                TextReference::Inline(src) => {
-                    assert_eq!(src.data, "bonjour");
-                    assert_eq!(src.text_type.unwrap().language_code, "fr");
-                }
-                _ => panic!("expected inline"),
-            },
+            SchemaValue::Text(t) => {
+                assert_eq!(t.text, "bonjour");
+                assert_eq!(t.language.unwrap(), "fr");
+            }
             _ => panic!("expected text"),
         }
     }
@@ -118,13 +135,10 @@ mod tests {
         let value = json!({"bytes": "AQID", "mime_type": "image/png"});
         let result = extract_multimodal_element_value("img", &value, &schema, 0).unwrap();
         match result {
-            UntypedElementValue::UnstructuredBinary(b) => match b.value {
-                BinaryReference::Inline(src) => {
-                    assert_eq!(src.data, vec![1, 2, 3]);
-                    assert_eq!(src.binary_type.mime_type, "image/png");
-                }
-                _ => panic!("expected inline"),
-            },
+            SchemaValue::Binary(b) => {
+                assert_eq!(b.bytes, vec![1, 2, 3]);
+                assert_eq!(b.mime_type.as_deref(), Some("image/png"));
+            }
             _ => panic!("expected binary"),
         }
     }

@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.schema;
 
 import "golem/common/empty.proto";
+import "golem/common/uuid.proto";
 
 // Recursive protobuf mirror of the in-memory schema model from
 // golem-common/src/schema. The WIT carrier (golem:core@2.0.0) is flat with
@@ -251,4 +252,154 @@ message QuotaTokenSpec {
 // Future/Stream stub bodies. Absent `element` means the inner type is unknown.
 message WasiStubType {
   SchemaType element = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Value side: recursive protobuf mirror of golem-common SchemaValue +
+// TypedSchemaValue. The value tree is structurally driven by a paired
+// SchemaGraph (see TypedSchemaValue): record fields are positional,
+// variant/enum carry case indices, union carries the resolved tag. The value
+// side does not redundantly carry field/case names.
+// ---------------------------------------------------------------------------
+
+// One node in a recursive schema-value tree.
+message SchemaValue {
+  oneof value {
+    // Primitives
+    bool bool_value = 1;
+    int32 s8_value = 2;
+    int32 s16_value = 3;
+    int32 s32_value = 4;
+    int64 s64_value = 5;
+    uint32 u8_value = 6;
+    uint32 u16_value = 7;
+    uint32 u32_value = 8;
+    uint64 u64_value = 9;
+    float f32_value = 10;
+    double f64_value = 11;
+    uint32 char_value = 12;
+    string string_value = 13;
+
+    // Structural composites
+    RecordValue record_value = 20;
+    VariantValue variant_value = 21;
+    uint32 enum_value = 22;
+    FlagsValue flags_value = 23;
+    TupleValue tuple_value = 24;
+    ListValue list_value = 25;
+    FixedListValue fixed_list_value = 26;
+    MapValue map_value = 27;
+    OptionValue option_value = 28;
+    ResultValue result_value = 29;
+
+    // Rich semantic
+    TextValue text_value = 40;
+    BinaryValue binary_value = 41;
+    string path_value = 42;
+    string url_value = 43;
+    DatetimeValue datetime_value = 44;
+    DurationValue duration_value = 45;
+    QuantityValue quantity_value = 46;
+
+    // Discriminated union
+    UnionValue union_value = 60;
+
+    // Capability nodes
+    SecretValue secret_value = 70;
+    QuotaTokenValue quota_token_value = 71;
+  }
+}
+
+message RecordValue {
+  repeated SchemaValue fields = 1;
+}
+
+message VariantValue {
+  uint32 case = 1;
+  // Absent payload (message not set) means a payload-less case.
+  SchemaValue payload = 2;
+}
+
+message FlagsValue {
+  repeated bool bits = 1;
+}
+
+message TupleValue {
+  repeated SchemaValue elements = 1;
+}
+
+message ListValue {
+  repeated SchemaValue elements = 1;
+}
+
+message FixedListValue {
+  repeated SchemaValue elements = 1;
+}
+
+message MapEntry {
+  SchemaValue key = 1;
+  SchemaValue value = 2;
+}
+
+message MapValue {
+  repeated MapEntry entries = 1;
+}
+
+message OptionValue {
+  // Absent inner (message not set) means `none`.
+  SchemaValue inner = 1;
+}
+
+// Exactly one of the four arms is set. The `*_unit` arms carry no payload (the
+// ok/err type is unit); the value arms carry the payload.
+message ResultValue {
+  oneof result {
+    SchemaValue ok = 1;
+    SchemaValue err = 2;
+    golem.common.Empty ok_unit = 3;
+    golem.common.Empty err_unit = 4;
+  }
+}
+
+message TextValue {
+  string text = 1;
+  optional string language = 2;
+}
+
+message BinaryValue {
+  bytes bytes = 1;
+  optional string mime_type = 2;
+}
+
+message DatetimeValue {
+  int64 seconds = 1;
+  uint32 nanoseconds = 2;
+}
+
+message DurationValue {
+  int64 nanoseconds = 1;
+}
+
+message UnionValue {
+  string tag = 1;
+  SchemaValue body = 2;
+}
+
+message SecretValue {
+  string secret_ref = 1;
+}
+
+message QuotaTokenValue {
+  golem.common.UUID environment_id = 1;
+  string resource_name = 2;
+  uint64 expected_use = 3;
+  int64 last_credit = 4;
+  DatetimeValue last_credit_at = 5;
+}
+
+// A typed value: a self-contained SchemaGraph paired with a value tree built
+// against it. Mirrors golem-common TypedSchemaValue.
+message TypedSchemaValue {
+  SchemaGraph graph = 1;
+  SchemaValue value = 2;
 }

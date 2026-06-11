@@ -46,10 +46,12 @@
 //! [`SchemaType`] driven by the element's embedded `AnalysedType`.
 
 use crate::base_model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentType, DataValue, ElementValue,
-    LegacyParsedAgentId,
+    AgentConfigDeclaration, AgentConstructor, AgentDependency, AgentMethod, AgentType, DataValue,
+    ElementValue, LegacyParsedAgentId,
 };
-use crate::schema::adapters::analysed_type::SchemaGraphBuilder;
+use crate::schema::adapters::analysed_type::{
+    SchemaGraphBuilder, analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
+};
 use crate::schema::adapters::data_schema::{
     data_schema_to_input_schema, data_schema_to_output_schema, input_schema_to_data_schema,
     output_schema_to_data_schema,
@@ -57,8 +59,8 @@ use crate::schema::adapters::data_schema::{
 use crate::schema::adapters::error::SchemaAdapterError;
 use crate::schema::adapters::value::value_to_schema_value;
 use crate::schema::agent::{
-    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-    ParsedAgentId,
+    AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
+    AgentTypeSchema, ParsedAgentId,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::{NamedFieldType, SchemaType};
@@ -165,6 +167,34 @@ pub fn schema_agent_dependency_to_legacy(
     })
 }
 
+/// Forward: legacy [`AgentConfigDeclaration`] → [`AgentConfigDeclarationSchema`].
+///
+/// The `value_type` is lowered from the legacy `AnalysedType` to an inline
+/// [`SchemaType`].
+fn agent_config_declaration_to_schema(
+    c: &AgentConfigDeclaration,
+) -> Result<AgentConfigDeclarationSchema, SchemaAdapterError> {
+    Ok(AgentConfigDeclarationSchema {
+        source: c.source,
+        path: c.path.clone(),
+        value_type: analysed_type_to_schema_type_inline(&c.value_type)?,
+    })
+}
+
+/// Reverse: [`AgentConfigDeclarationSchema`] → legacy [`AgentConfigDeclaration`].
+///
+/// The schema `value_type` is inline (no refs), so it lifts back to an
+/// `AnalysedType` against an empty graph.
+fn schema_agent_config_declaration_to_legacy(
+    c: &AgentConfigDeclarationSchema,
+) -> Result<AgentConfigDeclaration, SchemaAdapterError> {
+    Ok(AgentConfigDeclaration {
+        source: c.source,
+        path: c.path.clone(),
+        value_type: schema_type_to_analysed_type(&SchemaGraph::empty(), &c.value_type)?,
+    })
+}
+
 /// Forward: legacy [`AgentType`] → [`AgentTypeSchema`].
 ///
 /// Produces an empty `SchemaGraph` with all bodies fully inlined. The
@@ -189,7 +219,11 @@ pub fn agent_type_to_schema(ty: &AgentType) -> Result<AgentTypeSchema, SchemaAda
         mode: ty.mode,
         http_mount: ty.http_mount.clone(),
         snapshotting: ty.snapshotting.clone(),
-        config: ty.config.clone(),
+        config: ty
+            .config
+            .iter()
+            .map(agent_config_declaration_to_schema)
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -217,7 +251,11 @@ pub fn schema_agent_type_to_legacy(ty: &AgentTypeSchema) -> Result<AgentType, Sc
         mode: ty.mode,
         http_mount: ty.http_mount.clone(),
         snapshotting: ty.snapshotting.clone(),
-        config: ty.config.clone(),
+        config: ty
+            .config
+            .iter()
+            .map(schema_agent_config_declaration_to_legacy)
+            .collect::<Result<_, _>>()?,
     })
 }
 

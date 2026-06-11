@@ -21,8 +21,10 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
 use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::schema::SchemaValue;
 use golem_common::schema::adapters::{
     schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
+    schema_output_value_to_legacy_data_value,
 };
 use rmcp::ErrorData;
 use rmcp::model::{
@@ -89,14 +91,14 @@ pub async fn invoke_tool(
         ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
     })?;
 
-    let method_params_data_value =
-        get_agent_method_input(&method_args, &legacy_method.input_schema).map_err(|e| {
+    let method_parameters = get_agent_method_input(&method_args, &legacy_method.input_schema)
+        .map_err(|e| {
             tracing::error!("Failed to extract method parameters: {}", e);
             ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
         })?;
 
-    let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
-        method_params_data_value.into();
+    let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        method_parameters.into();
 
     let principal = Principal::anonymous();
     let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
@@ -136,19 +138,19 @@ pub async fn invoke_tool(
     };
 
     match agent_result {
-        Some(untyped_data_value) => {
-            map_agent_response_to_tool_result(untyped_data_value, &legacy_method.output_schema)
+        Some(schema_value) => {
+            map_agent_response_to_tool_result(schema_value, &legacy_method.output_schema)
         }
         None => Ok(CallToolResult::success(vec![])),
     }
 }
 
 pub fn map_agent_response_to_tool_result(
-    agent_response: UntypedDataValue,
+    agent_response: SchemaValue,
     expected_type: &DataSchema,
 ) -> Result<CallToolResult, ErrorData> {
-    let typed_value =
-        DataValue::try_from_untyped(agent_response, expected_type.clone()).map_err(|error| {
+    let typed_value = schema_output_value_to_legacy_data_value(agent_response, expected_type)
+        .map_err(|error| {
             ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
         })?;
 
@@ -345,17 +347,17 @@ mod tests {
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{
         AgentMode, AgentTypeName, BinaryDescriptor, ComponentModelElementSchema, DataSchema,
-        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, TextType,
-        UntypedNamedElementValue, Url,
+        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, Url,
     };
     use golem_common::model::AgentInvocationOutput;
-    use golem_common::schema::InputSchema;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
     };
     use golem_common::schema::graph::SchemaGraph;
     use golem_common::schema::schema_type::SchemaType;
-    use golem_wasm::Value;
+    use golem_common::schema::{
+        BinaryValuePayload, InputSchema, TextValuePayload, VariantValuePayload,
+    };
     use golem_wasm::analysis::{AnalysedType, TypeStr};
     use rmcp::model::Tool;
     use serde_json::json;
@@ -376,9 +378,7 @@ mod tests {
 
     #[test]
     fn tuple_single_component_model_to_structured_json() {
-        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-            Value::String("hello".to_string()),
-        )]);
+        let response = SchemaValue::String("hello".to_string());
         let result = map_agent_response_to_tool_result(response, &str_output_schema()).unwrap();
         assert_eq!(result.structured_content, Some(json!({"result": "hello"})));
         assert_eq!(result.is_error, Some(false));
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn tuple_empty_returns_success() {
         let schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
-        let response = UntypedDataValue::Tuple(vec![]);
+        let response = SchemaValue::Tuple { elements: vec![] };
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
         assert!(result.content.is_empty());
         assert_eq!(result.is_error, Some(false));
@@ -401,16 +401,10 @@ mod tests {
                 schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
             }],
         });
-        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
-            TextReferenceValue {
-                value: TextReference::Inline(TextSource {
-                    data: "weather is sunny".to_string(),
-                    text_type: Some(TextType {
-                        language_code: "en".to_string(),
-                    }),
-                }),
-            },
-        )]);
+        let response = SchemaValue::Text(TextValuePayload {
+            text: "weather is sunny".to_string(),
+            language: Some("en".to_string()),
+        });
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
 
         let raw_content = &result.content[0].raw;
@@ -427,16 +421,10 @@ mod tests {
             }],
         });
 
-        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredBinary(
-            BinaryReferenceValue {
-                value: BinaryReference::Inline(BinarySource {
-                    data: vec![1, 2, 3],
-                    binary_type: BinaryType {
-                        mime_type: "image/png".to_string(),
-                    },
-                }),
-            },
-        )]);
+        let response = SchemaValue::Binary(BinaryValuePayload {
+            bytes: vec![1, 2, 3],
+            mime_type: Some("image/png".to_string()),
+        });
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
 
         let raw_content = &result.content[0].raw;
@@ -463,28 +451,24 @@ mod tests {
                 },
             ],
         });
-        let response = UntypedDataValue::Multimodal(vec![
-            UntypedNamedElementValue {
-                name: "desc".to_string(),
-                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "a photo".to_string(),
-                        text_type: None,
-                    }),
+        let response = SchemaValue::List {
+            elements: vec![
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 0,
+                    payload: Some(Box::new(SchemaValue::Text(TextValuePayload {
+                        text: "a photo".to_string(),
+                        language: None,
+                    }))),
                 }),
-            },
-            UntypedNamedElementValue {
-                name: "photo".to_string(),
-                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: vec![1, 2, 3],
-                        binary_type: BinaryType {
-                            mime_type: "image/png".to_string(),
-                        },
-                    }),
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 1,
+                    payload: Some(Box::new(SchemaValue::Binary(BinaryValuePayload {
+                        bytes: vec![1, 2, 3],
+                        mime_type: Some("image/png".to_string()),
+                    }))),
                 }),
-            },
-        ]);
+            ],
+        };
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
         let contents = &result.content;
 
@@ -646,7 +630,9 @@ mod tests {
         let method_params = harness.recorded_method_params();
         assert_eq!(
             method_params,
-            UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(Value::U32(7))])
+            SchemaValue::Record {
+                fields: vec![SchemaValue::U32(7)]
+            }
         );
 
         // The constructor received the string value: it is encoded into the

@@ -14,6 +14,7 @@
 
 use crate::schema::schema_type::QuantityValue;
 use chrono::{DateTime, Utc};
+use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
 /// One node in the recursive in-memory schema-value tree.
@@ -25,10 +26,11 @@ use serde::{Deserialize, Serialize};
 /// union-value carries the discriminator's literal tag. The value side does
 /// not redundantly carry field names, case names, or named-ref identifiers —
 /// those come from the schema.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+#[schema(named = "schema-value")]
 pub enum SchemaValue {
     // Primitives
     Bool(bool),
@@ -96,7 +98,7 @@ pub enum SchemaValue {
     QuotaToken(QuotaTokenValuePayload),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct VariantValuePayload {
@@ -107,7 +109,7 @@ pub struct VariantValuePayload {
 
 /// Result payload: exactly one of `Ok` / `Err` is set. Each inner option
 /// allows `result<_, _>` cases whose ok/err type is unit (no payload).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", rename_all = "kebab-case")]
@@ -116,7 +118,7 @@ pub enum ResultValuePayload {
     Err { value: Option<Box<SchemaValue>> },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct TextValuePayload {
@@ -126,7 +128,7 @@ pub struct TextValuePayload {
     pub language: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct BinaryValuePayload {
@@ -136,14 +138,14 @@ pub struct BinaryValuePayload {
 }
 
 /// Signed duration as total nanoseconds.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct DurationValuePayload {
     pub nanoseconds: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct UnionValuePayload {
@@ -161,7 +163,7 @@ pub struct UnionValuePayload {
 /// declares the secret; the value side carries an opaque reference that the
 /// authority resolves on read. The literal secret material never crosses
 /// this carrier.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct SecretValuePayload {
@@ -171,7 +173,7 @@ pub struct SecretValuePayload {
 /// Capability value: quota-token transport is **by snapshot**. The receiver
 /// re-acquires a live lease against `(environment_id, resource_name)` on
 /// demand.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct QuotaTokenValuePayload {

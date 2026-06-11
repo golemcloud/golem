@@ -9,7 +9,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::OplogIndex;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentInvocationMode, Principal};
+use golem_common::schema::SchemaValue;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
@@ -89,7 +90,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _agent_id: &AgentId,
         _method_name: String,
-        _method_parameters: UntypedDataValue,
+        _method_parameters: SchemaValue,
         _mode: AgentInvocationMode,
         _schedule_at: Option<DateTime<Utc>>,
         _idempotency_key: Option<IdempotencyKey>,

@@ -64,17 +64,17 @@ use crate::base_model::agent::LegacyParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
-use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
+use crate::model::agent::AgentTypeResolver;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
+use crate::schema::{ResultValuePayload, SchemaValue};
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm::Value;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
 use rand::prelude::IteratorRandom;
@@ -843,14 +843,14 @@ pub enum AgentInvocation {
     },
     AgentInitialization {
         idempotency_key: IdempotencyKey,
-        input: UntypedDataValue,
+        input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
     },
     AgentMethod {
         idempotency_key: IdempotencyKey,
         method_name: String,
-        input: UntypedDataValue,
+        input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
     },
@@ -879,12 +879,12 @@ pub enum AgentInvocationPayload {
         target_revision: ComponentRevision,
     },
     AgentInitialization {
-        input: UntypedDataValue,
+        input: SchemaValue,
         principal: Principal,
     },
     AgentMethod {
         method_name: String,
-        input: UntypedDataValue,
+        input: SchemaValue,
         principal: Principal,
     },
     LoadSnapshot {
@@ -904,7 +904,7 @@ pub enum AgentInvocationPayload {
 #[desert(evolution())]
 pub enum AgentInvocationResult {
     AgentInitialization,
-    AgentMethod { output: UntypedDataValue },
+    AgentMethod { output: SchemaValue },
     ManualUpdate,
     LoadSnapshot { error: Option<String> },
     SaveSnapshot { snapshot: RawSnapshotData },
@@ -927,78 +927,57 @@ pub struct AgentInvocationOutput {
     pub agent_fingerprint: Option<AgentFingerprint>,
 }
 
-fn value_replay_equivalent(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::F32(x), Value::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,
-        (Value::F64(x), Value::F64(y)) => (x.is_nan() && y.is_nan()) || x == y,
-        (Value::List(xs), Value::List(ys))
-        | (Value::Tuple(xs), Value::Tuple(ys))
-        | (Value::Record(xs), Value::Record(ys)) => {
-            xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys.iter())
-                    .all(|(x, y)| value_replay_equivalent(x, y))
-        }
-        (
-            Value::Variant {
-                case_idx: ai,
-                case_value: av,
-            },
-            Value::Variant {
-                case_idx: bi,
-                case_value: bv,
-            },
-        ) => {
-            ai == bi
-                && match (av, bv) {
-                    (Some(a), Some(b)) => value_replay_equivalent(a, b),
-                    (None, None) => true,
-                    _ => false,
-                }
-        }
-        (Value::Option(a), Value::Option(b)) => match (a, b) {
-            (Some(a), Some(b)) => value_replay_equivalent(a, b),
+/// Compares two schema-native values for replay equivalence. This is the same
+/// as structural equality except that `NaN` floats compare equal (so that a
+/// replayed invocation result carrying a `NaN` is not spuriously reported as
+/// diverging).
+fn schema_value_replay_equivalent(a: &SchemaValue, b: &SchemaValue) -> bool {
+    fn opt_box_equiv(a: &Option<Box<SchemaValue>>, b: &Option<Box<SchemaValue>>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => schema_value_replay_equivalent(a, b),
             (None, None) => true,
             _ => false,
-        },
-        (Value::Result(a), Value::Result(b)) => match (a, b) {
-            (Ok(a), Ok(b)) | (Err(a), Err(b)) => match (a, b) {
-                (Some(a), Some(b)) => value_replay_equivalent(a, b),
-                (None, None) => true,
-                _ => false,
-            },
-            _ => false,
-        },
-        _ => a == b,
-    }
-}
-
-fn untyped_element_replay_equivalent(a: &UntypedElementValue, b: &UntypedElementValue) -> bool {
-    match (a, b) {
-        (UntypedElementValue::ComponentModel(a), UntypedElementValue::ComponentModel(b)) => {
-            value_replay_equivalent(a, b)
         }
-        _ => a == b,
     }
-}
 
-fn untyped_data_replay_equivalent(a: &UntypedDataValue, b: &UntypedDataValue) -> bool {
+    fn slice_equiv(xs: &[SchemaValue], ys: &[SchemaValue]) -> bool {
+        xs.len() == ys.len()
+            && xs
+                .iter()
+                .zip(ys.iter())
+                .all(|(x, y)| schema_value_replay_equivalent(x, y))
+    }
+
     match (a, b) {
-        (UntypedDataValue::Tuple(xs), UntypedDataValue::Tuple(ys)) => {
-            xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys.iter())
-                    .all(|(x, y)| untyped_element_replay_equivalent(x, y))
+        (SchemaValue::F32(x), SchemaValue::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (SchemaValue::F64(x), SchemaValue::F64(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (SchemaValue::Record { fields: xs }, SchemaValue::Record { fields: ys })
+        | (SchemaValue::Tuple { elements: xs }, SchemaValue::Tuple { elements: ys })
+        | (SchemaValue::List { elements: xs }, SchemaValue::List { elements: ys })
+        | (SchemaValue::FixedList { elements: xs }, SchemaValue::FixedList { elements: ys }) => {
+            slice_equiv(xs, ys)
         }
-        (UntypedDataValue::Multimodal(xs), UntypedDataValue::Multimodal(ys)) => {
+        (SchemaValue::Map { entries: xs }, SchemaValue::Map { entries: ys }) => {
             xs.len() == ys.len()
-                && xs.iter().zip(ys.iter()).all(|(x, y)| {
-                    x.name == y.name && untyped_element_replay_equivalent(&x.value, &y.value)
+                && xs.iter().zip(ys.iter()).all(|((xk, xv), (yk, yv))| {
+                    schema_value_replay_equivalent(xk, yk) && schema_value_replay_equivalent(xv, yv)
                 })
         }
-        _ => false,
+        (SchemaValue::Variant(a), SchemaValue::Variant(b)) => {
+            a.case == b.case && opt_box_equiv(&a.payload, &b.payload)
+        }
+        (SchemaValue::Option { inner: a }, SchemaValue::Option { inner: b }) => opt_box_equiv(a, b),
+        (SchemaValue::Result(a), SchemaValue::Result(b)) => match (a, b) {
+            (ResultValuePayload::Ok { value: a }, ResultValuePayload::Ok { value: b })
+            | (ResultValuePayload::Err { value: a }, ResultValuePayload::Err { value: b }) => {
+                opt_box_equiv(a, b)
+            }
+            _ => false,
+        },
+        (SchemaValue::Union(a), SchemaValue::Union(b)) => {
+            a.tag == b.tag && schema_value_replay_equivalent(&a.body, &b.body)
+        }
+        _ => a == b,
     }
 }
 
@@ -1012,7 +991,7 @@ impl AgentInvocationResult {
             (
                 AgentInvocationResult::AgentMethod { output: a },
                 AgentInvocationResult::AgentMethod { output: b },
-            ) => untyped_data_replay_equivalent(a, b),
+            ) => schema_value_replay_equivalent(a, b),
             (AgentInvocationResult::ManualUpdate, AgentInvocationResult::ManualUpdate) => true,
             (
                 AgentInvocationResult::LoadSnapshot { error: a },
@@ -1477,7 +1456,20 @@ impl From<golem_wasm::PromiseId> for PromiseId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, IntoValue, FromValue, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    IntoValue,
+    FromValue,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub enum ForkResult {
     /// The original worker that called `fork`
     Original,
@@ -1485,7 +1477,18 @@ pub enum ForkResult {
     Forked,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct RdbmsPoolKey {
     pub address: Url,

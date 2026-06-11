@@ -17,8 +17,9 @@ use crate::custom_api::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataSchema, DataValue, ElementValue,
     ElementValues, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-    UntypedDataValue,
 };
+use golem_common::schema::SchemaValue;
+use golem_common::schema::adapters::schema_output_value_to_legacy_data_value;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use http::StatusCode;
@@ -26,12 +27,12 @@ use std::collections::HashMap;
 use tracing::debug;
 
 pub fn interpret_agent_response(
-    invoke_result: Option<UntypedDataValue>,
+    invoke_result: Option<SchemaValue>,
     expected_type: &DataSchema,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     match invoke_result {
-        Some(untyped_data_value) => {
-            let mapped_response = map_successful_agent_response(untyped_data_value, expected_type)?;
+        Some(schema_value) => {
+            let mapped_response = map_successful_agent_response(schema_value, expected_type)?;
             Ok(mapped_response)
         }
         None => Ok(RouteExecutionResult {
@@ -43,11 +44,13 @@ pub fn interpret_agent_response(
 }
 
 fn map_successful_agent_response(
-    agent_response: UntypedDataValue,
+    agent_response: SchemaValue,
     expected_type: &DataSchema,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    let typed_value = DataValue::try_from_untyped(agent_response, expected_type.clone())
-        .map_err(|error| RequestHandlerError::AgentResponseTypeMismatch { error })?;
+    let typed_value = schema_output_value_to_legacy_data_value(agent_response, expected_type)
+        .map_err(|error| RequestHandlerError::AgentResponseTypeMismatch {
+            error: error.to_string(),
+        })?;
 
     debug!("Received successful agent response: {typed_value:?}");
 
@@ -223,10 +226,10 @@ mod tests {
     use super::*;
     use assert2::let_assert;
     use golem_common::model::agent::{
-        BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
-        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, TextReference,
-        TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue, Url,
+        BinaryDescriptor, BinaryType, ElementSchema, NamedElementSchema, NamedElementSchemas,
+        TextDescriptor, TextType, Url,
     };
+    use golem_common::schema::{BinaryValuePayload, TextValuePayload};
     use test_r::test;
 
     fn text_schema(restrictions: Option<Vec<TextType>>) -> DataSchema {
@@ -250,16 +253,10 @@ mod tests {
     #[test]
     fn inline_text_response_returns_200_with_unstructured_text_body() {
         let schema = text_schema(None);
-        let invoke_result = Some(UntypedDataValue::Tuple(vec![
-            UntypedElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Inline(TextSource {
-                    data: "hello".to_string(),
-                    text_type: Some(TextType {
-                        language_code: "en".to_string(),
-                    }),
-                }),
-            }),
-        ]));
+        let invoke_result = Some(SchemaValue::Text(TextValuePayload {
+            text: "hello".to_string(),
+            language: Some("en".to_string()),
+        }));
 
         let result = interpret_agent_response(invoke_result, &schema).unwrap();
 
@@ -273,14 +270,10 @@ mod tests {
     #[test]
     fn inline_text_response_without_language_returns_200() {
         let schema = text_schema(None);
-        let invoke_result = Some(UntypedDataValue::Tuple(vec![
-            UntypedElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Inline(TextSource {
-                    data: "hi".to_string(),
-                    text_type: None,
-                }),
-            }),
-        ]));
+        let invoke_result = Some(SchemaValue::Text(TextValuePayload {
+            text: "hi".to_string(),
+            language: None,
+        }));
 
         let result = interpret_agent_response(invoke_result, &schema).unwrap();
 
@@ -290,18 +283,20 @@ mod tests {
         assert!(body.text_type.is_none());
     }
 
+    // A bare `SchemaValue` (the executor's output carrier) cannot represent a
+    // URL text/binary reference, so the URL-reference invariant can only be
+    // exercised by feeding the legacy `ElementValue` directly into the
+    // defensive mapping branch.
     #[test]
     fn url_text_response_is_invariant_violation() {
-        let schema = text_schema(None);
-        let invoke_result = Some(UntypedDataValue::Tuple(vec![
-            UntypedElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Url(Url {
-                    value: "https://example.com/text".into(),
-                }),
+        let element = ElementValue::UnstructuredText(UnstructuredTextElementValue {
+            value: TextReference::Url(Url {
+                value: "https://example.com/text".into(),
             }),
-        ]));
+            descriptor: TextDescriptor { restrictions: None },
+        });
 
-        let err = interpret_agent_response(invoke_result, &schema).unwrap_err();
+        let err = map_single_element_agent_response(element).unwrap_err();
 
         let_assert!(RequestHandlerError::InvariantViolated { msg } = err);
         assert!(msg.contains("text"));
@@ -310,16 +305,10 @@ mod tests {
     #[test]
     fn inline_binary_response_returns_200_with_unstructured_binary_body() {
         let schema = binary_schema(None);
-        let invoke_result = Some(UntypedDataValue::Tuple(vec![
-            UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
-                value: BinaryReference::Inline(BinarySource {
-                    data: vec![0x01, 0x02, 0x03],
-                    binary_type: BinaryType {
-                        mime_type: "application/octet-stream".into(),
-                    },
-                }),
-            }),
-        ]));
+        let invoke_result = Some(SchemaValue::Binary(BinaryValuePayload {
+            bytes: vec![0x01, 0x02, 0x03],
+            mime_type: Some("application/octet-stream".into()),
+        }));
 
         let result = interpret_agent_response(invoke_result, &schema).unwrap();
 
@@ -331,16 +320,14 @@ mod tests {
 
     #[test]
     fn url_binary_response_is_invariant_violation() {
-        let schema = binary_schema(None);
-        let invoke_result = Some(UntypedDataValue::Tuple(vec![
-            UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
-                value: BinaryReference::Url(Url {
-                    value: "https://example.com/blob".into(),
-                }),
+        let element = ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            value: BinaryReference::Url(Url {
+                value: "https://example.com/blob".into(),
             }),
-        ]));
+            descriptor: BinaryDescriptor { restrictions: None },
+        });
 
-        let err = interpret_agent_response(invoke_result, &schema).unwrap_err();
+        let err = map_single_element_agent_response(element).unwrap_err();
 
         let_assert!(RequestHandlerError::InvariantViolated { msg } = err);
         assert!(msg.contains("binary"));

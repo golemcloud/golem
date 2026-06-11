@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentInvocationMode, Principal};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -39,6 +39,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
     InvocationStatus, OwnedAgentId, PromiseId,
 };
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
 use golem_service_base::model::auth::AuthCtx;
@@ -68,7 +69,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         agent_id: &AgentId,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         mode: AgentInvocationMode,
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
@@ -334,7 +335,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         agent_id: &AgentId,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         mode: AgentInvocationMode,
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
@@ -358,7 +359,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
+        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
             method_parameters.into();
 
         let response: InvokeAgentResponse = self
@@ -389,7 +390,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                 let result = success
                     .result
                     .map(|proto_val| {
-                        UntypedDataValue::try_from(proto_val).map_err(|e| {
+                        SchemaValue::try_from(proto_val).map_err(|e| {
                             WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
                                 "Failed to parse agent invocation result: {e}"
                             )))

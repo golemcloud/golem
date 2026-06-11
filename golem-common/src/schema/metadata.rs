@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -21,10 +22,13 @@ use std::fmt::{Display, Formatter};
 /// provides a default derivation rule (typically based on the local language's
 /// type name); cross-language interop requires the same `TypeId` on every side,
 /// which users can pin via the SDK's `named` attribute.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 #[serde(transparent)]
+#[schema(transparent)]
 pub struct TypeId(pub String);
 
 impl TypeId {
@@ -59,9 +63,10 @@ impl From<&str> for TypeId {
 /// information (docs, aliases, examples, deprecation, role). Per-scalar
 /// validation constraints live on the relevant scalar's typed substructure,
 /// not here.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[schema(named = "metadata-envelope")]
 pub struct MetadataEnvelope {
     /// Free-form documentation string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,10 +100,11 @@ impl MetadataEnvelope {
 /// Open registry of consumer-facing roles a type may carry. Unknown roles are
 /// preserved as [`Role::Other`] so the producer's intent is not lost when a
 /// receiver does not understand the role.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[schema(named = "role")]
 pub enum Role {
     Multimodal,
     Other(String),

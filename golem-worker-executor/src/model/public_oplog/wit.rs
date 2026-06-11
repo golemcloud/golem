@@ -40,6 +40,16 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
+use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::wit::{encode_typed, wire};
+
+/// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT
+/// wire form used by the oplog-processor plugin interface. Public-oplog
+/// rendering always produces well-formed typed values, so encoding cannot
+/// fail in practice.
+fn encode_public_typed_schema_value(value: TypedSchemaValue) -> wire::TypedSchemaValue {
+    encode_typed(&value).expect("public oplog TypedSchemaValue must be encodable as core@2.0.0 WIT")
+}
 
 impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
@@ -81,7 +91,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     .into_iter()
                     .map(|lac| oplog::LocalAgentConfigEntry {
                         path: lac.path,
-                        value: lac.value.into(),
+                        value: encode_public_typed_schema_value(lac.value),
                     })
                     .collect(),
                 original_phantom_id: original_phantom_id.map(|id| id.into()),
@@ -96,8 +106,8 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::HostCall(oplog::HostCallParameters {
                 timestamp: timestamp.into(),
                 function_name,
-                request: request.into(),
-                response: response.into(),
+                request: encode_public_typed_schema_value(request),
+                response: encode_public_typed_schema_value(response),
                 durable_function_type: wrapped_function_type.into(),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
@@ -110,11 +120,13 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp,
                 result,
+                method_name,
                 consumed_fuel,
                 component_revision,
             }) => Self::AgentInvocationFinished(oplog::AgentInvocationFinishedParameters {
                 timestamp: timestamp.into(),
                 result: result.into(),
+                method_name,
                 consumed_fuel,
                 component_revision: component_revision.get(),
             }),
@@ -469,13 +481,11 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
     fn from(value: PublicAgentInvocation) -> Self {
         match value {
             PublicAgentInvocation::AgentInitialization(params) => {
-                let schema = params.constructor_parameters.extract_schema();
                 Self::AgentInitialization(oplog::AgentInitializationParameters {
                     idempotency_key: params.idempotency_key.value,
-                    constructor_parameters: oplog::TypedDataValue {
-                        value: params.constructor_parameters.into(),
-                        schema: schema.into(),
-                    },
+                    constructor_parameters: encode_public_typed_schema_value(
+                        params.constructor_parameters,
+                    ),
                     trace_id: params.trace_id.to_string(),
                     trace_states: params.trace_states,
                     invocation_context: params
@@ -486,14 +496,10 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                 })
             }
             PublicAgentInvocation::AgentMethodInvocation(params) => {
-                let schema = params.function_input.extract_schema();
                 Self::AgentMethodInvocation(oplog::AgentMethodInvocationParameters {
                     idempotency_key: params.idempotency_key.value,
                     method_name: params.method_name,
-                    function_input: oplog::TypedDataValue {
-                        value: params.function_input.into(),
-                        schema: schema.into(),
-                    },
+                    function_input: encode_public_typed_schema_value(params.function_input),
                     trace_id: params.trace_id.to_string(),
                     trace_states: params.trace_states,
                     invocation_context: params
@@ -538,26 +544,14 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
         match value {
             PublicAgentInvocationResult::AgentInitialization(AgentInvocationOutputParameters {
                 output,
-            }) => {
-                let schema = output.extract_schema();
-                Self::AgentInitialization(oplog::AgentInvocationOutputParameters {
-                    output: oplog::TypedDataValue {
-                        value: output.into(),
-                        schema: schema.into(),
-                    },
-                })
-            }
+            }) => Self::AgentInitialization(oplog::AgentInvocationOutputParameters {
+                output: encode_public_typed_schema_value(output),
+            }),
             PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
                 output,
-            }) => {
-                let schema = output.extract_schema();
-                Self::AgentMethod(oplog::AgentInvocationOutputParameters {
-                    output: oplog::TypedDataValue {
-                        value: output.into(),
-                        schema: schema.into(),
-                    },
-                })
-            }
+            }) => Self::AgentMethod(oplog::AgentInvocationOutputParameters {
+                output: encode_public_typed_schema_value(output),
+            }),
             PublicAgentInvocationResult::ManualUpdate(Empty {}) => Self::ManualUpdate,
             PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }) => {
                 Self::LoadSnapshot(oplog::FallibleResultParameters { error })
@@ -898,6 +892,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 Ok(Self::AgentInvocationFinished {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     result: oplog_payload_from_wit(params.result),
+                    method_name: params.method_name,
                     consumed_fuel: params.consumed_fuel,
                     component_revision: params
                         .component_revision
@@ -1565,12 +1560,14 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             M::AgentInvocationFinished {
                 timestamp,
                 result,
+                method_name,
                 consumed_fuel,
                 component_revision,
             } => Ok(Self::AgentInvocationFinished(
                 oplog::RawAgentInvocationFinishedParameters {
                     timestamp: timestamp.into(),
                     result: oplog_payload_to_wit(result)?,
+                    method_name,
                     consumed_fuel,
                     component_revision: component_revision.get(),
                 },

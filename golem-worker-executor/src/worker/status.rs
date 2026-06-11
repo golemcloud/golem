@@ -1160,7 +1160,8 @@ mod test {
     use golem_common::base_model::OplogIndex;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
+    use golem_common::model::agent::{AgentMode, Principal};
+    use golem_common::schema::SchemaValue;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
@@ -1181,12 +1182,32 @@ mod test {
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::component::Component;
-    use golem_wasm::{IntoValueAndType, Value};
+    use golem_common::schema::IntoTypedSchemaValue;
+    use golem_wasm::Value;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
     use uuid::Uuid;
+
+    fn value_to_schema(value: Value) -> SchemaValue {
+        match value {
+            Value::Bool(v) => SchemaValue::Bool(v),
+            Value::U8(v) => SchemaValue::U8(v),
+            Value::U16(v) => SchemaValue::U16(v),
+            Value::U32(v) => SchemaValue::U32(v),
+            Value::U64(v) => SchemaValue::U64(v),
+            Value::S8(v) => SchemaValue::S8(v),
+            Value::S16(v) => SchemaValue::S16(v),
+            Value::S32(v) => SchemaValue::S32(v),
+            Value::S64(v) => SchemaValue::S64(v),
+            Value::F32(v) => SchemaValue::F32(v),
+            Value::F64(v) => SchemaValue::F64(v),
+            Value::Char(v) => SchemaValue::Char(v),
+            Value::String(v) => SchemaValue::String(v),
+            other => panic!("unsupported test value: {other:?}"),
+        }
+    }
 
     #[test]
     async fn empty() {
@@ -1378,13 +1399,13 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_update(&update1, |_| {})
@@ -1415,13 +1436,13 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_update(&update1, |_| {})
@@ -1455,7 +1476,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1464,7 +1485,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1501,7 +1522,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1510,7 +1531,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1547,7 +1568,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1581,13 +1602,13 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_update(&update1, |_| {})
@@ -1622,7 +1643,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1631,7 +1652,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1674,7 +1695,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1683,7 +1704,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1722,9 +1743,9 @@ mod test {
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
                 method_name: "b".to_string(),
-                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    Value::Bool(true),
-                )]),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::Bool(true)],
+                },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
@@ -1766,16 +1787,16 @@ mod test {
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k1.clone(),
                 method_name: "a".to_string(),
-                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    Value::Bool(true),
-                )]),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::Bool(true)],
+                },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
                 method_name: "b".to_string(),
-                input: UntypedDataValue::Tuple(vec![]),
+                input: SchemaValue::Record { fields: vec![] },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
@@ -2041,12 +2062,9 @@ mod test {
         ) -> Self {
             let payload = AgentInvocationPayload::AgentMethod {
                 method_name: function_name.to_string(),
-                input: UntypedDataValue::Tuple(
-                    request
-                        .into_iter()
-                        .map(UntypedElementValue::ComponentModel)
-                        .collect(),
-                ),
+                input: SchemaValue::Record {
+                    fields: request.into_iter().map(value_to_schema).collect(),
+                },
                 principal: Principal::anonymous(),
             };
             self.add(
@@ -2079,6 +2097,7 @@ mod test {
                 OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
                     result: OplogPayload::Inline(Box::new(result)),
+                    method_name: None,
                     consumed_fuel: 0,
                     component_revision,
                 },

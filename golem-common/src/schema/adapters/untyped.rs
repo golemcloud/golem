@@ -93,9 +93,9 @@
 
 use crate::base_model::agent::{
     BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
-    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextReference,
+    DataSchema, DataValue, ElementSchema, NamedElementSchema, NamedElementSchemas, TextReference,
     TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
-    UntypedNamedElementValue,
+    UntypedJsonDataValue, UntypedNamedElementValue,
 };
 use crate::schema::adapters::data_schema::{
     as_multimodal_list_variant, data_schema_to_input_schema, data_schema_to_output_schema,
@@ -105,10 +105,11 @@ use crate::schema::adapters::value::{schema_value_to_value, value_to_schema_valu
 use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::Role;
-use crate::schema::schema_type::{SchemaType, VariantCaseType};
+use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
+use serde_json::Value as JsonValue;
 
 // ===========================================================================
 // Forward: UntypedDataValue → typed
@@ -605,4 +606,127 @@ fn schema_value_to_untyped_element(
             Ok(UntypedElementValue::ComponentModel(component_value))
         }
     }
+}
+
+// ===========================================================================
+// Schema-native pairing + REST-edge helpers
+// ===========================================================================
+
+/// Pair a schema-native invocation **input** value (a parameter record, see
+/// `lower_invocation` in the worker executor) with the record schema derived
+/// from the agent's declared input [`DataSchema`]. The resulting
+/// [`TypedSchemaValue`] is the renderable, schema-carrying form of an
+/// invocation input.
+pub fn input_value_to_typed_schema_value(
+    input_schema: &DataSchema,
+    value: SchemaValue,
+) -> Result<TypedSchemaValue, SchemaAdapterError> {
+    let input = data_schema_to_input_schema(input_schema)?;
+    let fields = input
+        .fields()
+        .iter()
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    Ok(TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(fields)),
+        value,
+    ))
+}
+
+/// Pair a schema-native invocation **output** value with the schema derived
+/// from the agent method's declared output [`DataSchema`]. A `unit` output is
+/// represented by the canonical empty tuple (see `decode_invoke_output` in the
+/// worker executor).
+pub fn output_value_to_typed_schema_value(
+    output_schema: &DataSchema,
+    value: SchemaValue,
+) -> Result<TypedSchemaValue, SchemaAdapterError> {
+    let output = data_schema_to_output_schema(output_schema)?;
+    let root = match output.schema() {
+        Some(ty) => ty.clone(),
+        None => SchemaType::tuple(Vec::new()),
+    };
+    Ok(TypedSchemaValue::new(SchemaGraph::anonymous(root), value))
+}
+
+/// Bridge a bare executor **output** [`SchemaValue`] (paired with the method's
+/// declared output [`DataSchema`]) back into the legacy [`DataValue`] form used
+/// by the remaining legacy response-mapping code paths (MCP / custom-API).
+///
+/// The `UntypedDataValue` round-trip stays internal to `golem-common`, so
+/// callers never have to name the legacy untyped carriers.
+pub fn schema_output_value_to_legacy_data_value(
+    value: SchemaValue,
+    schema: &DataSchema,
+) -> Result<DataValue, SchemaAdapterError> {
+    let untyped = typed_output_value_to_untyped_data_value(value, schema)?;
+    DataValue::try_from_untyped(untyped, schema.clone())
+        .map_err(SchemaAdapterError::ValueShapeMismatch)
+}
+
+/// Convert raw client JSON (the wire shape of [`UntypedJsonDataValue`]) plus a
+/// looked-up [`DataSchema`] into the bare parameter-record [`SchemaValue`] that
+/// the executor invoke path expects as method/constructor **input**.
+///
+/// The untyped JSON lifting stays internal to `golem-common` so REST callers
+/// can hold raw [`serde_json::Value`] and never name the legacy untyped
+/// carriers.
+pub fn json_data_value_to_input_value(
+    json: JsonValue,
+    schema: &DataSchema,
+) -> Result<SchemaValue, SchemaAdapterError> {
+    let untyped_json: UntypedJsonDataValue = serde_json::from_value(json).map_err(|e| {
+        SchemaAdapterError::ValueShapeMismatch(format!("invalid JSON data value: {e}"))
+    })?;
+    let typed = DataValue::try_from_untyped_json(untyped_json, schema.clone())
+        .map_err(SchemaAdapterError::ValueShapeMismatch)?;
+    untyped_data_value_to_input_value(typed.into(), schema)
+}
+
+/// Convert raw client JSON (the wire shape of [`UntypedJsonDataValue`]) plus a
+/// looked-up [`DataSchema`] into a legacy [`DataValue`] (used where the legacy
+/// value is still needed server-side, e.g. building a parsed agent id).
+pub fn json_data_value_to_legacy_data_value(
+    json: JsonValue,
+    schema: &DataSchema,
+) -> Result<DataValue, SchemaAdapterError> {
+    let untyped_json: UntypedJsonDataValue = serde_json::from_value(json).map_err(|e| {
+        SchemaAdapterError::ValueShapeMismatch(format!("invalid JSON data value: {e}"))
+    })?;
+    DataValue::try_from_untyped_json(untyped_json, schema.clone())
+        .map_err(SchemaAdapterError::ValueShapeMismatch)
+}
+
+/// Render a legacy [`DataValue`] as the raw client JSON ([`UntypedJsonDataValue`]
+/// wire shape) carried by the REST agent-invoke request fields.
+///
+/// This is the inverse of [`json_data_value_to_legacy_data_value`]: it lets
+/// client-side callers (CLI, test framework) hold a [`DataValue`] and produce
+/// the `serde_json::Value` the server lifts back against the method schema,
+/// without naming the legacy untyped JSON carriers themselves.
+pub fn legacy_data_value_to_json(value: DataValue) -> JsonValue {
+    serde_json::to_value(UntypedJsonDataValue::from(value))
+        .expect("UntypedJsonDataValue is always serializable to JSON")
+}
+
+/// Convert the raw JSON of a schema-native invocation **output** (the
+/// [`TypedSchemaValue`] wire form returned by the REST agent-invoke response)
+/// back into the legacy [`DataValue`] form still used by client-side rendering
+/// code (CLI, test framework).
+///
+/// This is the inverse of [`output_value_to_typed_schema_value`]: it parses the
+/// `TypedSchemaValue` JSON and projects its value tree onto the looked-up
+/// output [`DataSchema`].
+pub fn output_json_to_legacy_data_value(
+    json: JsonValue,
+    schema: &DataSchema,
+) -> Result<DataValue, SchemaAdapterError> {
+    let typed: TypedSchemaValue = serde_json::from_value(json).map_err(|e| {
+        SchemaAdapterError::ValueShapeMismatch(format!("invalid typed schema value: {e}"))
+    })?;
+    schema_output_value_to_legacy_data_value(typed.value().clone(), schema)
 }

@@ -20,21 +20,20 @@ use super::{
     ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotBasedUpdateParameters, StringAttributeValue, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
-use crate::model::agent::DataValue;
-use crate::model::agent::UntypedDataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
-    HostFunctionName, host_request_from_value_and_type, host_response_from_value_and_type,
+    HostFunctionName, host_request_from_typed_schema_value, host_response_from_typed_schema_value,
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
@@ -56,15 +55,43 @@ use crate::model::oplog::{
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
-use crate::model::worker::TypedAgentConfigEntry;
+use crate::resource_runtime::ResourceTypeId;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
     AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
     oplog_entry, wrapped_function_type,
 };
-use crate::resource_runtime::ResourceTypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
+
+impl From<PublicTypedAgentConfigEntry>
+    for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
+{
+    fn from(value: PublicTypedAgentConfigEntry) -> Self {
+        Self {
+            path: value.path,
+            value: Some(value.value.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry>
+    for PublicTypedAgentConfigEntry
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path: value.path,
+            value: value
+                .value
+                .ok_or("Missing value field in PublicTypedAgentConfigEntry")?
+                .try_into()?,
+        })
+    }
+}
 
 impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
     fn from(value: PersistenceLevel) -> Self {
@@ -343,7 +370,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 local_agent_config: create
                     .config
                     .into_iter()
-                    .map(TypedAgentConfigEntry::try_from)
+                    .map(PublicTypedAgentConfigEntry::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id
@@ -412,6 +439,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .result
                         .ok_or("Missing result field")?
                         .try_into()?,
+                    method_name: agent_invocation_finished.method_name,
                     consumed_fuel: agent_invocation_finished.consumed_fuel,
                     component_revision: agent_invocation_finished.component_revision.try_into()?,
                 }),
@@ -854,6 +882,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             result: Some(agent_invocation_finished.result.try_into()?),
                             consumed_fuel: agent_invocation_finished.consumed_fuel,
                             component_revision: agent_invocation_finished.component_revision.get(),
+                            method_name: agent_invocation_finished.method_name,
                         },
                     )),
                 }
@@ -1429,12 +1458,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation;
         match value.invocation.ok_or("Missing invocation field")? {
             Invocation::AgentInitialization(init) => {
-                let typed = init
+                let constructor_parameters = init
                     .constructor_parameters
-                    .ok_or("Missing constructor_parameters field")?;
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let constructor_parameters = DataValue::try_from_untyped(untyped, schema)?;
+                    .ok_or("Missing constructor_parameters field")?
+                    .try_into()?;
                 let invocation_context = encode_public_span_data(init.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentInitialization(
                     AgentInitializationParameters {
@@ -1450,12 +1477,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 ))
             }
             Invocation::AgentMethod(method) => {
-                let typed = method
+                let function_input = method
                     .function_input
-                    .ok_or("Missing function_input field")?;
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let function_input = DataValue::try_from_untyped(untyped, schema)?;
+                    .ok_or("Missing function_input field")?
+                    .try_into()?;
                 let invocation_context = encode_public_span_data(method.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentMethodInvocation(
                     AgentMethodInvocationParameters {
@@ -1546,17 +1571,11 @@ impl TryFrom<PublicAgentInvocation>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation;
         let invocation = match value {
             PublicAgentInvocation::AgentInitialization(init) => {
-                let typed_data_value: super::TypedDataValue = init.constructor_parameters.into();
                 let invocation_context = decode_public_span_data(&init.invocation_context, 0);
                 Invocation::AgentInitialization(
                     golem_api_grpc::proto::golem::worker::PublicAgentInitializationInvocation {
                         idempotency_key: Some(init.idempotency_key.into()),
-                        constructor_parameters: Some(
-                            golem_api_grpc::proto::golem::component::TypedDataValue {
-                                value: Some(typed_data_value.value.into()),
-                                schema: Some(typed_data_value.schema.into()),
-                            },
-                        ),
+                        constructor_parameters: Some(init.constructor_parameters.into()),
                         trace_id: init.trace_id.to_string(),
                         trace_states: init.trace_states,
                         invocation_context,
@@ -1564,18 +1583,12 @@ impl TryFrom<PublicAgentInvocation>
                 )
             }
             PublicAgentInvocation::AgentMethodInvocation(method) => {
-                let typed_data_value: super::TypedDataValue = method.function_input.into();
                 let invocation_context = decode_public_span_data(&method.invocation_context, 0);
                 Invocation::AgentMethod(
                     golem_api_grpc::proto::golem::worker::PublicAgentMethodInvocation {
                         idempotency_key: Some(method.idempotency_key.into()),
                         method_name: method.method_name,
-                        function_input: Some(
-                            golem_api_grpc::proto::golem::component::TypedDataValue {
-                                value: Some(typed_data_value.value.into()),
-                                schema: Some(typed_data_value.schema.into()),
-                            },
-                        ),
+                        function_input: Some(method.function_input.into()),
                         trace_id: method.trace_id.to_string(),
                         trace_states: method.trace_states,
                         invocation_context,
@@ -1686,17 +1699,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation_result::Result as ProtoResult;
         match value.result.ok_or("Missing result field")? {
             ProtoResult::AgentInitializationOutput(typed) => {
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let output = DataValue::try_from_untyped(untyped, schema)?;
+                let output = typed.try_into()?;
                 Ok(PublicAgentInvocationResult::AgentInitialization(
                     AgentInvocationOutputParameters { output },
                 ))
             }
             ProtoResult::AgentMethodOutput(typed) => {
-                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
-                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
-                let output = DataValue::try_from_untyped(untyped, schema)?;
+                let output = typed.try_into()?;
                 Ok(PublicAgentInvocationResult::AgentMethod(
                     AgentInvocationOutputParameters { output },
                 ))
@@ -1774,22 +1783,10 @@ impl TryFrom<PublicAgentInvocationResult>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation_result::Result as ProtoResult;
         let result = match value {
             PublicAgentInvocationResult::AgentInitialization(output) => {
-                let typed: super::TypedDataValue = output.output.into();
-                ProtoResult::AgentInitializationOutput(
-                    golem_api_grpc::proto::golem::component::TypedDataValue {
-                        value: Some(typed.value.into()),
-                        schema: Some(typed.schema.into()),
-                    },
-                )
+                ProtoResult::AgentInitializationOutput(output.output.into())
             }
             PublicAgentInvocationResult::AgentMethod(output) => {
-                let typed: super::TypedDataValue = output.output.into();
-                ProtoResult::AgentMethodOutput(
-                    golem_api_grpc::proto::golem::component::TypedDataValue {
-                        value: Some(typed.value.into()),
-                        schema: Some(typed.schema.into()),
-                    },
-                )
+                ProtoResult::AgentMethodOutput(output.output.into())
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
@@ -2177,7 +2174,11 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 env: create.env.into_iter().collect(),
                 environment_id: create.environment_id,
                 created_by: create.created_by,
-                local_agent_config: create.local_agent_config.into_iter().map(Into::into).collect(),
+                local_agent_config: create
+                    .local_agent_config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()?,
                 parent: create.parent,
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
@@ -2203,11 +2204,11 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     }
                 };
 
-                let request = OplogPayload::Inline(Box::new(host_request_from_value_and_type(
+                let request = OplogPayload::Inline(Box::new(host_request_from_typed_schema_value(
                     &host_call.function_name,
                     host_call.request,
                 )?));
-                let response = OplogPayload::Inline(Box::new(host_response_from_value_and_type(
+                let response = OplogPayload::Inline(Box::new(host_response_from_typed_schema_value(
                     &host_call.function_name,
                     host_call.response,
                 )?));
@@ -2228,6 +2229,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp: finished.timestamp,
                     result: OplogPayload::Inline(Box::new(raw_result)),
+                    method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
                     component_revision: finished.component_revision,
                 })
@@ -2487,9 +2489,11 @@ fn public_agent_invocation_result_to_raw(
         PublicAgentInvocationResult::AgentInitialization(_) => {
             Ok(AgentInvocationResult::AgentInitialization)
         }
-        PublicAgentInvocationResult::AgentMethod(_) => Ok(AgentInvocationResult::AgentMethod {
-            output: UntypedDataValue::Tuple(vec![]),
-        }),
+        PublicAgentInvocationResult::AgentMethod(params) => {
+            Ok(AgentInvocationResult::AgentMethod {
+                output: params.output.into_parts().1,
+            })
+        }
         PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
         PublicAgentInvocationResult::LoadSnapshot(params) => {
             Ok(AgentInvocationResult::LoadSnapshot {
@@ -2923,11 +2927,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::AgentInvocationFinished {
                 result,
+                method_name,
                 consumed_fuel,
                 component_revision,
                 ..
             } => Entry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
                 result: Some(oplog_payload_to_proto(result)?),
+                method_name,
                 consumed_fuel,
                 component_revision: component_revision.into(),
             }),
@@ -3290,6 +3296,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp,
                     result,
+                    method_name: p.method_name,
                     consumed_fuel: p.consumed_fuel,
                     component_revision,
                 })

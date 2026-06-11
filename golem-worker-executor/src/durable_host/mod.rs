@@ -2636,11 +2636,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     | AgentInvocationResult::ProcessOplogEntries { .. } => true,
                 };
 
+                // Only `AgentMethod` results need the method name persisted so the
+                // public oplog renderer can resolve the correct output schema.
+                let method_name = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => {
+                        Some(full_function_name.to_string())
+                    }
+                    _ => None,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
                     .add_agent_invocation_finished(
                         &output.result,
+                        method_name,
                         consumed_fuel,
                         component_revision,
                     )

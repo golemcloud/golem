@@ -18,7 +18,9 @@ use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementValue};
-use golem_common::schema::adapters::value_and_type_to_typed_schema_value;
+use golem_common::schema::adapters::{
+    output_json_to_legacy_data_value, value_and_type_to_typed_schema_value,
+};
 use golem_wasm::analysis::{AnalysedType, TypeTuple};
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
@@ -138,9 +140,8 @@ impl InvokeResultView {
             return Ok((false, vec![]));
         };
 
-        let data_value =
-            DataValue::try_from_untyped_json(untyped.clone(), method.output_schema.clone())
-                .map_err(|e| anyhow!("Failed to parse agent result: {e}"))?;
+        let data_value = output_json_to_legacy_data_value(untyped.0.clone(), &method.output_schema)
+            .map_err(|e| anyhow!("Failed to parse agent result: {e}"))?;
 
         let DataValue::Tuple(elements) = data_value else {
             bail!("Non-tuple agent result not supported for result rendering");

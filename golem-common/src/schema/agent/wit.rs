@@ -30,20 +30,17 @@
 
 use crate::base_model::Empty;
 use crate::base_model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal,
-    CachePolicy, CachePolicyTtl, CorsOptions, CustomHttpMethod, GolemUserPrincipal, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment,
-    PathVariable, Principal, QueryVariable, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
+    AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy, CachePolicyTtl,
+    CorsOptions, CustomHttpMethod, GolemUserPrincipal, HeaderVariable, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment, PathVariable,
+    Principal, QueryVariable, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
     SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::agent::AgentTypeName;
-use crate::schema::adapters::analysed_type::{
-    analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
-};
-use crate::schema::adapters::error::SchemaAdapterError;
 use crate::schema::agent::{
-    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-    AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema, RegisteredAgentTypeSchema,
+    AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
+    AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
+    RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::wit::{
@@ -151,8 +148,6 @@ pub enum AgentWitError {
     Encode(EncodeError),
     /// Failed while reconstructing a recursive schema from the wire graph.
     Decode(DecodeError),
-    /// Failed while bridging an agent-config `AnalysedType` value type.
-    Adapter(SchemaAdapterError),
 }
 
 impl std::fmt::Display for AgentWitError {
@@ -160,7 +155,6 @@ impl std::fmt::Display for AgentWitError {
         match self {
             AgentWitError::Encode(e) => write!(f, "agent schema encode error: {e}"),
             AgentWitError::Decode(e) => write!(f, "agent schema decode error: {e}"),
-            AgentWitError::Adapter(e) => write!(f, "agent config type adapter error: {e}"),
         }
     }
 }
@@ -176,12 +170,6 @@ impl From<EncodeError> for AgentWitError {
 impl From<DecodeError> for AgentWitError {
     fn from(e: DecodeError) -> Self {
         AgentWitError::Decode(e)
-    }
-}
-
-impl From<SchemaAdapterError> for AgentWitError {
-    fn from(e: SchemaAdapterError) -> Self {
-        AgentWitError::Adapter(e)
     }
 }
 
@@ -471,10 +459,9 @@ fn decode_auto_injected(k: &wire::AutoInjectedKind) -> AutoInjectedKind {
 
 fn encode_config_declaration(
     enc: &mut GraphEncoder,
-    c: &AgentConfigDeclaration,
+    c: &AgentConfigDeclarationSchema,
 ) -> Result<wire::AgentConfigDeclaration, AgentWitError> {
-    let schema_ty = analysed_type_to_schema_type_inline(&c.value_type)?;
-    let value_type = enc.encode_type(&schema_ty)?;
+    let value_type = enc.encode_type(&c.value_type)?;
     Ok(wire::AgentConfigDeclaration {
         source: c.source.into(),
         path: c.path.clone(),
@@ -484,12 +471,11 @@ fn encode_config_declaration(
 
 fn decode_config_declaration(
     dec: &GraphDecoder,
-    graph: &SchemaGraph,
+    _graph: &SchemaGraph,
     c: &wire::AgentConfigDeclaration,
-) -> Result<AgentConfigDeclaration, AgentWitError> {
-    let ty = dec.decode_type_at(c.value_type)?;
-    let value_type = schema_type_to_analysed_type(graph, &ty)?;
-    Ok(AgentConfigDeclaration {
+) -> Result<AgentConfigDeclarationSchema, AgentWitError> {
+    let value_type = dec.decode_type_at(c.value_type)?;
+    Ok(AgentConfigDeclarationSchema {
         source: c.source.into(),
         path: c.path.clone(),
         value_type,
@@ -1054,10 +1040,10 @@ mod tests {
             methods: vec![],
         };
 
-        let config = vec![AgentConfigDeclaration {
+        let config = vec![AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
             path: vec!["api".to_string(), "key".to_string()],
-            value_type: golem_wasm::analysis::analysed_type::str(),
+            value_type: SchemaType::string(),
         }];
 
         AgentTypeSchema {

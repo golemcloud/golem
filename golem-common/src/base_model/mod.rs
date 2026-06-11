@@ -186,7 +186,20 @@ impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(
@@ -290,6 +303,8 @@ impl golem_wasm::IntoValue for ShardId {
     serde::Deserialize,
     IntoValue,
     FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -299,6 +314,7 @@ impl golem_wasm::IntoValue for ShardId {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[wit(name = "agent-id", owner = "golem:core@1.5.0/types")]
+#[schema(named = "agent-id")]
 pub struct AgentId {
     pub component_id: ComponentId,
     pub agent_id: String,
@@ -354,7 +370,17 @@ impl AsRef<AgentId> for &AgentId {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue,)
@@ -393,6 +419,8 @@ impl Display for PromiseId {
     serde::Deserialize,
     golem_wasm_derive::IntoValue,
     golem_wasm_derive::FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -470,6 +498,8 @@ impl From<OplogIndex> for u64 {
     serde::Deserialize,
     IntoValue,
     FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -549,7 +579,17 @@ pub fn validate_lower_kebab_case_identifier(
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Hash,
+    PartialEq,
+    IntoValue,
+    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 #[wit_transparent]
@@ -661,7 +701,20 @@ pub struct AgentResourceDescription {
 ///
 /// This is always recorded together with the current oplog index, and it can only be used
 /// as a source of truth if there are no newer oplog entries since the record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum AgentStatus {

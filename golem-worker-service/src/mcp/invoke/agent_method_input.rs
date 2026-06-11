@@ -14,8 +14,12 @@
 
 use crate::mcp::invoke::multimodal_params_extraction::extract_multimodal_element_value;
 use golem_common::base_model::agent::{
-    ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema, UntypedDataValue,
-    UntypedElementValue, UntypedNamedElementValue,
+    BinaryReference, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+    TextReference,
+};
+use golem_common::schema::adapters::value_to_schema_value;
+use golem_common::schema::{
+    BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use golem_wasm::analysis::AnalysedType;
 use rmcp::model::JsonObject;
@@ -23,11 +27,11 @@ use rmcp::model::JsonObject;
 pub fn get_agent_method_input(
     mcp_args: &JsonObject,
     schema: &DataSchema,
-) -> Result<UntypedDataValue, String> {
+) -> Result<SchemaValue, String> {
     match schema {
         DataSchema::Tuple(named_schemas) => {
-            let elements = extract_element_values(mcp_args, &named_schemas.elements)?;
-            Ok(UntypedDataValue::Tuple(elements))
+            let fields = extract_element_values(mcp_args, &named_schemas.elements)?;
+            Ok(SchemaValue::Record { fields })
         }
         DataSchema::Multimodal(named_schemas) => {
             let parts_array = mcp_args
@@ -35,13 +39,15 @@ pub fn get_agent_method_input(
                 .and_then(|v| v.as_array())
                 .ok_or("Multimodal input requires a parts array field")?;
 
-            let schema_map: std::collections::HashMap<&str, &ElementSchema> = named_schemas
-                .elements
-                .iter()
-                .map(|s| (s.name.as_str(), &s.schema))
-                .collect();
+            let schema_map: std::collections::HashMap<&str, (usize, &ElementSchema)> =
+                named_schemas
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .map(|(case, s)| (s.name.as_str(), (case, &s.schema)))
+                    .collect();
 
-            let mut named_elements = Vec::new();
+            let mut elements = Vec::new();
             for (i, part) in parts_array.iter().enumerate() {
                 // Each multimodal part is a canonical variant object: a
                 // single-key object `{ <element name>: <value> }`.
@@ -60,7 +66,7 @@ pub fn get_agent_method_input(
                 }
                 let (name, value_json) = obj.iter().next().expect("object has exactly one entry");
 
-                let elem_schema = schema_map.get(name.as_str()).ok_or_else(|| {
+                let (case, elem_schema) = schema_map.get(name.as_str()).ok_or_else(|| {
                     format!(
                         "parts[{}]: unknown element name '{}'. Expected one of: {}",
                         i,
@@ -69,14 +75,16 @@ pub fn get_agent_method_input(
                     )
                 })?;
 
-                let element = extract_multimodal_element_value(name, value_json, elem_schema, i)?;
+                let body = extract_multimodal_element_value(name, value_json, elem_schema, i)?;
 
-                named_elements.push(UntypedNamedElementValue {
-                    name: name.to_string(),
-                    value: element,
-                });
+                elements.push(SchemaValue::Variant(VariantValuePayload {
+                    case: *case as u32,
+                    payload: Some(Box::new(body)),
+                }));
             }
-            Ok(UntypedDataValue::Multimodal(named_elements))
+            Ok(SchemaValue::Record {
+                fields: vec![SchemaValue::List { elements }],
+            })
         }
     }
 }
@@ -84,7 +92,7 @@ pub fn get_agent_method_input(
 fn extract_element_values(
     args_map: &JsonObject,
     schemas: &[NamedElementSchema],
-) -> Result<Vec<UntypedElementValue>, String> {
+) -> Result<Vec<SchemaValue>, String> {
     let mut params = Vec::new();
     for schema_element in schemas {
         let element =
@@ -98,7 +106,7 @@ fn extract_single_element_value(
     args_map: &JsonObject,
     name: &str,
     elem_schema: &ElementSchema,
-) -> Result<UntypedElementValue, String> {
+) -> Result<SchemaValue, String> {
     let json_value = args_map.get(name);
     match elem_schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
@@ -116,19 +124,38 @@ fn extract_single_element_value(
             let value = crate::mcp::invoke::parse_component_model_value(&json_value, element_type)
                 .map_err(|e| format!("Failed to parse parameter '{}': {}", name, e))?;
 
-            Ok(UntypedElementValue::ComponentModel(value))
+            value_to_schema_value(&value, element_type)
+                .map_err(|e| format!("Failed to convert parameter '{}': {}", name, e))
         }
         ElementSchema::UnstructuredText(descriptor) => {
             let json_value = json_value.ok_or_else(|| format!("Missing parameter: {}", name))?;
             let value = crate::mcp::invoke::parse_unstructured_text(json_value, descriptor)
                 .map_err(|e| format!("Parameter '{}': {}", name, e))?;
-            Ok(UntypedElementValue::UnstructuredText(value))
+            match value.value {
+                TextReference::Inline(source) => Ok(SchemaValue::Text(TextValuePayload {
+                    text: source.data,
+                    language: source.text_type.map(|text_type| text_type.language_code),
+                })),
+                TextReference::Url(_) => Err(format!(
+                    "Parameter '{}': URL text references cannot be converted to SchemaValue",
+                    name
+                )),
+            }
         }
         ElementSchema::UnstructuredBinary(descriptor) => {
             let json_value = json_value.ok_or_else(|| format!("Missing parameter: {}", name))?;
             let value = crate::mcp::invoke::parse_unstructured_binary(json_value, descriptor)
                 .map_err(|e| format!("Parameter '{}': {}", name, e))?;
-            Ok(UntypedElementValue::UnstructuredBinary(value))
+            match value.value {
+                BinaryReference::Inline(source) => Ok(SchemaValue::Binary(BinaryValuePayload {
+                    bytes: source.data,
+                    mime_type: Some(source.binary_type.mime_type),
+                })),
+                BinaryReference::Url(_) => Err(format!(
+                    "Parameter '{}': URL binary references cannot be converted to SchemaValue",
+                    name
+                )),
+            }
         }
     }
 }
@@ -174,7 +201,7 @@ mod tests {
         });
         let args: JsonObject = json!({"city": "Sydney"}).as_object().unwrap().clone();
         let result = get_agent_method_input(&args, &schema).unwrap();
-        assert!(matches!(result, UntypedDataValue::Tuple(elems) if elems.len() == 1));
+        assert!(matches!(result, SchemaValue::Record { fields } if fields.len() == 1));
     }
 
     #[test]
@@ -188,14 +215,11 @@ mod tests {
             .clone();
         let result = get_agent_method_input(&args, &schema).unwrap();
         match result {
-            UntypedDataValue::Tuple(elems) => match &elems[0] {
-                UntypedElementValue::UnstructuredText(t) => match &t.value {
-                    TextReference::Inline(src) => assert_eq!(src.data, "hello world"),
-                    _ => panic!("expected inline text"),
-                },
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Text(t) => assert_eq!(t.text, "hello world"),
                 _ => panic!("expected unstructured text"),
             },
-            _ => panic!("expected tuple"),
+            _ => panic!("expected record"),
         }
     }
 
@@ -211,17 +235,14 @@ mod tests {
             .clone();
         let result = get_agent_method_input(&args, &schema).unwrap();
         match result {
-            UntypedDataValue::Tuple(elems) => match &elems[0] {
-                UntypedElementValue::UnstructuredBinary(b) => match &b.value {
-                    BinaryReference::Inline(src) => {
-                        assert_eq!(src.data, b"abc");
-                        assert_eq!(src.binary_type.mime_type, "image/png");
-                    }
-                    _ => panic!("expected inline binary"),
-                },
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Binary(b) => {
+                    assert_eq!(b.bytes, b"abc");
+                    assert_eq!(b.mime_type.as_deref(), Some("image/png"));
+                }
                 _ => panic!("expected unstructured binary"),
             },
-            _ => panic!("expected tuple"),
+            _ => panic!("expected record"),
         }
     }
 
@@ -291,7 +312,13 @@ mod tests {
         .unwrap()
         .clone();
         let result = get_agent_method_input(&args, &schema).unwrap();
-        assert!(matches!(result, UntypedDataValue::Multimodal(parts) if parts.len() == 2));
+        match result {
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::List { elements } => assert_eq!(elements.len(), 2),
+                _ => panic!("expected multimodal list"),
+            },
+            _ => panic!("expected record"),
+        }
     }
 
     #[test]
@@ -323,6 +350,6 @@ mod tests {
         });
         let args: JsonObject = json!({}).as_object().unwrap().clone();
         let result = get_agent_method_input(&args, &schema).unwrap();
-        assert!(matches!(result, UntypedDataValue::Tuple(elems) if elems.len() == 1));
+        assert!(matches!(result, SchemaValue::Record { fields } if fields.len() == 1));
     }
 }

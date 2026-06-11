@@ -54,6 +54,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
+use golem_common::schema::adapters::{legacy_data_value_to_json, output_json_to_legacy_data_value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -383,10 +384,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.clone().into(),
+                    parameters: legacy_data_value_to_json(agent_id.parameters.clone()),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
-                    method_parameters: params.into(),
+                    method_parameters: legacy_data_value_to_json(params),
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
@@ -447,10 +448,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.clone().into(),
+                    parameters: legacy_data_value_to_json(agent_id.parameters.clone()),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
-                    method_parameters: params.into(),
+                    method_parameters: legacy_data_value_to_json(params),
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
@@ -461,7 +462,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         match result.result {
-            Some(untyped_json) => {
+            Some(typed_output) => {
                 let revision = ComponentRevision::new(
                     result
                         .component_revision
@@ -486,7 +487,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                         anyhow!("Agent method not found: {}", method_name)
                     })?;
 
-                DataValue::try_from_untyped_json(untyped_json, agent_method.output_schema.clone())
+                output_json_to_legacy_data_value(typed_output.0, &agent_method.output_schema)
                     .map_err(|err| anyhow!("DataValue conversion error: {err}"))
             }
             None => Ok(DataValue::Tuple(

@@ -512,6 +512,7 @@ async fn test_playback_with_overrides(
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: Timestamp::now_utc(),
             result: original_result.clone(),
+            method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,
         });

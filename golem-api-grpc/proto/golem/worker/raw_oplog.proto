@@ -163,6 +163,7 @@ message RawAgentInvocationFinishedParameters {
   RawOplogPayload result = 1;
   int64 consumed_fuel = 2;
   uint64 component_revision = 3;
+  optional string method_name = 4;
 }
 
 message RawErrorParameters {

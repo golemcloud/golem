@@ -21,6 +21,7 @@ use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
 use async_trait::async_trait;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
 use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
 use golem_wasm::analysis::AnalysedType;
@@ -97,7 +98,7 @@ pub struct JsonComponentModelValue {
     pub value: serde_json::Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -270,6 +271,8 @@ impl RegistryInvalidationEvent {
     Deserialize,
     IntoValue,
     FromValue,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
@@ -545,7 +548,7 @@ pub struct AgentMethod {
     pub read_only: Option<ReadOnlyConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
@@ -558,7 +561,7 @@ pub struct ReadOnlyConfig {
     pub uses_principal: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -574,7 +577,7 @@ pub enum CachePolicy {
     Ttl(CachePolicyTtl),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -695,7 +698,19 @@ pub trait AgentTypeResolver {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize,
+    IntoValue,
+    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -1161,7 +1176,7 @@ impl ElementValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1177,7 +1192,7 @@ pub struct HttpMountDetails {
     pub webhook_suffix: Vec<PathSegment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1195,7 +1210,19 @@ pub struct HttpEndpointDetails {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -1250,7 +1277,19 @@ impl TryFrom<HttpMethod> for http::Method {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -1264,7 +1303,7 @@ pub struct CustomHttpMethod {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1276,7 +1315,7 @@ pub struct CorsOptions {
     pub allowed_patterns: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1291,7 +1330,7 @@ pub enum PathSegment {
     RemainingPathVariable(PathVariable),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1304,7 +1343,7 @@ pub struct LiteralSegment {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1317,7 +1356,20 @@ pub struct SystemVariableSegment {
     pub value: SystemVariable,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    IntoSchema,
+    FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum SystemVariable {
     AgentType,
@@ -1334,7 +1386,7 @@ impl Display for SystemVariable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1346,7 +1398,7 @@ pub struct PathVariable {
     pub variable_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1359,7 +1411,7 @@ pub struct HeaderVariable {
     pub variable_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1372,7 +1424,7 @@ pub struct QueryVariable {
     pub variable_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1386,7 +1438,7 @@ pub enum Snapshotting {
     Enabled(SnapshottingConfig),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1404,7 +1456,7 @@ pub enum SnapshottingConfig {
     EveryNInvocation(SnapshottingEveryNInvocation),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1416,7 +1468,7 @@ pub struct SnapshottingPeriodic {
     pub duration_nanos: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1428,7 +1480,20 @@ pub struct SnapshottingEveryNInvocation {
     pub count: u16,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    IntoSchema,
+    FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(
     feature = "full",
@@ -1458,7 +1523,7 @@ pub struct AgentConfigDeclaration {
     pub value_type: AnalysedType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)

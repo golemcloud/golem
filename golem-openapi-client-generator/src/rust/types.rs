@@ -263,9 +263,10 @@ fn schema_type(
                     )))
                 }
             } else {
-                Err(Error::unexpected(
-                    "Cannot resolve the data type for any schema-kind with no details on content_type",
-                ))
+                // An `any` schema with no content-type context (e.g. an object
+                // property or array item with an empty `{}` schema) represents
+                // an arbitrary JSON value, which maps to `serde_json::Value`.
+                Ok(DataType::Json)
             }
         }
     }

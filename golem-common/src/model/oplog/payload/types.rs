@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
-use crate::model::agent::UntypedDataValue;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::AttributeValue;
@@ -22,6 +21,10 @@ use crate::model::oplog::{
 };
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{AgentId, AgentMetadata, AgentStatus, RdbmsPoolKey, ScheduleId};
+use crate::schema::conversion::{FromSchemaError, SchemaBuilder, value_kind};
+use crate::schema::metadata::TypeId;
+use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_value::SchemaValue;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -29,10 +32,7 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
     DeserializationContext, SerializationContext,
 };
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
-use golem_wasm::{FromValue, IntoValue, NodeIndex, Value};
-use golem_wasm_derive::{FromValue, IntoValue};
+use golem_wasm::NodeIndex;
 use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
@@ -59,7 +59,15 @@ use wasmtime_wasi_http::p2::bindings::http::types::{
 use wasmtime_wasi_http::p2::body::HostIncomingBody;
 use wasmtime_wasi_http::p2::types::HostIncomingResponse;
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct ObjectMetadata {
     pub name: String,
@@ -68,7 +76,15 @@ pub struct ObjectMetadata {
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableDateTime {
     pub seconds: u64,
@@ -121,14 +137,30 @@ impl From<DateTime<Utc>> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum FileSystemError {
     ErrorCode(SerializableFsErrorCode),
@@ -255,201 +287,168 @@ impl BinaryDeserializer for SerializableFsErrorCode {
     }
 }
 
-impl IntoValue for SerializableFsErrorCode {
-    fn into_value(self) -> Value {
-        match &self.0 {
-            filesystem::types::ErrorCode::Access => Value::Enum(0),
-            filesystem::types::ErrorCode::WouldBlock => Value::Enum(1),
-            filesystem::types::ErrorCode::Already => Value::Enum(2),
-            filesystem::types::ErrorCode::BadDescriptor => Value::Enum(3),
-            filesystem::types::ErrorCode::Busy => Value::Enum(4),
-            filesystem::types::ErrorCode::Deadlock => Value::Enum(5),
-            filesystem::types::ErrorCode::Quota => Value::Enum(6),
-            filesystem::types::ErrorCode::Exist => Value::Enum(7),
-            filesystem::types::ErrorCode::FileTooLarge => Value::Enum(8),
-            filesystem::types::ErrorCode::IllegalByteSequence => Value::Enum(9),
-            filesystem::types::ErrorCode::InProgress => Value::Enum(10),
-            filesystem::types::ErrorCode::Interrupted => Value::Enum(11),
-            filesystem::types::ErrorCode::Invalid => Value::Enum(12),
-            filesystem::types::ErrorCode::Io => Value::Enum(13),
-            filesystem::types::ErrorCode::IsDirectory => Value::Enum(14),
-            filesystem::types::ErrorCode::Loop => Value::Enum(15),
-            filesystem::types::ErrorCode::TooManyLinks => Value::Enum(16),
-            filesystem::types::ErrorCode::MessageSize => Value::Enum(17),
-            filesystem::types::ErrorCode::NameTooLong => Value::Enum(18),
-            filesystem::types::ErrorCode::NoDevice => Value::Enum(19),
-            filesystem::types::ErrorCode::NoEntry => Value::Enum(20),
-            filesystem::types::ErrorCode::NoLock => Value::Enum(21),
-            filesystem::types::ErrorCode::InsufficientMemory => Value::Enum(22),
-            filesystem::types::ErrorCode::InsufficientSpace => Value::Enum(23),
-            filesystem::types::ErrorCode::NotDirectory => Value::Enum(24),
-            filesystem::types::ErrorCode::NotEmpty => Value::Enum(25),
-            filesystem::types::ErrorCode::NotRecoverable => Value::Enum(26),
-            filesystem::types::ErrorCode::Unsupported => Value::Enum(27),
-            filesystem::types::ErrorCode::NoTty => Value::Enum(28),
-            filesystem::types::ErrorCode::NoSuchDevice => Value::Enum(29),
-            filesystem::types::ErrorCode::Overflow => Value::Enum(30),
-            filesystem::types::ErrorCode::NotPermitted => Value::Enum(31),
-            filesystem::types::ErrorCode::Pipe => Value::Enum(32),
-            filesystem::types::ErrorCode::ReadOnly => Value::Enum(33),
-            filesystem::types::ErrorCode::InvalidSeek => Value::Enum(34),
-            filesystem::types::ErrorCode::TextFileBusy => Value::Enum(35),
-            filesystem::types::ErrorCode::CrossDevice => Value::Enum(36),
-        }
+// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// above: a flat enum with the same 37 cases/indices.
+impl crate::schema::conversion::IntoSchema for SerializableFsErrorCode {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.SerializableFsErrorCode")
     }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&[
-            "access",
-            "would-block",
-            "already",
-            "bad-descriptor",
-            "busy",
-            "deadlock",
-            "quota",
-            "exist",
-            "file-too-large",
-            "illegal-byte-sequence",
-            "in-progress",
-            "interrupted",
-            "invalid",
-            "io",
-            "is-directory",
-            "loop",
-            "too-many-links",
-            "message-size",
-            "name-too-long",
-            "no-device",
-            "no-entry",
-            "no-lock",
-            "insufficient-memory",
-            "insufficient-space",
-            "not-directory",
-            "not-empty",
-            "not-recoverable",
-            "unsupported",
-            "no-tty",
-            "no-such-device",
-            "overflow",
-            "not-permitted",
-            "pipe",
-            "read-only",
-            "invalid-seek",
-            "text-file-busy",
-            "cross-device",
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::r#enum(vec![
+            "access".to_string(),
+            "would-block".to_string(),
+            "already".to_string(),
+            "bad-descriptor".to_string(),
+            "busy".to_string(),
+            "deadlock".to_string(),
+            "quota".to_string(),
+            "exist".to_string(),
+            "file-too-large".to_string(),
+            "illegal-byte-sequence".to_string(),
+            "in-progress".to_string(),
+            "interrupted".to_string(),
+            "invalid".to_string(),
+            "io".to_string(),
+            "is-directory".to_string(),
+            "loop".to_string(),
+            "too-many-links".to_string(),
+            "message-size".to_string(),
+            "name-too-long".to_string(),
+            "no-device".to_string(),
+            "no-entry".to_string(),
+            "no-lock".to_string(),
+            "insufficient-memory".to_string(),
+            "insufficient-space".to_string(),
+            "not-directory".to_string(),
+            "not-empty".to_string(),
+            "not-recoverable".to_string(),
+            "unsupported".to_string(),
+            "no-tty".to_string(),
+            "no-such-device".to_string(),
+            "overflow".to_string(),
+            "not-permitted".to_string(),
+            "pipe".to_string(),
+            "read-only".to_string(),
+            "invalid-seek".to_string(),
+            "text-file-busy".to_string(),
+            "cross-device".to_string(),
         ])
     }
-}
-
-impl FromValue for SerializableFsErrorCode {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Enum(0) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Access,
-            )),
-            Value::Enum(1) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::WouldBlock,
-            )),
-            Value::Enum(2) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Already,
-            )),
-            Value::Enum(3) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::BadDescriptor,
-            )),
-            Value::Enum(4) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Busy)),
-            Value::Enum(5) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Deadlock,
-            )),
-            Value::Enum(6) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Quota)),
-            Value::Enum(7) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Exist)),
-            Value::Enum(8) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::FileTooLarge,
-            )),
-            Value::Enum(9) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::IllegalByteSequence,
-            )),
-            Value::Enum(10) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InProgress,
-            )),
-            Value::Enum(11) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Interrupted,
-            )),
-            Value::Enum(12) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Invalid,
-            )),
-            Value::Enum(13) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Io)),
-            Value::Enum(14) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::IsDirectory,
-            )),
-            Value::Enum(15) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Loop)),
-            Value::Enum(16) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::TooManyLinks,
-            )),
-            Value::Enum(17) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::MessageSize,
-            )),
-            Value::Enum(18) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NameTooLong,
-            )),
-            Value::Enum(19) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoDevice,
-            )),
-            Value::Enum(20) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoEntry,
-            )),
-            Value::Enum(21) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoLock,
-            )),
-            Value::Enum(22) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InsufficientMemory,
-            )),
-            Value::Enum(23) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InsufficientSpace,
-            )),
-            Value::Enum(24) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotDirectory,
-            )),
-            Value::Enum(25) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotEmpty,
-            )),
-            Value::Enum(26) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotRecoverable,
-            )),
-            Value::Enum(27) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Unsupported,
-            )),
-            Value::Enum(28) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::NoTty)),
-            Value::Enum(29) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoSuchDevice,
-            )),
-            Value::Enum(30) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Overflow,
-            )),
-            Value::Enum(31) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotPermitted,
-            )),
-            Value::Enum(32) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Pipe)),
-            Value::Enum(33) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::ReadOnly,
-            )),
-            Value::Enum(34) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InvalidSeek,
-            )),
-            Value::Enum(35) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::TextFileBusy,
-            )),
-            Value::Enum(36) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::CrossDevice,
-            )),
-            _ => Err(format!(
-                "Invalid value for SerializableFsErrorCode: {:?}",
-                value
-            )),
-        }
+    fn to_value(&self) -> SchemaValue {
+        let case = match &self.0 {
+            filesystem::types::ErrorCode::Access => 0,
+            filesystem::types::ErrorCode::WouldBlock => 1,
+            filesystem::types::ErrorCode::Already => 2,
+            filesystem::types::ErrorCode::BadDescriptor => 3,
+            filesystem::types::ErrorCode::Busy => 4,
+            filesystem::types::ErrorCode::Deadlock => 5,
+            filesystem::types::ErrorCode::Quota => 6,
+            filesystem::types::ErrorCode::Exist => 7,
+            filesystem::types::ErrorCode::FileTooLarge => 8,
+            filesystem::types::ErrorCode::IllegalByteSequence => 9,
+            filesystem::types::ErrorCode::InProgress => 10,
+            filesystem::types::ErrorCode::Interrupted => 11,
+            filesystem::types::ErrorCode::Invalid => 12,
+            filesystem::types::ErrorCode::Io => 13,
+            filesystem::types::ErrorCode::IsDirectory => 14,
+            filesystem::types::ErrorCode::Loop => 15,
+            filesystem::types::ErrorCode::TooManyLinks => 16,
+            filesystem::types::ErrorCode::MessageSize => 17,
+            filesystem::types::ErrorCode::NameTooLong => 18,
+            filesystem::types::ErrorCode::NoDevice => 19,
+            filesystem::types::ErrorCode::NoEntry => 20,
+            filesystem::types::ErrorCode::NoLock => 21,
+            filesystem::types::ErrorCode::InsufficientMemory => 22,
+            filesystem::types::ErrorCode::InsufficientSpace => 23,
+            filesystem::types::ErrorCode::NotDirectory => 24,
+            filesystem::types::ErrorCode::NotEmpty => 25,
+            filesystem::types::ErrorCode::NotRecoverable => 26,
+            filesystem::types::ErrorCode::Unsupported => 27,
+            filesystem::types::ErrorCode::NoTty => 28,
+            filesystem::types::ErrorCode::NoSuchDevice => 29,
+            filesystem::types::ErrorCode::Overflow => 30,
+            filesystem::types::ErrorCode::NotPermitted => 31,
+            filesystem::types::ErrorCode::Pipe => 32,
+            filesystem::types::ErrorCode::ReadOnly => 33,
+            filesystem::types::ErrorCode::InvalidSeek => 34,
+            filesystem::types::ErrorCode::TextFileBusy => 35,
+            filesystem::types::ErrorCode::CrossDevice => 36,
+        };
+        SchemaValue::Enum { case }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+impl crate::schema::conversion::FromSchema for SerializableFsErrorCode {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        let case = match v {
+            SchemaValue::Enum { case } => *case,
+            other => {
+                return Err(FromSchemaError::shape_mismatch(
+                    "enum",
+                    value_kind(other),
+                    "SerializableFsErrorCode",
+                ));
+            }
+        };
+        let error_code = match case {
+            0 => filesystem::types::ErrorCode::Access,
+            1 => filesystem::types::ErrorCode::WouldBlock,
+            2 => filesystem::types::ErrorCode::Already,
+            3 => filesystem::types::ErrorCode::BadDescriptor,
+            4 => filesystem::types::ErrorCode::Busy,
+            5 => filesystem::types::ErrorCode::Deadlock,
+            6 => filesystem::types::ErrorCode::Quota,
+            7 => filesystem::types::ErrorCode::Exist,
+            8 => filesystem::types::ErrorCode::FileTooLarge,
+            9 => filesystem::types::ErrorCode::IllegalByteSequence,
+            10 => filesystem::types::ErrorCode::InProgress,
+            11 => filesystem::types::ErrorCode::Interrupted,
+            12 => filesystem::types::ErrorCode::Invalid,
+            13 => filesystem::types::ErrorCode::Io,
+            14 => filesystem::types::ErrorCode::IsDirectory,
+            15 => filesystem::types::ErrorCode::Loop,
+            16 => filesystem::types::ErrorCode::TooManyLinks,
+            17 => filesystem::types::ErrorCode::MessageSize,
+            18 => filesystem::types::ErrorCode::NameTooLong,
+            19 => filesystem::types::ErrorCode::NoDevice,
+            20 => filesystem::types::ErrorCode::NoEntry,
+            21 => filesystem::types::ErrorCode::NoLock,
+            22 => filesystem::types::ErrorCode::InsufficientMemory,
+            23 => filesystem::types::ErrorCode::InsufficientSpace,
+            24 => filesystem::types::ErrorCode::NotDirectory,
+            25 => filesystem::types::ErrorCode::NotEmpty,
+            26 => filesystem::types::ErrorCode::NotRecoverable,
+            27 => filesystem::types::ErrorCode::Unsupported,
+            28 => filesystem::types::ErrorCode::NoTty,
+            29 => filesystem::types::ErrorCode::NoSuchDevice,
+            30 => filesystem::types::ErrorCode::Overflow,
+            31 => filesystem::types::ErrorCode::NotPermitted,
+            32 => filesystem::types::ErrorCode::Pipe,
+            33 => filesystem::types::ErrorCode::ReadOnly,
+            34 => filesystem::types::ErrorCode::InvalidSeek,
+            35 => filesystem::types::ErrorCode::TextFileBusy,
+            36 => filesystem::types::ErrorCode::CrossDevice,
+            other => {
+                return Err(FromSchemaError::out_of_range(
+                    other,
+                    37,
+                    "SerializableFsErrorCode",
+                ));
+            }
+        };
+        Ok(SerializableFsErrorCode(error_code))
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableSocketError {
     ErrorCode(SerializableSocketErrorCode),
@@ -554,111 +553,108 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
     }
 }
 
-impl IntoValue for SerializableSocketErrorCode {
-    fn into_value(self) -> Value {
-        match &self.0 {
-            SocketErrorCode::Unknown => Value::Enum(0),
-            SocketErrorCode::AccessDenied => Value::Enum(1),
-            SocketErrorCode::NotSupported => Value::Enum(2),
-            SocketErrorCode::InvalidArgument => Value::Enum(3),
-            SocketErrorCode::OutOfMemory => Value::Enum(4),
-            SocketErrorCode::Timeout => Value::Enum(5),
-            SocketErrorCode::ConcurrencyConflict => Value::Enum(6),
-            SocketErrorCode::NotInProgress => Value::Enum(7),
-            SocketErrorCode::WouldBlock => Value::Enum(8),
-            SocketErrorCode::InvalidState => Value::Enum(9),
-            SocketErrorCode::NewSocketLimit => Value::Enum(10),
-            SocketErrorCode::AddressNotBindable => Value::Enum(11),
-            SocketErrorCode::AddressInUse => Value::Enum(12),
-            SocketErrorCode::RemoteUnreachable => Value::Enum(13),
-            SocketErrorCode::ConnectionRefused => Value::Enum(14),
-            SocketErrorCode::ConnectionReset => Value::Enum(15),
-            SocketErrorCode::ConnectionAborted => Value::Enum(16),
-            SocketErrorCode::DatagramTooLarge => Value::Enum(17),
-            SocketErrorCode::NameUnresolvable => Value::Enum(18),
-            SocketErrorCode::TemporaryResolverFailure => Value::Enum(19),
-            SocketErrorCode::PermanentResolverFailure => Value::Enum(20),
-        }
+// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// above: a flat enum with the same 21 cases/indices.
+impl crate::schema::conversion::IntoSchema for SerializableSocketErrorCode {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.SerializableSocketErrorCode")
     }
-
-    fn get_type() -> AnalysedType {
-        r#enum(&[
-            "unknown",
-            "access-denied",
-            "not-supported",
-            "invalid-argument",
-            "out-of-memory",
-            "timeout",
-            "concurrency-conflict",
-            "not-in-progress",
-            "would-block",
-            "invalid-state",
-            "new-socket-limit",
-            "address-not-bindable",
-            "address-in-use",
-            "remote-unreachable",
-            "connection-refused",
-            "connection-reset",
-            "connection-aborted",
-            "datagram-too-large",
-            "name-unresolvable",
-            "temporary-resolver-failure",
-            "permanent-resolver-failure",
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::r#enum(vec![
+            "unknown".to_string(),
+            "access-denied".to_string(),
+            "not-supported".to_string(),
+            "invalid-argument".to_string(),
+            "out-of-memory".to_string(),
+            "timeout".to_string(),
+            "concurrency-conflict".to_string(),
+            "not-in-progress".to_string(),
+            "would-block".to_string(),
+            "invalid-state".to_string(),
+            "new-socket-limit".to_string(),
+            "address-not-bindable".to_string(),
+            "address-in-use".to_string(),
+            "remote-unreachable".to_string(),
+            "connection-refused".to_string(),
+            "connection-reset".to_string(),
+            "connection-aborted".to_string(),
+            "datagram-too-large".to_string(),
+            "name-unresolvable".to_string(),
+            "temporary-resolver-failure".to_string(),
+            "permanent-resolver-failure".to_string(),
         ])
+    }
+    fn to_value(&self) -> SchemaValue {
+        let case = match &self.0 {
+            SocketErrorCode::Unknown => 0,
+            SocketErrorCode::AccessDenied => 1,
+            SocketErrorCode::NotSupported => 2,
+            SocketErrorCode::InvalidArgument => 3,
+            SocketErrorCode::OutOfMemory => 4,
+            SocketErrorCode::Timeout => 5,
+            SocketErrorCode::ConcurrencyConflict => 6,
+            SocketErrorCode::NotInProgress => 7,
+            SocketErrorCode::WouldBlock => 8,
+            SocketErrorCode::InvalidState => 9,
+            SocketErrorCode::NewSocketLimit => 10,
+            SocketErrorCode::AddressNotBindable => 11,
+            SocketErrorCode::AddressInUse => 12,
+            SocketErrorCode::RemoteUnreachable => 13,
+            SocketErrorCode::ConnectionRefused => 14,
+            SocketErrorCode::ConnectionReset => 15,
+            SocketErrorCode::ConnectionAborted => 16,
+            SocketErrorCode::DatagramTooLarge => 17,
+            SocketErrorCode::NameUnresolvable => 18,
+            SocketErrorCode::TemporaryResolverFailure => 19,
+            SocketErrorCode::PermanentResolverFailure => 20,
+        };
+        SchemaValue::Enum { case }
     }
 }
 
-impl FromValue for SerializableSocketErrorCode {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Enum(0) => Ok(SerializableSocketErrorCode(SocketErrorCode::Unknown)),
-            Value::Enum(1) => Ok(SerializableSocketErrorCode(SocketErrorCode::AccessDenied)),
-            Value::Enum(2) => Ok(SerializableSocketErrorCode(SocketErrorCode::NotSupported)),
-            Value::Enum(3) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::InvalidArgument,
-            )),
-            Value::Enum(4) => Ok(SerializableSocketErrorCode(SocketErrorCode::OutOfMemory)),
-            Value::Enum(5) => Ok(SerializableSocketErrorCode(SocketErrorCode::Timeout)),
-            Value::Enum(6) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConcurrencyConflict,
-            )),
-            Value::Enum(7) => Ok(SerializableSocketErrorCode(SocketErrorCode::NotInProgress)),
-            Value::Enum(8) => Ok(SerializableSocketErrorCode(SocketErrorCode::WouldBlock)),
-            Value::Enum(9) => Ok(SerializableSocketErrorCode(SocketErrorCode::InvalidState)),
-            Value::Enum(10) => Ok(SerializableSocketErrorCode(SocketErrorCode::NewSocketLimit)),
-            Value::Enum(11) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::AddressNotBindable,
-            )),
-            Value::Enum(12) => Ok(SerializableSocketErrorCode(SocketErrorCode::AddressInUse)),
-            Value::Enum(13) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::RemoteUnreachable,
-            )),
-            Value::Enum(14) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConnectionRefused,
-            )),
-            Value::Enum(15) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConnectionReset,
-            )),
-            Value::Enum(16) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConnectionAborted,
-            )),
-            Value::Enum(17) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::DatagramTooLarge,
-            )),
-            Value::Enum(18) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::NameUnresolvable,
-            )),
-            Value::Enum(19) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::TemporaryResolverFailure,
-            )),
-            Value::Enum(20) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::PermanentResolverFailure,
-            )),
-            _ => Err(format!(
-                "Invalid value for SerializableSocketErrorCode: {:?}",
-                value
-            )),
-        }
+impl crate::schema::conversion::FromSchema for SerializableSocketErrorCode {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        let case = match v {
+            SchemaValue::Enum { case } => *case,
+            other => {
+                return Err(FromSchemaError::shape_mismatch(
+                    "enum",
+                    value_kind(other),
+                    "SerializableSocketErrorCode",
+                ));
+            }
+        };
+        let error_code = match case {
+            0 => SocketErrorCode::Unknown,
+            1 => SocketErrorCode::AccessDenied,
+            2 => SocketErrorCode::NotSupported,
+            3 => SocketErrorCode::InvalidArgument,
+            4 => SocketErrorCode::OutOfMemory,
+            5 => SocketErrorCode::Timeout,
+            6 => SocketErrorCode::ConcurrencyConflict,
+            7 => SocketErrorCode::NotInProgress,
+            8 => SocketErrorCode::WouldBlock,
+            9 => SocketErrorCode::InvalidState,
+            10 => SocketErrorCode::NewSocketLimit,
+            11 => SocketErrorCode::AddressNotBindable,
+            12 => SocketErrorCode::AddressInUse,
+            13 => SocketErrorCode::RemoteUnreachable,
+            14 => SocketErrorCode::ConnectionRefused,
+            15 => SocketErrorCode::ConnectionReset,
+            16 => SocketErrorCode::ConnectionAborted,
+            17 => SocketErrorCode::DatagramTooLarge,
+            18 => SocketErrorCode::NameUnresolvable,
+            19 => SocketErrorCode::TemporaryResolverFailure,
+            20 => SocketErrorCode::PermanentResolverFailure,
+            other => {
+                return Err(FromSchemaError::out_of_range(
+                    other,
+                    21,
+                    "SerializableSocketErrorCode",
+                ));
+            }
+        };
+        Ok(SerializableSocketErrorCode(error_code))
     }
 }
 
@@ -707,7 +703,14 @@ impl From<SerializableHttpVersion> for Version {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableHttpResponse {
     Pending,
@@ -716,7 +719,14 @@ pub enum SerializableHttpResponse {
     InternalError(Option<String>),
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableResponseHeaders {
     pub status: u16,
@@ -767,7 +777,14 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableTlsAlertReceivedPayload {
     pub alert_id: Option<u8>,
@@ -792,7 +809,14 @@ impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableDnsErrorPayload {
     pub rcode: Option<String>,
@@ -817,7 +841,14 @@ impl From<SerializableDnsErrorPayload> for DnsErrorPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableFieldSizePayload {
     pub field_name: Option<String>,
@@ -842,7 +873,14 @@ impl From<SerializableFieldSizePayload> for FieldSizePayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableHttpErrorCode {
     DnsTimeout,
@@ -1058,7 +1096,14 @@ impl From<SerializableHttpErrorCode> for wasmtime_wasi_http::p2::bindings::http:
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableHttpMethod {
     Get,
@@ -1128,7 +1173,14 @@ impl Display for SerializableHttpMethod {
 }
 
 /// A subset of AgentMetadata visible for guests (and serializable to oplog)
-#[derive(Debug, Clone, PartialEq, IntoValue, FromValue, BinaryCodec)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
     pub args: Vec<String>,
@@ -1161,7 +1213,15 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableStreamError {
     Closed,
@@ -1228,31 +1288,44 @@ impl From<SerializableIpAddress> for IpAddress {
     }
 }
 
-impl IntoValue for SerializableIpAddress {
-    fn into_value(self) -> Value {
-        let addr = match self {
-            SerializableIpAddress::IPv4 { address } => IpAddr::V4(address.into()),
-            SerializableIpAddress::IPv6 { address } => IpAddr::V6(address.into()),
-        };
-        Value::String(addr.to_string())
+// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// above: the address rendered as a string.
+impl crate::schema::conversion::IntoSchema for SerializableIpAddress {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.SerializableIpAddress")
     }
-
-    fn get_type() -> AnalysedType {
-        str()
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        let addr = match self {
+            SerializableIpAddress::IPv4 { address } => IpAddr::V4((*address).into()),
+            SerializableIpAddress::IPv6 { address } => IpAddr::V6((*address).into()),
+        };
+        SchemaValue::String(addr.to_string())
     }
 }
 
-impl FromValue for SerializableIpAddress {
-    fn from_value(value: Value) -> Result<Self, String> {
-        let str = String::from_value(value)?;
-        let ipaddr = IpAddr::from_str(&str).map_err(|err| err.to_string())?;
-        match ipaddr {
-            IpAddr::V4(addr) => Ok(SerializableIpAddress::IPv4 {
-                address: addr.octets(),
-            }),
-            IpAddr::V6(addr) => Ok(SerializableIpAddress::IPv6 {
-                address: addr.segments(),
-            }),
+impl crate::schema::conversion::FromSchema for SerializableIpAddress {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => {
+                let ipaddr =
+                    IpAddr::from_str(s).map_err(|err| FromSchemaError::custom(err.to_string()))?;
+                match ipaddr {
+                    IpAddr::V4(addr) => Ok(SerializableIpAddress::IPv4 {
+                        address: addr.octets(),
+                    }),
+                    IpAddr::V6(addr) => Ok(SerializableIpAddress::IPv6 {
+                        address: addr.segments(),
+                    }),
+                }
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "SerializableIpAddress",
+            )),
         }
     }
 }
@@ -1279,7 +1352,15 @@ impl From<SerializableIpAddress> for IpAddr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(transparent)]
 pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
@@ -1295,15 +1376,30 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableInvokeResult {
     Failed(String),
     Pending,
-    Completed(Result<UntypedDataValue, SerializableRpcError>),
+    Completed(Result<SchemaValue, SerializableRpcError>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableRpcError {
     ProtocolError { details: String },
@@ -1312,21 +1408,45 @@ pub enum SerializableRpcError {
     RemoteInternalError { details: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableWebsocketCloseInfo {
     pub code: u16,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableWebsocketMessage {
     Text(String),
     Binary(Vec<u8>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableWebsocketError {
     ConnectionFailure(String),
@@ -1337,9 +1457,15 @@ pub enum SerializableWebsocketError {
     Other(String),
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
-#[wit_transparent]
 pub struct SerializableScheduleId {
     pub id: Uuid,
 }
@@ -1479,7 +1605,15 @@ pub fn decode_span_data(spans: Vec<Vec<PublicSpanData>>) -> Vec<SpanData> {
     result
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableRdbmsError {
     ConnectionFailure(String),
@@ -1493,21 +1627,34 @@ pub enum SerializableRdbmsError {
 #[desert(transparent)]
 pub struct SerializableMacAddress(pub MacAddress);
 
-impl IntoValue for SerializableMacAddress {
-    fn into_value(self) -> Value {
-        Value::String(self.0.to_string())
+// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// above: the MAC address rendered as a string.
+impl crate::schema::conversion::IntoSchema for SerializableMacAddress {
+    fn type_id() -> TypeId {
+        TypeId::new("golem_common.model.oplog.payload.SerializableMacAddress")
     }
-
-    fn get_type() -> AnalysedType {
-        str()
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.0.to_string())
     }
 }
 
-impl FromValue for SerializableMacAddress {
-    fn from_value(value: Value) -> Result<Self, String> {
-        let str = String::from_value(value)?;
-        let macaddr = MacAddress::from_str(&str).map_err(|err| err.to_string())?;
-        Ok(SerializableMacAddress(macaddr))
+impl crate::schema::conversion::FromSchema for SerializableMacAddress {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => {
+                let macaddr = MacAddress::from_str(s)
+                    .map_err(|err| FromSchemaError::custom(err.to_string()))?;
+                Ok(SerializableMacAddress(macaddr))
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "SerializableMacAddress",
+            )),
+        }
     }
 }
 
@@ -1523,7 +1670,14 @@ impl From<SerializableMacAddress> for MacAddress {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableRdbmsRequest {
     pub pool_key: RdbmsPoolKey,
@@ -1532,13 +1686,27 @@ pub struct SerializableRdbmsRequest {
     pub transaction_id: Option<TransactionId>,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableDbValue {
     pub nodes: Vec<SerializableDbValueNode>,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub enum SerializableDbValueNode {
     Boolean(bool),
@@ -1606,7 +1774,16 @@ pub enum SerializableDbValueNode {
     Sparsevec(SparseVec),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct ValuesRange<T> {
     pub start: Bound<T>,
@@ -1667,35 +1844,14 @@ impl<T: Debug> Display for ValuesRange<T> {
     }
 }
 
-impl<T: IntoValue> IntoValue for ValuesRange<T> {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![self.start.into_value(), self.end.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        tuple(vec![T::get_type(), T::get_type()])
-    }
-}
-
-impl<T: FromValue> FromValue for ValuesRange<T> {
-    fn from_value(value: Value) -> Result<Self, String> {
-        let mut tuple = match value {
-            Value::Tuple(elements) => elements,
-            _ => return Err("Expected Tuple value".to_string()),
-        };
-
-        if tuple.len() != 2 {
-            return Err("Expected Tuple of length 2".to_string());
-        }
-
-        let start = Bound::from_value(tuple.remove(0))?;
-        let end = Bound::from_value(tuple.remove(0))?;
-
-        Ok(ValuesRange::new(start, end))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct Interval {
     pub months: i32,
@@ -1719,7 +1875,16 @@ impl Display for Interval {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct TimeTz {
     pub time: chrono::NaiveTime,
@@ -1741,7 +1906,14 @@ impl Display for TimeTz {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct Enumeration {
     pub name: String,
@@ -1760,28 +1932,56 @@ impl Display for Enumeration {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableComposite {
     pub name: String,
     pub values: Vec<NodeIndex>,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableDomain {
     pub name: String,
     pub value: NodeIndex,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableRange {
     pub name: String,
     pub value: ValuesRange<NodeIndex>,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SparseVec {
     pub dim: i32,
@@ -1937,7 +2137,15 @@ impl sqlx::postgres::PgHasArrayType for Enumeration {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub struct EnumerationType {
     pub name: String,
 }
@@ -1954,30 +2162,65 @@ impl Display for EnumerationType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub struct SerializableCompositeType {
     pub name: String,
     pub attributes: Vec<(String, NodeIndex)>,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub struct SerializableDomainType {
     pub name: String,
     pub base_type: NodeIndex,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub struct SerializableRangeType {
     pub name: String,
     pub base_type: NodeIndex,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub struct SerializableDbColumnType {
     pub nodes: Vec<SerializableDbColumnTypeNode>,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub enum SerializableDbColumnTypeNode {
     Boolean,
     Tinyint,
@@ -2052,7 +2295,14 @@ pub enum SerializableDbColumnTypeNode {
     Sparsevec,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableDbColumn {
     pub ordinal: u64,
@@ -2061,7 +2311,14 @@ pub struct SerializableDbColumn {
     pub db_type_name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct SerializableDbResult {
     pub columns: Vec<SerializableDbColumn>,

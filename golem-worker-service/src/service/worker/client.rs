@@ -32,7 +32,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -226,7 +225,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -1294,7 +1293,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -1344,7 +1343,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     } => {
                         let invocation_result = match result {
                             Some(proto_val) => {
-                                let output = UntypedDataValue::try_from(proto_val)
+                                let output = golem_common::schema::SchemaValue::try_from(proto_val)
                                     .map_err(WorkerExecutorError::unknown)?;
                                 AgentInvocationResult::AgentMethod { output }
                             }

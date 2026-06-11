@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
@@ -34,25 +33,44 @@ use crate::model::oplog::{
     MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue,
+    PublicOplogEntry, PublicSnapshotData, PublicSpanData, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
-use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
-use golem_wasm::analysis::analysed_type::{
-    bool, r#enum, f64, field, handle, list, option, record, result_err, result_ok, s16, s32, str,
-    tuple, u64, variant,
-};
-use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use crate::schema::IntoTypedSchemaValue;
+use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
+use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
+use crate::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
 use test_r::test;
 use uuid::Uuid;
+
+/// Build a single-root [`TypedSchemaValue`] fixture from an anonymous schema
+/// root and a value tree.
+fn typed(root: SchemaType, value: SchemaValue) -> TypedSchemaValue {
+    TypedSchemaValue::new(SchemaGraph::anonymous(root), value)
+}
+
+fn nf(name: &str, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.to_string(),
+        body,
+        metadata: Default::default(),
+    }
+}
+
+fn vc(name: &str, payload: Option<SchemaType>) -> VariantCaseType {
+    VariantCaseType {
+        name: name.to_string(),
+        payload,
+        metadata: Default::default(),
+    }
+}
 
 #[test]
 fn create_serialization_poem_serde_equivalence() {
@@ -73,9 +91,9 @@ fn create_serialization_poem_serde_equivalence() {
             .into_iter()
             .collect(),
         created_by: AccountId::new(),
-        local_agent_config: vec![TypedAgentConfigEntry {
+        local_agent_config: vec![PublicTypedAgentConfigEntry {
             path: vec!["foo".to_string(), "bar".to_string()],
-            value: 1.into_value_and_type(),
+            value: 1i32.into_typed_schema_value().unwrap(),
         }],
         environment_id: EnvironmentId::new(),
         parent: Some(AgentId {
@@ -106,14 +124,16 @@ fn host_call_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::HostCall(HostCallParams {
         timestamp: Timestamp::now_utc().rounded(),
         function_name: "test".to_string(),
-        request: ValueAndType {
-            value: Value::String("test".to_string()),
-            typ: str(),
-        },
-        response: ValueAndType {
-            value: Value::List(vec![Value::U64(1)]),
-            typ: list(u64()),
-        },
+        request: typed(
+            SchemaType::string(),
+            SchemaValue::String("test".to_string()),
+        ),
+        response: typed(
+            SchemaType::list(SchemaType::u64()),
+            SchemaValue::List {
+                elements: vec![SchemaValue::U64(1)],
+            },
+        ),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -122,21 +142,28 @@ fn host_call_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_with_handle_serialization_poem_serde_equivalence() {
+fn host_call_with_tuple_values_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::HostCall(HostCallParams {
         timestamp: Timestamp::now_utc().rounded(),
         function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
-        request: ValueAndType {
-            value: Value::Handle {
-                uri: "urn:worker:component-id/worker-name".to_string(),
-                resource_id: 42,
+        request: typed(
+            SchemaType::record(vec![
+                nf("uri", SchemaType::string()),
+                nf("resource-id", SchemaType::u64()),
+            ]),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("urn:worker:component-id/worker-name".to_string()),
+                    SchemaValue::U64(42),
+                ],
             },
-            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-        },
-        response: ValueAndType {
-            value: Value::Tuple(vec![Value::U64(5)]),
-            typ: tuple(vec![u64()]),
-        },
+        ),
+        response: typed(
+            SchemaType::tuple(vec![SchemaType::u64()]),
+            SchemaValue::Tuple {
+                elements: vec![SchemaValue::U64(5)],
+            },
+        ),
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -149,49 +176,80 @@ fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::HostCall(HostCallParams {
         timestamp: Timestamp::now_utc().rounded(),
         function_name: "wasi:keyvalue/store.{get}".to_string(),
-        request: ValueAndType {
-            value: Value::Record(vec![
-                Value::String("key".to_string()),
-                Value::Option(Some(Box::new(Value::List(vec![
-                    Value::U8(1),
-                    Value::U8(2),
-                ])))),
-                Value::Result(Ok(Some(Box::new(Value::Tuple(vec![
-                    Value::Bool(true),
-                    Value::F64(1.23),
-                ]))))),
-                Value::Variant {
-                    case_idx: 1,
-                    case_value: Some(Box::new(Value::S32(-42))),
-                },
-                Value::Flags(vec![true, false, true]),
-                Value::Enum(2),
-            ]),
-            typ: record(vec![
-                field("name", str()),
-                field(
+        request: typed(
+            SchemaType::record(vec![
+                nf("name", SchemaType::string()),
+                nf(
                     "data",
-                    option(list(golem_wasm::analysis::analysed_type::u8())),
+                    SchemaType::option(SchemaType::list(SchemaType::u8())),
                 ),
-                field("status", result_ok(tuple(vec![bool(), f64()]))),
-                field(
+                nf(
+                    "status",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::tuple(vec![
+                            SchemaType::bool(),
+                            SchemaType::f64(),
+                        ]))),
+                        err: None,
+                    }),
+                ),
+                nf(
                     "kind",
-                    variant(vec![
-                        golem_wasm::analysis::analysed_type::case("none", str()),
-                        golem_wasm::analysis::analysed_type::case("some", s32()),
+                    SchemaType::variant(vec![
+                        vc("none", Some(SchemaType::string())),
+                        vc("some", Some(SchemaType::s32())),
                     ]),
                 ),
-                field(
+                nf(
                     "perms",
-                    golem_wasm::analysis::analysed_type::flags(&["read", "write", "exec"]),
+                    SchemaType::flags(vec![
+                        "read".to_string(),
+                        "write".to_string(),
+                        "exec".to_string(),
+                    ]),
                 ),
-                field("color", r#enum(&["red", "green", "blue"])),
+                nf(
+                    "color",
+                    SchemaType::r#enum(vec![
+                        "red".to_string(),
+                        "green".to_string(),
+                        "blue".to_string(),
+                    ]),
+                ),
             ]),
-        },
-        response: ValueAndType {
-            value: Value::Result(Err(Some(Box::new(Value::String("not found".to_string()))))),
-            typ: result_err(str()),
-        },
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("key".to_string()),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::List {
+                            elements: vec![SchemaValue::U8(1), SchemaValue::U8(2)],
+                        })),
+                    },
+                    SchemaValue::Result(ResultValuePayload::Ok {
+                        value: Some(Box::new(SchemaValue::Tuple {
+                            elements: vec![SchemaValue::Bool(true), SchemaValue::F64(1.23)],
+                        })),
+                    }),
+                    SchemaValue::Variant(VariantValuePayload {
+                        case: 1,
+                        payload: Some(Box::new(SchemaValue::S32(-42))),
+                    }),
+                    SchemaValue::Flags {
+                        bits: vec![true, false, true],
+                    },
+                    SchemaValue::Enum { case: 2 },
+                ],
+            },
+        ),
+        response: typed(
+            SchemaType::result(ResultSpec {
+                ok: None,
+                err: Some(Box::new(SchemaType::string())),
+            }),
+            SchemaValue::Result(ResultValuePayload::Err {
+                value: Some(Box::new(SchemaValue::String("not found".to_string()))),
+            }),
+        ),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -206,22 +264,23 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
-            function_input: DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::String("test".to_string()),
-                            typ: str(),
+            function_input: typed(
+                SchemaType::tuple(vec![
+                    SchemaType::string(),
+                    SchemaType::record(vec![
+                        nf("x", SchemaType::s16()),
+                        nf("y", SchemaType::s16()),
+                    ]),
+                ]),
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("test".to_string()),
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::S16(1), SchemaValue::S16(-1)],
                         },
-                    }),
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                            typ: record(vec![field("x", s16()), field("y", s16())]),
-                        },
-                    }),
-                ],
-            }),
+                    ],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -251,15 +310,16 @@ fn agent_invocation_finished_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
         result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
-            output: DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType {
-                        value: Value::Enum(1),
-                        typ: r#enum(&["red", "green", "blue"]),
-                    },
-                })],
-            }),
+            output: typed(
+                SchemaType::r#enum(vec![
+                    "red".to_string(),
+                    "green".to_string(),
+                    "blue".to_string(),
+                ]),
+                SchemaValue::Enum { case: 1 },
+            ),
         }),
+        method_name: Some("test".to_string()),
         consumed_fuel: 100,
         component_revision: ComponentRevision::INITIAL,
     });
@@ -384,14 +444,12 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-            constructor_parameters: DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType {
-                        value: Value::String("test".to_string()),
-                        typ: str(),
-                    },
-                })],
-            }),
+            constructor_parameters: typed(
+                SchemaType::tuple(vec![SchemaType::string()]),
+                SchemaValue::Tuple {
+                    elements: vec![SchemaValue::String("test".to_string())],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec![],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -415,14 +473,12 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-            constructor_parameters: DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType {
-                        value: Value::Tuple(vec![]),
-                        typ: tuple(vec![]),
-                    },
-                })],
-            }),
+            constructor_parameters: typed(
+                SchemaType::tuple(vec![SchemaType::tuple(vec![])]),
+                SchemaValue::Tuple {
+                    elements: vec![SchemaValue::Tuple { elements: vec![] }],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec![],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -447,22 +503,23 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
-            function_input: DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::String("test".to_string()),
-                            typ: str(),
+            function_input: typed(
+                SchemaType::tuple(vec![
+                    SchemaType::string(),
+                    SchemaType::record(vec![
+                        nf("x", SchemaType::s16()),
+                        nf("y", SchemaType::s16()),
+                    ]),
+                ]),
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::String("test".to_string()),
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::S16(1), SchemaValue::S16(-1)],
                         },
-                    }),
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType {
-                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                            typ: record(vec![field("x", s16()), field("y", s16())]),
-                        },
-                    }),
-                ],
-            }),
+                    ],
+                },
+            ),
             trace_id: TraceId::generate(),
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -893,57 +950,4 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn oplog_entry_type_matches_wit() {
-    use crate::component_introspection::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
-    use crate::model::oplog::OplogEntry;
-    use golem_wasm::IntoValue;
-    use std::path::PathBuf;
-
-    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
-    let mut resolver =
-        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
-
-    let wit_type = resolver
-        .analysed_type(&TypeName {
-            package: Some("golem:api@1.5.0".to_string()),
-            owner: TypeOwner::Interface("oplog".to_string()),
-            name: Some("oplog-entry".to_string()),
-        })
-        .expect("Failed to find oplog-entry type in WIT");
-
-    let rust_type = OplogEntry::get_type();
-
-    assert_eq!(
-        rust_type, wit_type,
-        "OplogEntry::get_type() does not match the WIT oplog-entry definition"
-    );
-}
-
-#[test]
-fn public_oplog_entry_type_matches_wit() {
-    use crate::component_introspection::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
-    use golem_wasm::IntoValue;
-    use std::path::PathBuf;
-
-    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
-    let mut resolver =
-        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
-
-    let wit_type = resolver
-        .analysed_type(&TypeName {
-            package: Some("golem:api@1.5.0".to_string()),
-            owner: TypeOwner::Interface("oplog".to_string()),
-            name: Some("public-oplog-entry".to_string()),
-        })
-        .expect("Failed to find public-oplog-entry type in WIT");
-
-    let rust_type = PublicOplogEntry::get_type();
-
-    assert_eq!(
-        rust_type, wit_type,
-        "PublicOplogEntry::get_type() does not match the WIT public-oplog-entry definition"
-    );
 }

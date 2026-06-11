@@ -16,6 +16,10 @@
 // which require an increased recursion limit.
 #![recursion_limit = "256"]
 
+// Allows the `IntoSchema` / `FromSchema` derive macros (which emit
+// `::golem_common::…` paths) to be used on types defined *within* this crate.
+extern crate self as golem_common;
+
 use http::Uri;
 use shadow_rs::shadow;
 use std::convert::Infallible;

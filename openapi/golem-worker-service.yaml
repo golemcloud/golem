@@ -2254,7 +2254,7 @@ components:
         idempotencyKey:
           type: string
         constructorParameters:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
         traceId:
           type: string
         traceStates:
@@ -2279,7 +2279,7 @@ components:
       - output
       properties:
         output:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
     AgentInvocationRequest:
       type: object
       title: AgentInvocationRequest
@@ -2298,15 +2298,13 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+        parameters: {}
         phantomId:
           type: string
           format: uuid
         methodName:
           type: string
-        methodParameters:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+        methodParameters: {}
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -2328,7 +2326,7 @@ components:
         agentId:
           $ref: '#/components/schemas/AgentId'
         result:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
         componentRevision:
           type: integer
           format: uint64
@@ -2451,7 +2449,7 @@ components:
         methodName:
           type: string
         functionInput:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
         traceId:
           type: string
         traceStates:
@@ -3512,78 +3510,6 @@ components:
           format: uint64
         inner:
           $ref: '#/components/schemas/ApiRetryPolicy'
-    BinaryDescriptor:
-      type: object
-      title: BinaryDescriptor
-      properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/BinaryType'
-    BinaryReference:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/BinaryReference_Url'
-      - $ref: '#/components/schemas/BinaryReference_BinarySource'
-      discriminator:
-        propertyName: type
-        mapping:
-          Url: '#/components/schemas/BinaryReference_Url'
-          Inline: '#/components/schemas/BinaryReference_BinarySource'
-    BinaryReferenceValue:
-      type: object
-      title: BinaryReferenceValue
-      required:
-      - value
-      properties:
-        value:
-          $ref: '#/components/schemas/BinaryReference'
-    BinaryReference_BinarySource:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Inline
-            example: Inline
-      - $ref: '#/components/schemas/BinarySource'
-    BinaryReference_Url:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Url
-            example: Url
-      - $ref: '#/components/schemas/Url'
-    BinarySource:
-      type: object
-      title: BinarySource
-      required:
-      - data
-      - binaryType
-      properties:
-        data:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        binaryType:
-          $ref: '#/components/schemas/BinaryType'
-    BinaryType:
-      type: object
-      title: BinaryType
-      required:
-      - mimeType
-      properties:
-        mimeType:
-          type: string
     CancelInvocationResponse:
       type: object
       title: CancelInvocationResponse
@@ -3607,14 +3533,6 @@ components:
           items:
             type: integer
             format: uint8
-    ComponentModelElementValue:
-      type: object
-      title: ComponentModelElementValue
-      required:
-      - value
-      properties:
-        value:
-          $ref: '#/components/schemas/ValueAndType'
     CreateAgentRequest:
       type: object
       title: CreateAgentRequest
@@ -3630,8 +3548,7 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+        parameters: {}
         phantomId:
           type: string
           format: uuid
@@ -3652,104 +3569,12 @@ components:
         componentRevision:
           type: integer
           format: uint64
-    DataValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DataValue_ElementValues'
-      - $ref: '#/components/schemas/DataValue_NamedElementValues'
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/DataValue_ElementValues'
-          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
-    DataValue_ElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Tuple
-            example: Tuple
-      - $ref: '#/components/schemas/ElementValues'
-    DataValue_NamedElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Multimodal
-            example: Multimodal
-      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginResponse:
       type: object
       title: DeactivatePluginResponse
     DeleteWorkerResponse:
       type: object
       title: DeleteWorkerResponse
-    ElementValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ElementValue_ComponentModelElementValue'
-      - $ref: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
-      - $ref: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/ElementValue_ComponentModelElementValue'
-          UnstructuredText: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
-          UnstructuredBinary: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
-    ElementValue_ComponentModelElementValue:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentModel
-            example: ComponentModel
-      - $ref: '#/components/schemas/ComponentModelElementValue'
-    ElementValue_UnstructuredBinaryElementValue:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredBinary
-            example: UnstructuredBinary
-      - $ref: '#/components/schemas/UnstructuredBinaryElementValue'
-    ElementValue_UnstructuredTextElementValue:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredText
-            example: UnstructuredText
-      - $ref: '#/components/schemas/UnstructuredTextElementValue'
-    ElementValues:
-      type: object
-      title: ElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/ElementValue'
     Empty:
       type: object
       title: Empty
@@ -3880,13 +3705,6 @@ components:
     InterruptResponse:
       type: object
       title: InterruptResponse
-    JsonComponentModelValue:
-      type: object
-      title: JsonComponentModelValue
-      required:
-      - value
-      properties:
-        value: {}
     JsonSnapshotData:
       type: object
       title: JsonSnapshotData
@@ -4005,31 +3823,6 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
-    NamedElementValue:
-      type: object
-      title: NamedElementValue
-      required:
-      - name
-      - value
-      - schemaIndex
-      properties:
-        name:
-          type: string
-        value:
-          $ref: '#/components/schemas/ElementValue'
-        schemaIndex:
-          type: integer
-          format: uint32
-    NamedElementValues:
-      type: object
-      title: NamedElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/NamedElementValue'
     NormalizedJsonValue:
       type: object
     OplogCursor:
@@ -5296,6 +5089,24 @@ components:
             - LocalSpan
             example: LocalSpan
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicTypedAgentConfigEntry:
+      type: object
+      title: PublicTypedAgentConfigEntry
+      description: |-
+        Public-oplog-local, schema-native counterpart of the legacy
+        `TypedAgentConfigEntry` (which still carries `golem_wasm::ValueAndType` for
+        non-migrated consumers). Used when rendering the `Create` oplog entry as a
+        public entry; converted from the legacy form at the public-oplog render edge.
+      required:
+      - path
+      - value
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/TypedSchemaValue'
     PublicUpdateDescription:
       type: object
       oneOf:
@@ -5466,74 +5277,6 @@ components:
         targetRevision:
           type: integer
           format: uint64
-    TextDescriptor:
-      type: object
-      title: TextDescriptor
-      properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/TextType'
-    TextReference:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/TextReference_Url'
-      - $ref: '#/components/schemas/TextReference_TextSource'
-      discriminator:
-        propertyName: type
-        mapping:
-          Url: '#/components/schemas/TextReference_Url'
-          Inline: '#/components/schemas/TextReference_TextSource'
-    TextReferenceValue:
-      type: object
-      title: TextReferenceValue
-      required:
-      - value
-      properties:
-        value:
-          $ref: '#/components/schemas/TextReference'
-    TextReference_TextSource:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Inline
-            example: Inline
-      - $ref: '#/components/schemas/TextSource'
-    TextReference_Url:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Url
-            example: Url
-      - $ref: '#/components/schemas/Url'
-    TextSource:
-      type: object
-      title: TextSource
-      required:
-      - data
-      properties:
-        data:
-          type: string
-        textType:
-          $ref: '#/components/schemas/TextType'
-    TextType:
-      type: object
-      title: TextType
-      required:
-      - languageCode
-      properties:
-        languageCode:
-          type: string
     TypeBool:
       type: object
       title: TypeBool
@@ -5708,141 +5451,8 @@ components:
             type: string
         value:
           $ref: '#/components/schemas/ValueAndType'
-    UnstructuredBinaryElementValue:
+    TypedSchemaValue:
       type: object
-      title: UnstructuredBinaryElementValue
-      required:
-      - value
-      - descriptor
-      properties:
-        value:
-          $ref: '#/components/schemas/BinaryReference'
-        descriptor:
-          $ref: '#/components/schemas/BinaryDescriptor'
-    UnstructuredTextElementValue:
-      type: object
-      title: UnstructuredTextElementValue
-      required:
-      - value
-      - descriptor
-      properties:
-        value:
-          $ref: '#/components/schemas/TextReference'
-        descriptor:
-          $ref: '#/components/schemas/TextDescriptor'
-    UntypedJsonDataValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
-      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
-          Multimodal: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
-    UntypedJsonDataValue_UntypedJsonElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Tuple
-            example: Tuple
-      - $ref: '#/components/schemas/UntypedJsonElementValues'
-    UntypedJsonDataValue_UntypedJsonNamedElementValues:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Multimodal
-            example: Multimodal
-      - $ref: '#/components/schemas/UntypedJsonNamedElementValues'
-    UntypedJsonElementValue:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
-      - $ref: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
-      - $ref: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
-          UnstructuredText: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
-          UnstructuredBinary: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
-    UntypedJsonElementValue_BinaryReferenceValue:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredBinary
-            example: UnstructuredBinary
-      - $ref: '#/components/schemas/BinaryReferenceValue'
-    UntypedJsonElementValue_JsonComponentModelValue:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentModel
-            example: ComponentModel
-      - $ref: '#/components/schemas/JsonComponentModelValue'
-    UntypedJsonElementValue_TextReferenceValue:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - UnstructuredText
-            example: UnstructuredText
-      - $ref: '#/components/schemas/TextReferenceValue'
-    UntypedJsonElementValues:
-      type: object
-      title: UntypedJsonElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/UntypedJsonElementValue'
-    UntypedJsonNamedElementValue:
-      type: object
-      title: UntypedJsonNamedElementValue
-      required:
-      - name
-      - value
-      properties:
-        name:
-          type: string
-        value:
-          $ref: '#/components/schemas/UntypedJsonElementValue'
-    UntypedJsonNamedElementValues:
-      type: object
-      title: UntypedJsonNamedElementValues
-      required:
-      - elements
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/UntypedJsonNamedElementValue'
     UpdateRecord:
       type: object
       oneOf:
@@ -5909,14 +5519,6 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
-    Url:
-      type: object
-      title: Url
-      required:
-      - value
-      properties:
-        value:
-          type: string
     ValueAndType:
       type: object
       required:
@@ -6025,6 +5627,8 @@ components:
           format: date-time
         result:
           $ref: '#/components/schemas/PublicAgentInvocationResult'
+        methodName:
+          type: string
         consumedFuel:
           type: integer
           format: int64
@@ -6162,7 +5766,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+            $ref: '#/components/schemas/PublicTypedAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -6344,9 +5948,9 @@ components:
         functionName:
           type: string
         request:
-          $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/TypedSchemaValue'
         response:
-          $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
     r#InterruptedParams:

@@ -13,15 +13,16 @@
 // limitations under the License.
 
 use crate::custom_api::error::RequestHandlerError;
-use golem_common::model::agent::UntypedElementValue;
 use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType};
+use golem_wasm::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
 
 pub fn parse_path_segment_value(
     value: String,
     r#type: &PathSegmentType,
-) -> Result<UntypedElementValue, RequestHandlerError> {
-    parse_path_segment_value_to_component_model(value, r#type)
-        .map(UntypedElementValue::ComponentModel)
+) -> Result<ValueAndType, RequestHandlerError> {
+    let component_value = parse_path_segment_value_to_component_model(value, r#type)?;
+    Ok(ValueAndType::new(component_value, AnalysedType::from(r#type)))
 }
 
 pub fn parse_path_segment_value_to_component_model(
@@ -150,8 +151,8 @@ pub fn parse_path_segment_value_to_component_model(
 pub fn parse_query_or_header_value(
     values: &[String],
     r#type: &QueryOrHeaderType,
-) -> Result<UntypedElementValue, RequestHandlerError> {
-    match r#type {
+) -> Result<ValueAndType, RequestHandlerError> {
+    let component_value = match r#type {
         QueryOrHeaderType::Primitive(inner) => {
             if values.len() > 1 {
                 return Err(RequestHandlerError::TooManyValues {
@@ -166,27 +167,25 @@ pub fn parse_query_or_header_value(
                     expected: "single value",
                 })?;
 
-            parse_path_segment_value(value.clone(), inner)
+            parse_path_segment_value_to_component_model(value.clone(), inner)?
         }
 
         QueryOrHeaderType::Option { inner, .. } => match values.len() {
-            0 => Ok(UntypedElementValue::ComponentModel(
-                golem_wasm::Value::Option(None),
-            )),
+            0 => golem_wasm::Value::Option(None),
 
             1 => {
                 let parsed = parse_path_segment_value_to_component_model(
                     values.iter().next().unwrap().clone(),
                     inner,
                 )?;
-                Ok(UntypedElementValue::ComponentModel(
-                    golem_wasm::Value::Option(Some(Box::new(parsed))),
-                ))
+                golem_wasm::Value::Option(Some(Box::new(parsed)))
             }
 
-            _ => Err(RequestHandlerError::TooManyValues {
-                expected: "zero or one value",
-            }),
+            _ => {
+                return Err(RequestHandlerError::TooManyValues {
+                    expected: "zero or one value",
+                });
+            }
         },
 
         QueryOrHeaderType::List { inner, .. } => {
@@ -199,11 +198,14 @@ pub fn parse_query_or_header_value(
                 )?);
             }
 
-            Ok(UntypedElementValue::ComponentModel(
-                golem_wasm::Value::List(parsed_values),
-            ))
+            golem_wasm::Value::List(parsed_values)
         }
-    }
+    };
+
+    Ok(ValueAndType::new(
+        component_value,
+        AnalysedType::from(r#type.clone()),
+    ))
 }
 
 #[cfg(test)]
@@ -218,20 +220,14 @@ mod path_segment_tests {
     fn parse_string_path_segment() {
         let result = parse_path_segment_value("hello".to_string(), &PathSegmentType::Str).unwrap();
 
-        assert_eq!(
-            result,
-            UntypedElementValue::ComponentModel(golem_wasm::Value::String("hello".into()))
-        );
+        assert_eq!(result.value, golem_wasm::Value::String("hello".into()));
     }
 
     #[test]
     fn parse_char_success() {
         let result = parse_path_segment_value("a".to_string(), &PathSegmentType::Chr).unwrap();
 
-        assert_eq!(
-            result,
-            UntypedElementValue::ComponentModel(golem_wasm::Value::Char('a'))
-        );
+        assert_eq!(result.value, golem_wasm::Value::Char('a'));
     }
 
     #[test]
@@ -335,10 +331,7 @@ mod query_or_header_tests {
         )
         .unwrap();
 
-        assert_eq!(
-            result,
-            UntypedElementValue::ComponentModel(golem_wasm::Value::U32(42))
-        );
+        assert_eq!(result.value, golem_wasm::Value::U32(42));
     }
 
     #[test]
@@ -381,10 +374,7 @@ mod query_or_header_tests {
         )
         .unwrap();
 
-        assert_eq!(
-            result,
-            UntypedElementValue::ComponentModel(golem_wasm::Value::Option(None))
-        );
+        assert_eq!(result.value, golem_wasm::Value::Option(None));
     }
 
     #[test]
@@ -402,10 +392,8 @@ mod query_or_header_tests {
         .unwrap();
 
         assert_eq!(
-            result,
-            UntypedElementValue::ComponentModel(golem_wasm::Value::Option(Some(Box::new(
-                golem_wasm::Value::Bool(true)
-            ))))
+            result.value,
+            golem_wasm::Value::Option(Some(Box::new(golem_wasm::Value::Bool(true))))
         );
     }
 
@@ -441,12 +429,12 @@ mod query_or_header_tests {
         .unwrap();
 
         assert_eq!(
-            result,
-            UntypedElementValue::ComponentModel(golem_wasm::Value::List(vec![
+            result.value,
+            golem_wasm::Value::List(vec![
                 golem_wasm::Value::U8(1),
                 golem_wasm::Value::U8(2),
                 golem_wasm::Value::U8(3),
-            ]))
+            ])
         );
     }
 }

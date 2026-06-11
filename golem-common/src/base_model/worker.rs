@@ -41,7 +41,12 @@ declare_unions! {
         FailedUpdate(FailedUpdate),
     }
 
-    #[derive(IntoValue, FromValue)]
+    #[derive(
+        IntoValue,
+        FromValue,
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub enum RevertWorkerTarget {
@@ -143,14 +148,24 @@ declare_structs! {
         pub fingerprint: AgentFingerprint
     }
 
-    #[derive(IntoValue, FromValue)]
+    #[derive(
+        IntoValue,
+        FromValue,
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct RevertToOplogIndex {
         pub last_oplog_index: OplogIndex,
     }
 
-    #[derive(IntoValue, FromValue)]
+    #[derive(
+        IntoValue,
+        FromValue,
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct RevertLastInvocations {

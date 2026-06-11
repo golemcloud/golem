@@ -77,6 +77,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::schema::adapters::legacy_data_value_to_json;
 use golem_wasm::analysis::AnalysedType;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -519,10 +520,10 @@ impl WorkerCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: UntypedJsonDataValue::from(agent_id.parameters.clone()),
+            parameters: legacy_data_value_to_json(agent_id.parameters.clone()),
             phantom_id: agent_id.phantom_id,
             method_name: method_name.clone(),
-            method_parameters,
+            method_parameters: serde_json::to_value(method_parameters)?,
             mode,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),

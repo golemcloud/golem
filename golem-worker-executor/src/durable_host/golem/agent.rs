@@ -34,14 +34,14 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::schema::adapters::agent::{
-    agent_type_to_schema, legacy_data_value_to_typed_schema_value,
+    agent_type_to_schema, legacy_data_value_to_typed_schema_value, schema_agent_type_to_legacy,
 };
 use golem_common::schema::adapters::analysed_type::{
     analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
 };
 use golem_common::schema::adapters::data_schema::data_schema_to_input_schema;
 use golem_common::schema::adapters::untyped::typed_input_to_untyped_data_value;
-use golem_common::schema::adapters::value::{schema_value_to_value, value_to_schema_value};
+use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::schema::agent::RegisteredAgentTypeSchema;
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::graph::SchemaGraph;
@@ -66,6 +66,31 @@ fn encode_registered_agent_type_wire(
     };
     encode_registered_agent_type(&schema)
         .map_err(|e| anyhow!("Failed to encode agent type to wire form: {e}"))
+}
+
+/// Project the canonical [`RegisteredAgentType`] model into its schema-native
+/// counterpart for schema-native oplog persistence.
+fn registered_agent_type_to_schema(
+    registered: RegisteredAgentType,
+) -> Result<RegisteredAgentTypeSchema, String> {
+    let agent_type = agent_type_to_schema(&registered.agent_type).map_err(|e| e.to_string())?;
+    Ok(RegisteredAgentTypeSchema {
+        agent_type,
+        implemented_by: registered.implemented_by,
+    })
+}
+
+/// Recover the canonical [`RegisteredAgentType`] model from the schema-native
+/// form read back from the oplog (live persist round-trip or replay).
+fn registered_agent_type_from_schema(
+    registered: RegisteredAgentTypeSchema,
+) -> Result<RegisteredAgentType, String> {
+    let agent_type =
+        schema_agent_type_to_legacy(&registered.agent_type).map_err(|e| e.to_string())?;
+    Ok(RegisteredAgentType {
+        agent_type,
+        implemented_by: registered.implemented_by,
+    })
 }
 
 /// Convert a guest-supplied `golem:core/types@2.0.0` `schema-value-tree`
@@ -213,77 +238,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             };
 
-            // The oplog payload still stores the resolved value in the legacy
-            // typed form owned by the (later-wave) oplog subsystem. When the
-            // secret has its own graph it is used directly to lower the
-            // schema-native value; otherwise the inline expected type stands
-            // in as a self-contained anonymous graph.
-            let (boundary_graph, boundary_type);
-            if let Some(sec) = agent_secret {
-                boundary_graph = sec.secret_type.clone();
-                boundary_type = schema_type_to_analysed_type(
-                    &boundary_graph,
-                    &boundary_graph.root,
-                )
-                .map_err(|e| {
-                    anyhow!(
-                        "Agent secret for key {path_str} has a type not representable in the legacy oplog form: {e}"
-                    )
-                })?;
-            } else {
-                boundary_graph = SchemaGraph::anonymous(expected_type.clone());
-                boundary_type =
-                    schema_type_to_analysed_type(&boundary_graph, &boundary_graph.root).map_err(
-                        |e| {
-                            anyhow!(
-                                "Expected secret type for key {path_str} is not representable in the legacy oplog form: {e}"
-                            )
-                        },
-                    )?;
-            }
-            let result = schema_value_to_value(
-                &boundary_graph,
-                &boundary_graph.root,
-                &result_schema,
-            )
-            .map_err(|e| {
-                anyhow!(
-                    "Resolved secret value for key {path_str} is not representable in the legacy oplog form: {e}"
-                )
-            })?;
-
+            // The oplog payload now stores the resolved value schema-natively;
+            // the guest-supplied `expected_type` is self-contained (no refs)
+            // and is recorded as the request metadata.
             let persisted = durability
                 .persist(
                     self,
                     HostRequestGolemAgentGetConfigValue {
                         path,
-                        expected_type: boundary_type.clone(),
+                        expected_type: expected_type.clone(),
                     },
-                    HostResponseGolemAgentGetConfigValue { result },
+                    HostResponseGolemAgentGetConfigValue {
+                        result: result_schema,
+                    },
                 )
                 .await?;
 
-            // Lift the persisted (legacy oplog) value back into the
-            // schema-native value the agent surface returns to the guest.
-            value_to_schema_value(&persisted.result, &boundary_type).map_err(|e| {
-                anyhow!(
-                    "Resolved secret value for key {path_str} is not representable as a schema value: {e}"
-                )
-            })
+            Ok(persisted.result)
         } else {
             let replayed = durability.replay(self).await?;
-            let return_graph = SchemaGraph::anonymous(expected_type);
-            let return_type = schema_type_to_analysed_type(&return_graph, &return_graph.root)
-                .map_err(|e| {
-                    anyhow!(
-                        "Expected secret type for key {path_str} is not representable in the legacy oplog form: {e}"
-                    )
-                })?;
-            value_to_schema_value(&replayed.result, &return_type).map_err(|e| {
-                anyhow!(
-                    "Resolved secret value for key {path_str} is not representable as a schema value: {e}"
-                )
-            })
+            Ok(replayed.result)
         }
     }
 
@@ -315,6 +289,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            let result = result.and_then(|types| {
+                types
+                    .into_iter()
+                    .map(registered_agent_type_to_schema)
+                    .collect::<Result<Vec<_>, String>>()
+            });
             durability
                 .persist(
                     self,
@@ -327,7 +307,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(result),
+            Ok(result) => result
+                .into_iter()
+                .map(registered_agent_type_from_schema)
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|err| anyhow!(err)),
             Err(err) => Err(anyhow!(err)),
         }
     }
@@ -363,6 +347,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            let result = result.and_then(|maybe_type| {
+                maybe_type.map(registered_agent_type_to_schema).transpose()
+            });
             durability
                 .persist(
                     self,
@@ -375,7 +362,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(result),
+            Ok(result) => result
+                .map(registered_agent_type_from_schema)
+                .transpose()
+                .map_err(|err| anyhow!(err)),
             Err(err) => Err(anyhow!(err)),
         }
     }

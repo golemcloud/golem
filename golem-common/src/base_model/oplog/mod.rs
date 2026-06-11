@@ -23,9 +23,8 @@ use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
-use crate::model::worker::TypedAgentConfigEntry;
 use crate::oplog_entry;
-use golem_wasm::ValueAndType;
+use crate::schema::TypedSchemaValue;
 pub use public_types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -99,7 +98,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            local_agent_config: Vec<TypedAgentConfigEntry>,
+            local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,
             instance_id: Uuid
         }
@@ -117,8 +116,8 @@ oplog_entry! {
         }
         public {
             function_name: String,
-            request: ValueAndType,
-            response: ValueAndType,
+            request: TypedSchemaValue,
+            response: TypedSchemaValue,
             durable_function_type: PublicDurableFunctionType,
         }
     },
@@ -145,11 +144,13 @@ oplog_entry! {
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
             result: payload::OplogPayload<AgentInvocationResult>,
+            method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
         public {
             result: PublicAgentInvocationResult,
+            method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
@@ -475,9 +476,7 @@ oplog_entry! {
         }
         public {
             span_id: SpanId,
-            #[cfg_attr(feature = "full", wit_field(rename = "parent"))]
             parent_id: Option<SpanId>,
-            #[cfg_attr(feature = "full", wit_field(rename = "linked-context-id"))]
             linked_context: Option<SpanId>,
             attributes: Vec<PublicAttribute>,
         }

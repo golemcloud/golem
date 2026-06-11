@@ -292,8 +292,7 @@ impl LimitService for NoopLimitService {
 
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params:
-        Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
     invocation_output: AgentInvocationOutput,
 }
 
@@ -490,7 +489,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         agent_id: &AgentId,
         _: Option<String>,
-        method_params: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_params: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         _: Option<IdempotencyKey>,
@@ -529,8 +528,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) account_id: AccountId,
     pub(crate) account_email: AccountEmail,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params:
-        Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
 }
 
 impl InvocationHarness {
@@ -616,13 +614,13 @@ impl InvocationHarness {
     }
 
     /// The method parameters recorded for the first invocation, decoded back
-    /// from the gRPC carrier into the runtime `UntypedDataValue`.
-    pub(crate) fn recorded_method_params(&self) -> golem_common::model::agent::UntypedDataValue {
+    /// from the gRPC carrier into the runtime `SchemaValue`.
+    pub(crate) fn recorded_method_params(&self) -> golem_common::schema::SchemaValue {
         self.method_params.lock().unwrap()[0]
             .clone()
             .expect("method params were recorded")
             .try_into()
-            .expect("method params decode back into UntypedDataValue")
+            .expect("method params decode back into SchemaValue")
     }
 }
 
