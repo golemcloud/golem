@@ -3645,6 +3645,40 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
+        let component_service = parent.component_service();
+        component_service.record_revoked_cards(
+            &worker_metadata
+                .last_known_status
+                .revoked_cards
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+
+        if let Some(card_id) = parent.parsed_agent_id.as_ref().and_then(|agent_id| {
+            component_metadata
+                .metadata
+                .agent_type_initial_permission_template(&agent_id.agent_type)
+                .map(|template| template.card_id)
+        }) {
+            let exists = !component_service.is_card_revoked(card_id)
+                && component_service
+                    .existing_cards(vec![card_id])
+                    .await?
+                    .contains(&card_id);
+            if !exists
+                && !worker_metadata
+                    .last_known_status
+                    .revoked_cards
+                    .contains(&card_id)
+            {
+                component_service.record_revoked_cards(&[card_id]);
+                parent
+                    .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                    .await;
+            }
+        }
+
         let component_version_for_replay = worker_metadata
             .last_known_status
             .pending_updates

@@ -95,6 +95,13 @@ pub trait ComponentService: Send + Sync {
     fn is_card_revoked(&self, _card_id: CardId) -> bool {
         false
     }
+
+    async fn existing_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<CardId>, WorkerExecutorError> {
+        Ok(card_ids)
+    }
 }
 
 pub fn configured(
@@ -413,6 +420,28 @@ impl ComponentService for ComponentServiceDefault {
 
     fn is_card_revoked(&self, card_id: CardId) -> bool {
         self.revoked_cards.read().unwrap().contains(&card_id)
+    }
+
+    async fn existing_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<CardId>, WorkerExecutorError> {
+        let existing = self
+            .registry_client
+            .batch_get_existing_cards(card_ids.clone())
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed checking card existence: {}",
+                    err.to_safe_string()
+                ))
+            })?;
+        let missing = card_ids
+            .into_iter()
+            .filter(|card_id| !existing.contains(card_id))
+            .collect::<Vec<_>>();
+        self.record_revoked_cards(&missing);
+        Ok(existing)
     }
 }
 

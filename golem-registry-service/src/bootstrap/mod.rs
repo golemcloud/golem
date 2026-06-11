@@ -94,6 +94,7 @@ pub struct Services {
     pub agent_secret_service: Arc<AgentSecretService>,
     pub application_service: Arc<ApplicationService>,
     pub auth_service: Arc<AuthService>,
+    pub card_service: Arc<CardService>,
     pub component_compilation_service: Arc<dyn ComponentCompilationService>,
     pub component_resolver_service: Arc<ComponentResolverService>,
     pub component_service: Arc<ComponentService>,
@@ -286,7 +287,7 @@ impl Services {
 
         let component_write_service = Arc::new(ComponentWriteService::new(
             repos.component_repo.clone(),
-            card_service,
+            card_service.clone(),
             component_object_store,
             component_compilation_service.clone(),
             initial_agent_files,
@@ -421,6 +422,7 @@ impl Services {
             agent_secret_service,
             application_service,
             auth_service,
+            card_service,
             component_compilation_service,
             component_resolver_service,
             component_service,

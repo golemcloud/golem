@@ -35,6 +35,19 @@ use golem_common::model::oplog::public_oplog_entry::{
     SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
     SuspendParams,
 };
+use golem_common::model::oplog::public_oplog_entry::{
+    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
+    CancelPendingInvocationParams, CardRevokedParams, ChangePersistenceLevelParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+};
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
@@ -880,6 +893,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::RemoveRetryPolicy { timestamp, name } => Ok(
                 PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams { timestamp, name }),
             ),
+            OplogEntry::CardRevoked { timestamp, card_id } => {
+                Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
+                    timestamp,
+                    card_id,
+                }))
+            }
         }
     }
 }

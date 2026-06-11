@@ -48,6 +48,19 @@ use crate::model::oplog::public_oplog_entry::{
     SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
     SuspendParams,
 };
+use crate::model::oplog::public_oplog_entry::{
+    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
+    CancelPendingInvocationParams, CardRevokedParams, ChangePersistenceLevelParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+};
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel,
@@ -802,6 +815,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     name: params.policy_name,
                 }),
             ),
+            oplog_entry::Entry::CardRevoked(params) => {
+                Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    card_id: params.card_id.ok_or("Missing card_id field")?.into(),
+                }))
+            }
         }
     }
 }
@@ -1319,6 +1338,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::RemoveRetryPolicyParameters {
                             timestamp: Some(params.timestamp.into()),
                             policy_name: params.name,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardRevoked(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardRevoked(
+                        golem_api_grpc::proto::golem::worker::CardRevokedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            card_id: Some(params.card_id.into()),
                         },
                     )),
                 }
@@ -2491,6 +2520,10 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 timestamp: p.timestamp,
                 name: p.name,
             }),
+            PublicOplogEntry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
+                timestamp: p.timestamp,
+                card_id: p.card_id,
+            }),
         }
     }
 }
@@ -2851,7 +2884,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         use golem_api_grpc::proto::golem::worker::{
             RawActivatePluginParameters, RawAgentInvocationFinishedParameters,
             RawAgentInvocationStartedParameters, RawBeginRemoteTransactionParameters,
-            RawCancelPendingInvocationParameters, RawCancelledParameters,
+            RawCancelPendingInvocationParameters, RawCancelledParameters, RawCardRevokedParameters,
             RawChangePersistenceLevelParameters, RawCreateParameters, RawCreateResourceParameters,
             RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
             RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
@@ -3203,6 +3236,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }
             OplogEntry::RemoveRetryPolicy { name, .. } => {
                 Entry::RemoveRetryPolicy(RawRemoveRetryPolicyParameters { name })
+            }
+            OplogEntry::CardRevoked { card_id, .. } => {
+                Entry::CardRevoked(RawCardRevokedParameters {
+                    card_id: Some(card_id.into()),
+                })
             }
         };
 
@@ -3619,6 +3657,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
                 timestamp,
                 name: p.name,
+            }),
+            Entry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
+                timestamp,
+                card_id: p.card_id.ok_or("Missing card_id")?.into(),
             }),
         }
     }

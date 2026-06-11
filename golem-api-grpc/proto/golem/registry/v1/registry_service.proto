@@ -53,6 +53,9 @@ service RegistryService {
   rpc GetResourceDefinitionById (GetResourceDefinitionByIdRequest) returns (GetResourceDefinitionByIdResponse);
   rpc GetResourceDefinitionByName (GetResourceDefinitionByNameRequest) returns (GetResourceDefinitionByNameResponse);
 
+  // cards api
+  rpc BatchGetExistingCards (BatchGetExistingCardsRequest) returns (BatchGetExistingCardsResponse);
+
   // registry invalidation stream — multiplexed event types
   rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
       returns (stream RegistryInvalidationEvent);
@@ -114,6 +117,21 @@ message BatchUpdateResourceUsageResponse {
 
 message BatchUpdateResourceUsageSuccessResponse {
   golem.common.AccountResourceLimits account_resource_limits = 1;
+}
+
+message BatchGetExistingCardsRequest {
+  repeated golem.common.UUID card_ids = 1;
+}
+
+message BatchGetExistingCardsResponse {
+  oneof result {
+    BatchGetExistingCardsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message BatchGetExistingCardsSuccessResponse {
+  repeated golem.common.UUID card_ids = 1;
 }
 
 message DownloadComponentRequest {

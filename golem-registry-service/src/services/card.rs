@@ -55,4 +55,8 @@ impl CardService {
 
         Ok(card_id)
     }
+
+    pub async fn existing(&self, card_ids: Vec<CardId>) -> Result<Vec<CardId>, CardRepoError> {
+        self.card_repo.existing(card_ids).await.map_err(Into::into)
+    }
 }
