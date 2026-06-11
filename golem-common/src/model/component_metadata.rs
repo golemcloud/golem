@@ -511,7 +511,7 @@ impl AgentInitialPermissionTemplate {
 
 fn agent_permission(verb: AgentVerb, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
     PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
-        owner: PolymorphicAgentOwnerPattern::Agent,
+        owner: PolymorphicAgentOwnerPattern::ComponentAgents,
         recipient,
         verb: Some(verb),
         resource: AgentResourcePattern::Any,
