@@ -55,22 +55,18 @@ struct QueuedAgent {
 /// the responsibility to decrement the account's `running_count` and wake the
 /// next queued agent when it is released.
 ///
-/// Crucially, the `running_count` was incremented *together with* acquiring the
-/// raw permit, and the matching decrement lives **only** here in `Drop`. This
-/// binds the count strictly to the lifetime of the granted permit, regardless
-/// of how the slot is ultimately disposed of:
+/// The `running_count` is incremented together with acquiring the raw permit,
+/// and the matching decrement lives only here in `Drop`. This binds the count
+/// strictly to the lifetime of the granted permit, regardless of how the slot
+/// is disposed of:
 ///
-/// * It is moved into a [`ConcurrentAgentPermit`] and dropped when the agent
+/// * it is moved into a [`ConcurrentAgentPermit`] and dropped when the agent
 ///   releases the slot (the normal case), or
 /// * it is sent into a queued waiter's oneshot and that waiter is cancelled
-///   before receiving it — the slot is then dropped *inside* the channel.
+///   before receiving it — the slot is then dropped inside the channel.
 ///
 /// Both paths run this same `Drop`, so a slot granted to a waiter that is
-/// cancelled after the grant succeeded cannot leak the count. (A previous
-/// design decremented only when the oneshot `send` failed, which left
-/// `running_count` permanently inflated when a waiter was cancelled *after* a
-/// successful send — wedging the whole account once the count reached the
-/// limit.)
+/// cancelled after the grant succeeded cannot leak the count.
 struct GrantedSlot {
     raw: Option<OwnedSemaphorePermit>,
     account: Arc<AccountScheduler>,
@@ -359,7 +355,7 @@ fn try_grant_next_sync(account: &Arc<AccountScheduler>, account_id: &AccountId) 
 /// uses `try_acquire_owned` which does not block.
 ///
 /// Each granted permit is wrapped in a [`GrantedSlot`] carrying the
-/// `running_count` decrement, so a waiter cancelled *after* a successful send
+/// `running_count` decrement, so a waiter cancelled after a successful send
 /// still releases its slot (via the slot's `Drop` when the oneshot channel is
 /// dropped) rather than leaking the count. The increment here is matched
 /// one-for-one by that slot's `Drop`.
