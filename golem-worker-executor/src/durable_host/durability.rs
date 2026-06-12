@@ -862,6 +862,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.process_pending_replay_events().await?;
+        self.drain_card_events_at_boundary().await?;
+
         // Generic read-only side-effect trap. For any `Write*` durable function type, refuse
         // the call up front when the worker is executing a read-only agent method. This is the
         // single, central place that enforces the read-only contract — outgoing HTTP, RPC,
@@ -883,8 +886,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 host_function,
             });
         }
-
-        self.process_pending_replay_events().await?;
         let oplog_index = self.begin_function(function_type).await?;
         Ok(oplog_index)
     }

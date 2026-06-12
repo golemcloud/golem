@@ -152,7 +152,10 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     card_count = card_ids.len(),
                     "Received card revocation event, recording revoked card ids"
                 );
-                self.card_service.record_revoked_cards(&card_ids);
+                let affected_agents = self.card_service.record_revoked_cards(&card_ids);
+                self.active_workers
+                    .notify_card_revoked(affected_agents)
+                    .await;
             }
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,

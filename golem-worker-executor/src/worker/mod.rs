@@ -758,6 +758,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
+    pub async fn unblock(&self) {
+        let instance_guard = self.instance.lock().await;
+        if let WorkerInstance::Running(running) = &*instance_guard {
+            let _ = running.sender.send(WorkerCommand::Unblock);
+        }
+    }
+
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
     /// There are several interruption modes but not all of them are supported by all worker
     /// executor implementations.
@@ -2556,6 +2563,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 notify.set();
             }
         }
+
+        self.card_service().unregister_agent(&self.owned_agent_id);
     }
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
@@ -3651,13 +3660,14 @@ impl RunningWorker {
                 .agent_type_initial_permission_template(&agent_id.agent_type)
                 .map(|template| template.card_id)
         });
+        let initial_agent_card_already_revoked = initial_agent_card_id.is_some_and(|card_id| {
+            worker_metadata
+                .last_known_status
+                .revoked_cards
+                .contains(&card_id)
+        });
         let initial_agent_card_liveness = match initial_agent_card_id {
-            Some(card_id)
-                if worker_metadata
-                    .last_known_status
-                    .revoked_cards
-                    .contains(&card_id) =>
-            {
+            Some(_) if initial_agent_card_already_revoked => {
                 crate::services::card::CardLiveness::Revoked {
                     newly_detected: false,
                 }
@@ -3686,12 +3696,16 @@ impl RunningWorker {
             (None, _) => golem_common::model::card::EffectiveSurface::default(),
         };
 
-        if let Some(card_id) = initial_agent_card_id
-            && initial_agent_card_liveness.newly_detected_revocation()
-        {
-            parent
-                .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
-                .await;
+        if let Some(card_id) = initial_agent_card_id {
+            if initial_agent_card_liveness.is_live() {
+                parent
+                    .card_service()
+                    .register_agent_cards(parent.owned_agent_id.clone(), &[card_id]);
+            } else if !initial_agent_card_already_revoked {
+                parent
+                    .card_service()
+                    .enqueue_revoked_cards_for_agent(&parent.owned_agent_id, &[card_id]);
+            }
         }
 
         let component_version_for_replay = worker_metadata

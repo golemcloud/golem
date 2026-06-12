@@ -51,7 +51,7 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::card::CardService;
+use crate::services::card::{CardService, LiveCardEvent};
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -690,6 +690,53 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.created_by_email().clone(),
             self.agent_effective_surface(),
         )
+    }
+    async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
+        if !self.state.is_live() {
+            return Ok(());
+        }
+
+        let events = self
+            .state
+            .card_service
+            .drain_live_card_events(&self.owned_agent_id);
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let current_initial_card_id = self.state.agent_id.as_ref().and_then(|agent_id| {
+            self.state
+                .component_metadata
+                .metadata
+                .agent_type_initial_permission_template(&agent_id.agent_type)
+                .map(|template| template.card_id)
+        });
+        let mut revoked_cards = self
+            .public_state
+            .worker()
+            .get_last_known_status()
+            .await
+            .revoked_cards;
+
+        for event in events {
+            match event {
+                LiveCardEvent::CardRevoked(card_id) => {
+                    if Some(card_id) == current_initial_card_id {
+                        self.state.agent_effective_surface =
+                            golem_common::model::card::EffectiveSurface::default();
+                    }
+
+                    if revoked_cards.insert(card_id) {
+                        self.public_state
+                            .worker()
+                            .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                            .await;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
@@ -2541,30 +2588,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             validate_agent_config(&updated_agent_config, agent_type)?;
 
-            let liveness = match new_metadata
+            let initial_card_id = new_metadata
                 .metadata
                 .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id)
-            {
-                Some(card_id) => {
-                    let liveness = self
-                        .state
-                        .card_service
-                        .check_cards(vec![card_id])
-                        .await?
-                        .get(&card_id)
-                        .copied()
-                        .unwrap_or(crate::services::card::CardLiveness::Revoked {
-                            newly_detected: true,
-                        });
-                    if liveness.newly_detected_revocation() {
-                        self.public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
-                            .await;
+                .map(|template| template.card_id);
+            let initial_card_already_revoked = match initial_card_id {
+                Some(card_id) => self
+                    .public_state
+                    .worker()
+                    .get_last_known_status()
+                    .await
+                    .revoked_cards
+                    .contains(&card_id),
+                None => false,
+            };
+            let liveness = match initial_card_id {
+                Some(_) if initial_card_already_revoked => {
+                    crate::services::card::CardLiveness::Revoked {
+                        newly_detected: false,
                     }
-                    liveness
                 }
+                Some(card_id) => self
+                    .state
+                    .card_service
+                    .check_cards(vec![card_id])
+                    .await?
+                    .get(&card_id)
+                    .copied()
+                    .unwrap_or(crate::services::card::CardLiveness::Revoked {
+                        newly_detected: true,
+                    }),
                 None => crate::services::card::CardLiveness::Live,
             };
 
@@ -2578,7 +2631,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 golem_common::model::card::EffectiveSurface::default()
             };
 
-            Some((updated_agent_config, agent_effective_surface))
+            Some((
+                updated_agent_config,
+                agent_effective_surface,
+                initial_card_id,
+                liveness,
+                initial_card_already_revoked,
+            ))
         } else {
             None
         };
@@ -2601,7 +2660,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             *read_only_paths = compute_read_only_paths(&current_files);
         }
 
-        if let Some((updated_agent_config, agent_effective_surface)) = updated_agent_state {
+        if let Some((
+            updated_agent_config,
+            agent_effective_surface,
+            initial_card_id,
+            liveness,
+            initial_card_already_revoked,
+        )) = updated_agent_state
+        {
+            self.state
+                .card_service
+                .unregister_agent(&self.owned_agent_id);
+            if let Some(card_id) = initial_card_id {
+                if liveness.is_live() {
+                    self.state
+                        .card_service
+                        .register_agent_cards(self.owned_agent_id.clone(), &[card_id]);
+                } else if !initial_card_already_revoked {
+                    self.state
+                        .card_service
+                        .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &[card_id]);
+                }
+            }
+
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
             self.state.agent_effective_surface = agent_effective_surface;

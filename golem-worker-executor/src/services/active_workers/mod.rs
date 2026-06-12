@@ -242,6 +242,14 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.workers.remove(agent_id).await
     }
 
+    pub async fn notify_card_revoked(&self, agents: Vec<OwnedAgentId>) {
+        for owned_agent_id in agents {
+            if let Some(worker) = self.try_get(&owned_agent_id).await {
+                worker.unblock().await;
+            }
+        }
+    }
+
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {
         self.workers.iter().await
     }
