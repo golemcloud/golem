@@ -3685,32 +3685,28 @@ impl RunningWorker {
                 .revoked_cards
                 .contains(&card_id)
         });
-        let initial_agent_card_live = match initial_agent_card_id {
-            Some(_) if initial_agent_card_already_revoked => false,
-            Some(card_id) => parent
-                .card_service()
-                .check_cards(vec![card_id])
-                .await?
-                .contains(&card_id),
-            None => true,
-        };
-        let agent_effective_surface = match (&parent.parsed_agent_id, initial_agent_card_live) {
-            (Some(agent_id), true) => agent_effective_surface_from_component_metadata(
+        let agent_effective_surface = match &parent.parsed_agent_id {
+            Some(agent_id) => agent_effective_surface_from_component_metadata(
                 &component_metadata_for_replay,
                 &parent.owned_agent_id,
                 agent_id,
             ),
-            (Some(_), false) => golem_common::model::card::EffectiveSurface::default(),
-            (None, _) => golem_common::model::card::EffectiveSurface::default(),
+            None => golem_common::model::card::EffectiveSurface::default(),
         };
 
         if let Some(card_id) = initial_agent_card_id {
-            if initial_agent_card_live {
-                parent
+            parent
+                .card_service()
+                .register_agent_cards(parent.owned_agent_id.clone(), &[card_id])
+                .await;
+
+            if !initial_agent_card_already_revoked
+                && !parent
                     .card_service()
-                    .register_agent_cards(parent.owned_agent_id.clone(), &[card_id])
-                    .await;
-            } else if !initial_agent_card_already_revoked {
+                    .check_cards(vec![card_id])
+                    .await?
+                    .contains(&card_id)
+            {
                 parent
                     .card_service()
                     .enqueue_revoked_cards_for_agent(&parent.owned_agent_id, &[card_id])

@@ -37,6 +37,8 @@ pub trait CardService: Send + Sync {
 
     async fn enqueue_revoked_cards_for_agent(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]);
 
+    async fn record_known_revoked_cards(&self, card_ids: &[CardId]);
+
     async fn record_revoked_cards(&self, card_ids: &[CardId]) -> Vec<OwnedAgentId>;
 
     async fn drain_live_card_events(&self, agent_id: &OwnedAgentId) -> Vec<LiveCardEvent>;
@@ -71,6 +73,8 @@ impl CardService for NoopCardService {
         _card_ids: &[CardId],
     ) {
     }
+
+    async fn record_known_revoked_cards(&self, _card_ids: &[CardId]) {}
 
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) -> Vec<OwnedAgentId> {
         Vec::new()
@@ -200,6 +204,11 @@ impl CardService for CardServiceDefault {
         self.cache_revoked_cards(card_ids).await;
         self.remove_revoked_cards_from_reverse_index(card_ids).await;
         self.queue_revoked_cards_for_agent(agent_id, card_ids).await;
+    }
+
+    async fn record_known_revoked_cards(&self, card_ids: &[CardId]) {
+        self.cache_revoked_cards(card_ids).await;
+        self.remove_revoked_cards_from_reverse_index(card_ids).await;
     }
 
     async fn record_revoked_cards(&self, card_ids: &[CardId]) -> Vec<OwnedAgentId> {

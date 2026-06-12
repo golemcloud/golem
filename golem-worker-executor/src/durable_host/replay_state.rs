@@ -16,6 +16,7 @@ use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
 use crate::services::oplog::{Oplog, OplogOps};
+use golem_common::model::card::CardId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -44,6 +45,7 @@ pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed { new_revision: ComponentRevision },
     ForkReplayed { new_phantom_id: Uuid },
+    CardRevoked { card_id: CardId },
 }
 
 #[derive(Debug, Clone)]
@@ -412,12 +414,18 @@ impl ReplayState {
         // record side effects that need to be applied at the next opportunity
         if let OplogEntry::SuccessfulUpdate {
             target_revision, ..
-        } = oplog_entry
+        } = &oplog_entry
         {
             self.record_replay_event(ReplayEvent::UpdateReplayed {
-                new_revision: target_revision,
+                new_revision: *target_revision,
             })
             .await
+        }
+        if let OplogEntry::CardRevoked { card_id, .. } = &oplog_entry {
+            self.record_replay_event(ReplayEvent::CardRevoked {
+                card_id: CardId(*card_id),
+            })
+            .await;
         }
         // The legacy adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
@@ -655,27 +663,43 @@ impl ReplayState {
 
     async fn get_out_of_skipped_region(&mut self) {
         if self.is_replay() {
-            let mut internal = self.internal.write().await;
-            let update_next_skipped_region = match &internal.next_skipped_region {
-                Some(region) if region.start == (self.last_replayed_index.get().next()) => {
-                    let target = region.end.next(); // we want to continue reading _after_ the region
-                    debug!(
-                        "Worker reached skipped region at {}, jumping to {} (oplog size: {})",
-                        region.start,
-                        target,
-                        self.replay_target.get()
-                    );
-                    self.last_replayed_index.set(target.previous()); // so we set the last replayed index to the end of the region
-
-                    true
+            let skipped_region = {
+                let internal = self.internal.write().await;
+                match &internal.next_skipped_region {
+                    Some(region) if region.start == (self.last_replayed_index.get().next()) => {
+                        let target = region.end.next(); // we want to continue reading _after_ the region
+                        debug!(
+                            "Worker reached skipped region at {}, jumping to {} (oplog size: {})",
+                            region.start,
+                            target,
+                            self.replay_target.get()
+                        );
+                        self.last_replayed_index.set(target.previous()); // so we set the last replayed index to the end of the region
+                        Some(region.clone())
+                    }
+                    _ => None,
                 }
-                _ => false,
             };
 
-            if update_next_skipped_region {
+            if let Some(skipped_region) = skipped_region {
+                self.record_card_revoked_events_in_region(&skipped_region)
+                    .await;
+                let mut internal = self.internal.write().await;
                 internal.next_skipped_region = internal
                     .skipped_regions
                     .find_next_deleted_region(self.last_replayed_index.get());
+            }
+        }
+    }
+
+    async fn record_card_revoked_events_in_region(&mut self, region: &OplogRegion) {
+        let count = region.end.as_u64() - region.start.as_u64() + 1;
+        for (_, entry) in self.read_oplog(region.start, count).await {
+            if let OplogEntry::CardRevoked { card_id, .. } = entry {
+                self.record_replay_event(ReplayEvent::CardRevoked {
+                    card_id: CardId(card_id),
+                })
+                .await;
             }
         }
     }

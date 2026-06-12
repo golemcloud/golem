@@ -318,8 +318,7 @@ pub fn update_status_with_new_entries(
 
     let active_plugins = calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
 
-    let revoked_cards =
-        calculate_revoked_cards(last_known.revoked_cards, &deleted_regions, &new_entries);
+    let revoked_cards = calculate_revoked_cards(last_known.revoked_cards, &new_entries);
 
     let oplog_processor_checkpoints = calculate_oplog_processor_checkpoints(
         last_known.oplog_processor_checkpoints,
@@ -534,14 +533,9 @@ fn calculate_latest_worker_status(
 
 fn calculate_revoked_cards(
     mut revoked_cards: HashSet<golem_common::model::card::CardId>,
-    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> HashSet<golem_common::model::card::CardId> {
-    for (idx, entry) in entries {
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
+    for entry in entries.values() {
         if let OplogEntry::CardRevoked { card_id, .. } = entry {
             revoked_cards.insert(golem_common::model::card::CardId(*card_id));
         }
@@ -3163,6 +3157,42 @@ mod test {
         )
         .unwrap();
 
+        assert!(status.revoked_cards.contains(&card_id));
+    }
+
+    #[test]
+    fn card_revoked_entry_is_recorded_even_in_deleted_region() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::CardRevoked {
+                    timestamp: Timestamp::now_utc(),
+                    card_id: card_id.0,
+                },
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(
+            status
+                .deleted_regions
+                .is_in_deleted_region(OplogIndex::from_u64(2))
+        );
         assert!(status.revoked_cards.contains(&card_id));
     }
 }
