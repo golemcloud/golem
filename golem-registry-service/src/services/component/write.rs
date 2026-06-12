@@ -112,18 +112,16 @@ impl ComponentWriteService {
         let mut result = BTreeMap::new();
 
         for agent_type in agent_types {
-            let card_id = self
-                .card_service
+            let template =
+                AgentInitialPermissionTemplate::default_for(environment_name, component_name);
+            self.card_service
                 .create_agent_initial_card(
                     component_id,
                     component_revision,
                     agent_type.type_name.clone(),
+                    &template,
                 )
                 .await?;
-            let template = AgentInitialPermissionTemplate {
-                card_id,
-                ..AgentInitialPermissionTemplate::default_for(environment_name, component_name)
-            };
 
             result.insert(agent_type.type_name.clone(), template);
         }

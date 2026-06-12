@@ -17,6 +17,7 @@ use crate::repo::model::card::{CardRecord, CardRepoError};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::AgentInitialPermissionTemplate;
 use std::sync::Arc;
 
 pub struct CardService {
@@ -33,16 +34,17 @@ impl CardService {
         component_id: ComponentId,
         component_revision: ComponentRevision,
         agent_type: AgentTypeName,
+        template: &AgentInitialPermissionTemplate,
     ) -> Result<CardId, CardRepoError> {
-        let card_id = CardId::new();
+        let card_id = template.card_id;
         self.card_repo
-            .create(CardRecord::creation(
+            .create(CardRecord::polymorphic_creation(
                 card_id,
                 Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
+                template.lower_positive.clone(),
+                template.lower_negative.clone(),
+                template.upper_positive.clone(),
+                template.upper_negative.clone(),
                 None,
                 false,
                 Some(CardManagedBy::AgentInitial {

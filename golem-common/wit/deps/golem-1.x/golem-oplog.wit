@@ -204,6 +204,12 @@ interface oplog {
         name: string,
     }
 
+    /// Parameters for a card-revoked oplog entry.
+    record card-revoked-parameters {
+        timestamp: datetime,
+        card-id: uuid,
+    }
+
     record end-atomic-region-parameters {
         timestamp: datetime,
         begin-index: oplog-index
@@ -716,7 +722,9 @@ interface oplog {
         /// Sets or overwrites a named retry policy
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
-        remove-retry-policy(remove-retry-policy-parameters)
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters)
     }
 
     variant public-oplog-entry {
@@ -810,7 +818,9 @@ interface oplog {
         /// Sets or overwrites a named retry policy
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
-        remove-retry-policy(remove-retry-policy-parameters)
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

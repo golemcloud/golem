@@ -444,8 +444,10 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 })
             }
             PublicOplogEntry::CardRevoked(CardRevokedParams { timestamp, card_id }) => {
-                let _ = card_id;
-                Self::NoOp(timestamp.into())
+                Self::CardRevoked(oplog::CardRevokedParameters {
+                    timestamp: timestamp.into(),
+                    card_id: card_id.into(),
+                })
             }
         }
     }
@@ -1190,6 +1192,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::RemoveRetryPolicy(params) => Ok(Self::RemoveRetryPolicy {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 name: params.name,
+            }),
+            oplog::OplogEntry::CardRevoked(params) => Ok(Self::CardRevoked {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                card_id: params.card_id.into(),
             }),
         }
     }

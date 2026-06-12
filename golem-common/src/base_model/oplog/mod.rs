@@ -668,7 +668,7 @@ oplog_entry! {
             name: String,
         }
     },
-    /// Records that a permission card used by the worker has been revoked.
+    /// Records that a permission card used by the agent has been revoked.
     CardRevoked {
         hint: true
         wit_raw_type: "card-revoked-parameters"
