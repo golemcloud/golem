@@ -114,95 +114,79 @@ pub mod component {
 }
 
 pub mod runtime {
-    use std::time::{Duration, Instant};
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use lazy_static::lazy_static;
-    use prometheus::*;
+    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
     use tokio::runtime::Handle;
+    use tokio::task::JoinSet;
+    use tokio_metrics::RuntimeMetricsReporterBuilder;
 
-    lazy_static! {
-        /// Number of tasks currently sitting in the tokio runtime's global
-        /// (injection) queue: runnable but not yet polled by any worker thread.
-        /// A persistently non-zero value means ready tasks (including I/O
-        /// continuations such as DB-response handling) are waiting for a worker
-        /// thread, which inflates I/O latency metrics even when the underlying
-        /// I/O is fast.
-        static ref GLOBAL_QUEUE_DEPTH: IntGauge = register_int_gauge!(
-            "executor_tokio_global_queue_depth",
-            "Tasks scheduled in the tokio runtime global queue, runnable but not yet polled"
-        )
-        .unwrap();
+    /// How often the recorder's upkeep runs to keep its internal storage
+    /// bounded (e.g. pruning idle metrics once an idle timeout is configured).
+    const UPKEEP_INTERVAL: Duration = Duration::from_secs(30);
 
-        /// Number of worker threads in the multi-thread runtime.
-        static ref NUM_WORKERS: IntGauge = register_int_gauge!(
-            "executor_tokio_num_workers",
-            "Number of tokio runtime worker threads"
-        )
-        .unwrap();
-
-        /// Current number of alive tasks in the runtime.
-        static ref NUM_ALIVE_TASKS: IntGauge = register_int_gauge!(
-            "executor_tokio_num_alive_tasks",
-            "Number of alive tasks in the tokio runtime"
-        )
-        .unwrap();
-
-        /// Per-worker busy ratio over the last sampling interval: the fraction
-        /// of wall-clock time the worker spent executing tasks. A value near 1.0
-        /// means the worker is CPU-saturated and cannot promptly poll newly
-        /// ready tasks.
-        static ref WORKER_BUSY_RATIO: GaugeVec = register_gauge_vec!(
-            "executor_tokio_worker_busy_ratio",
-            "Fraction of wall-clock time each tokio worker spent busy over the sampling interval",
-            &["worker"]
-        )
-        .unwrap();
-    }
-
-    /// Background loop that samples stable tokio runtime metrics and exports them
-    /// to Prometheus.
+    /// Installs a dedicated `metrics`-crate Prometheus recorder for tokio
+    /// runtime metrics, spawns the tokio-metrics reporter on `join_set`, and
+    /// returns a renderer that emits the collected metrics in Prometheus text
+    /// format.
     ///
-    /// All metrics used here are stable as of tokio 1.45 (the workspace resolves
-    /// 1.50+), so this requires neither the `tokio_unstable` cfg nor any build
-    /// flag. `global_queue_depth` is the primary diagnostic for runtime
-    /// scheduling pressure; `worker_busy_ratio` corroborates it by showing
-    /// per-worker CPU saturation. Never returns.
-    pub async fn run_runtime_metrics_loop(handle: Handle) -> anyhow::Result<()> {
-        const INTERVAL: Duration = Duration::from_secs(5);
+    /// `sampling_interval` controls how often metrics are sampled from the
+    /// runtime into the recorder; Prometheus scrapes the rendered values
+    /// independently.
+    ///
+    /// The returned closure is appended to the `prometheus`-crate scrape output
+    /// on the shared `/metrics` endpoint, so all `tokio_*` series appear on the
+    /// same endpoint as the rest of the executor's metrics, carrying the same
+    /// `executor_id` label.
+    ///
+    /// Returns `None` if a global `metrics` recorder is already installed (which
+    /// should not happen in the executor), in which case runtime metrics are
+    /// simply not exported.
+    pub fn install_runtime_metrics(
+        runtime: Handle,
+        sampling_interval: Duration,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) -> Option<Arc<dyn Fn() -> String + Send + Sync>> {
+        let executor_id = crate::identity::executor_id();
 
-        let metrics = handle.metrics();
-        let num_workers = metrics.num_workers();
-        NUM_WORKERS.set(num_workers as i64);
-
-        // Previous cumulative busy duration per worker, for computing the busy
-        // ratio over each interval.
-        let mut prev_busy: Vec<Duration> = (0..num_workers)
-            .map(|w| metrics.worker_total_busy_duration(w))
-            .collect();
-        let mut prev_instant = Instant::now();
-
-        let mut interval = tokio::time::interval(INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-
-            GLOBAL_QUEUE_DEPTH.set(metrics.global_queue_depth() as i64);
-            NUM_ALIVE_TASKS.set(metrics.num_alive_tasks() as i64);
-
-            let now = Instant::now();
-            let elapsed = now.duration_since(prev_instant).as_secs_f64();
-            prev_instant = now;
-            if elapsed > 0.0 {
-                for (w, prev) in prev_busy.iter_mut().enumerate() {
-                    let busy = metrics.worker_total_busy_duration(w);
-                    let delta = busy.saturating_sub(*prev).as_secs_f64();
-                    *prev = busy;
-                    WORKER_BUSY_RATIO
-                        .with_label_values(&[&w.to_string()])
-                        .set((delta / elapsed).min(1.0));
-                }
+        let handle: PrometheusHandle = match PrometheusBuilder::new()
+            .add_global_label("executor_id", executor_id)
+            .install_recorder()
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to install tokio runtime metrics recorder, runtime metrics will not be exported: {err}"
+                );
+                return None;
             }
-        }
+        };
+
+        let reporter = RuntimeMetricsReporterBuilder::default().with_interval(sampling_interval);
+        join_set.spawn_on(
+            async move {
+                reporter.describe_and_run().await;
+                Ok(())
+            },
+            &runtime,
+        );
+
+        // Run periodic upkeep so the recorder's internal storage stays bounded.
+        let upkeep_handle = handle.clone();
+        join_set.spawn_on(
+            async move {
+                let mut interval = tokio::time::interval(UPKEEP_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    upkeep_handle.run_upkeep();
+                }
+            },
+            &runtime,
+        );
+
+        Some(Arc::new(move || handle.render()))
     }
 }
 
@@ -874,16 +858,10 @@ pub mod storage {
     use lazy_static::lazy_static;
     use prometheus::*;
 
-    /// Returns the executor identity label: POD_NAME env var, falling back to HOSTNAME, then "unknown".
-    /// Resolved once on first call and cached for the lifetime of the process.
-    pub fn executor_id() -> &'static str {
-        static EXECUTOR_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        EXECUTOR_ID.get_or_init(|| {
-            std::env::var("POD_NAME")
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "unknown".to_string())
-        })
-    }
+    /// Re-exported from [`crate::identity`], which owns the process identity.
+    /// Kept here so existing metric-recording call sites can keep using
+    /// `crate::metrics::storage::executor_id()`.
+    pub use crate::identity::executor_id;
 
     lazy_static! {
         pub static ref STORAGE_FILESYSTEM_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(

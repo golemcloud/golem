@@ -16,6 +16,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub mod grpc;
+pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod preview2;
@@ -1061,15 +1062,18 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
 
-    join_set.spawn(crate::metrics::runtime::run_runtime_metrics_loop(
+    let runtime_metrics = crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),
-    ));
+        golem_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
 
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
-    let http_port = golem_service_base::observability::start_health_and_metrics_server(
+    let http_port = golem_service_base::observability::start_health_and_metrics_server_with_extra(
         golem_config.http_addr()?,
         prometheus_registry,
+        runtime_metrics,
         "Worker executor is running",
         join_set,
     )
