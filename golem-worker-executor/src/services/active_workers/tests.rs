@@ -840,3 +840,223 @@ mod component_module_charge {
         );
     }
 }
+
+// ── ConcurrentAgentsScheduler — model-based liveness property ────────────────
+//
+// The scheduler keeps its own `running_count` integer alongside the real tokio
+// semaphore permits. The two must stay in lockstep: every increment of
+// `running_count` must be matched by exactly one decrement, regardless of how a
+// granted slot is disposed of (released by a live worker, or dropped inside a
+// cancelled waiter's oneshot channel). If they drift, the scheduler wedges —
+// `running_count` sticks at the limit while permits are actually free, and
+// every future acquire queues forever. This is the production deadlock the
+// property is designed to catch.
+//
+// The model drives random interleavings of acquire / release / cancel against
+// the real scheduler and, after every step, asserts the *liveness* invariant:
+// whenever fewer permits are genuinely held than the limit allows, a fresh
+// acquire must succeed promptly. A leaked `running_count` violates this.
+mod scheduler_liveness {
+    use super::super::concurrent_agents_scheduler::{
+        ConcurrentAgentPermit, ConcurrentAgentsScheduler,
+    };
+    use super::{account, agent, resource_entry_with_agent_limit};
+    use proptest::prelude::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::task::JoinHandle;
+
+    /// One step in a randomized scheduler workload.
+    #[derive(Debug, Clone)]
+    enum Op {
+        /// Acquire a permit and hold it (resolves immediately if capacity is
+        /// free, otherwise the in-flight acquire is parked in `pending`).
+        Acquire,
+        /// Release a currently-held permit, if any.
+        Release(prop::sample::Index),
+        /// Cancel an in-flight (likely queued) acquire, if any. Exercises both
+        /// "cancelled while queued" and "cancelled just after being granted".
+        CancelPending(prop::sample::Index),
+        /// Release a held permit and, in the same step, cancel an in-flight
+        /// acquire. This is the deadly race: the released slot may be granted
+        /// to the in-flight acquire's oneshot and then the acquire is cancelled
+        /// before it can receive it. The slot must still be released.
+        ReleaseThenCancel(prop::sample::Index, prop::sample::Index),
+    }
+
+    fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
+        prop::collection::vec(
+            prop_oneof![
+                3 => Just(Op::Acquire),
+                2 => any::<prop::sample::Index>().prop_map(Op::Release),
+                2 => any::<prop::sample::Index>().prop_map(Op::CancelPending),
+                3 => (any::<prop::sample::Index>(), any::<prop::sample::Index>())
+                    .prop_map(|(a, b)| Op::ReleaseThenCancel(a, b)),
+            ],
+            1..60,
+        )
+    }
+
+    /// Let any synchronous grant/drain bookkeeping triggered by a release or
+    /// cancellation settle before the next observation.
+    async fn settle() {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+
+    proptest! {
+        // Cap shrink iterations so a failing (buggy) run cannot spend minutes
+        // re-running wedging inputs against the overall timeout while shrinking.
+        #![proptest_config(ProptestConfig { cases: 128, max_shrink_iters: 64, ..ProptestConfig::default() })]
+
+        /// Liveness: under any interleaving of acquire / release / cancel, the
+        /// scheduler never wedges. After each step, if fewer permits are held
+        /// than the limit, a fresh acquire must succeed within a short timeout.
+        /// At the end, draining all held permits must let the account return to
+        /// full capacity.
+        #[test]
+        fn scheduler_never_wedges_under_churn(
+            limit in 1usize..6,
+            ops in arb_ops(),
+        ) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_time()
+                .build()
+                .unwrap();
+
+            rt.block_on(async move {
+                // Bound the whole case so a wedge fails fast and deterministically
+                // rather than hanging the test suite. A correct scheduler completes
+                // a 60-op workload in well under a second; the bug deadlocks here,
+                // so a tight bound makes the failure (and any shrinking) quick.
+                let outcome = tokio::time::timeout(Duration::from_secs(3), async move {
+                    run_workload(limit, ops).await
+                })
+                .await;
+
+                match outcome {
+                    Ok(result) => result,
+                    Err(_elapsed) => Err(TestCaseError::fail(
+                        "scheduler workload did not complete within the overall timeout — \
+                         deadlock (running_count leaked above true occupancy)",
+                    )),
+                }
+            })?;
+        }
+    }
+
+    /// Drives one randomized workload against a freshly-registered account and
+    /// returns `Err` if the liveness invariant is ever violated. Factored out of
+    /// the proptest body so the whole run can be wrapped in an overall timeout.
+    async fn run_workload(limit: usize, ops: Vec<Op>) -> Result<(), TestCaseError> {
+        // Short per-acquire timeout: a wedge must surface quickly, but allow
+        // enough slack for genuine multi-thread scheduling jitter.
+        const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+        let sched = Arc::new(ConcurrentAgentsScheduler::new());
+        let acc = account();
+        sched
+            .register_account(acc, resource_entry_with_agent_limit(limit as u64))
+            .await;
+
+        // Permits we are deliberately holding (count against the limit).
+        let mut held: Vec<ConcurrentAgentPermit> = Vec::new();
+        // In-flight acquires not yet resolved (queued or just granted).
+        let mut pending: Vec<JoinHandle<ConcurrentAgentPermit>> = Vec::new();
+        let mut counter = 0usize;
+
+        for op in ops {
+            match op {
+                Op::Acquire => {
+                    counter += 1;
+                    let sched = sched.clone();
+                    let name = format!("W{counter}");
+                    let handle =
+                        tokio::spawn(async move { sched.acquire(acc, agent(&name)).await });
+                    pending.push(handle);
+                }
+                Op::Release(idx) => {
+                    if !held.is_empty() {
+                        let i = idx.index(held.len());
+                        drop(held.remove(i));
+                    }
+                }
+                Op::CancelPending(idx) => {
+                    if !pending.is_empty() {
+                        let i = idx.index(pending.len());
+                        pending.remove(i).abort();
+                    }
+                }
+                Op::ReleaseThenCancel(ri, ci) => {
+                    if !held.is_empty() {
+                        let i = ri.index(held.len());
+                        drop(held.remove(i));
+                    }
+                    if !pending.is_empty() {
+                        let i = ci.index(pending.len());
+                        pending.remove(i).abort();
+                    }
+                }
+            }
+
+            settle().await;
+
+            // Collect any in-flight acquires that have now resolved into
+            // held permits, so `held.len()` reflects true occupancy.
+            let mut still_pending = Vec::new();
+            for h in pending.drain(..) {
+                if h.is_finished() {
+                    if let Ok(permit) = h.await {
+                        held.push(permit);
+                    }
+                    // Cancelled/aborted handles are simply dropped.
+                } else {
+                    still_pending.push(h);
+                }
+            }
+            pending = still_pending;
+
+            // Liveness invariant: if we are below the limit, a fresh
+            // acquire must succeed promptly. A leaked running_count
+            // would make this hang and trip the timeout.
+            if held.len() < limit {
+                let probe =
+                    tokio::time::timeout(PROBE_TIMEOUT, sched.acquire(acc, agent("probe"))).await;
+                prop_assert!(
+                    probe.is_ok(),
+                    "scheduler wedged: held {} < limit {} but acquire timed out",
+                    held.len(),
+                    limit,
+                );
+                // Release the probe immediately.
+                drop(probe.ok());
+                settle().await;
+            }
+        }
+
+        // Abort everything still queued, drop all held permits, and
+        // confirm the account drains back to full capacity: `limit`
+        // fresh acquires must all succeed.
+        for h in pending.drain(..) {
+            h.abort();
+            let _ = h.await;
+        }
+        held.clear();
+        settle().await;
+
+        let mut drained = Vec::new();
+        for _ in 0..limit {
+            let p = tokio::time::timeout(PROBE_TIMEOUT, sched.acquire(acc, agent("drain"))).await;
+            prop_assert!(
+                p.is_ok(),
+                "scheduler did not return to full capacity after churn",
+            );
+            drained.push(p.unwrap());
+        }
+        Ok(())
+    }
+}
