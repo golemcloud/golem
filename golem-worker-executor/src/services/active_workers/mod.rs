@@ -221,7 +221,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.workers
             .get_or_insert_simple(&agent_id, || {
                 Box::pin(async move {
-                    card_service.register_agent(owned_agent_id.clone());
+                    card_service.register_agent(owned_agent_id.clone()).await;
                     let worker = Worker::new(
                         &deps,
                         owned_agent_id.clone(),
@@ -238,7 +238,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     match worker {
                         Ok(worker) => Ok(Arc::new(worker)),
                         Err(err) => {
-                            card_service.unregister_agent(&owned_agent_id);
+                            card_service.unregister_agent(&owned_agent_id).await;
                             Err(err)
                         }
                     }
@@ -254,13 +254,15 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub async fn remove(&self, agent_id: &AgentId) {
         if let Some(worker) = self.workers.get(agent_id).await {
-            self.card_service.unregister_agent(worker.owned_agent_id());
+            self.card_service
+                .unregister_agent(worker.owned_agent_id())
+                .await;
         }
         self.workers.remove(agent_id).await
     }
 
-    pub fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        let _ = self.card_service.record_revoked_cards(card_ids);
+    pub async fn record_revoked_cards(&self, card_ids: &[CardId]) {
+        let _ = self.card_service.record_revoked_cards(card_ids).await;
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {

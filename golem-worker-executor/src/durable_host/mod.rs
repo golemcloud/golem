@@ -699,7 +699,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let events = self
             .state
             .card_service
-            .drain_live_card_events(&self.owned_agent_id);
+            .drain_live_card_events(&self.owned_agent_id)
+            .await;
         if events.is_empty() {
             return Ok(());
         }
@@ -2602,26 +2603,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .contains(&card_id),
                 None => false,
             };
-            let liveness = match initial_card_id {
-                Some(_) if initial_card_already_revoked => {
-                    crate::services::card::CardLiveness::Revoked {
-                        newly_detected: false,
-                    }
-                }
+            let initial_card_live = match initial_card_id {
+                Some(_) if initial_card_already_revoked => false,
                 Some(card_id) => self
                     .state
                     .card_service
                     .check_cards(vec![card_id])
                     .await?
-                    .get(&card_id)
-                    .copied()
-                    .unwrap_or(crate::services::card::CardLiveness::Revoked {
-                        newly_detected: true,
-                    }),
-                None => crate::services::card::CardLiveness::Live,
+                    .contains(&card_id),
+                None => true,
             };
 
-            let agent_effective_surface = if liveness.is_live() {
+            let agent_effective_surface = if initial_card_live {
                 agent_effective_surface_from_component_metadata(
                     &new_metadata,
                     &self.owned_agent_id,
@@ -2630,13 +2623,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } else {
                 golem_common::model::card::EffectiveSurface::default()
             };
+            let revoked_card_to_queue =
+                initial_card_id.filter(|_| !initial_card_live && !initial_card_already_revoked);
 
             Some((
                 updated_agent_config,
                 agent_effective_surface,
                 initial_card_id,
-                liveness,
-                initial_card_already_revoked,
+                revoked_card_to_queue,
             ))
         } else {
             None
@@ -2664,23 +2658,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             updated_agent_config,
             agent_effective_surface,
             initial_card_id,
-            liveness,
-            initial_card_already_revoked,
+            revoked_card_to_queue,
         )) = updated_agent_state
         {
+            let initial_card_ids = initial_card_id.into_iter().collect::<Vec<_>>();
             self.state
                 .card_service
-                .clear_agent_cards(&self.owned_agent_id);
-            if let Some(card_id) = initial_card_id {
-                if liveness.is_live() {
-                    self.state
-                        .card_service
-                        .register_agent_cards(self.owned_agent_id.clone(), &[card_id]);
-                } else if !initial_card_already_revoked {
-                    self.state
-                        .card_service
-                        .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &[card_id]);
-                }
+                .register_agent_cards(self.owned_agent_id.clone(), &initial_card_ids)
+                .await;
+            if let Some(card_id) = revoked_card_to_queue {
+                self.state
+                    .card_service
+                    .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &[card_id])
+                    .await;
             }
 
             self.state.agent_config = updated_agent_config;
