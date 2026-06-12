@@ -33,11 +33,11 @@ pub trait CardService: Send + Sync {
 
     async fn register_agent_cards(&self, agent_id: OwnedAgentId, card_ids: &[CardId]);
 
+    async fn remove_revoked_agent_cards(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]);
+
     async fn unregister_agent(&self, agent_id: &OwnedAgentId);
 
     async fn enqueue_revoked_cards_for_agent(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]);
-
-    async fn record_known_revoked_cards(&self, card_ids: &[CardId]);
 
     async fn record_revoked_cards(&self, card_ids: &[CardId]) -> Vec<OwnedAgentId>;
 
@@ -65,6 +65,8 @@ impl CardService for NoopCardService {
 
     async fn register_agent_cards(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
 
+    async fn remove_revoked_agent_cards(&self, _agent_id: &OwnedAgentId, _card_ids: &[CardId]) {}
+
     async fn unregister_agent(&self, _agent_id: &OwnedAgentId) {}
 
     async fn enqueue_revoked_cards_for_agent(
@@ -73,8 +75,6 @@ impl CardService for NoopCardService {
         _card_ids: &[CardId],
     ) {
     }
-
-    async fn record_known_revoked_cards(&self, _card_ids: &[CardId]) {}
 
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) -> Vec<OwnedAgentId> {
         Vec::new()
@@ -108,19 +108,31 @@ impl CardServiceDefault {
         negative_index.extend(card_ids.iter().copied());
     }
 
-    async fn remove_revoked_cards_from_reverse_index(&self, card_ids: &[CardId]) {
-        let mut reverse_index = self.reverse_index.write().await;
-        for card_id in card_ids {
-            reverse_index.remove(card_id);
-        }
-    }
-
     async fn remove_agent_from_reverse_index(&self, agent_id: &OwnedAgentId) {
         let mut reverse_index = self.reverse_index.write().await;
         reverse_index.retain(|_, agents| {
             agents.remove(agent_id);
             !agents.is_empty()
         });
+    }
+
+    async fn remove_agent_cards_from_reverse_index(
+        &self,
+        agent_id: &OwnedAgentId,
+        card_ids: &[CardId],
+    ) {
+        let mut reverse_index = self.reverse_index.write().await;
+        for card_id in card_ids {
+            let remove_card = if let Some(agents) = reverse_index.get_mut(card_id) {
+                agents.remove(agent_id);
+                agents.is_empty()
+            } else {
+                false
+            };
+            if remove_card {
+                reverse_index.remove(card_id);
+            }
+        }
     }
 
     async fn queue_revoked_cards_for_agent(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]) {
@@ -171,25 +183,19 @@ impl CardService for CardServiceDefault {
             return;
         }
 
-        let negative_index = self.negative_index.read().await;
-        let live_card_ids = card_ids
-            .iter()
-            .copied()
-            .filter(|card_id| !negative_index.contains(card_id))
-            .collect::<Vec<_>>();
-        drop(negative_index);
-
-        if live_card_ids.is_empty() {
-            return;
-        }
-
         let mut reverse_index = self.reverse_index.write().await;
-        for card_id in live_card_ids {
+        for card_id in card_ids {
             reverse_index
-                .entry(card_id)
+                .entry(*card_id)
                 .or_default()
                 .insert(agent_id.clone());
         }
+    }
+
+    async fn remove_revoked_agent_cards(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]) {
+        self.cache_revoked_cards(card_ids).await;
+        self.remove_agent_cards_from_reverse_index(agent_id, card_ids)
+            .await;
     }
 
     async fn unregister_agent(&self, agent_id: &OwnedAgentId) {
@@ -202,13 +208,7 @@ impl CardService for CardServiceDefault {
 
     async fn enqueue_revoked_cards_for_agent(&self, agent_id: &OwnedAgentId, card_ids: &[CardId]) {
         self.cache_revoked_cards(card_ids).await;
-        self.remove_revoked_cards_from_reverse_index(card_ids).await;
         self.queue_revoked_cards_for_agent(agent_id, card_ids).await;
-    }
-
-    async fn record_known_revoked_cards(&self, card_ids: &[CardId]) {
-        self.cache_revoked_cards(card_ids).await;
-        self.remove_revoked_cards_from_reverse_index(card_ids).await;
     }
 
     async fn record_revoked_cards(&self, card_ids: &[CardId]) -> Vec<OwnedAgentId> {
@@ -234,8 +234,6 @@ impl CardService for CardServiceDefault {
             self.queue_revoked_cards_for_agent(agent_id, affected_card_ids)
                 .await;
         }
-        self.remove_revoked_cards_from_reverse_index(card_ids).await;
-
         affected_agent_cards.into_keys().collect()
     }
 
@@ -634,6 +632,63 @@ mod tests {
                 .await
                 .unwrap()
                 .contains(&card_id)
+        );
+    }
+
+    #[test]
+    async fn card_is_removed_from_reverse_index_only_after_wallet_removal() {
+        let service = service();
+        let first_agent = agent("agent-1");
+        let second_agent = agent("agent-2");
+        let card_id = CardId::new();
+
+        service.register_agent(first_agent.clone()).await;
+        service.register_agent(second_agent.clone()).await;
+        service
+            .register_agent_cards(first_agent.clone(), &[card_id])
+            .await;
+        service
+            .register_agent_cards(second_agent.clone(), &[card_id])
+            .await;
+
+        service
+            .enqueue_revoked_cards_for_agent(&first_agent, &[card_id])
+            .await;
+
+        assert_eq!(
+            service.drain_live_card_events(&first_agent).await,
+            vec![LiveCardEvent::CardRevoked(card_id)]
+        );
+        assert!(
+            service
+                .drain_live_card_events(&second_agent)
+                .await
+                .is_empty()
+        );
+
+        let affected_agents = service.record_revoked_cards(&[card_id]).await;
+        assert_eq!(affected_agents.len(), 2);
+        assert!(affected_agents.contains(&first_agent));
+        assert!(affected_agents.contains(&second_agent));
+
+        assert_eq!(
+            service.drain_live_card_events(&first_agent).await,
+            vec![LiveCardEvent::CardRevoked(card_id)]
+        );
+        assert_eq!(
+            service.drain_live_card_events(&second_agent).await,
+            vec![LiveCardEvent::CardRevoked(card_id)]
+        );
+
+        service
+            .remove_revoked_agent_cards(&first_agent, &[card_id])
+            .await;
+
+        let affected_agents = service.record_revoked_cards(&[card_id]).await;
+        assert_eq!(affected_agents, vec![second_agent.clone()]);
+        assert_eq!(
+            service.drain_live_card_events(&second_agent).await,
+            vec![LiveCardEvent::CardRevoked(card_id)]
         );
     }
 }

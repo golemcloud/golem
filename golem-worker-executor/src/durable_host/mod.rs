@@ -720,12 +720,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn apply_card_revoked(
         &mut self,
         card_id: CardId,
-        persist_oplog: bool,
+        is_live: bool,
     ) -> Result<(), WorkerExecutorError> {
-        self.state
-            .card_service
-            .record_known_revoked_cards(&[card_id])
-            .await;
+        if !self.state.agent_wallet_card_ids.remove(&card_id) {
+            return Ok(());
+        }
 
         let current_initial_card_id = self.state.agent_id.as_ref().and_then(|agent_id| {
             self.state
@@ -740,7 +739,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 golem_common::model::card::EffectiveSurface::default();
         }
 
-        if persist_oplog {
+        if is_live {
+            self.state
+                .card_service
+                .remove_revoked_agent_cards(&self.owned_agent_id, &[card_id])
+                .await;
+
             let mut revoked_cards = self
                 .public_state
                 .worker()
@@ -2561,6 +2565,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         };
 
+        let wallet_card_ids = self
+            .state
+            .agent_wallet_card_ids
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        self.state
+            .card_service
+            .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+            .await;
+
+        if !self.state.agent_wallet_card_ids.contains(&card_id) {
+            return Ok(());
+        }
+
         if !self
             .state
             .card_service
@@ -2680,15 +2699,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if let Some((updated_agent_config, agent_effective_surface, initial_card_id)) =
             updated_agent_state
         {
-            let initial_card_ids = initial_card_id.into_iter().collect::<Vec<_>>();
-            self.state
-                .card_service
-                .register_agent_cards(self.owned_agent_id.clone(), &initial_card_ids)
-                .await;
-
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
             self.state.agent_effective_surface = agent_effective_surface;
+            self.state.agent_wallet_card_ids = initial_card_id.into_iter().collect();
         };
 
         self.state.component_metadata = new_metadata;
@@ -4606,6 +4620,7 @@ struct PrivateDurableWorkerState {
 
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
+    agent_wallet_card_ids: HashSet<CardId>,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -4779,6 +4794,16 @@ impl PrivateDurableWorkerState {
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
+        let agent_wallet_card_ids = agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                component_metadata
+                    .metadata
+                    .agent_type_initial_permission_template(&agent_id.agent_type)
+                    .map(|template| template.card_id)
+            })
+            .into_iter()
+            .collect();
         Ok(Self {
             oplog_service,
             oplog,
@@ -4820,6 +4845,7 @@ impl PrivateDurableWorkerState {
             read_only_method_name: None,
             component_metadata,
             agent_effective_surface,
+            agent_wallet_card_ids,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,
