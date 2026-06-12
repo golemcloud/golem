@@ -63,6 +63,7 @@ pub struct Card {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PolymorphicCard {
     pub card_id: CardId,
     pub parent_ids: Vec<CardId>,
@@ -73,6 +74,57 @@ pub struct PolymorphicCard {
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StoredCard {
+    Concrete(Card),
+    Polymorphic(PolymorphicCard),
+}
+
+impl StoredCard {
+    pub fn card_id(&self) -> CardId {
+        match self {
+            Self::Concrete(card) => card.card_id,
+            Self::Polymorphic(card) => card.card_id,
+        }
+    }
+
+    pub fn parent_ids(&self) -> &[CardId] {
+        match self {
+            Self::Concrete(card) => &card.parent_ids,
+            Self::Polymorphic(card) => &card.parent_ids,
+        }
+    }
+
+    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Concrete(card) => card.expires_at,
+            Self::Polymorphic(card) => card.expires_at,
+        }
+    }
+
+    pub fn system_card(&self) -> bool {
+        match self {
+            Self::Concrete(card) => card.system_card,
+            Self::Polymorphic(card) => card.system_card,
+        }
+    }
+
+    pub fn into_concrete(self) -> Result<Card, Self> {
+        match self {
+            Self::Concrete(card) => Ok(card),
+            other => Err(other),
+        }
+    }
+
+    pub fn into_polymorphic(self) -> Result<PolymorphicCard, Self> {
+        match self {
+            Self::Polymorphic(card) => Ok(card),
+            other => Err(other),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

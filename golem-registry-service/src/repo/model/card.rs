@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use golem_common::error_forwarding;
 use golem_common::model::card::{
     Card, CardId, CardManagedBy, PermissionPattern, PolymorphicCard, PolymorphicPermissionPattern,
+    StoredCard,
 };
 use golem_service_base::repo::{Blob, RepoError, SqlDateTime};
 use sqlx::FromRow;
@@ -37,15 +39,13 @@ error_forwarding!(CardRepoError, RepoError);
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct CardDataRecord {
-    pub parent_ids: Vec<Uuid>,
-    pub lower_positive: Vec<PermissionPattern>,
-    pub lower_negative: Vec<PermissionPattern>,
-    pub upper_positive: Vec<PermissionPattern>,
-    pub upper_negative: Vec<PermissionPattern>,
-    pub polymorphic_lower_positive: Vec<PolymorphicPermissionPattern>,
-    pub polymorphic_lower_negative: Vec<PolymorphicPermissionPattern>,
-    pub polymorphic_upper_positive: Vec<PolymorphicPermissionPattern>,
-    pub polymorphic_upper_negative: Vec<PolymorphicPermissionPattern>,
+    pub card: StoredCard,
+}
+
+impl CardDataRecord {
+    pub fn parent_ids(&self) -> &[CardId] {
+        self.card.parent_ids()
+    }
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
@@ -62,19 +62,10 @@ impl TryFrom<CardRecord> for Card {
     type Error = RepoError;
 
     fn try_from(value: CardRecord) -> Result<Self, Self::Error> {
-        let data = value.data.into_value();
-
-        Ok(Card {
-            card_id: CardId(value.card_id),
-            parent_ids: data.parent_ids.into_iter().map(CardId).collect(),
-            lower_positive: data.lower_positive,
-            lower_negative: data.lower_negative,
-            upper_positive: data.upper_positive,
-            upper_negative: data.upper_negative,
-            created_at: value.created_at.into(),
-            expires_at: value.expires_at.map(Into::into),
-            system_card: value.system_card,
-            managed_by: value.managed_by.map(Blob::into_value),
+        value.try_into_stored_card()?.into_concrete().map_err(|_| {
+            RepoError::InternalError(anyhow!(
+                "Cannot convert polymorphic card record to concrete card"
+            ))
         })
     }
 }
@@ -83,19 +74,22 @@ impl TryFrom<CardRecord> for PolymorphicCard {
     type Error = RepoError;
 
     fn try_from(value: CardRecord) -> Result<Self, Self::Error> {
-        let data = value.data.into_value();
+        value
+            .try_into_stored_card()?
+            .into_polymorphic()
+            .map_err(|_| {
+                RepoError::InternalError(anyhow!(
+                    "Cannot convert concrete card record to polymorphic card"
+                ))
+            })
+    }
+}
 
-        Ok(PolymorphicCard {
-            card_id: CardId(value.card_id),
-            parent_ids: data.parent_ids.into_iter().map(CardId).collect(),
-            lower_positive: data.polymorphic_lower_positive,
-            lower_negative: data.polymorphic_lower_negative,
-            upper_positive: data.polymorphic_upper_positive,
-            upper_negative: data.polymorphic_upper_negative,
-            created_at: value.created_at.into(),
-            expires_at: value.expires_at.map(Into::into),
-            system_card: value.system_card,
-        })
+impl TryFrom<CardRecord> for StoredCard {
+    type Error = RepoError;
+
+    fn try_from(value: CardRecord) -> Result<Self, Self::Error> {
+        value.try_into_stored_card()
     }
 }
 
@@ -111,23 +105,27 @@ impl CardRecord {
         system_card: bool,
         managed_by: Option<CardManagedBy>,
     ) -> Self {
-        Self {
-            card_id: card_id.0,
-            data: Blob::new(CardDataRecord {
-                parent_ids: parent_ids.into_iter().map(|id| id.0).collect(),
-                lower_positive,
-                lower_negative,
-                upper_positive,
-                upper_negative,
-                polymorphic_lower_positive: Vec::new(),
-                polymorphic_lower_negative: Vec::new(),
-                polymorphic_upper_positive: Vec::new(),
-                polymorphic_upper_negative: Vec::new(),
-            }),
-            created_at: SqlDateTime::now(),
-            expires_at: expires_at.map(Into::into),
+        let card = Card {
+            card_id,
+            parent_ids,
+            lower_positive,
+            lower_negative,
+            upper_positive,
+            upper_negative,
+            created_at: Utc::now(),
+            expires_at,
             system_card,
-            managed_by: managed_by.map(Blob::new),
+            managed_by,
+        };
+        Self {
+            card_id: card.card_id.0,
+            data: Blob::new(CardDataRecord {
+                card: StoredCard::Concrete(card.clone()),
+            }),
+            created_at: card.created_at.into(),
+            expires_at: card.expires_at.map(Into::into),
+            system_card: card.system_card,
+            managed_by: card.managed_by.map(Blob::new),
         }
     }
 
@@ -142,24 +140,47 @@ impl CardRecord {
         system_card: bool,
         managed_by: Option<CardManagedBy>,
     ) -> Self {
-        Self {
-            card_id: card_id.0,
-            data: Blob::new(CardDataRecord {
-                parent_ids: parent_ids.into_iter().map(|id| id.0).collect(),
-                lower_positive: Vec::new(),
-                lower_negative: Vec::new(),
-                upper_positive: Vec::new(),
-                upper_negative: Vec::new(),
-                polymorphic_lower_positive: lower_positive,
-                polymorphic_lower_negative: lower_negative,
-                polymorphic_upper_positive: upper_positive,
-                polymorphic_upper_negative: upper_negative,
-            }),
-            created_at: SqlDateTime::now(),
-            expires_at: expires_at.map(Into::into),
+        let card = PolymorphicCard {
+            card_id,
+            parent_ids,
+            lower_positive,
+            lower_negative,
+            upper_positive,
+            upper_negative,
+            created_at: Utc::now(),
+            expires_at,
             system_card,
+        };
+        Self {
+            card_id: card.card_id.0,
+            data: Blob::new(CardDataRecord {
+                card: StoredCard::Polymorphic(card.clone()),
+            }),
+            created_at: card.created_at.into(),
+            expires_at: card.expires_at.map(Into::into),
+            system_card: card.system_card,
             managed_by: managed_by.map(Blob::new),
         }
+    }
+
+    fn try_into_stored_card(self) -> Result<StoredCard, RepoError> {
+        let mut card = self.data.into_value().card;
+        match &mut card {
+            StoredCard::Concrete(card) => {
+                card.card_id = CardId(self.card_id);
+                card.created_at = self.created_at.into();
+                card.expires_at = self.expires_at.map(Into::into);
+                card.system_card = self.system_card;
+                card.managed_by = self.managed_by.map(Blob::into_value);
+            }
+            StoredCard::Polymorphic(card) => {
+                card.card_id = CardId(self.card_id);
+                card.created_at = self.created_at.into();
+                card.expires_at = self.expires_at.map(Into::into);
+                card.system_card = self.system_card;
+            }
+        }
+        Ok(card)
     }
 }
 
