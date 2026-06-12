@@ -86,9 +86,9 @@ impl CardService for NoopCardService {
 
     async fn check_cards(
         &self,
-        card_ids: Vec<CardId>,
+        _card_ids: Vec<CardId>,
     ) -> Result<HashSet<CardId>, WorkerExecutorError> {
-        Ok(card_ids.into_iter().collect())
+        Ok(HashSet::new())
     }
 }
 
@@ -252,18 +252,20 @@ impl CardService for CardServiceDefault {
         card_ids: Vec<CardId>,
     ) -> Result<HashSet<CardId>, WorkerExecutorError> {
         let revoked_cards = self.negative_index.read().await.clone();
-        let mut live_cards = HashSet::with_capacity(card_ids.len());
+        let mut result = HashSet::with_capacity(card_ids.len());
         let mut needs_registry_lookup = Vec::new();
         let mut seen_lookup = HashSet::new();
 
         for card_id in card_ids {
-            if !revoked_cards.contains(&card_id) && seen_lookup.insert(card_id) {
+            if revoked_cards.contains(&card_id) {
+                result.insert(card_id);
+            } else if seen_lookup.insert(card_id) {
                 needs_registry_lookup.push(card_id);
             }
         }
 
         if needs_registry_lookup.is_empty() {
-            return Ok(live_cards);
+            return Ok(result);
         }
 
         let existing = self
@@ -284,13 +286,9 @@ impl CardService for CardServiceDefault {
             .collect::<Vec<_>>();
         self.cache_revoked_cards(&missing).await;
 
-        for card_id in needs_registry_lookup {
-            if existing.contains(&card_id) {
-                live_cards.insert(card_id);
-            }
-        }
+        result.extend(missing);
 
-        Ok(live_cards)
+        Ok(result)
     }
 }
 
@@ -508,12 +506,12 @@ mod tests {
     }
 
     #[test]
-    async fn noop_card_service_treats_cards_as_live() {
+    async fn noop_card_service_reports_no_revoked_cards() {
         let service = NoopCardService;
         let revoked = CardId::new();
 
         assert!(
-            service
+            !service
                 .check_cards(vec![revoked])
                 .await
                 .unwrap()
@@ -627,7 +625,7 @@ mod tests {
             vec![LiveCardEvent::CardRevoked(card_id)]
         );
         assert!(
-            !service
+            service
                 .check_cards(vec![card_id])
                 .await
                 .unwrap()

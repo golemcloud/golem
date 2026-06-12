@@ -3701,7 +3701,7 @@ impl RunningWorker {
                 .await;
 
             if !initial_agent_card_already_revoked
-                && !parent
+                && parent
                     .card_service()
                     .check_cards(vec![card_id])
                     .await?

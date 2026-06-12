@@ -745,19 +745,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .remove_revoked_agent_cards(&self.owned_agent_id, &[card_id])
                 .await;
 
-            let mut revoked_cards = self
-                .public_state
+            self.public_state
                 .worker()
-                .get_non_detached_last_known_status()
-                .await
-                .revoked_cards;
-
-            if revoked_cards.insert(card_id) {
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
-                    .await;
-            }
+                .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                .await;
         }
 
         Ok(())
@@ -2552,7 +2543,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                     }
 
-                    self.check_current_initial_card_liveness().await?;
+                    self.check_post_replay_wallet_liveness().await?;
                 }
             }
         }
@@ -2560,11 +2551,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn check_current_initial_card_liveness(&mut self) -> Result<(), WorkerExecutorError> {
-        let Some(card_id) = self.current_initial_card_id() else {
-            return Ok(());
-        };
-
+    async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
         let wallet_card_ids = self
             .state
             .agent_wallet_card_ids
@@ -2576,34 +2563,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
             .await;
 
-        if !self.state.agent_wallet_card_ids.contains(&card_id) {
+        if wallet_card_ids.is_empty() {
             return Ok(());
         }
 
-        if !self
-            .state
-            .card_service
-            .check_cards(vec![card_id])
-            .await?
-            .contains(&card_id)
-        {
+        let revoked_card_ids = self.state.card_service.check_cards(wallet_card_ids).await?;
+
+        if !revoked_card_ids.is_empty() {
+            let revoked_card_ids = revoked_card_ids.into_iter().collect::<Vec<_>>();
             self.state
                 .card_service
-                .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &[card_id])
+                .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &revoked_card_ids)
                 .await;
         }
 
         Ok(())
-    }
-
-    fn current_initial_card_id(&self) -> Option<CardId> {
-        self.state.agent_id.as_ref().and_then(|agent_id| {
-            self.state
-                .component_metadata
-                .metadata
-                .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id)
-        })
     }
 
     pub async fn update_state_to_new_phantom_id(
