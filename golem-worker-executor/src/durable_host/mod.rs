@@ -2670,7 +2670,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             self.state
                 .card_service
-                .unregister_agent(&self.owned_agent_id);
+                .clear_agent_cards(&self.owned_agent_id);
             if let Some(card_id) = initial_card_id {
                 if liveness.is_live() {
                     self.state

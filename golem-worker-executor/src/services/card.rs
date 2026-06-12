@@ -49,7 +49,11 @@ impl CardLiveness {
 
 #[async_trait]
 pub trait CardService: Send + Sync {
+    fn register_agent(&self, agent_id: OwnedAgentId);
+
     fn register_agent_cards(&self, agent_id: OwnedAgentId, card_ids: &[CardId]);
+
+    fn clear_agent_cards(&self, agent_id: &OwnedAgentId);
 
     fn unregister_agent(&self, agent_id: &OwnedAgentId);
 
@@ -68,6 +72,7 @@ pub trait CardService: Send + Sync {
 pub struct CardServiceDefault {
     registry_service: Arc<dyn RegistryService>,
     negative_index: RwLock<HashSet<CardId>>,
+    active_agents: RwLock<HashSet<OwnedAgentId>>,
     reverse_index: RwLock<HashMap<CardId, HashSet<OwnedAgentId>>>,
     live_card_events: RwLock<HashMap<OwnedAgentId, VecDeque<LiveCardEvent>>>,
 }
@@ -76,7 +81,11 @@ pub struct NoopCardService;
 
 #[async_trait]
 impl CardService for NoopCardService {
+    fn register_agent(&self, _agent_id: OwnedAgentId) {}
+
     fn register_agent_cards(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
+
+    fn clear_agent_cards(&self, _agent_id: &OwnedAgentId) {}
 
     fn unregister_agent(&self, _agent_id: &OwnedAgentId) {}
 
@@ -106,6 +115,7 @@ impl CardServiceDefault {
         Self {
             registry_service,
             negative_index: RwLock::new(HashSet::new()),
+            active_agents: RwLock::new(HashSet::new()),
             reverse_index: RwLock::new(HashMap::new()),
             live_card_events: RwLock::new(HashMap::new()),
         }
@@ -128,6 +138,10 @@ impl CardServiceDefault {
             return;
         }
 
+        if !self.active_agents.read().unwrap().contains(agent_id) {
+            return;
+        }
+
         let mut live_card_events = self.live_card_events.write().unwrap();
         let queue = live_card_events.entry(agent_id.clone()).or_default();
         let mut existing_revocations = queue
@@ -147,8 +161,21 @@ impl CardServiceDefault {
 
 #[async_trait]
 impl CardService for CardServiceDefault {
+    fn register_agent(&self, agent_id: OwnedAgentId) {
+        self.active_agents.write().unwrap().insert(agent_id.clone());
+        self.live_card_events
+            .write()
+            .unwrap()
+            .entry(agent_id)
+            .or_default();
+    }
+
     fn register_agent_cards(&self, agent_id: OwnedAgentId, card_ids: &[CardId]) {
         if card_ids.is_empty() {
+            return;
+        }
+
+        if !self.active_agents.read().unwrap().contains(&agent_id) {
             return;
         }
 
@@ -173,13 +200,18 @@ impl CardService for CardServiceDefault {
         }
     }
 
-    fn unregister_agent(&self, agent_id: &OwnedAgentId) {
+    fn clear_agent_cards(&self, agent_id: &OwnedAgentId) {
         let mut reverse_index = self.reverse_index.write().unwrap();
         reverse_index.retain(|_, agents| {
             agents.remove(agent_id);
             !agents.is_empty()
         });
-        drop(reverse_index);
+    }
+
+    fn unregister_agent(&self, agent_id: &OwnedAgentId) {
+        self.active_agents.write().unwrap().remove(agent_id);
+
+        self.clear_agent_cards(agent_id);
 
         self.live_card_events.write().unwrap().remove(agent_id);
     }
@@ -524,6 +556,7 @@ mod tests {
         let agent = agent("agent-1");
         let card_id = CardId::new();
 
+        service.register_agent(agent.clone());
         service.register_agent_cards(agent.clone(), &[card_id]);
         let affected_agents = service.record_revoked_cards(&[card_id]);
 
@@ -542,6 +575,7 @@ mod tests {
         let live_card_id = CardId::new();
         let revoked_card_id = CardId::new();
 
+        service.register_agent(agent.clone());
         service.register_agent_cards(agent.clone(), &[live_card_id]);
         let affected_agents = service.record_revoked_cards(&[revoked_card_id]);
 
@@ -555,6 +589,7 @@ mod tests {
         let agent = agent("agent-1");
         let card_id = CardId::new();
 
+        service.register_agent(agent.clone());
         service.register_agent_cards(agent.clone(), &[card_id]);
         service.enqueue_revoked_cards_for_agent(&agent, &[card_id]);
         service.unregister_agent(&agent);
@@ -569,6 +604,7 @@ mod tests {
         let agent = agent("agent-1");
         let card_id = CardId::new();
 
+        service.register_agent(agent.clone());
         service.enqueue_revoked_cards_for_agent(&agent, &[card_id]);
         service.enqueue_revoked_cards_for_agent(&agent, &[card_id]);
 

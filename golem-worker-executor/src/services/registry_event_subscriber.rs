@@ -14,7 +14,6 @@
 
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
-use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::workerctx::WorkerCtx;
@@ -27,7 +26,6 @@ use tracing::{debug, warn};
 
 pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
     active_workers: Arc<ActiveWorkers<Ctx>>,
-    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn AgentTypesService>,
@@ -37,7 +35,6 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
-        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -49,7 +46,6 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                 Some(shutdown_token),
                 Arc::new(Self {
                     active_workers,
-                    card_service,
                     component_service,
                     environment_state_service,
                     agent_types_service,
@@ -152,10 +148,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     card_count = card_ids.len(),
                     "Received card revocation event, recording revoked card ids"
                 );
-                let affected_agents = self.card_service.record_revoked_cards(&card_ids);
-                self.active_workers
-                    .notify_card_revoked(affected_agents)
-                    .await;
+                self.active_workers.record_revoked_cards(&card_ids);
             }
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,

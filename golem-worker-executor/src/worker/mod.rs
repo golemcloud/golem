@@ -758,11 +758,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
-    pub async fn unblock(&self) {
-        let instance_guard = self.instance.lock().await;
-        if let WorkerInstance::Running(running) = &*instance_guard {
-            let _ = running.sender.send(WorkerCommand::Unblock);
-        }
+    pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
+        &self.owned_agent_id
     }
 
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
@@ -2563,8 +2560,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 notify.set();
             }
         }
-
-        self.card_service().unregister_agent(&self.owned_agent_id);
     }
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {

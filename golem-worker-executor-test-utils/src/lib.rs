@@ -1851,6 +1851,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
+        card_service: Arc<dyn CardService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         // The in-process test harness shares its process (and RSS) with the test
@@ -1867,12 +1868,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
+                card_service,
                 shutdown_token,
             )),
             None => Arc::new(ActiveWorkers::new(
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
+                card_service,
                 shutdown_token,
             )),
         }
