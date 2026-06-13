@@ -342,7 +342,6 @@ debug = "line-tables-only"
 [profile.release]
 panic = "abort"
 lto = "thin"
-codegen-units = 1
 
 [profile.benchmarks]
 inherits = "release"
