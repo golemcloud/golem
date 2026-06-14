@@ -1702,7 +1702,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 run_loop_handle,
                 notify,
             } => {
-                run_loop_handle.await.expect("Failed to join run loop");
+                join_run_loop_with_watchdog(&self.owned_agent_id, run_loop_handle).await;
 
                 let mut instance_guard = self.instance.lock().await;
                 let is_deleting = match &*instance_guard {
@@ -2308,6 +2308,37 @@ impl Drop for WorkerStatusMetric {
     }
 }
 
+/// Joins the invocation-loop task, logging a periodic warning if the join does
+/// not complete promptly.
+///
+/// The stop path drops the worker's command channel sender and then waits here
+/// for the loop task to observe the close and return. If the loop is parked at
+/// an await that never observes the closed channel, this join never completes
+/// and the delete/stop that triggered it is wedged. The watchdog surfaces that
+/// condition with the agent id so a stuck teardown is diagnosable from logs.
+async fn join_run_loop_with_watchdog(owned_agent_id: &OwnedAgentId, handle: JoinHandle<()>) {
+    const WARN_AFTER: Duration = Duration::from_secs(10);
+
+    let mut handle = handle;
+    let mut waited = Duration::ZERO;
+    loop {
+        match tokio::time::timeout(WARN_AFTER, &mut handle).await {
+            Ok(join_result) => {
+                join_result.expect("Failed to join run loop");
+                return;
+            }
+            Err(_) => {
+                waited += WARN_AFTER;
+                warn!(
+                    agent_id = %owned_agent_id,
+                    waited_secs = waited.as_secs(),
+                    "Still waiting for invocation loop to exit during stop; the loop task may be parked at an uninterruptible await"
+                );
+            }
+        }
+    }
+}
+
 pub fn merge_agent_env_with_default_env(
     agent_env: Option<Vec<(String, String)>>,
     default_agent_env: BTreeMap<String, String>,
@@ -2514,6 +2545,7 @@ impl Drop for WaitingWorker {
 #[derive(Debug)]
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
+    owned_agent_id: OwnedAgentId,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     /// The worker's memory reservation with the admission gate, covering its
@@ -2550,6 +2582,19 @@ impl Drop for RunningWorker {
                 record_filesystem_pool_released(bytes);
             }
         }
+        // A `RunningWorker` is normally torn down via `stop()`, which takes the
+        // handle so the invocation loop can be joined after its command channel
+        // closes. If the handle is still present here and the task has not
+        // finished, the loop task is being orphaned: it will keep running and
+        // hold its wasmtime `Store` even though the worker is gone.
+        if let Some(handle) = &self.handle
+            && !handle.is_finished()
+        {
+            warn!(
+                agent_id = %self.owned_agent_id,
+                "RunningWorker dropped while its invocation loop task is still running; the loop task is being orphaned and will leak its Store"
+            );
+        }
     }
 }
 
@@ -2568,6 +2613,7 @@ impl RunningWorker {
 
         let active_clone = queue.clone();
         let owned_agent_id_clone = owned_agent_id.clone();
+        let owned_agent_id_log = owned_agent_id.clone();
         let waiting_for_command = Arc::new(AtomicBool::new(false));
         let waiting_for_command_clone = waiting_for_command.clone();
         let interrupt_signal = Arc::new(async_lock::Mutex::new(None));
@@ -2588,6 +2634,7 @@ impl RunningWorker {
         );
         let handle = tokio::task::spawn(
             async move {
+                debug!(agent_id = %owned_agent_id_log, "Invocation loop task started");
                 RunningWorker::invocation_loop(
                     receiver,
                     active_clone,
@@ -2601,12 +2648,14 @@ impl RunningWorker {
                 )
                 .instrument(span)
                 .await;
+                debug!(agent_id = %owned_agent_id_log, "Invocation loop task exited");
             }
             .in_current_span(),
         );
 
         RunningWorker {
             handle: Some(handle),
+            owned_agent_id,
             sender,
             queue,
             memory_grant,
