@@ -37,10 +37,15 @@
 //! both the burst race and later faulting of granted pages.
 //!
 //! The granted total is maintained by two integer updates: a worker's grant is
-//! added on admission and removed on unload (via [`AdmissionController::release`]
-//! from the worker lifecycle). The headroom check re-derives the reservation
-//! from this maintained total and the current probe reading, so it is O(1) and
-//! exact regardless of worker churn.
+//! added on admission, and removed when the [`MemoryGrant`] guard returned by
+//! admission is dropped. Tying the removal to the guard's drop — rather than to
+//! an explicit release call on some worker-lifecycle path — keeps the accounting
+//! symmetric no matter how a worker's start ends: whether it becomes resident and
+//! later stops, or its start is cancelled mid-flight (e.g. the worker is deleted
+//! while still waiting for permits), dropping the guard returns its reservation
+//! exactly once. The headroom check re-derives the reservation from the
+//! maintained total and the current probe reading, so it is O(1) and exact
+//! regardless of worker churn.
 //!
 //! When headroom is short the controller evicts already-resident idle-then-warm
 //! work; if it still cannot make room it rejects rather than over-committing.
@@ -51,12 +56,12 @@
 
 use super::memory_probe::MemoryProbe;
 use async_trait::async_trait;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Why an eviction candidate is worth evicting, in priority order. Lower
 /// variants are evicted first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EvictionPriority {
+pub(crate) enum EvictionPriority {
     /// Resident in memory, not executing, no durable pending work. Cheapest to
     /// evict — losing it costs at most a re-load on next use.
     Idle,
@@ -69,7 +74,7 @@ pub enum EvictionPriority {
 /// restore headroom. Abstracts over the live worker set so the decision logic
 /// is testable without `Worker`/wasmtime.
 #[async_trait]
-pub trait EvictionSource: Send + Sync {
+pub(crate) trait EvictionSource: Send + Sync {
     /// Evict at the given priority tier, attempting to free at least
     /// `needed_bytes`. Returns the number of bytes actually reclaimed (which may
     /// be less if the tier is exhausted, or more if a single victim was larger
@@ -80,7 +85,7 @@ pub trait EvictionSource: Send + Sync {
 
 /// The outcome of an admission attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdmissionDecision {
+pub(crate) enum AdmissionDecision {
     /// There is enough real headroom (possibly after eviction) to admit the
     /// request without risking the limit.
     Admit,
@@ -96,7 +101,7 @@ pub enum AdmissionDecision {
 ///   arenas, runtime buffers). Mirrors `worker_memory_ratio`, but applied to the
 ///   measured limit rather than the configured total.
 #[derive(Debug, Clone, Copy)]
-pub struct AdmissionPolicy {
+pub(crate) struct AdmissionPolicy {
     /// Fraction (0.0..=1.0) of the measured limit usable for WASM admission.
     pub usable_ratio: f64,
 }
@@ -106,7 +111,7 @@ pub struct AdmissionPolicy {
 /// probe on each call. The only retained state is `granted`: the total linear
 /// memory granted to live workers, maintained across admit and unload, which the
 /// gate reserves so a worker cannot OOM the node by faulting in granted pages.
-pub struct AdmissionController {
+pub(crate) struct AdmissionController {
     probe: Box<dyn MemoryProbe>,
     policy: AdmissionPolicy,
     granted: Mutex<u64>,
@@ -181,7 +186,7 @@ impl AdmissionController {
     /// becomes resident and shared by all its workers. Unlike admission this does
     /// not evict or reject (the worker is already in); it accounts the bytes so
     /// later admissions see them. Released with [`Self::release`].
-    pub fn reserve_committed(&self, bytes: u64) {
+    pub(crate) fn reserve_committed(&self, bytes: u64) {
         self.reserve(bytes);
     }
 
@@ -189,7 +194,7 @@ impl AdmissionController {
     /// granted. Its pages leave memory, so its grant no longer needs reserving;
     /// not releasing it would permanently shrink admissible headroom as workers
     /// come and go.
-    pub fn release(&self, reserved_bytes: u64) {
+    pub(crate) fn release(&self, reserved_bytes: u64) {
         let mut granted = self.granted.lock().unwrap();
         *granted = granted.saturating_sub(reserved_bytes);
         crate::metrics::workers::record_worker_memory_granted(*granted);
@@ -211,7 +216,7 @@ impl AdmissionController {
     /// headroom is re-measured against ground truth; the request is admitted only
     /// if the real headroom now covers it, otherwise it is rejected. On admit the
     /// request is added to the in-flight reservation.
-    pub async fn try_admit(
+    async fn try_admit(
         &self,
         request_bytes: u64,
         source: &dyn EvictionSource,
@@ -244,10 +249,90 @@ impl AdmissionController {
         }
     }
 
-    /// The current admissible headroom. Exposed for metrics and for callers that
-    /// want to make their own pre-check.
-    pub fn headroom_bytes(&self) -> u64 {
+    /// The current admissible headroom. Used by tests to assert the gate's
+    /// accounting; production reads headroom indirectly through admission.
+    #[cfg(test)]
+    pub(crate) fn headroom_bytes(&self) -> u64 {
         self.admissible_headroom()
+    }
+
+    /// Like [`Self::try_admit`], but on admit returns a [`MemoryGrant`] guard
+    /// that owns the reservation and releases it on drop. The grant a starting
+    /// worker holds passes through several `.await` points before the worker
+    /// becomes resident (per-account concurrency, component charge, filesystem
+    /// storage); if that work is cancelled — as when the worker is deleted while
+    /// still waiting — the guard's drop returns the reservation, so a cancelled
+    /// start cannot leak headroom.
+    pub(crate) async fn try_admit_grant(
+        self: &Arc<Self>,
+        request_bytes: u64,
+        source: &dyn EvictionSource,
+    ) -> Option<MemoryGrant> {
+        match self.try_admit(request_bytes, source).await {
+            AdmissionDecision::Admit => Some(MemoryGrant {
+                controller: Some(self.clone()),
+                bytes: request_bytes,
+            }),
+            AdmissionDecision::Reject => None,
+        }
+    }
+}
+
+/// Owns a memory reservation made with the [`AdmissionController`] and returns it
+/// to the gate when dropped, so a reservation is released exactly once regardless
+/// of whether the worker became resident or its start was cancelled.
+///
+/// When measured admission is disabled (no controller) the grant is inert: it
+/// reserves nothing and releasing it is a no-op, so callers can hold a grant
+/// uniformly without branching on whether admission is active.
+pub(crate) struct MemoryGrant {
+    controller: Option<Arc<AdmissionController>>,
+    bytes: u64,
+}
+
+impl MemoryGrant {
+    /// An inert grant for when measured admission is disabled: holds no
+    /// reservation and releases nothing on drop.
+    pub(crate) fn inert() -> Self {
+        Self {
+            controller: None,
+            bytes: 0,
+        }
+    }
+
+    /// Fold another grant's bytes into this one, so a worker that grows its
+    /// memory carries a single grant covering its whole reservation. The other
+    /// grant is consumed and its reservation transferred here; the combined total
+    /// is released exactly once when this grant drops.
+    pub(crate) fn merge(&mut self, mut other: MemoryGrant) {
+        if other.controller.is_some() {
+            // Adopt the controller so a merged grant acquired while admission was
+            // enabled still releases, even if `self` started inert.
+            if self.controller.is_none() {
+                self.controller = other.controller.take();
+            }
+            self.bytes += other.bytes;
+        }
+        // Neutralize the absorbed grant so its drop does not release the bytes
+        // now owned by `self`.
+        other.bytes = 0;
+        other.controller = None;
+    }
+}
+
+impl std::fmt::Debug for MemoryGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryGrant")
+            .field("bytes", &self.bytes)
+            .finish()
+    }
+}
+
+impl Drop for MemoryGrant {
+    fn drop(&mut self) {
+        if let Some(controller) = &self.controller {
+            controller.release(self.bytes);
+        }
     }
 }
 

@@ -988,7 +988,9 @@ impl MemoryConfig {
     /// The admission policy for the measured-headroom gate. Reuses
     /// `worker_memory_ratio` as the usable fraction of the measured limit (the
     /// host keeps the remainder).
-    pub fn admission_policy(&self) -> crate::services::active_workers::admission::AdmissionPolicy {
+    pub(crate) fn admission_policy(
+        &self,
+    ) -> crate::services::active_workers::admission::AdmissionPolicy {
         crate::services::active_workers::admission::AdmissionPolicy {
             usable_ratio: self.worker_memory_ratio,
         }

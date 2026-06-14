@@ -29,7 +29,8 @@ pub use fs_semaphore::{
     filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
 };
 
-use admission::{AdmissionController, AdmissionDecision, EvictionPriority, EvictionSource};
+pub(crate) use admission::MemoryGrant;
+use admission::{AdmissionController, EvictionPriority, EvictionSource};
 use async_trait::async_trait;
 pub use component_charge::HeldComponentCharge;
 use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegistry};
@@ -235,7 +236,10 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     /// Blocking memory admission for a starting worker. Loops until the gate
-    /// admits the request, backing off between attempts.
+    /// admits the request, backing off between attempts, and returns a
+    /// [`MemoryGrant`] guard owning the reservation: the worker holds it for as
+    /// long as it is resident and releases it by dropping the guard, so a start
+    /// cancelled before the worker becomes resident cannot leak the reservation.
     ///
     /// A rejection is transient, not terminal. The gate reads resident memory
     /// from the probe, which lags real usage (cgroup `memory.current` only counts
@@ -244,18 +248,19 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     /// Each iteration backs off and re-reads the gate, so the caller eventually
     /// proceeds once headroom recovers rather than failing under momentary
     /// pressure. With measured admission disabled the worker is admitted
-    /// immediately.
-    pub async fn acquire(&self, memory: u64) {
+    /// immediately with an inert grant.
+    pub(crate) async fn acquire(&self, memory: u64) -> MemoryGrant {
         let Some(admission) = &self.admission else {
-            return;
+            return MemoryGrant::inert();
         };
         loop {
             // Evicts idle-then-warm when real headroom is short; rejects (and we
             // back off) when it cannot make room rather than risking the limit.
-            if admission.try_admit(memory, &self.eviction_source()).await
-                == AdmissionDecision::Admit
+            if let Some(grant) = admission
+                .try_admit_grant(memory, &self.eviction_source())
+                .await
             {
-                return;
+                return grant;
             }
             debug!("Measured headroom insufficient for {memory}, backing off and retrying");
             tokio::time::sleep(self.acquire_retry_delay).await;
@@ -271,30 +276,25 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     /// Non-blocking memory admission for a growing worker. A single gate attempt:
-    /// returns `true` when the grow is admitted, `false` when real headroom is
-    /// insufficient even after eviction (the caller turns this into a retriable
-    /// out-of-memory trap). With measured admission disabled the grow is always
-    /// admitted.
-    pub async fn try_acquire(&self, memory: u64) -> bool {
+    /// returns the additional [`MemoryGrant`] when the grow is admitted, or `None`
+    /// when real headroom is insufficient even after eviction (the caller turns
+    /// `None` into a retriable out-of-memory trap). The returned grant should be
+    /// merged into the worker's existing grant so its whole reservation is
+    /// released together on unload. With measured admission disabled the grow is
+    /// always admitted with an inert grant.
+    pub(crate) async fn try_acquire(&self, memory: u64) -> Option<MemoryGrant> {
         let Some(admission) = &self.admission else {
-            return true;
+            return Some(MemoryGrant::inert());
         };
-        match admission.try_admit(memory, &self.eviction_source()).await {
-            AdmissionDecision::Admit => true,
-            AdmissionDecision::Reject => {
+        match admission
+            .try_admit_grant(memory, &self.eviction_source())
+            .await
+        {
+            Some(grant) => Some(grant),
+            None => {
                 debug!("Measured headroom insufficient for {memory}, not admitting");
-                false
+                None
             }
-        }
-    }
-
-    /// Release the memory a worker reserved with the admission gate when it
-    /// unloads. `bytes` must be the cumulative amount the worker reserved through
-    /// [`Self::acquire`] and [`Self::try_acquire`], so the gate's granted total
-    /// stays symmetric. No-op when measured admission is disabled.
-    pub fn release_memory(&self, bytes: u64) {
-        if let Some(admission) = &self.admission {
-            admission.release(bytes);
         }
     }
 

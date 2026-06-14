@@ -27,7 +27,7 @@ use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
-    FilesystemStoragePermit, HeldComponentCharge, RegisteredConcurrentAccount,
+    FilesystemStoragePermit, HeldComponentCharge, MemoryGrant, RegisteredConcurrentAccount,
     WorkerComponentCharge,
 };
 use crate::services::events::{Event, EventsSubscription};
@@ -137,11 +137,6 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// at least that many bytes from the blocking eviction path, ensuring
     /// enough idle workers are evicted to satisfy the pending write.
     desired_extra_filesystem_storage: AtomicU64,
-    /// Cumulative memory bytes this worker has reserved with the admission gate:
-    /// its initial requirement plus every grow delta. Released back to the gate
-    /// in full when the worker unloads, so the gate's granted total stays exactly
-    /// symmetric with what was reserved.
-    granted_memory: AtomicU64,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -354,7 +349,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
-            granted_memory: AtomicU64::new(0),
         };
 
         // Wire the worker event service into the forwarding oplog so plugin errors
@@ -1004,24 +998,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             | WorkerInstance::Deleting => return Ok(()),
         }
 
-        if self.active_workers().try_acquire(delta).await {
-            self.granted_memory.fetch_add(delta, Ordering::Relaxed);
-            Ok(())
-        } else {
+        let Some(extra_grant) = self.active_workers().try_acquire(delta).await else {
             crate::metrics::workers::record_worker_memory_grow_rejected();
-            Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
-        }
-    }
+            return Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory));
+        };
 
-    /// Release this worker's entire accumulated memory grant back to the
-    /// admission gate, resetting the running total to zero. Called when the
-    /// worker stops being resident; a later reload re-accumulates the grant from
-    /// scratch through the acquire path.
-    fn release_granted_memory(&self) {
-        let granted = self.granted_memory.swap(0, Ordering::Relaxed);
-        if granted > 0 {
-            self.active_workers().release_memory(granted);
+        // Re-check state under the lock: the worker may have changed state while
+        // the gate ran. If it is still running, merge the extra grant into the
+        // running worker so its whole reservation releases together on unload.
+        // Otherwise drop `extra_grant` here, returning the reservation to the
+        // gate, and treat the grow as a no-op (matching the non-running arms).
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                running.merge_extra_memory_grant(extra_grant);
+            }
+            WorkerInstance::Stopping(_)
+            | WorkerInstance::WaitingForPermit(_)
+            | WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Deleting => {}
         }
+        Ok(())
     }
 
     /// Return `freed_bytes` to the storage semaphore pool.
@@ -1672,15 +1668,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
-                    self.release_granted_memory();
+                    // Dropping `running` at the end of this arm releases its
+                    // memory grant (and component/storage permits) back to the
+                    // gate.
                     **instance_guard = final_state.into_instance();
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
+                    // `stop()` consumes the RunningWorker and drops everything but
+                    // its join handle, releasing its memory grant back to the gate.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
                     crate::metrics::workers::dec_worker_memory_resident();
-                    self.release_granted_memory();
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
@@ -2229,6 +2228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
+        memory_grant: MemoryGrant,
         component_charge: WorkerComponentCharge,
         filesystem_storage_permit: Option<FilesystemStoragePermit>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
@@ -2244,6 +2244,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
                     this.clone(),
+                    memory_grant,
                     component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
@@ -2258,9 +2259,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
-                // The grant was reserved before this call; the worker is not
-                // becoming resident, so release it rather than leak it.
-                this.release_granted_memory();
+                // The worker is not becoming resident: dropping `memory_grant`
+                // here returns its reservation to the gate.
             }
         }
     }
@@ -2401,10 +2401,15 @@ impl WaitingWorker {
                 // Do not gate executor memory while waiting for a per-account
                 // concurrency slot. Otherwise one account could exhaust the
                 // memory headroom with workers that are not allowed to run yet.
-                parent.active_workers().acquire(memory_requirement).await;
-                parent
-                    .granted_memory
-                    .fetch_add(memory_requirement, Ordering::Relaxed);
+                //
+                // `memory_grant` owns the reservation from here on: it is held as
+                // a local until the worker becomes resident (when it moves into
+                // the RunningWorker) or this task ends/aborts (when dropping it
+                // returns the reservation to the gate). This is what makes a
+                // start cancelled mid-flight — e.g. the worker being deleted while
+                // still waiting for its remaining permits — release rather than
+                // leak its grant.
+                let memory_grant = parent.active_workers().acquire(memory_requirement).await;
                 // Reserve the component's compiled module size once per resident
                 // component (shared by all its workers). Held for as long as this
                 // worker is resident; the module faults into RAM when the first
@@ -2424,7 +2429,7 @@ impl WaitingWorker {
                         warn!(
                             "Failed to determine component charge requirement, not starting: {err}"
                         );
-                        parent.release_granted_memory();
+                        // Dropping `memory_grant` here returns its reservation.
                         return;
                     }
                 };
@@ -2478,6 +2483,7 @@ impl WaitingWorker {
                 debug!("Attempting to start worker after acquiring enough permits");
                 Worker::start_waiting_worker(
                     parent,
+                    memory_grant,
                     component_charge,
                     filesystem_storage_permit,
                     concurrent_agent_permit,
@@ -2510,6 +2516,13 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    /// The worker's memory reservation with the admission gate, covering its
+    /// initial requirement plus any grow deltas merged in. Held only to be
+    /// dropped: dropping it (on stop, eviction, or this worker being dropped for
+    /// any reason) returns the reservation to the gate, keeping the granted total
+    /// symmetric with what was reserved.
+    #[allow(dead_code)]
+    memory_grant: MemoryGrant,
     /// Keeps this worker's component module charge alive while it is resident.
     /// Held only to be dropped: dropping it releases the component's residency
     /// (and the module reservation if this was the last worker of the component).
@@ -2545,6 +2558,7 @@ impl RunningWorker {
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
+        memory_grant: MemoryGrant,
         component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
@@ -2595,12 +2609,20 @@ impl RunningWorker {
             handle: Some(handle),
             sender,
             queue,
+            memory_grant,
             component_charge: Box::new(component_charge),
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             resume_replay_pending,
         }
+    }
+
+    /// Merge an additional memory grant (from a successful grow) into this
+    /// worker's grant, so its whole reservation is released together when the
+    /// worker unloads.
+    pub fn merge_extra_memory_grant(&mut self, extra: MemoryGrant) {
+        self.memory_grant.merge(extra);
     }
 
     /// Merge additional storage permits into this worker's storage permit. If

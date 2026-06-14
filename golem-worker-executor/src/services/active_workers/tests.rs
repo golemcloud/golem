@@ -1060,3 +1060,225 @@ mod scheduler_liveness {
         Ok(())
     }
 }
+
+// ── Grant-guard liveness under random churn ──────────────────────────────────
+//
+// A worker's memory grant is reserved with the admission gate and then owned by
+// a guard that lives in one of three places over the worker's lifetime: in the
+// in-flight start task (waiting for permits), in the resident worker (started),
+// or dropped (the worker exited or its start was cancelled). The liveness
+// invariant — mirroring `scheduler_liveness` for the concurrent-agents scheduler
+// — is that however the guard travels between those places, the gate's
+// accounting stays symmetric: once every guard is gone, admissible headroom
+// returns to the full ceiling. A reservation released zero times (leak, the
+// cancelled-while-waiting deletion bug) or more than once (double-release) breaks
+// it. With a zero-usage probe, headroom is `ceiling - granted`, so the final
+// headroom reads the granted total directly.
+mod grant_guard_liveness {
+    use super::super::admission::{
+        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource, MemoryGrant,
+    };
+    use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
+    use proptest::prelude::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::task::JoinHandle;
+
+    /// Probe with a fixed limit reporting zero resident usage, so admissible
+    /// headroom equals `ceiling - granted` and reads the granted accounting
+    /// directly — the quantity a leaked or double-released grant corrupts.
+    #[derive(Debug)]
+    struct ZeroUsageProbe {
+        limit: u64,
+    }
+
+    impl MemoryProbe for ZeroUsageProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            MemorySnapshot {
+                limit_bytes: self.limit,
+                current_bytes: 0,
+            }
+        }
+    }
+
+    /// Nothing to evict: a rejected request stays rejected (the schedule keeps
+    /// total grants within the ceiling so admission only fails transiently, never
+    /// due to a leak the gate could not see).
+    struct NoEvictionSource;
+
+    #[async_trait::async_trait]
+    impl EvictionSource for NoEvictionSource {
+        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            0
+        }
+    }
+
+    /// One step in a randomized grant-lifecycle workload.
+    #[derive(Debug, Clone)]
+    enum Op {
+        /// Begin a worker start: spawn a task that acquires a grant of this many
+        /// bytes and then parks holding it, as a worker waits for its remaining
+        /// permits before becoming resident.
+        Start(u64),
+        /// A still-in-flight start becomes resident: its task yields the grant
+        /// guard, which we keep (the worker is now running).
+        Resident(prop::sample::Index),
+        /// Cancel a still-in-flight start, as deleting a waiting worker does:
+        /// abort the task, dropping the grant guard it held.
+        CancelStart(prop::sample::Index),
+        /// A resident worker exits: drop its grant guard.
+        Exit(prop::sample::Index),
+    }
+
+    fn arb_ops() -> impl Strategy<Value = Vec<Op>> {
+        prop::collection::vec(
+            prop_oneof![
+                4 => (1u64..50).prop_map(Op::Start),
+                2 => any::<prop::sample::Index>().prop_map(Op::Resident),
+                3 => any::<prop::sample::Index>().prop_map(Op::CancelStart),
+                2 => any::<prop::sample::Index>().prop_map(Op::Exit),
+            ],
+            1..80,
+        )
+    }
+
+    /// An in-flight start: the task acquires the grant, then sends it back over
+    /// `ready` and parks, so the driver can either take the grant (the worker
+    /// became resident) or abort the task (the start was cancelled, dropping the
+    /// grant inside the task).
+    struct InFlight {
+        handle: JoinHandle<()>,
+        ready: tokio::sync::oneshot::Receiver<MemoryGrant>,
+    }
+
+    /// Drive one randomized workload and assert headroom recovers to the ceiling
+    /// once every grant guard is gone.
+    async fn run_workload(limit: u64, ops: Vec<Op>) -> Result<(), TestCaseError> {
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(ZeroUsageProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+
+        let mut in_flight: Vec<InFlight> = Vec::new();
+        let mut resident: Vec<MemoryGrant> = Vec::new();
+
+        for op in ops {
+            match op {
+                Op::Start(bytes) => {
+                    let controller = controller.clone();
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let handle = tokio::spawn(async move {
+                        if let Some(grant) =
+                            controller.try_admit_grant(bytes, &NoEvictionSource).await
+                        {
+                            // Hand the grant to the driver, then park holding the
+                            // task alive so an abort drops the guard if the driver
+                            // never took it.
+                            let _ = tx.send(grant);
+                        }
+                        std::future::pending::<()>().await;
+                    });
+                    in_flight.push(InFlight { handle, ready: rx });
+                }
+                Op::Resident(idx) => {
+                    if !in_flight.is_empty() {
+                        let i = idx.index(in_flight.len());
+                        let started = in_flight.remove(i);
+                        // Take the grant out of the task (worker is now resident),
+                        // then abort the now-grantless parked task.
+                        match started.ready.await {
+                            Ok(grant) => {
+                                resident.push(grant);
+                                started.handle.abort();
+                                let _ = started.handle.await;
+                            }
+                            Err(_) => {
+                                // Admission was rejected; nothing was granted.
+                                started.handle.abort();
+                                let _ = started.handle.await;
+                            }
+                        }
+                    }
+                }
+                Op::CancelStart(idx) => {
+                    if !in_flight.is_empty() {
+                        let i = idx.index(in_flight.len());
+                        let started = in_flight.remove(i);
+                        // Delete a waiting worker: abort mid-flight. If the task
+                        // had already acquired its grant, the guard is dropped
+                        // inside the aborted task.
+                        started.handle.abort();
+                        let _ = started.handle.await;
+                    }
+                }
+                Op::Exit(idx) => {
+                    if !resident.is_empty() {
+                        let i = idx.index(resident.len());
+                        drop(resident.remove(i));
+                    }
+                }
+            }
+            // Let acquires/aborts settle so the granted accounting is observable.
+            for _ in 0..4 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // Tear everything down: abort remaining starts, drop remaining resident
+        // grants. The environment is now empty.
+        for started in in_flight.drain(..) {
+            started.handle.abort();
+            let _ = started.handle.await;
+        }
+        resident.clear();
+        // Let the final drops' releases settle.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let headroom = controller.headroom_bytes();
+        prop_assert_eq!(
+            headroom,
+            limit,
+            "headroom did not recover to ceiling {} after all grants were released (got {}); \
+             a grant leaked or was double-released across the lifecycle",
+            limit,
+            headroom
+        );
+
+        // And the gate must be live again: a fresh full-ceiling admission fits.
+        let readmit = controller.try_admit_grant(limit, &NoEvictionSource).await;
+        prop_assert!(
+            readmit.is_some(),
+            "gate refused a full-ceiling admission after draining; headroom is wedged"
+        );
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 128, max_shrink_iters: 64, ..ProptestConfig::default() })]
+
+        /// Liveness: under any interleaving of start / become-resident /
+        /// cancel-start / exit, once every grant guard is gone the gate's
+        /// admissible headroom returns to the full ceiling and admits again. A
+        /// grant that leaks on cancellation (or is released twice) breaks this.
+        #[test]
+        fn grants_never_leak_under_random_churn(
+            limit in 200u64..4000,
+            ops in arb_ops(),
+        ) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_time()
+                .build()
+                .unwrap();
+
+            rt.block_on(async move {
+                tokio::time::timeout(Duration::from_secs(10), run_workload(limit, ops))
+                    .await
+                    .unwrap_or_else(|_| Err(TestCaseError::fail(
+                        "grant workload did not complete within the timeout",
+                    )))
+            })?;
+        }
+    }
+}
