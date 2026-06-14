@@ -29,7 +29,7 @@ benchmarks:
   # size   = number of workers per implementation (×6 implementations total)
   # length = unused for echo
   - name: throughput-echo
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 50, 100, 250]
     length: [1000]
@@ -40,7 +40,7 @@ benchmarks:
   # benchmark most relevant to the memory-admission investigation — sized to
   # match throughput-echo so it exercises real density.
   - name: throughput-large-input
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 50, 100, 250]
     length: [100, 10000]
@@ -48,7 +48,7 @@ benchmarks:
   # size   = number of workers per implementation
   # length = CPU work length passed to cpu_intensive
   - name: throughput-cpu-intensive
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 50, 100, 250]
     length: [100]
@@ -58,14 +58,14 @@ benchmarks:
   # size   = number of unique components created (each in its own env)
   # length = seconds to wait per component for pre-compilation warm-up
   - name: cold-start-unknown-small
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 5, 25, 50]
     length: [2]
     disableCompilationCache: true
 
   - name: cold-start-unknown-medium
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 5, 25, 50]
     length: [5]
@@ -78,13 +78,13 @@ benchmarks:
   # NOTE: if results here are close to the cache-disabled entries above, the
   # warm-up wait is too short and compilation hasn't finished — bump length.
   - name: cold-start-unknown-small
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 5, 25, 50]
     length: [2]
 
   - name: cold-start-unknown-medium
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [1, 5, 25, 50]
     length: [5]
@@ -94,13 +94,13 @@ benchmarks:
   # size   = number of workers created
   # length = number of hot invocations per worker after the first cold one
   - name: latency-small
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [100, 500, 1000, 2000, 5000]
     length: [2]
 
   - name: latency-medium
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [100, 500, 1000, 2000]
     length: [5]
@@ -112,7 +112,7 @@ benchmarks:
   # size   = number of workers launched in parallel
   # length = sleep duration in milliseconds
   - name: sleep
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [10, 100, 500, 1000, 2000]
     length: [10000]
@@ -124,7 +124,7 @@ benchmarks:
   # size   = number of workers per variant
   # length = loop iteration count passed to oplog_heavy
   - name: durability-overhead
-    iterations: 1
+    iterations: 3
     clusterSize: [2]
     size: [10, 50, 100, 200]
     length: [5000]
