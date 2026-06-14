@@ -1143,13 +1143,15 @@ mod grant_guard_liveness {
         )
     }
 
-    /// An in-flight start: the task acquires the grant, then sends it back over
-    /// `ready` and parks, so the driver can either take the grant (the worker
-    /// became resident) or abort the task (the start was cancelled, dropping the
-    /// grant inside the task).
+    /// An in-flight start: the task runs admission, reports the outcome back over
+    /// `ready` (the grant on admit, `None` if the gate rejected it), then parks
+    /// holding the grant. The driver can take the grant (the worker became
+    /// resident) or abort the task (the start was cancelled, dropping any grant
+    /// inside the task). The outcome is always reported, so the driver never
+    /// blocks waiting on a start that was rejected.
     struct InFlight {
         handle: JoinHandle<()>,
-        ready: tokio::sync::oneshot::Receiver<MemoryGrant>,
+        ready: tokio::sync::oneshot::Receiver<Option<MemoryGrant>>,
     }
 
     /// Drive one randomized workload and assert headroom recovers to the ceiling
@@ -1169,14 +1171,15 @@ mod grant_guard_liveness {
                     let controller = controller.clone();
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     let handle = tokio::spawn(async move {
-                        if let Some(grant) =
-                            controller.try_admit_grant(bytes, &NoEvictionSource).await
-                        {
-                            // Hand the grant to the driver, then park holding the
-                            // task alive so an abort drops the guard if the driver
-                            // never took it.
-                            let _ = tx.send(grant);
-                        }
+                        // Always report the admission outcome so the driver never
+                        // blocks on a start that was rejected. On admit the grant
+                        // travels to the driver (held in the channel until taken
+                        // as resident or dropped on cancel); on reject we report
+                        // `None`.
+                        let outcome = controller.admit(bytes, &NoEvictionSource).await;
+                        let _ = tx.send(outcome);
+                        // Park so the task stays alive until the driver decides
+                        // its fate (become resident, or be aborted on cancel).
                         std::future::pending::<()>().await;
                     });
                     in_flight.push(InFlight { handle, ready: rx });
@@ -1185,31 +1188,28 @@ mod grant_guard_liveness {
                     if !in_flight.is_empty() {
                         let i = idx.index(in_flight.len());
                         let started = in_flight.remove(i);
-                        // Take the grant out of the task (worker is now resident),
-                        // then abort the now-grantless parked task.
-                        match started.ready.await {
-                            Ok(grant) => {
-                                resident.push(grant);
-                                started.handle.abort();
-                                let _ = started.handle.await;
-                            }
-                            Err(_) => {
-                                // Admission was rejected; nothing was granted.
-                                started.handle.abort();
-                                let _ = started.handle.await;
-                            }
+                        // Becoming resident requires the start to have been
+                        // admitted. Take the grant if there is one (worker is now
+                        // running); a rejected start cannot become resident and is
+                        // simply discarded. Either way abort the parked task.
+                        if let Ok(Some(grant)) = started.ready.await {
+                            resident.push(grant);
                         }
+                        started.handle.abort();
+                        let _ = started.handle.await;
                     }
                 }
                 Op::CancelStart(idx) => {
                     if !in_flight.is_empty() {
                         let i = idx.index(in_flight.len());
                         let started = in_flight.remove(i);
-                        // Delete a waiting worker: abort mid-flight. If the task
-                        // had already acquired its grant, the guard is dropped
-                        // inside the aborted task.
+                        // Delete a waiting worker: abort the task and drop the
+                        // `InFlight`. Any grant the start acquired is held in
+                        // `started.ready`; dropping it returns the reservation,
+                        // exactly as aborting a waiting worker mid-flight does.
                         started.handle.abort();
                         let _ = started.handle.await;
+                        drop(started.ready);
                     }
                 }
                 Op::Exit(idx) => {
@@ -1246,7 +1246,7 @@ mod grant_guard_liveness {
         );
 
         // And the gate must be live again: a fresh full-ceiling admission fits.
-        let readmit = controller.try_admit_grant(limit, &NoEvictionSource).await;
+        let readmit = controller.admit(limit, &NoEvictionSource).await;
         prop_assert!(
             readmit.is_some(),
             "gate refused a full-ceiling admission after draining; headroom is wedged"

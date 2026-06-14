@@ -256,14 +256,16 @@ impl AdmissionController {
         self.admissible_headroom()
     }
 
-    /// Like [`Self::try_admit`], but on admit returns a [`MemoryGrant`] guard
-    /// that owns the reservation and releases it on drop. The grant a starting
-    /// worker holds passes through several `.await` points before the worker
-    /// becomes resident (per-account concurrency, component charge, filesystem
-    /// storage); if that work is cancelled — as when the worker is deleted while
-    /// still waiting — the guard's drop returns the reservation, so a cancelled
-    /// start cannot leak headroom.
-    pub(crate) async fn try_admit_grant(
+    /// Admit `request_bytes`, evicting resident idle-then-warm work if needed,
+    /// and on success return a [`MemoryGrant`] guard that owns the reservation
+    /// and releases it on drop; `None` if the request cannot be admitted.
+    ///
+    /// The grant a starting worker holds passes through several `.await` points
+    /// before the worker becomes resident (per-account concurrency, component
+    /// charge, filesystem storage); if that work is cancelled — as when the
+    /// worker is deleted while still waiting — the guard's drop returns the
+    /// reservation, so a cancelled start cannot leak headroom.
+    pub(crate) async fn admit(
         self: &Arc<Self>,
         request_bytes: u64,
         source: &dyn EvictionSource,

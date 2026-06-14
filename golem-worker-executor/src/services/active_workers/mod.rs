@@ -256,10 +256,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         loop {
             // Evicts idle-then-warm when real headroom is short; rejects (and we
             // back off) when it cannot make room rather than risking the limit.
-            if let Some(grant) = admission
-                .try_admit_grant(memory, &self.eviction_source())
-                .await
-            {
+            if let Some(grant) = admission.admit(memory, &self.eviction_source()).await {
                 return grant;
             }
             debug!("Measured headroom insufficient for {memory}, backing off and retrying");
@@ -286,10 +283,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let Some(admission) = &self.admission else {
             return Some(MemoryGrant::inert());
         };
-        match admission
-            .try_admit_grant(memory, &self.eviction_source())
-            .await
-        {
+        match admission.admit(memory, &self.eviction_source()).await {
             Some(grant) => Some(grant),
             None => {
                 debug!("Measured headroom insufficient for {memory}, not admitting");
