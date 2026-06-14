@@ -126,5 +126,5 @@ benchmarks:
   - name: durability-overhead
     iterations: 1
     clusterSize: [2]
-    size: [10, 50, 100, 250]
+    size: [10, 50, 100, 200]
     length: [5000]
