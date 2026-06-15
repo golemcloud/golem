@@ -365,6 +365,18 @@ async fn list_visible_environments_shows_owned_and_shared(
     assert!(grantee_env_ids.contains(&env_1b.id));
     assert!(!grantee_env_ids.contains(&env_2a.id));
 
+    // A single-environment grant is not enough for the application-scoped listing endpoint.
+    // Partial listing is intentionally handled by list_visible_environments instead.
+    let list_application_result = client_grantee
+        .list_application_environments(&app_1.id.0)
+        .await;
+    assert_matches!(
+        list_application_result,
+        Err(golem_client::Error::Item(
+            RegistryServiceListApplicationEnvironmentsError::Error404(_)
+        ))
+    );
+
     Ok(())
 }
 
