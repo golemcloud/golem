@@ -25,7 +25,9 @@ use golem_common::model::agent::{
 use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
-use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::environment::{
+    EnvironmentRevisionRecord, EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
+};
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
@@ -61,7 +63,7 @@ use golem_registry_service::services::registry_change_notifier::{
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use heck::ToKebabCase;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
@@ -347,6 +349,116 @@ pub async fn test_environment_create(deps: &Deps) {
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
     check!(env == env_by_id);
+}
+
+pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
+    let owner_1 = deps
+        .create_account_with_email("visibility-owner-1@golem")
+        .await;
+    let owner_2 = deps
+        .create_account_with_email("visibility-owner-2@golem")
+        .await;
+
+    let app_1 = deps.create_application(owner_1.revision.account_id).await;
+    let app_2 = deps.create_application(owner_1.revision.account_id).await;
+    let app_3 = deps.create_application(owner_2.revision.account_id).await;
+
+    let env_1 = deps.create_env(app_1.revision.application_id).await;
+    let env_2 = deps.create_env(app_2.revision.application_id).await;
+    let env_3 = deps.create_env(app_3.revision.application_id).await;
+
+    let account_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
+            owner_1.revision.email.clone(),
+        )]);
+    let account_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &account_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(
+        account_filtered
+            == BTreeSet::from([env_1.revision.environment_id, env_2.revision.environment_id])
+    );
+
+    let account_filter_with_request_filters = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(
+                new_repo_uuid(),
+                &account_filter,
+                Some(&owner_1.revision.email),
+                Some(&app_2.revision.name),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    check!(account_filter_with_request_filters == BTreeSet::from([env_2.revision.environment_id]));
+
+    let application_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::application(
+            owner_1.revision.email.clone(),
+            app_1.revision.name.clone(),
+            None,
+        )]);
+    let application_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &application_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(application_filtered == BTreeSet::from([env_1.revision.environment_id]));
+
+    let environment_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::application(
+            owner_2.revision.email.clone(),
+            app_3.revision.name.clone(),
+            Some(env_3.revision.name.clone()),
+        )]);
+    let environment_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &environment_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(environment_filtered == BTreeSet::from([env_3.revision.environment_id]));
+
+    let none_filtered = deps
+        .environment_repo
+        .list_visible_to_account(
+            new_repo_uuid(),
+            &EnvironmentVisibilityFilter::None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    check!(none_filtered.is_empty());
+
+    let all_with_request_account_filter = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(
+                new_repo_uuid(),
+                &EnvironmentVisibilityFilter::All,
+                Some(&owner_2.revision.email),
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    check!(all_with_request_account_filter == BTreeSet::from([env_3.revision.environment_id]));
+}
+
+fn environment_ids(
+    records: Vec<golem_registry_service::repo::model::environment::EnvironmentWithDetailsRecord>,
+) -> BTreeSet<Uuid> {
+    records
+        .into_iter()
+        .map(|record| record.environment_id)
+        .collect()
 }
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {

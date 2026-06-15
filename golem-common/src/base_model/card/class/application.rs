@@ -60,7 +60,6 @@ pub enum ApplicationVerb {
     Create,
     Update,
     Delete,
-    ListAllEnvironments,
 }
 impl VerbPattern for ApplicationVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
@@ -69,7 +68,6 @@ impl VerbPattern for ApplicationVerb {
             "create" => Some(Self::Create),
             "update" => Some(Self::Update),
             "delete" => Some(Self::Delete),
-            "list-all-environments" => Some(Self::ListAllEnvironments),
             _ => None,
         }
     }
