@@ -25,6 +25,7 @@ export default {
   "golem-invoke-agent-moonbit": "Invoking a Golem Agent with `golem agent invoke`",
   "golem-logging-moonbit": "Logging from a MoonBit Agent",
   "golem-make-http-request-moonbit": "Making Outgoing HTTP Requests (MoonBit)",
+  "golem-mark-read-only-moonbit": "Marking Agent Methods as Read-Only (MoonBit)",
   "golem-parallel-workers-moonbit": "Parallel Workers — Fan-Out / Fan-In (MoonBit)",
   "golem-multi-instance-agent-moonbit": "Phantom Agents in MoonBit",
   "golem-recurring-task-moonbit": "Recurring Tasks via Self-Scheduling (MoonBit)",
