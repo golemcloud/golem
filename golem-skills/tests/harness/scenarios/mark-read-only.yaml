@@ -1,0 +1,90 @@
+name: "mark-read-only"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-read-only-method"
+    prompt:
+      rust: >
+        The test-app project already contains a stateful `CounterAgent` whose identity is a
+        counter name and which has an `increment` method that mutates and returns the counter.
+        Add a new method `get_count` to the same `CounterAgent` that returns the current counter
+        value without modifying any state, and mark it as a read-only method using the default
+        (until-write) cache policy so its result can be cached. Make sure the project builds and
+        deploys successfully.
+      ts: >
+        The test-app project already contains a stateful `CounterAgent` whose identity is a
+        counter name and which has an `increment` method that mutates and returns the counter.
+        Add a new method `getCount` to the same `CounterAgent` that returns the current counter
+        value without modifying any state, and mark it as a read-only method using the default
+        (until-write) cache policy so its result can be cached. Make sure the project builds and
+        deploys successfully.
+      scala: >
+        The test-app project already contains a stateful `CounterAgent` whose identity is a
+        counter name and which has an `increment` method that mutates and returns the counter.
+        Add a new method `getCount` to the same `CounterAgent` that returns the current counter
+        value without modifying any state, and mark it as a read-only method using the default
+        (until-write) cache policy so its result can be cached. Make sure the project builds and
+        deploys successfully.
+      moonbit: >
+        The test-app project already contains a stateful `CounterAgent` whose identity is a
+        counter name and which has an `increment` method that mutates and returns the counter.
+        Add a new method `get_count` to the same `CounterAgent` that returns the current counter
+        value without modifying any state, and mark it as a read-only method using the default
+        (until-write) cache policy so its result can be cached. Make sure the project builds and
+        deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-mark-read-only-rust"
+      ts:
+        - "golem-mark-read-only-ts"
+      scala:
+        - "golem-mark-read-only-scala"
+      moonbit:
+        - "golem-mark-read-only-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-read-only-registered"
+    shell:
+      command: "golem"
+      args: ["agent-type", "list", "--environment", "test-app/local", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: '"cachePolicy"'
+
+  - id: "increment-once"
+    invoke_json:
+      agent: 'CounterAgent("ro-counter")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "increment-twice"
+    invoke_json:
+      agent: 'CounterAgent("ro-counter")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "read-only-get-count"
+    invoke_json:
+      agent: 'CounterAgent("ro-counter")'
+      method:
+        rust: "get_count"
+        ts: "getCount"
+        scala: "getCount"
+        moonbit: "get_count"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
