@@ -18,7 +18,7 @@ use crate::model::text::fmt::{
     format_message_highlight, log_table, new_table_full_condensed,
 };
 use golem_common::model::plugin_registration::PluginRegistrationDto;
-use serde_derive::Serialize;
+use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -27,7 +27,7 @@ pub struct PluginNameAndVersion {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginSource {
     Own,
     Builtin,
@@ -44,14 +44,14 @@ impl std::fmt::Display for PluginSource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginListEntry {
     pub plugin: PluginRegistrationDto,
     pub source: PluginSource,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginListView {
     pub plugins: Vec<PluginListEntry>,
@@ -107,7 +107,7 @@ impl TextView for Vec<PluginRegistrationDto> {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistrationRegisterView(pub PluginRegistrationDto);
 
 impl MessageWithFields for PluginRegistrationRegisterView {
@@ -128,7 +128,7 @@ impl CliOutput for PluginRegistrationRegisterView {
     const KIND: &'static str = "plugin.register.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistrationGetView(pub PluginRegistrationDto);
 
 impl MessageWithFields for PluginRegistrationGetView {
@@ -149,7 +149,7 @@ impl CliOutput for PluginRegistrationGetView {
     const KIND: &'static str = "plugin.get.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginUnregisterResult {
     pub unregistered: bool,

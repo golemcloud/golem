@@ -65,7 +65,7 @@ fn with_cli_output_type<Output: CliOutput>(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::cli_output::CLI_OUTPUT_TYPE_FIELD;
+    use crate::model::cli_output::{CLI_OUTPUT_TYPE_FIELD, CliOutput, to_cli_output_value};
     use proptest::prelude::*;
     use quote::ToTokens;
     use serde_json::{Value, json};
@@ -99,12 +99,10 @@ mod tests {
                 output_type: $output_type,
                 examples: || {
                     let mut runner = proptest::test_runner::TestRunner::deterministic();
-                    vec![
-                        ($arbitrary)()
-                            .new_tree(&mut runner)
-                            .expect("example strategy should produce a value")
-                            .current(),
-                    ]
+                    vec![($arbitrary)()
+                        .new_tree(&mut runner)
+                        .expect("example strategy should produce a value")
+                        .current()]
                 },
                 arbitrary: Some($arbitrary),
             }
@@ -1004,173 +1002,171 @@ mod tests {
         proptest::strategy::Union::new(strategies).boxed()
     }
 
-    fn arb_small_string() -> BoxedStrategy<String> {
-        "[a-zA-Z0-9._:/() -]{0,40}".prop_map(|value| value).boxed()
+    fn serialized_output<T>(strategy: impl Strategy<Value = T> + 'static) -> OutputDocumentStrategy
+    where
+        T: CliOutput + 'static,
+    {
+        strategy
+            .prop_map(|output| {
+                to_cli_output_value(&output).expect("generated DTO should serialize")
+            })
+            .boxed()
     }
 
-    fn arb_bool_field(
-        output_type: &'static str,
-        field_name: &'static str,
-    ) -> OutputDocumentStrategy {
-        any::<bool>()
-            .prop_map(move |value| json!({ CLI_OUTPUT_TYPE_FIELD: output_type, field_name: value }))
+    fn render_generated_deployment_diff() -> Value {
+        to_cli_output_value(&empty_deployment_diff())
+            .expect("generated deployment diff should serialize")
+    }
+
+    fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
+        golem_common::model::diff::DeploymentDiff {
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+        }
+    }
+
+    fn arb_small_string() -> BoxedStrategy<String> {
+        any::<u128>()
+            .prop_map(|value| uuid::Uuid::from_u128(value).to_string())
             .boxed()
+    }
+
+    fn arb_uuid() -> BoxedStrategy<uuid::Uuid> {
+        any::<u128>().prop_map(uuid::Uuid::from_u128).boxed()
+    }
+
+    fn arb_small_u64() -> BoxedStrategy<u64> {
+        (0u64..1000).boxed()
+    }
+
+    fn arb_timestamp_string() -> BoxedStrategy<String> {
+        Just("1970-01-01T00:00:00Z".to_string()).boxed()
+    }
+
+    fn arb_timestamp() -> BoxedStrategy<golem_common::model::Timestamp> {
+        Just(
+            "1970-01-01T00:00:00Z"
+                .parse::<golem_common::model::Timestamp>()
+                .expect("fixed timestamp should parse"),
+        )
+        .boxed()
+    }
+
+    fn arb_url_string() -> BoxedStrategy<String> {
+        Just("https://example.com/callback".to_string()).boxed()
+    }
+
+    fn fixed_datetime() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
+            .expect("fixed timestamp should parse")
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn render_empty_agent_type_list() -> Value {
+        to_cli_output_value(&crate::model::text::agent::AgentTypeListView {
+            agent_types: Vec::new(),
+        })
+        .expect("generated agent type list should serialize")
+    }
+
+    fn render_empty_agent_oplog() -> Value {
+        to_cli_output_value(&crate::model::text::worker::AgentOplogView {
+            entries: Vec::new(),
+        })
+        .expect("generated agent oplog should serialize")
     }
 
     fn arb_build_result() -> OutputDocumentStrategy {
-        arb_bool_field("app.build.result", "built")
+        serialized_output(
+            any::<bool>()
+                .prop_map(|built| crate::model::text::action_result::BuildResult { built }),
+        )
     }
 
     fn arb_clean_result() -> OutputDocumentStrategy {
-        arb_bool_field("app.clean.result", "cleaned")
+        serialized_output(
+            any::<bool>()
+                .prop_map(|cleaned| crate::model::text::action_result::CleanResult { cleaned }),
+        )
     }
 
     fn arb_deploy_result() -> OutputDocumentStrategy {
-        arb_bool_field("app.deploy.result", "deployed")
+        serialized_output(
+            any::<bool>().prop_map(|deployed| {
+                crate::model::text::action_result::DeployResultView { deployed }
+            }),
+        )
     }
 
     fn arb_generate_bridge_result() -> OutputDocumentStrategy {
-        arb_bool_field("app.generate-bridge.result", "generated")
+        serialized_output(any::<bool>().prop_map(|generated| {
+            crate::model::text::action_result::GenerateBridgeResult { generated }
+        }))
     }
 
     fn arb_agent_type_get_result() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_small_string(), arb_small_string())
-            .prop_map(|(agent_type, constructor, description)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent-type.get.result",
-                    "agentType": agent_type,
-                    "constructor": constructor,
-                    "description": description,
-                })
-            })
-            .boxed()
+        serialized_output(
+            (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+                |(agent_type, constructor, description)| crate::model::agent::view::AgentTypeView {
+                    agent_type,
+                    constructor,
+                    description,
+                },
+            ),
+        )
     }
 
     fn arb_agent_type_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_deployed_registered_agent_type(), 0..5)
-            .prop_map(|agent_types| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent-type.list.result",
-                    "agentTypes": agent_types,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_deployed_registered_agent_type() -> OutputDocumentStrategy {
-        (
-            arb_json_value(2),
-            arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            proptest::option::of(arb_small_string()),
-        )
-            .prop_map(
-                |(
-                    agent_type,
-                    component_id,
-                    component_revision,
-                    component_name,
-                    account_id,
-                    account_email,
-                    webhook_prefix_authority_and_path,
-                )| {
-                    let mut value = json!({
-                        "agentType": agent_type,
-                        "implementedBy": {
-                            "componentId": component_id,
-                            "componentRevision": component_revision,
-                            "componentName": component_name,
-                            "accountId": account_id,
-                            "accountEmail": account_email,
-                        }
-                    });
-                    if let Some(webhook_prefix_authority_and_path) =
-                        webhook_prefix_authority_and_path
-                    {
-                        value["webhookPrefixAuthorityAndPath"] =
-                            json!(webhook_prefix_authority_and_path);
-                    }
-                    value
-                },
-            )
-            .boxed()
+        Just(render_empty_agent_type_list()).boxed()
     }
 
     fn arb_agent_files_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_file_node(), 0..6)
-            .prop_map(|nodes| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.files.result",
-                    "nodes": nodes,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_file_node(), 0..6)
+                .prop_map(|nodes| crate::model::text::worker::WorkerFilesView { nodes }),
+        )
     }
 
-    fn arb_file_node() -> OutputDocumentStrategy {
+    fn arb_file_node() -> BoxedStrategy<crate::model::text::worker::FileNodeView> {
         (
             arb_small_string(),
             arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            any::<u64>(),
+            arb_timestamp_string(),
+            arb_timestamp_string(),
+            arb_small_u64(),
         )
             .prop_map(|(name, last_modified, kind, permissions, size)| {
-                json!({
-                    "name": name,
-                    "lastModified": last_modified,
-                    "kind": kind,
-                    "permissions": permissions,
-                    "size": size,
-                })
+                crate::model::text::worker::FileNodeView {
+                    name,
+                    last_modified,
+                    kind,
+                    permissions,
+                    size,
+                }
             })
             .boxed()
     }
 
     fn arb_agent_get_result() -> OutputDocumentStrategy {
-        (arb_agent_metadata_view(), any::<bool>())
-            .prop_map(|(metadata, precise)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.get.result",
-                    "metadata": metadata,
-                    "precise": precise,
-                })
-            })
-            .boxed()
+        serialized_output((arb_agent_metadata_view(), any::<bool>()).prop_map(
+            |(metadata, precise)| crate::model::text::worker::WorkerGetView { metadata, precise },
+        ))
     }
 
     fn arb_agent_invoke_result() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            proptest::option::of(arb_json_value(2)),
-            proptest::option::of(proptest::collection::vec(arb_json_value(2), 0..4)),
-            proptest::option::of(arb_small_string()),
-            proptest::option::of(arb_small_string()),
-        )
-            .prop_map(
-                |(idempotency_key, result_json, results_json, result, result_format)| {
-                    let mut value = json!({
-                        CLI_OUTPUT_TYPE_FIELD: "agent.invoke.result",
-                        "idempotencyKey": idempotency_key,
-                    });
-                    if let Some(result_json) = result_json {
-                        value["resultJson"] = result_json;
-                    }
-                    if let Some(results_json) = results_json {
-                        value["resultsJson"] = json!(results_json);
-                    }
-                    if let Some(result) = result {
-                        value["result"] = json!(result);
-                    }
-                    if let Some(result_format) = result_format {
-                        value["resultFormat"] = json!(result_format);
-                    }
-                    value
-                },
-            )
+        arb_small_string()
+            .prop_map(|idempotency_key| {
+                to_cli_output_value(&crate::model::invoke_result_view::InvokeResultView {
+                    idempotency_key,
+                    result_json: None,
+                    results_json: None,
+                    result: None,
+                    result_format: None,
+                    is_void_result: true,
+                })
+                .expect("generated invoke result should serialize")
+            })
             .boxed()
     }
 
@@ -1179,147 +1175,121 @@ mod tests {
             proptest::collection::vec(arb_agent_metadata_view(), 0..5),
             proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
         )
-            .prop_map(|(agents, cursors)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.list.result",
-                    "agents": agents,
-                    "cursors": cursors,
-                })
+            .prop_map(
+                |(agents, cursors)| crate::model::worker::AgentsMetadataResponseView {
+                    agents,
+                    cursors,
+                },
+            )
+            .prop_map(|output| {
+                to_cli_output_value(&output).expect("generated DTO should serialize")
             })
             .boxed()
     }
 
     fn arb_agent_new_result() -> OutputDocumentStrategy {
-        (arb_small_string(), proptest::option::of(arb_small_string()))
-            .prop_map(|(component_name, agent_name)| {
-                let mut value = json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.new.result",
-                    "componentName": component_name,
-                });
-                if let Some(agent_name) = agent_name {
-                    value["agentName"] = json!(agent_name);
-                }
-                value
-            })
-            .boxed()
+        serialized_output(
+            (arb_small_string(), proptest::option::of(arb_small_string())).prop_map(
+                |(component_name, agent_name)| crate::model::text::worker::WorkerCreateView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    agent_name: agent_name.map(crate::model::worker::RawAgentId),
+                },
+            ),
+        )
     }
 
     fn arb_agent_oplog_result() -> OutputDocumentStrategy {
-        proptest::collection::vec((any::<u64>(), arb_json_value(2)), 0..6)
-            .prop_map(|entries| {
-                let entries = entries
-                    .into_iter()
-                    .map(|(index, entry)| json!([index, entry]))
-                    .collect::<Vec<_>>();
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.oplog.result",
-                    "entries": entries,
-                })
-            })
-            .boxed()
+        Just(render_empty_agent_oplog()).boxed()
     }
 
     fn arb_agent_stream_event() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_agent_stream_event_kind(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            proptest::option::of(arb_small_string()),
-            proptest::option::of(arb_small_string()),
-            proptest::option::of(any::<u64>()),
-            proptest::option::of(arb_small_string()),
-        )
-            .prop_map(
-                |(
-                    timestamp,
-                    kind,
-                    level,
-                    context,
-                    message,
-                    function_name,
-                    idempotency_key,
-                    number_of_missed_messages,
-                    error,
-                )| {
-                    let mut value = json!({
-                        CLI_OUTPUT_TYPE_FIELD: "agent.stream.event",
-                        "timestamp": timestamp,
-                        "kind": kind,
-                        "level": level,
-                        "context": context,
-                        "message": message,
-                    });
-                    if let Some(function_name) = function_name {
-                        value["functionName"] = json!(function_name);
-                    }
-                    if let Some(idempotency_key) = idempotency_key {
-                        value["idempotencyKey"] = json!(idempotency_key);
-                    }
-                    if let Some(number_of_missed_messages) = number_of_missed_messages {
-                        value["numberOfMissedMessages"] = json!(number_of_missed_messages);
-                    }
-                    if let Some(error) = error {
-                        value["error"] = json!(error);
-                    }
-                    value
-                },
+        serialized_output(
+            (
+                arb_timestamp(),
+                arb_agent_stream_event_kind(),
+                arb_small_string(),
+                arb_small_string(),
+                arb_small_string(),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_u64()),
+                proptest::option::of(arb_small_string()),
             )
-            .boxed()
+                .prop_map(
+                    |(
+                        timestamp,
+                        kind,
+                        level,
+                        context,
+                        message,
+                        function_name,
+                        idempotency_key,
+                        number_of_missed_messages,
+                        error,
+                    )| crate::model::agent::stream::AgentStreamEvent {
+                        timestamp,
+                        kind,
+                        level,
+                        context,
+                        message,
+                        function_name,
+                        idempotency_key,
+                        number_of_missed_messages,
+                        error,
+                    },
+                ),
+        )
     }
 
-    fn arb_agent_stream_event_kind() -> BoxedStrategy<&'static str> {
+    fn arb_agent_stream_event_kind()
+    -> BoxedStrategy<crate::model::agent::stream::AgentStreamEventKind> {
         prop_oneof![
-            Just("log"),
-            Just("stdout"),
-            Just("stderr"),
-            Just("stream-closed"),
-            Just("stream-error"),
-            Just("invocation-started"),
-            Just("invocation-finished"),
-            Just("missed-messages"),
+            Just(crate::model::agent::stream::AgentStreamEventKind::Log),
+            Just(crate::model::agent::stream::AgentStreamEventKind::Stdout),
+            Just(crate::model::agent::stream::AgentStreamEventKind::Stderr),
+            Just(crate::model::agent::stream::AgentStreamEventKind::StreamClosed),
+            Just(crate::model::agent::stream::AgentStreamEventKind::StreamError),
+            Just(crate::model::agent::stream::AgentStreamEventKind::InvocationStarted),
+            Just(crate::model::agent::stream::AgentStreamEventKind::InvocationFinished),
+            Just(crate::model::agent::stream::AgentStreamEventKind::MissedMessages),
         ]
         .boxed()
     }
 
     fn arb_agent_update_result() -> OutputDocumentStrategy {
-        (
-            proptest::collection::vec(arb_worker_update_attempt(), 0..5),
-            proptest::collection::vec(arb_worker_update_attempt(), 0..5),
+        serialized_output(
+            (
+                proptest::collection::vec(arb_worker_update_attempt(), 0..5),
+                proptest::collection::vec(arb_worker_update_attempt(), 0..5),
+            )
+                .prop_map(|(triggered, failed)| {
+                    crate::model::deploy::TryUpdateAllWorkersResult { triggered, failed }
+                }),
         )
-            .prop_map(|(triggered, failed)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.update.result",
-                    "triggered": triggered,
-                    "failed": failed,
-                })
-            })
-            .boxed()
     }
 
-    fn arb_worker_update_attempt() -> OutputDocumentStrategy {
+    fn arb_worker_update_attempt() -> BoxedStrategy<crate::model::deploy::WorkerUpdateAttempt> {
         (
             arb_small_string(),
-            any::<u64>(),
+            arb_small_u64(),
             arb_small_string(),
             proptest::option::of(arb_small_string()),
         )
             .prop_map(|(component_name, target_revision, agent_name, error)| {
-                let mut value = json!({
-                    "componentName": component_name,
-                    "targetRevision": target_revision,
-                    "agentName": agent_name,
-                });
-                if let Some(error) = error {
-                    value["error"] = json!(error);
+                crate::model::deploy::WorkerUpdateAttempt {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    target_revision: golem_common::model::component::ComponentRevision::new(
+                        target_revision,
+                    )
+                    .expect("generated revision should be valid"),
+                    agent_name: crate::model::worker::RawAgentId(agent_name),
+                    error,
                 }
-                value
             })
             .boxed()
     }
 
-    fn arb_agent_metadata_view() -> OutputDocumentStrategy {
+    fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::worker::AgentMetadataView> {
         (
             (
                 arb_small_string(),
@@ -1330,17 +1300,17 @@ mod tests {
                 proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
                 proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
                 proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
-                arb_small_string(),
+                Just("Running".to_string()).boxed(),
             ),
             (
-                any::<u64>(),
+                arb_small_u64(),
                 any::<u32>(),
-                any::<u64>(),
+                arb_small_u64(),
                 proptest::collection::vec(arb_update_record(), 0..4),
-                arb_small_string(),
+                arb_timestamp_string(),
                 proptest::option::of(arb_small_string()),
-                any::<u64>(),
-                any::<u64>(),
+                arb_small_u64(),
+                arb_small_u64(),
                 proptest::collection::btree_map(
                     arb_small_string(),
                     arb_agent_resource_description(),
@@ -1358,7 +1328,7 @@ mod tests {
                     default_env,
                     config,
                     default_config,
-                    status,
+                    _status,
                 ) = left;
                 let (
                     component_revision,
@@ -1372,206 +1342,234 @@ mod tests {
                     exported_resource_instances,
                 ) = right;
 
-                let mut value = json!({
-                    "componentName": component_name,
-                    "agentName": agent_name,
-                    "createdBy": created_by,
-                    "environmentId": environment_id,
-                    "env": env,
-                    "defaultEnv": default_env,
-                    "config": config,
-                    "defaultConfig": default_config,
-                    "status": status,
-                    "componentRevision": component_revision,
-                    "retryCount": retry_count,
-                    "pendingInvocationCount": pending_invocation_count,
-                    "updates": updates,
-                    "createdAt": created_at,
-                    "componentSize": component_size,
-                    "totalLinearMemorySize": total_linear_memory_size,
-                    "exportedResourceInstances": exported_resource_instances,
-                });
-                if let Some(last_error) = last_error {
-                    value["lastError"] = json!(last_error);
+                crate::model::worker::AgentMetadataView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    agent_name: crate::model::worker::RawAgentId(agent_name),
+                    created_by: golem_common::model::account::AccountId(
+                        uuid::Uuid::parse_str(&created_by).expect("generated UUID should parse"),
+                    ),
+                    environment_id: golem_common::model::environment::EnvironmentId(
+                        uuid::Uuid::parse_str(&environment_id)
+                            .expect("generated UUID should parse"),
+                    ),
+                    env: env.into_iter().collect(),
+                    default_env: default_env.into_iter().collect(),
+                    config,
+                    default_config,
+                    status: golem_common::model::AgentStatus::Running,
+                    component_revision: golem_common::model::component::ComponentRevision::new(
+                        component_revision,
+                    )
+                    .expect("generated revision should be valid"),
+                    retry_count,
+                    pending_invocation_count,
+                    updates,
+                    created_at: created_at
+                        .parse()
+                        .expect("generated timestamp should parse"),
+                    last_error,
+                    component_size,
+                    total_linear_memory_size,
+                    exported_resource_instances: exported_resource_instances.into_iter().collect(),
+                    source_language: crate::agent_id_display::SourceLanguage::default(),
                 }
-                value
             })
             .boxed()
     }
 
-    fn arb_agent_config_entry_dto() -> OutputDocumentStrategy {
+    fn arb_agent_config_entry_dto()
+    -> BoxedStrategy<golem_common::model::worker::AgentConfigEntryDto> {
         (
             proptest::collection::vec(arb_small_string(), 1..4),
             arb_json_value(2),
         )
-            .prop_map(|(path, value)| {
-                json!({
-                    "path": path,
-                    "value": value,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_update_record() -> OutputDocumentStrategy {
-        prop_oneof![
-            (arb_small_string(), any::<u64>()).prop_map(|(timestamp, target_revision)| {
-                json!({
-                    "type": "PendingUpdate",
-                    "timestamp": timestamp,
-                    "targetRevision": target_revision,
-                })
-            }),
-            (arb_small_string(), any::<u64>()).prop_map(|(timestamp, target_revision)| {
-                json!({
-                    "type": "SuccessfulUpdate",
-                    "timestamp": timestamp,
-                    "targetRevision": target_revision,
-                })
-            }),
-            (
-                arb_small_string(),
-                any::<u64>(),
-                proptest::option::of(arb_small_string()),
-            )
-                .prop_map(|(timestamp, target_revision, details)| {
-                    let mut value = json!({
-                        "type": "FailedUpdate",
-                        "timestamp": timestamp,
-                        "targetRevision": target_revision,
-                    });
-                    if let Some(details) = details {
-                        value["details"] = json!(details);
-                    }
-                    value
-                }),
-        ]
-        .boxed()
-    }
-
-    fn arb_agent_resource_description() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_small_string(), arb_small_string())
-            .prop_map(|(created_at, resource_owner, resource_name)| {
-                json!({
-                    "createdAt": created_at,
-                    "resourceOwner": resource_owner,
-                    "resourceName": resource_name,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_agent_delete_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string())
-            .prop_map(|(deleted, agent)| {
-                json!({ CLI_OUTPUT_TYPE_FIELD: "agent.delete.result", "deleted": deleted, "agent": agent })
-            })
-            .boxed()
-    }
-
-    fn arb_account_delete_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string())
-            .prop_map(|(deleted, account_id)| {
-                json!({ CLI_OUTPUT_TYPE_FIELD: "account.delete.result", "deleted": deleted, "accountId": account_id })
-            })
-            .boxed()
-    }
-
-    fn arb_account_get_result() -> OutputDocumentStrategy {
-        arb_account_value("account.get.result")
-    }
-
-    fn arb_account_new_result() -> OutputDocumentStrategy {
-        arb_account_value("account.new.result")
-    }
-
-    fn arb_account_update_result() -> OutputDocumentStrategy {
-        arb_account_value("account.update.result")
-    }
-
-    fn arb_account_value(output_type: &'static str) -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            proptest::collection::vec(arb_account_role(), 0..4),
-            arb_small_string(),
-        )
             .prop_map(
-                move |(id, revision, name, email, plan_id, roles, account_root_card_id)| {
-                    json!({
-                        CLI_OUTPUT_TYPE_FIELD: output_type,
-                        "id": id,
-                        "revision": revision,
-                        "name": name,
-                        "email": email,
-                        "planId": plan_id,
-                        "roles": roles,
-                        "accountRootCardId": account_root_card_id,
-                    })
+                |(path, value)| golem_common::model::worker::AgentConfigEntryDto {
+                    path,
+                    value: golem_common::base_model::json::NormalizedJsonValue(value),
                 },
             )
             .boxed()
     }
 
-    fn arb_account_role() -> BoxedStrategy<&'static str> {
-        prop_oneof![Just("admin"), Just("marketing-admin")].boxed()
+    fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecord> {
+        prop_oneof![
+            (arb_timestamp(), arb_small_u64()).prop_map(|(timestamp, target_revision)| {
+                golem_common::model::worker::UpdateRecord::PendingUpdate(
+                    golem_common::model::worker::PendingUpdate {
+                        timestamp,
+                        target_revision: golem_common::model::component::ComponentRevision::new(
+                            target_revision,
+                        )
+                        .expect("generated revision should be valid"),
+                    },
+                )
+            }),
+            (arb_timestamp(), arb_small_u64()).prop_map(|(timestamp, target_revision)| {
+                golem_common::model::worker::UpdateRecord::SuccessfulUpdate(
+                    golem_common::model::worker::SuccessfulUpdate {
+                        timestamp,
+                        target_revision: golem_common::model::component::ComponentRevision::new(
+                            target_revision,
+                        )
+                        .expect("generated revision should be valid"),
+                    },
+                )
+            }),
+            (
+                arb_timestamp(),
+                arb_small_u64(),
+                proptest::option::of(arb_small_string()),
+            )
+                .prop_map(|(timestamp, target_revision, details)| {
+                    golem_common::model::worker::UpdateRecord::FailedUpdate(
+                        golem_common::model::worker::FailedUpdate {
+                            timestamp,
+                            target_revision:
+                                golem_common::model::component::ComponentRevision::new(
+                                    target_revision,
+                                )
+                                .expect("generated revision should be valid"),
+                            details,
+                        },
+                    )
+                }),
+        ]
+        .boxed()
+    }
+
+    fn arb_agent_resource_description()
+    -> BoxedStrategy<golem_common::model::AgentResourceDescription> {
+        (arb_timestamp(), arb_small_string(), arb_small_string())
+            .prop_map(|(created_at, resource_owner, resource_name)| {
+                golem_common::model::AgentResourceDescription {
+                    created_at,
+                    resource_owner,
+                    resource_name,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_agent_delete_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(deleted, agent)| {
+                crate::model::text::action_result::AgentDeleteResult { deleted, agent }
+            }),
+        )
+    }
+
+    fn arb_account_delete_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(deleted, account_id)| {
+                crate::model::text::account::AccountDeleteResult {
+                    deleted,
+                    account_id: golem_common::model::account::AccountId(
+                        uuid::Uuid::parse_str(&account_id).expect("generated UUID should parse"),
+                    ),
+                }
+            }),
+        )
+    }
+
+    fn arb_account_get_result() -> OutputDocumentStrategy {
+        serialized_output(arb_account().prop_map(crate::model::text::account::AccountGetView))
+    }
+
+    fn arb_account_new_result() -> OutputDocumentStrategy {
+        serialized_output(arb_account().prop_map(crate::model::text::account::AccountNewView))
+    }
+
+    fn arb_account_update_result() -> OutputDocumentStrategy {
+        serialized_output(arb_account().prop_map(crate::model::text::account::AccountUpdateView))
+    }
+
+    fn arb_account() -> BoxedStrategy<golem_client::model::Account> {
+        (
+            arb_uuid(),
+            arb_small_u64(),
+            arb_small_string(),
+            arb_small_string(),
+            arb_uuid(),
+            proptest::collection::vec(arb_account_role(), 0..4),
+            arb_uuid(),
+        )
+            .prop_map(
+                |(id, revision, name, email, plan_id, roles, account_root_card_id)| {
+                    golem_client::model::Account {
+                        id: golem_common::model::account::AccountId(id),
+                        revision: golem_common::model::account::AccountRevision::new(revision)
+                            .expect("generated revision should be valid"),
+                        name,
+                        email: golem_common::model::account::AccountEmail::new(email),
+                        plan_id: golem_common::model::plan::PlanId(plan_id),
+                        roles,
+                        account_root_card_id: golem_common::model::card::CardId(
+                            account_root_card_id,
+                        ),
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_account_role() -> BoxedStrategy<golem_common::model::auth::AccountRole> {
+        prop_oneof![
+            Just(golem_common::model::auth::AccountRole::Admin),
+            Just(golem_common::model::auth::AccountRole::MarketingAdmin),
+            Just(golem_common::model::auth::AccountRole::BuiltinPluginOwner),
+        ]
+        .boxed()
     }
 
     fn arb_permission_share_delete_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string())
-            .prop_map(|(deleted, permission_share_id)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "account.permission-share.delete.result",
-                    "deleted": deleted,
-                    "permissionShareId": permission_share_id,
-                })
-            })
-            .boxed()
+        serialized_output((any::<bool>(), arb_small_string()).prop_map(
+            |(deleted, permission_share_id)| {
+                crate::model::text::account::PermissionShareDeleteResult {
+                    deleted,
+                    permission_share_id: golem_common::model::permission_share::PermissionShareId(
+                        uuid::Uuid::parse_str(&permission_share_id)
+                            .expect("generated UUID should parse"),
+                    ),
+                }
+            },
+        ))
     }
 
     fn arb_permission_share_get_result() -> OutputDocumentStrategy {
-        arb_permission_share_value("account.permission-share.get.result")
+        serialized_output(
+            arb_permission_share().prop_map(crate::model::text::account::PermissionShareGetView),
+        )
     }
 
     fn arb_permission_share_new_result() -> OutputDocumentStrategy {
-        arb_permission_share_value("account.permission-share.new.result")
+        serialized_output(
+            arb_permission_share().prop_map(crate::model::text::account::PermissionShareNewView),
+        )
     }
 
     fn arb_permission_share_update_result() -> OutputDocumentStrategy {
-        arb_permission_share_value("account.permission-share.update.result")
+        serialized_output(
+            arb_permission_share().prop_map(crate::model::text::account::PermissionShareUpdateView),
+        )
     }
 
     fn arb_permission_share_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_permission_share_value_without_type(), 0..5)
-            .prop_map(|permission_shares| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "account.permission-share.list.result",
-                    "permissionShares": permission_shares,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_permission_share(), 0..5).prop_map(|permission_shares| {
+                crate::model::text::account::PermissionShareListView { permission_shares }
+            }),
+        )
     }
 
-    fn arb_permission_share_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_permission_share_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_permission_share_value_without_type() -> OutputDocumentStrategy {
+    fn arb_permission_share() -> BoxedStrategy<golem_client::model::PermissionShare> {
         (
+            arb_uuid(),
+            arb_small_u64(),
+            arb_uuid(),
+            arb_uuid(),
             arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            proptest::option::of(arb_small_string()),
+            proptest::option::of(arb_uuid()),
             arb_permission_share_data(),
         )
             .prop_map(
@@ -1584,24 +1582,28 @@ mod tests {
                     current_card_id,
                     data,
                 )| {
-                    let mut value = json!({
-                        "id": id,
-                        "revision": revision,
-                        "ownerAccountId": owner_account_id,
-                        "targetAccountId": target_account_id,
-                        "name": name,
-                        "data": data,
-                    });
-                    if let Some(current_card_id) = current_card_id {
-                        value["currentCardId"] = json!(current_card_id);
+                    golem_client::model::PermissionShare {
+                        id: golem_common::model::permission_share::PermissionShareId(id),
+                        revision:
+                            golem_common::model::permission_share::PermissionShareRevision::new(
+                                revision,
+                            )
+                            .expect("generated revision should be valid"),
+                        owner_account_id: golem_common::model::account::AccountId(owner_account_id),
+                        target_account_id: golem_common::model::account::AccountId(
+                            target_account_id,
+                        ),
+                        name: golem_common::model::permission_share::PermissionShareName(name),
+                        current_card_id: current_card_id.map(golem_common::model::card::CardId),
+                        data,
                     }
-                    value
                 },
             )
             .boxed()
     }
 
-    fn arb_permission_share_data() -> OutputDocumentStrategy {
+    fn arb_permission_share_data()
+    -> BoxedStrategy<golem_common::model::permission_share::PermissionShareData> {
         (
             proptest::collection::vec(arb_small_string(), 0..4),
             proptest::collection::vec(arb_small_string(), 0..4),
@@ -1610,326 +1612,308 @@ mod tests {
         )
             .prop_map(
                 |(lower_positive, lower_negative, upper_positive, upper_negative)| {
-                    json!({
-                        "lowerPositive": lower_positive,
-                        "lowerNegative": lower_negative,
-                        "upperPositive": upper_positive,
-                        "upperNegative": upper_negative,
-                    })
+                    golem_common::model::permission_share::PermissionShareData {
+                        lower_positive,
+                        lower_negative,
+                        upper_positive,
+                        upper_negative,
+                    }
                 },
             )
             .boxed()
     }
 
     fn arb_agent_cancel_invocation_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string(), arb_small_string())
-            .prop_map(|(canceled, agent, idempotency_key)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.cancel-invocation.result",
-                    "canceled": canceled,
-                    "agent": agent,
-                    "idempotencyKey": idempotency_key,
-                })
-            })
-            .boxed()
+        serialized_output(
+            (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
+                |(canceled, agent, idempotency_key)| {
+                    crate::model::text::action_result::AgentCancelInvocationResult {
+                        canceled,
+                        agent,
+                        idempotency_key,
+                    }
+                },
+            ),
+        )
     }
 
     fn arb_agent_redeploy_result() -> OutputDocumentStrategy {
-        (
-            any::<bool>(),
-            proptest::collection::vec(arb_small_string(), 0..5),
+        serialized_output(
+            (
+                any::<bool>(),
+                proptest::collection::vec(arb_small_string(), 0..5),
+            )
+                .prop_map(|(redeployed, components)| {
+                    crate::model::text::action_result::AgentRedeployResult {
+                        redeployed,
+                        components: components
+                            .into_iter()
+                            .map(golem_common::model::component::ComponentName)
+                            .collect(),
+                    }
+                }),
         )
-            .prop_map(|(redeployed, components)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.redeploy.result",
-                    "redeployed": redeployed,
-                    "components": components,
-                })
+    }
+
+    fn arb_agent_revert_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (
+                any::<bool>(),
+                arb_small_string(),
+                proptest::option::of(arb_small_u64()),
+                proptest::option::of(arb_small_u64()),
+            )
+                .prop_map(
+                    |(reverted, agent, last_oplog_index, number_of_invocations)| {
+                        crate::model::text::action_result::AgentRevertResult {
+                            reverted,
+                            agent,
+                            last_oplog_index,
+                            number_of_invocations,
+                        }
+                    },
+                ),
+        )
+    }
+
+    fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (
+                any::<bool>(),
+                arb_small_string(),
+                arb_small_string(),
+                0i32..1000,
+            )
+                .prop_map(|(activated, agent, plugin, priority)| {
+                    crate::model::text::action_result::AgentPluginToggleResult {
+                        activated,
+                        agent,
+                        plugin,
+                        priority,
+                    }
+                }),
+        )
+    }
+
+    fn arb_token_delete_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(deleted, token_id)| {
+                crate::model::text::token::TokenDeleteResult {
+                    deleted,
+                    token_id: golem_common::model::auth::TokenId(
+                        uuid::Uuid::parse_str(&token_id).expect("generated UUID should parse"),
+                    ),
+                }
+            }),
+        )
+    }
+
+    fn arb_token_list_result() -> OutputDocumentStrategy {
+        serialized_output(
+            proptest::collection::vec(arb_token(), 0..5)
+                .prop_map(|tokens| crate::model::text::token::TokenListView { tokens }),
+        )
+    }
+
+    fn arb_token_new_result() -> OutputDocumentStrategy {
+        serialized_output(arb_token_with_secret().prop_map(crate::model::text::token::TokenNewView))
+    }
+
+    fn arb_token() -> BoxedStrategy<golem_common::model::auth::Token> {
+        (arb_uuid(), arb_uuid())
+            .prop_map(|(id, account_id)| golem_common::model::auth::Token {
+                id: golem_common::model::auth::TokenId(id),
+                account_id: golem_common::model::account::AccountId(account_id),
+                created_at: fixed_datetime(),
+                expires_at: fixed_datetime(),
             })
             .boxed()
     }
 
-    fn arb_agent_revert_result() -> OutputDocumentStrategy {
-        (
-            any::<bool>(),
-            arb_small_string(),
-            proptest::option::of(any::<u64>()),
-            proptest::option::of(any::<u64>()),
-        )
+    fn arb_token_with_secret() -> BoxedStrategy<golem_common::model::auth::TokenWithSecret> {
+        (arb_uuid(), arb_uuid())
             .prop_map(
-                |(reverted, agent, last_oplog_index, number_of_invocations)| {
-                    let mut value = json!({
-                        CLI_OUTPUT_TYPE_FIELD: "agent.revert.result",
-                        "reverted": reverted,
-                        "agent": agent,
-                    });
-                    if let Some(last_oplog_index) = last_oplog_index {
-                        value["lastOplogIndex"] = json!(last_oplog_index);
-                    }
-                    if let Some(number_of_invocations) = number_of_invocations {
-                        value["numberOfInvocations"] = json!(number_of_invocations);
-                    }
-                    value
+                |(id, account_id)| golem_common::model::auth::TokenWithSecret {
+                    id: golem_common::model::auth::TokenId(id),
+                    secret: golem_common::model::auth::TokenSecret::trusted(
+                        "generated-token-secret".to_string(),
+                    ),
+                    account_id: golem_common::model::account::AccountId(account_id),
+                    created_at: fixed_datetime(),
+                    expires_at: fixed_datetime(),
                 },
             )
             .boxed()
     }
 
-    fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
-        (
-            any::<bool>(),
-            arb_small_string(),
-            arb_small_string(),
-            any::<i32>(),
-        )
-            .prop_map(|(activated, agent, plugin, priority)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "agent.plugin-toggle.result",
-                    "activated": activated,
-                    "agent": agent,
-                    "plugin": plugin,
-                    "priority": priority,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_token_delete_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string())
-            .prop_map(|(deleted, token_id)| {
-                json!({ CLI_OUTPUT_TYPE_FIELD: "api-token.delete.result", "deleted": deleted, "tokenId": token_id })
-            })
-            .boxed()
-    }
-
-    fn arb_token_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_token_value(), 0..5)
-            .prop_map(|tokens| {
-                json!({ CLI_OUTPUT_TYPE_FIELD: "api-token.list.result", "tokens": tokens })
-            })
-            .boxed()
-    }
-
-    fn arb_token_new_result() -> OutputDocumentStrategy {
-        arb_token_with_secret_value()
-            .prop_map(|mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!("api-token.new.result");
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_token_value() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-        )
-            .prop_map(|(id, account_id, created_at, expires_at)| {
-                json!({
-                    "id": id,
-                    "accountId": account_id,
-                    "createdAt": created_at,
-                    "expiresAt": expires_at,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_token_with_secret_value() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-        )
-            .prop_map(|(id, secret, account_id, created_at, expires_at)| {
-                json!({
-                    "id": id,
-                    "secret": secret,
-                    "accountId": account_id,
-                    "createdAt": created_at,
-                    "expiresAt": expires_at,
-                })
-            })
-            .boxed()
-    }
-
     fn arb_api_domain_delete_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string(), arb_small_string())
-            .prop_map(|(deleted, domain, id)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "api.domain.delete.result",
-                    "deleted": deleted,
-                    "domain": domain,
-                    "id": id,
-                })
-            })
-            .boxed()
+        serialized_output(
+            (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
+                |(deleted, domain, id)| {
+                    crate::model::text::http_api_domain::DomainRegistrationDeleteResult {
+                        deleted,
+                        domain: golem_common::model::domain_registration::Domain(domain),
+                        id: golem_common::model::domain_registration::DomainRegistrationId(
+                            uuid::Uuid::parse_str(&id).expect("generated UUID should parse"),
+                        ),
+                    }
+                },
+            ),
+        )
     }
 
     fn arb_api_domain_register_result() -> OutputDocumentStrategy {
-        arb_domain_registration_value("api.domain.register.result")
+        serialized_output(
+            arb_domain_registration()
+                .prop_map(crate::model::text::http_api_domain::DomainRegistrationNewView),
+        )
     }
 
     fn arb_api_domain_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_domain_registration_value_without_type(), 0..5)
-            .prop_map(|domains| json!({ CLI_OUTPUT_TYPE_FIELD: "api.domain.list.result", "domains": domains }))
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_domain_registration(), 0..5).prop_map(|domains| {
+                crate::model::text::http_api_domain::HttpApiDomainListView { domains }
+            }),
+        )
     }
 
-    fn arb_domain_registration_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_domain_registration_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_domain_registration_value_without_type() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_small_string(), arb_small_string())
+    fn arb_domain_registration()
+    -> BoxedStrategy<golem_common::model::domain_registration::DomainRegistration> {
+        (arb_uuid(), arb_uuid(), arb_small_string())
             .prop_map(|(id, environment_id, domain)| {
-                json!({
-                    "id": id,
-                    "environmentId": environment_id,
-                    "domain": domain,
-                })
+                golem_common::model::domain_registration::DomainRegistration {
+                    id: golem_common::model::domain_registration::DomainRegistrationId(id),
+                    environment_id: golem_common::model::environment::EnvironmentId(environment_id),
+                    domain: golem_common::model::domain_registration::Domain(domain),
+                }
             })
             .boxed()
     }
 
     fn arb_api_deployment_get_result() -> OutputDocumentStrategy {
-        arb_http_api_deployment_value("api.deployment.get.result")
+        serialized_output(
+            arb_http_api_deployment()
+                .prop_map(crate::model::text::http_api_deployment::HttpApiDeploymentGetView),
+        )
     }
 
     fn arb_api_deployment_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_http_api_deployment_value_without_type(), 0..5)
-            .prop_map(|deployments| json!({ CLI_OUTPUT_TYPE_FIELD: "api.deployment.list.result", "deployments": deployments }))
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_http_api_deployment(), 0..5).prop_map(|deployments| {
+                crate::model::text::http_api_deployment::HttpApiDeploymentListView { deployments }
+            }),
+        )
     }
 
-    fn arb_http_api_deployment_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_http_api_deployment_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_http_api_deployment_value_without_type() -> OutputDocumentStrategy {
+    fn arb_http_api_deployment() -> BoxedStrategy<golem_client::model::HttpApiDeployment> {
         (
-            arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
+            arb_uuid(),
+            arb_small_u64(),
+            arb_uuid(),
             arb_small_string(),
             proptest::collection::btree_map(
-                arb_small_string(),
+                arb_agent_type_name(),
                 arb_http_api_deployment_agent_options(),
                 0..4,
             ),
             arb_small_string(),
             arb_small_string(),
-            arb_small_string(),
+            Just(fixed_datetime()),
         )
-            .prop_map(
-                |(
-                    id,
-                    revision,
-                    environment_id,
-                    domain,
-                    hash,
+            .prop_map(|(id, revision, environment_id, domain, agents, webhooks_prefix, openapi_endpoint_prefix, created_at)| {
+                golem_client::model::HttpApiDeployment {
+                    id: golem_common::model::http_api_deployment::HttpApiDeploymentId(id),
+                    revision: golem_common::model::http_api_deployment::HttpApiDeploymentRevision::new(revision)
+                        .expect("generated revision should be valid"),
+                    environment_id: golem_common::model::environment::EnvironmentId(environment_id),
+                    domain: golem_common::model::domain_registration::Domain(domain),
+                    hash: golem_common::model::diff::Hash::empty(),
                     agents,
                     webhooks_prefix,
                     openapi_endpoint_prefix,
                     created_at,
-                )| {
-                    json!({
-                        "id": id,
-                        "revision": revision,
-                        "environmentId": environment_id,
-                        "domain": domain,
-                        "hash": hash,
-                        "agents": agents,
-                        "webhooksPrefix": webhooks_prefix,
-                        "openapiEndpointPrefix": openapi_endpoint_prefix,
-                        "createdAt": created_at,
-                    })
-                },
-            )
+                }
+            })
             .boxed()
     }
 
-    fn arb_http_api_deployment_agent_options() -> BoxedStrategy<Value> {
+    fn arb_agent_type_name() -> BoxedStrategy<golem_common::model::agent::AgentTypeName> {
+        arb_small_string()
+            .prop_map(golem_common::model::agent::AgentTypeName)
+            .boxed()
+    }
+
+    fn arb_http_api_deployment_agent_options()
+    -> BoxedStrategy<golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions> {
         proptest::option::of(prop_oneof![
-            arb_small_string().prop_map(|header_name| json!({
-                "type": "TestSessionHeader",
-                "headerName": header_name,
-            })),
-            arb_small_string().prop_map(|security_scheme| json!({
-                "type": "SecurityScheme",
-                "securityScheme": security_scheme,
-            })),
+            arb_small_string().prop_map(|header_name| {
+                golem_common::model::http_api_deployment::HttpApiDeploymentAgentSecurity::TestSessionHeader(
+                    golem_common::model::http_api_deployment::TestSessionHeaderAgentSecurity { header_name },
+                )
+            }),
+            arb_small_string().prop_map(|security_scheme| {
+                golem_common::model::http_api_deployment::HttpApiDeploymentAgentSecurity::SecurityScheme(
+                    golem_common::model::http_api_deployment::SecuritySchemeAgentSecurity {
+                        security_scheme: golem_common::model::security_scheme::SecuritySchemeName(security_scheme),
+                    },
+                )
+            }),
         ])
         .prop_map(|security| {
-            let mut value = json!({});
-            if let Some(security) = security {
-                value["security"] = security;
+            golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions {
+                security,
             }
-            value
         })
         .boxed()
     }
 
     fn arb_api_security_scheme_create_result() -> OutputDocumentStrategy {
-        arb_security_scheme_value("api.security-scheme.create.result")
+        serialized_output(
+            arb_security_scheme()
+                .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeCreateView),
+        )
     }
 
     fn arb_api_security_scheme_delete_result() -> OutputDocumentStrategy {
-        arb_security_scheme_value("api.security-scheme.delete.result")
+        serialized_output(
+            arb_security_scheme()
+                .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeDeleteView),
+        )
     }
 
     fn arb_api_security_scheme_get_result() -> OutputDocumentStrategy {
-        arb_security_scheme_value("api.security-scheme.get.result")
+        serialized_output(
+            arb_security_scheme()
+                .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeGetView),
+        )
     }
 
     fn arb_api_security_scheme_update_result() -> OutputDocumentStrategy {
-        arb_security_scheme_value("api.security-scheme.update.result")
+        serialized_output(
+            arb_security_scheme()
+                .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeUpdateView),
+        )
     }
 
     fn arb_api_security_scheme_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_security_scheme_value_without_type(), 0..5)
-            .prop_map(|security_schemes| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "api.security-scheme.list.result",
-                    "securitySchemes": security_schemes,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_security_scheme(), 0..5).prop_map(|security_schemes| {
+                crate::model::text::http_api_security::HttpSecuritySchemeListView {
+                    security_schemes,
+                }
+            }),
+        )
     }
 
-    fn arb_security_scheme_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_security_scheme_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_security_scheme_value_without_type() -> OutputDocumentStrategy {
+    fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto> {
         (
-            arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
+            arb_uuid(),
+            arb_small_u64(),
+            Just("generated-scheme".to_string()),
+            arb_uuid(),
             arb_security_scheme_provider(),
             arb_small_string(),
-            arb_small_string(),
+            arb_url_string(),
             proptest::collection::vec(arb_small_string(), 0..5),
         )
             .prop_map(
@@ -1943,136 +1927,127 @@ mod tests {
                     redirect_url,
                     scopes,
                 )| {
-                    json!({
-                        "id": id,
-                        "revision": revision,
-                        "name": name,
-                        "environmentId": environment_id,
-                        "providerType": provider_type,
-                        "clientId": client_id,
-                        "redirectUrl": redirect_url,
-                        "scopes": scopes,
-                    })
+                    golem_client::model::SecuritySchemeDto {
+                        id: golem_common::model::security_scheme::SecuritySchemeId(id),
+                        revision:
+                            golem_common::model::security_scheme::SecuritySchemeRevision::new(
+                                revision,
+                            )
+                            .expect("generated revision should be valid"),
+                        name: golem_common::model::security_scheme::SecuritySchemeName(name),
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            environment_id,
+                        ),
+                        provider_type,
+                        client_id,
+                        redirect_url,
+                        scopes,
+                    }
                 },
             )
             .boxed()
     }
 
-    fn arb_security_scheme_provider() -> OutputDocumentStrategy {
+    fn arb_security_scheme_provider()
+    -> BoxedStrategy<golem_common::model::security_scheme::Provider> {
         prop_oneof![
-            Just(json!({ "type": "Google" })),
-            Just(json!({ "type": "Facebook" })),
-            Just(json!({ "type": "Microsoft" })),
-            Just(json!({ "type": "Gitlab" })),
-            (arb_small_string(), arb_small_string()).prop_map(|(name, issuer_url)| {
-                json!({
-                    "type": "Custom",
-                    "name": name,
-                    "issuerUrl": issuer_url,
-                })
+            Just(golem_common::model::security_scheme::Provider::Google(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::security_scheme::Provider::Facebook(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::security_scheme::Provider::Microsoft(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::security_scheme::Provider::Gitlab(
+                golem_common::model::Empty {}
+            )),
+            (arb_small_string(), arb_url_string()).prop_map(|(name, issuer_url)| {
+                golem_common::model::security_scheme::Provider::Custom(
+                    golem_common::model::security_scheme::CustomProvider { name, issuer_url },
+                )
             }),
         ]
         .boxed()
     }
 
     fn arb_new_app_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string(), arb_small_string())
-            .prop_map(|(created, application_name, application_dir)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "app.new.result",
-                    "created": created,
-                    "applicationName": application_name,
-                    "applicationDir": application_dir,
-                })
-            })
-            .boxed()
+        serialized_output(
+            (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
+                |(created, application_name, application_dir)| {
+                    crate::model::text::action_result::NewAppResult {
+                        created,
+                        application_name,
+                        application_dir: PathBuf::from(application_dir),
+                    }
+                },
+            ),
+        )
     }
 
     fn arb_template_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_template_description(), 0..5)
-            .prop_map(|templates| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "app.templates.result",
-                    "templates": templates,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_template_description(), 0..5)
+                .prop_map(|templates| crate::model::text::template::TemplateListView { templates }),
+        )
     }
 
-    fn arb_template_description() -> OutputDocumentStrategy {
+    fn arb_template_description() -> BoxedStrategy<crate::model::TemplateDescription> {
         (arb_small_string(), arb_guest_language(), arb_small_string())
-            .prop_map(|(name, language, description)| {
-                json!({
-                    "name": name,
-                    "language": language,
-                    "description": description,
-                })
-            })
+            .prop_map(
+                |(name, language, description)| crate::model::TemplateDescription {
+                    name,
+                    language,
+                    description,
+                },
+            )
             .boxed()
     }
 
-    fn arb_guest_language() -> BoxedStrategy<&'static str> {
+    fn arb_guest_language() -> BoxedStrategy<crate::model::GuestLanguage> {
         prop_oneof![
-            Just("TypeScript"),
-            Just("Rust"),
-            Just("Scala"),
-            Just("MoonBit")
+            Just(crate::model::GuestLanguage::TypeScript),
+            Just(crate::model::GuestLanguage::Rust),
+            Just(crate::model::GuestLanguage::Scala),
+            Just(crate::model::GuestLanguage::MoonBit)
         ]
         .boxed()
     }
 
     fn arb_component_get_result() -> OutputDocumentStrategy {
-        arb_component_view("component.get.result")
+        serialized_output(
+            arb_component_view().prop_map(crate::model::text::component::ComponentGetView),
+        )
     }
 
     fn arb_component_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_component_view_without_type(), 0..5)
-            .prop_map(|components| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "component.list.result",
-                    "components": components,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_component_view(), 0..5).prop_map(|components| {
+                crate::model::text::component::ComponentListView { components }
+            }),
+        )
     }
 
     fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_json_value(2))
-            .prop_map(|(component_name, properties)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "component.manifest-trace.result",
-                    "componentName": component_name,
-                    "properties": properties,
-                })
-            })
-            .boxed()
+        serialized_output(arb_small_string().prop_map(|component_name| {
+            crate::model::text::component::ComponentManifestTraceView {
+                component_name: golem_common::model::component::ComponentName(component_name),
+                properties: crate::model::app::ComponentLayerProperties::default(),
+            }
+        }))
     }
 
-    fn arb_component_view(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_component_view_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_component_view_without_type() -> OutputDocumentStrategy {
+    fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView> {
         (
             arb_small_string(),
-            arb_small_string(),
+            arb_uuid(),
             proptest::option::of(arb_small_string()),
-            any::<u64>(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
+            arb_small_u64(),
+            arb_small_u64(),
+            Just(fixed_datetime()),
+            arb_uuid(),
             proptest::collection::vec(arb_small_string(), 0..5),
-            proptest::collection::vec(arb_json_value(1), 0..3),
-            proptest::collection::btree_map(
-                arb_small_string(),
-                arb_agent_type_provision_config(),
-                0..3,
-            ),
         )
             .prop_map(
                 |(
@@ -2084,534 +2059,122 @@ mod tests {
                     created_at,
                     environment_id,
                     exports,
-                    agent_types,
-                    agent_type_provision_configs,
                 )| {
-                    json!({
-                        "componentName": component_name,
-                        "componentId": component_id,
-                        "componentVersion": component_version,
-                        "componentRevision": component_revision,
-                        "componentSize": component_size,
-                        "createdAt": created_at,
-                        "environmentId": environment_id,
-                        "exports": exports,
-                        "agentTypes": agent_types,
-                        "agentTypeProvisionConfigs": agent_type_provision_configs,
-                    })
+                    crate::model::component::ComponentView {
+                        show_sensitive: true,
+                        component_name: golem_common::model::component::ComponentName(
+                            component_name,
+                        ),
+                        component_id: golem_common::model::component::ComponentId(component_id),
+                        component_version,
+                        component_revision,
+                        component_size,
+                        created_at,
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            environment_id,
+                        ),
+                        exports,
+                        agent_types: Vec::new(),
+                        agent_type_provision_configs: BTreeMap::new(),
+                    }
                 },
             )
             .boxed()
-    }
-
-    fn arb_agent_type_provision_config() -> OutputDocumentStrategy {
-        (
-            proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
-            proptest::collection::vec(arb_typed_agent_config_entry(), 0..4),
-            proptest::collection::vec(arb_installed_plugin(), 0..3),
-            proptest::collection::vec(arb_initial_agent_file(), 0..4),
-        )
-            .prop_map(|(env, config, plugins, files)| {
-                json!({
-                    "env": env,
-                    "config": config,
-                    "plugins": plugins,
-                    "files": files,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_typed_agent_config_entry() -> OutputDocumentStrategy {
-        (
-            proptest::collection::vec(arb_small_string(), 1..4),
-            arb_json_value(2),
-        )
-            .prop_map(|(path, value)| {
-                json!({
-                    "path": path,
-                    "value": value,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_installed_plugin() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            any::<u32>(),
-            proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            proptest::option::of(arb_small_string()),
-            proptest::option::of(any::<u64>()),
-        )
-            .prop_map(
-                |(
-                    environment_plugin_grant_id,
-                    priority,
-                    parameters,
-                    plugin_registration_id,
-                    plugin_name,
-                    plugin_version,
-                    oplog_processor_component_id,
-                    oplog_processor_component_revision,
-                )| {
-                    let mut value = json!({
-                        "environmentPluginGrantId": environment_plugin_grant_id,
-                        "priority": priority,
-                        "parameters": parameters,
-                        "pluginRegistrationId": plugin_registration_id,
-                        "pluginName": plugin_name,
-                        "pluginVersion": plugin_version,
-                    });
-                    if let Some(oplog_processor_component_id) = oplog_processor_component_id {
-                        value["oplogProcessorComponentId"] = json!(oplog_processor_component_id);
-                    }
-                    if let Some(oplog_processor_component_revision) =
-                        oplog_processor_component_revision
-                    {
-                        value["oplogProcessorComponentRevision"] =
-                            json!(oplog_processor_component_revision);
-                    }
-                    value
-                },
-            )
-            .boxed()
-    }
-
-    fn arb_initial_agent_file() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_small_string(),
-            arb_agent_file_permissions(),
-            any::<u64>(),
-        )
-            .prop_map(|(content_hash, path, permissions, size)| {
-                json!({
-                    "contentHash": content_hash,
-                    "path": path,
-                    "permissions": permissions,
-                    "size": size,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_agent_file_permissions() -> BoxedStrategy<&'static str> {
-        prop_oneof![Just("ReadOnly"), Just("ReadWrite")].boxed()
     }
 
     fn arb_deploy_plan_result() -> OutputDocumentStrategy {
-        (
-            arb_deployment_diff_payload(),
-            proptest::option::of(arb_environment_setup_plan_value()),
-        )
-            .prop_map(|(deployment_diff, environment_setup)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "app.deploy-plan.result",
-                    "deploymentDiff": deployment_diff,
-                    "environmentSetup": environment_setup,
+        any::<bool>()
+            .prop_map(|include_environment_setup| {
+                let deployment_diff = empty_deployment_diff();
+                let environment_setup = include_environment_setup
+                    .then(crate::model::deploy::EnvironmentSetupPlan::default);
+                to_cli_output_value(&crate::model::text::diff::DeployPlanView {
+                    deployment_diff: &deployment_diff,
+                    environment_setup: environment_setup.as_ref(),
                 })
+                .expect("generated deploy plan should serialize")
             })
             .boxed()
     }
 
     fn arb_deployment_diff_result() -> OutputDocumentStrategy {
-        arb_deployment_diff_payload()
-            .prop_map(|deployment_diff| {
-                let mut value = json!({ CLI_OUTPUT_TYPE_FIELD: "deployment.diff.result" });
-                if let Some(fields) = deployment_diff.as_object() {
-                    for (key, field_value) in fields {
-                        value[key] = field_value.clone();
-                    }
-                }
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_deployment_diff_payload() -> OutputDocumentStrategy {
-        (
-            proptest::option::of(arb_deployment_diff_section_value(2)),
-            proptest::option::of(arb_deployment_diff_section_value(2)),
-            proptest::option::of(arb_deployment_diff_section_value(2)),
-        )
-            .prop_map(|(components, http_api_deployments, mcp_deployments)| {
-                let mut value = json!({});
-
-                if let Some(components) = components {
-                    value["components"] = components;
-                }
-                if let Some(http_api_deployments) = http_api_deployments {
-                    value["httpApiDeployments"] = http_api_deployments;
-                }
-                if let Some(mcp_deployments) = mcp_deployments {
-                    value["mcpDeployments"] = mcp_deployments;
-                }
-
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_deployment_diff_section_value(depth: u32) -> OutputDocumentStrategy {
-        proptest::collection::btree_map(
-            arb_small_string(),
-            arb_deployment_diff_map_value(depth),
-            0..4,
-        )
-        .prop_map(|entries| Value::Object(entries.into_iter().collect()))
-        .boxed()
-    }
-
-    fn arb_deployment_diff_map_value(depth: u32) -> OutputDocumentStrategy {
-        let base = prop_oneof![
-            Just(json!("create")),
-            Just(json!("delete")),
-            (arb_small_string(), arb_small_string()).prop_map(|(new_hash, current_hash)| {
-                json!({
-                    "newHash": new_hash,
-                    "currentHash": current_hash,
-                })
-            }),
-        ];
-
-        if depth == 0 {
-            base.boxed()
-        } else {
-            prop_oneof![
-                base,
-                arb_component_diff_payload(depth - 1),
-                arb_http_api_deployment_diff_payload(depth - 1),
-                arb_mcp_deployment_diff_payload(depth - 1),
-            ]
-            .boxed()
-        }
-    }
-
-    fn arb_component_diff_payload(depth: u32) -> OutputDocumentStrategy {
-        (
-            any::<bool>(),
-            proptest::option::of(arb_deployment_diff_section_value(depth)),
-        )
-            .prop_map(|(wasm_changed, agent_type_provision_config_changes)| {
-                let mut value = json!({
-                    "wasmChanged": wasm_changed,
-                });
-                if let Some(agent_type_provision_config_changes) =
-                    agent_type_provision_config_changes
-                {
-                    value["agentTypeProvisionConfigChanges"] = agent_type_provision_config_changes;
-                }
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_http_api_deployment_diff_payload(depth: u32) -> OutputDocumentStrategy {
-        (
-            any::<bool>(),
-            any::<bool>(),
-            proptest::option::of(arb_deployment_diff_section_value(depth)),
-        )
-            .prop_map(
-                |(webhooks_url_changed, openapi_endpoint_changed, agents_changes)| {
-                    let mut value = json!({
-                        "webhooksUrlChanged": webhooks_url_changed,
-                        "openapiEndpointChanged": openapi_endpoint_changed,
-                    });
-                    if let Some(agents_changes) = agents_changes {
-                        value["agentsChanges"] = agents_changes;
-                    }
-                    value
-                },
-            )
-            .boxed()
-    }
-
-    fn arb_mcp_deployment_diff_payload(depth: u32) -> OutputDocumentStrategy {
-        proptest::option::of(arb_deployment_diff_section_value(depth))
-            .prop_map(|agents_changes| {
-                let mut value = json!({});
-                if let Some(agents_changes) = agents_changes {
-                    value["agentsChanges"] = agents_changes;
-                }
-                value
-            })
-            .boxed()
+        Just(render_generated_deployment_diff()).boxed()
     }
 
     fn arb_environment_setup_plan_result() -> OutputDocumentStrategy {
-        arb_environment_setup_plan_value()
-            .prop_map(|mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!("environment.setup-plan.result");
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_environment_setup_plan_value() -> OutputDocumentStrategy {
-        (
-            arb_environment_setup_display_value(),
-            proptest::collection::vec(arb_deployment_agent_secret_default_value(), 0..4),
-            proptest::collection::vec(arb_deployment_agent_secret_default_value(), 0..4),
-            proptest::collection::vec(arb_deployment_retry_policy_default_value(), 0..4),
-            proptest::collection::vec(arb_resource_definition_creation_value(), 0..4),
+        let output = crate::model::deploy::EnvironmentSetupPlan::default();
+        Just(
+            to_cli_output_value(&crate::model::text::diff::EnvironmentSetupPlanView(&output))
+                .expect("generated environment setup plan should serialize"),
         )
-            .prop_map(
-                |(
-                    display,
-                    agent_secret_defaults,
-                    skipped_existing_agent_secret_defaults,
-                    retry_policy_defaults,
-                    resource_defaults,
-                )| {
-                    json!({
-                        "display": display,
-                        "agentSecretDefaults": agent_secret_defaults,
-                        "skippedExistingAgentSecretDefaults": skipped_existing_agent_secret_defaults,
-                        "retryPolicyDefaults": retry_policy_defaults,
-                        "resourceDefaults": resource_defaults,
-                    })
-                },
-            )
-            .boxed()
-    }
-
-    fn arb_environment_setup_display_value() -> OutputDocumentStrategy {
-        (
-            proptest::option::of(arb_environment_setup_detailed_section_value()),
-            proptest::option::of(arb_environment_setup_keys_only_section_value()),
-        )
-            .prop_map(|(to_be_applied, skipped_already_exists)| {
-                let mut value = json!({});
-                if let Some(to_be_applied) = to_be_applied {
-                    value["toBeApplied"] = to_be_applied;
-                }
-                if let Some(skipped_already_exists) = skipped_already_exists {
-                    value["skippedAlreadyExists"] = skipped_already_exists;
-                }
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_environment_setup_detailed_section_value() -> OutputDocumentStrategy {
-        (
-            proptest::option::of(proptest::collection::btree_map(
-                arb_small_string(),
-                arb_environment_setup_secret_value_display_value(),
-                0..4,
-            )),
-            proptest::option::of(proptest::collection::btree_map(
-                arb_small_string(),
-                arb_environment_setup_retry_policy_display_value(),
-                0..4,
-            )),
-            proptest::option::of(proptest::collection::btree_map(
-                arb_small_string(),
-                arb_environment_setup_resource_display_value(),
-                0..4,
-            )),
-        )
-            .prop_map(|(secret_values, retry_policies, resources)| {
-                let mut value = json!({});
-                if let Some(secret_values) = secret_values {
-                    value["secretValues"] = json!(secret_values);
-                }
-                if let Some(retry_policies) = retry_policies {
-                    value["retryPolicies"] = json!(retry_policies);
-                }
-                if let Some(resources) = resources {
-                    value["resources"] = json!(resources);
-                }
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_environment_setup_keys_only_section_value() -> OutputDocumentStrategy {
-        (
-            proptest::option::of(proptest::collection::btree_set(arb_small_string(), 0..4)),
-            proptest::option::of(proptest::collection::btree_set(arb_small_string(), 0..4)),
-            proptest::option::of(proptest::collection::btree_set(arb_small_string(), 0..4)),
-        )
-            .prop_map(|(secret_values, retry_policies, resources)| {
-                let mut value = json!({});
-                if let Some(secret_values) = secret_values {
-                    value["secretValues"] = json!(secret_values);
-                }
-                if let Some(retry_policies) = retry_policies {
-                    value["retryPolicies"] = json!(retry_policies);
-                }
-                if let Some(resources) = resources {
-                    value["resources"] = json!(resources);
-                }
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_environment_setup_secret_value_display_value() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_json_value(2))
-            .prop_map(|(secret_type, value)| {
-                json!({
-                    "secretType": secret_type,
-                    "value": value,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_environment_setup_retry_policy_display_value() -> OutputDocumentStrategy {
-        (any::<u32>(), arb_api_predicate(), arb_api_retry_policy())
-            .prop_map(|(priority, predicate, policy)| {
-                json!({
-                    "priority": priority,
-                    "predicate": predicate,
-                    "policy": policy,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_environment_setup_resource_display_value() -> OutputDocumentStrategy {
-        (
-            arb_resource_limit(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-        )
-            .prop_map(|(limit, enforcement_action, unit, units)| {
-                json!({
-                    "limit": limit,
-                    "enforcementAction": enforcement_action,
-                    "unit": unit,
-                    "units": units,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_deployment_agent_secret_default_value() -> OutputDocumentStrategy {
-        (
-            proptest::collection::vec(arb_small_string(), 1..4),
-            arb_json_value(2),
-        )
-            .prop_map(|(path, secret_value)| {
-                json!({
-                    "path": path,
-                    "secretValue": secret_value,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_deployment_retry_policy_default_value() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            any::<u32>(),
-            arb_api_predicate(),
-            arb_api_retry_policy(),
-        )
-            .prop_map(|(name, priority, predicate, policy)| {
-                json!({
-                    "name": name,
-                    "priority": priority,
-                    "predicate": predicate,
-                    "policy": policy,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_resource_definition_creation_value() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_resource_limit(),
-            arb_enforcement_action(),
-            arb_small_string(),
-            arb_small_string(),
-        )
-            .prop_map(|(name, limit, enforcement_action, unit, units)| {
-                json!({
-                    "name": name,
-                    "limit": limit,
-                    "enforcementAction": enforcement_action,
-                    "unit": unit,
-                    "units": units,
-                })
-            })
-            .boxed()
+        .boxed()
     }
 
     fn arb_deployment_create_result() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_small_string(),
-            arb_current_deployment_value(),
+        serialized_output(
+            (
+                arb_small_string(),
+                arb_small_string(),
+                arb_current_deployment(),
+            )
+                .prop_map(|(application_name, environment_name, deployment)| {
+                    crate::model::text::deployment::DeploymentNewView {
+                        application_name: golem_common::model::application::ApplicationName(
+                            application_name,
+                        ),
+                        environment_name: golem_common::model::environment::EnvironmentName(
+                            environment_name,
+                        ),
+                        deployment,
+                    }
+                }),
         )
-            .prop_map(|(application_name, environment_name, deployment)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "deployment.create.result",
-                    "applicationName": application_name,
-                    "environmentName": environment_name,
-                    "deployment": deployment,
-                })
-            })
-            .boxed()
     }
 
     fn arb_deployment_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_deployment_value(), 0..5)
-            .prop_map(|deployments| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "deployment.list.result",
-                    "deployments": deployments,
-                })
-            })
-            .boxed()
+        serialized_output(proptest::collection::vec(arb_deployment(), 0..5).prop_map(
+            |deployments| crate::model::text::deployment::DeploymentListView { deployments },
+        ))
     }
 
     fn arb_environment_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_environment_with_details_value(), 0..5)
-            .prop_map(|environments| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "environment.list.result",
-                    "environments": environments,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_environment_with_details(), 0..5).prop_map(
+                |environments| crate::model::text::environment::EnvironmentListView {
+                    environments,
+                },
+            ),
+        )
     }
 
-    fn arb_environment_with_details_value() -> OutputDocumentStrategy {
+    fn arb_environment_with_details()
+    -> BoxedStrategy<golem_common::model::environment::EnvironmentWithDetails> {
         (
-            arb_environment_summary_value(),
-            arb_application_summary_value(),
-            arb_account_summary_value(),
+            arb_environment_summary(),
+            arb_application_summary(),
+            arb_account_summary(),
         )
             .prop_map(|(environment, application, account)| {
-                json!({
-                    "environment": environment,
-                    "application": application,
-                    "account": account,
-                })
+                golem_common::model::environment::EnvironmentWithDetails {
+                    environment,
+                    application,
+                    account,
+                }
             })
             .boxed()
     }
 
-    fn arb_environment_summary_value() -> OutputDocumentStrategy {
+    fn arb_environment_summary()
+    -> BoxedStrategy<golem_common::model::environment::EnvironmentSummary> {
         (
-            arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
+            arb_uuid(),
+            arb_small_u64(),
+            Just("generated-env".to_string()),
             any::<u32>(),
             any::<bool>(),
             any::<bool>(),
             any::<bool>(),
-            proptest::option::of(arb_environment_current_deployment_value()),
+            proptest::option::of(arb_environment_current_deployment()),
         )
             .prop_map(
                 |(
@@ -2624,308 +2187,248 @@ mod tests {
                     security_overrides,
                     current_deployment,
                 )| {
-                    json!({
-                        "id": id,
-                        "revision": revision,
-                        "name": name,
-                        "diffModelVersion": diff_model_version,
-                        "compatibilityCheck": compatibility_check,
-                        "versionCheck": version_check,
-                        "securityOverrides": security_overrides,
-                        "currentDeployment": current_deployment,
-                    })
+                    golem_common::model::environment::EnvironmentSummary {
+                        id: golem_common::model::environment::EnvironmentId(id),
+                        revision: golem_common::model::environment::EnvironmentRevision::new(
+                            revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        name: golem_common::model::environment::EnvironmentName(name),
+                        diff_model_version,
+                        compatibility_check,
+                        version_check,
+                        security_overrides,
+                        current_deployment,
+                    }
                 },
             )
             .boxed()
     }
 
-    fn arb_environment_current_deployment_value() -> OutputDocumentStrategy {
+    fn arb_environment_current_deployment()
+    -> BoxedStrategy<golem_common::model::environment::EnvironmentCurrentDeploymentView> {
         (
-            any::<u64>(),
-            any::<u64>(),
+            arb_small_u64(),
+            arb_small_u64(),
             arb_small_string(),
-            arb_small_string(),
+            Just(golem_common::model::diff::Hash::empty()),
         )
             .prop_map(
                 |(revision, deployment_revision, deployment_version, deployment_hash)| {
-                    json!({
-                        "revision": revision,
-                        "deploymentRevision": deployment_revision,
-                        "deploymentVersion": deployment_version,
-                        "deploymentHash": deployment_hash,
-                    })
+                    golem_common::model::environment::EnvironmentCurrentDeploymentView {
+                        revision: golem_common::model::deployment::CurrentDeploymentRevision::new(
+                            revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        deployment_revision:
+                            golem_common::model::deployment::DeploymentRevision::new(
+                                deployment_revision,
+                            )
+                            .expect("generated revision should be valid"),
+                        deployment_version: golem_common::model::deployment::DeploymentVersion(
+                            deployment_version,
+                        ),
+                        deployment_hash,
+                    }
                 },
             )
             .boxed()
     }
 
-    fn arb_application_summary_value() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_small_string())
-            .prop_map(|(id, name)| {
-                json!({
-                    "id": id,
-                    "name": name,
-                })
-            })
+    fn arb_application_summary()
+    -> BoxedStrategy<golem_common::model::application::ApplicationSummary> {
+        (arb_uuid(), arb_small_string())
+            .prop_map(
+                |(id, name)| golem_common::model::application::ApplicationSummary {
+                    id: golem_common::model::application::ApplicationId(id),
+                    name: golem_common::model::application::ApplicationName(name),
+                },
+            )
             .boxed()
     }
 
-    fn arb_account_summary_value() -> OutputDocumentStrategy {
-        (arb_small_string(), arb_small_string(), arb_small_string())
-            .prop_map(|(id, name, email)| {
-                json!({
-                    "id": id,
-                    "name": name,
-                    "email": email,
-                })
-            })
+    fn arb_account_summary() -> BoxedStrategy<golem_common::model::account::AccountSummary> {
+        (arb_uuid(), arb_small_string(), arb_small_string())
+            .prop_map(
+                |(id, name, email)| golem_common::model::account::AccountSummary {
+                    id: golem_common::model::account::AccountId(id),
+                    name,
+                    email: golem_common::model::account::AccountEmail::new(email),
+                },
+            )
             .boxed()
     }
 
-    fn arb_deployment_value() -> OutputDocumentStrategy {
+    fn arb_deployment() -> BoxedStrategy<golem_common::model::deployment::Deployment> {
         (
+            arb_uuid(),
+            arb_small_u64(),
             arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
+            Just(golem_common::model::diff::Hash::empty()),
         )
             .prop_map(|(environment_id, revision, version, deployment_hash)| {
-                json!({
-                    "environmentId": environment_id,
-                    "revision": revision,
-                    "version": version,
-                    "deploymentHash": deployment_hash,
-                })
+                golem_common::model::deployment::Deployment {
+                    environment_id: golem_common::model::environment::EnvironmentId(environment_id),
+                    revision: golem_common::model::deployment::DeploymentRevision::new(revision)
+                        .expect("generated revision should be valid"),
+                    version: golem_common::model::deployment::DeploymentVersion(version),
+                    deployment_hash,
+                }
             })
             .boxed()
     }
 
-    fn arb_current_deployment_value() -> OutputDocumentStrategy {
+    fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::CurrentDeployment>
+    {
         (
+            arb_uuid(),
+            arb_small_u64(),
             arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
-            arb_small_string(),
-            any::<u64>(),
-            proptest::collection::vec(arb_deploy_validation_warning(), 0..4),
+            Just(golem_common::model::diff::Hash::empty()),
+            arb_small_u64(),
         )
             .prop_map(
-                |(
-                    environment_id,
-                    revision,
-                    version,
-                    deployment_hash,
-                    current_revision,
-                    validation_warnings,
-                )| {
-                    json!({
-                        "environmentId": environment_id,
-                        "revision": revision,
-                        "version": version,
-                        "deploymentHash": deployment_hash,
-                        "currentRevision": current_revision,
-                        "validationWarnings": validation_warnings,
-                    })
+                |(environment_id, revision, version, deployment_hash, current_revision)| {
+                    golem_common::model::deployment::CurrentDeployment {
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            environment_id,
+                        ),
+                        revision: golem_common::model::deployment::DeploymentRevision::new(
+                            revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        version: golem_common::model::deployment::DeploymentVersion(version),
+                        deployment_hash,
+                        current_revision:
+                            golem_common::model::deployment::CurrentDeploymentRevision::new(
+                                current_revision,
+                            )
+                            .expect("generated revision should be valid"),
+                        validation_warnings: Vec::new(),
+                    }
                 },
             )
             .boxed()
-    }
-
-    fn arb_deploy_validation_warning() -> OutputDocumentStrategy {
-        prop_oneof![
-            (
-                arb_small_string(),
-                arb_small_string(),
-                arb_small_string(),
-                arb_deploy_validation_http_method(),
-                arb_small_string(),
-            )
-                .prop_map(
-                    |(component_id, agent_type, method_name, http_method, path)| {
-                        json!({
-                            "type": "HttpApiReadOnlyMethodBoundToNonGetVerb",
-                            "componentId": component_id,
-                            "agentType": agent_type,
-                            "methodName": method_name,
-                            "httpMethod": http_method,
-                            "path": path,
-                        })
-                    },
-                ),
-            (
-                arb_small_string(),
-                arb_small_string(),
-                arb_small_string(),
-                any::<u64>(),
-            )
-                .prop_map(|(component_id, agent_type, method_name, ttl_nanos)| {
-                    json!({
-                        "type": "HttpApiReadOnlyTtlBelowOneSecond",
-                        "componentId": component_id,
-                        "agentType": agent_type,
-                        "methodName": method_name,
-                        "ttlNanos": ttl_nanos,
-                    })
-                }),
-        ]
-        .boxed()
-    }
-
-    fn arb_deploy_validation_http_method() -> OutputDocumentStrategy {
-        prop_oneof![
-            Just(json!({ "type": "Get" })),
-            Just(json!({ "type": "Head" })),
-            Just(json!({ "type": "Post" })),
-            Just(json!({ "type": "Put" })),
-            Just(json!({ "type": "Delete" })),
-            Just(json!({ "type": "Connect" })),
-            Just(json!({ "type": "Options" })),
-            Just(json!({ "type": "Trace" })),
-            Just(json!({ "type": "Patch" })),
-            arb_small_string().prop_map(|value| json!({ "type": "Custom", "value": value })),
-        ]
-        .boxed()
     }
 
     fn arb_plugin_unregister_result() -> OutputDocumentStrategy {
-        (
-            any::<bool>(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
+        serialized_output(
+            (
+                any::<bool>(),
+                arb_uuid(),
+                arb_small_string(),
+                arb_small_string(),
+            )
+                .prop_map(|(unregistered, plugin_id, name, version)| {
+                    crate::model::text::plugin::PluginUnregisterResult {
+                        unregistered,
+                        plugin_id,
+                        name,
+                        version,
+                    }
+                }),
         )
-            .prop_map(|(unregistered, plugin_id, name, version)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "plugin.unregister.result",
-                    "unregistered": unregistered,
-                    "pluginId": plugin_id,
-                    "name": name,
-                    "version": version,
-                })
-            })
-            .boxed()
     }
 
     fn arb_plugin_get_result() -> OutputDocumentStrategy {
-        arb_plugin_registration_value("plugin.get.result")
+        serialized_output(
+            arb_plugin_registration()
+                .prop_map(crate::model::text::plugin::PluginRegistrationGetView),
+        )
     }
 
     fn arb_plugin_register_result() -> OutputDocumentStrategy {
-        arb_plugin_registration_value("plugin.register.result")
+        serialized_output(
+            arb_plugin_registration()
+                .prop_map(crate::model::text::plugin::PluginRegistrationRegisterView),
+        )
     }
 
     fn arb_plugin_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(
-            (
-                arb_plugin_registration_value_without_type(),
-                prop_oneof![Just("Own"), Just("Builtin"), Just("Shared")],
-            )
-                .prop_map(|(plugin, source)| json!({ "plugin": plugin, "source": source })),
-            0..5,
+        serialized_output(
+            proptest::collection::vec(arb_plugin_list_entry(), 0..5)
+                .prop_map(|plugins| crate::model::text::plugin::PluginListView { plugins }),
         )
-        .prop_map(
-            |plugins| json!({ CLI_OUTPUT_TYPE_FIELD: "plugin.list.result", "plugins": plugins }),
-        )
-        .boxed()
     }
 
-    fn arb_plugin_registration_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_plugin_registration_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
+    fn arb_plugin_list_entry() -> BoxedStrategy<crate::model::text::plugin::PluginListEntry> {
+        (arb_plugin_registration(), arb_plugin_source())
+            .prop_map(
+                |(plugin, source)| crate::model::text::plugin::PluginListEntry { plugin, source },
+            )
             .boxed()
     }
 
-    fn arb_plugin_registration_value_without_type() -> OutputDocumentStrategy {
+    fn arb_plugin_source() -> BoxedStrategy<crate::model::text::plugin::PluginSource> {
+        prop_oneof![
+            Just(crate::model::text::plugin::PluginSource::Own),
+            Just(crate::model::text::plugin::PluginSource::Builtin),
+            Just(crate::model::text::plugin::PluginSource::Shared),
+        ]
+        .boxed()
+    }
+
+    fn arb_plugin_registration()
+    -> BoxedStrategy<golem_common::model::plugin_registration::PluginRegistrationDto> {
         (
+            arb_uuid(),
+            arb_uuid(),
             arb_small_string(),
             arb_small_string(),
             arb_small_string(),
+            Just(golem_common::model::base64::Base64(vec![0])),
             arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            any::<u64>(),
+            arb_uuid(),
+            arb_small_u64(),
         )
-            .prop_map(
-                |(
-                    id,
-                    account_id,
+            .prop_map(|(id, account_id, name, version, description, icon, homepage, component_id, component_revision)| {
+                golem_common::model::plugin_registration::PluginRegistrationDto {
+                    id: golem_common::model::plugin_registration::PluginRegistrationId(id),
+                    account_id: golem_common::model::account::AccountId(account_id),
                     name,
                     version,
                     description,
                     icon,
                     homepage,
-                    component_id,
-                    component_revision,
-                )| {
-                    json!({
-                        "id": id,
-                        "accountId": account_id,
-                        "name": name,
-                        "version": version,
-                        "description": description,
-                        "icon": icon,
-                        "homepage": homepage,
-                        "spec": {
-                            "type": "OplogProcessor",
-                            "componentId": component_id,
-                            "componentRevision": component_revision,
+                    spec: golem_common::model::plugin_registration::PluginSpecDto::OplogProcessor(
+                        golem_common::model::plugin_registration::OplogProcessorPluginSpec {
+                            component_id: golem_common::model::component::ComponentId(component_id),
+                            component_revision: golem_common::model::component::ComponentRevision::new(component_revision)
+                                .expect("generated revision should be valid"),
                         },
-                    })
-                },
-            )
+                    ),
+                }
+            })
             .boxed()
     }
 
     fn arb_profile_create_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string(), any::<bool>())
-            .prop_map(|(created, profile, set_active)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "profile.new.result",
-                    "created": created,
-                    "profile": profile,
-                    "setActive": set_active,
-                })
-            })
-            .boxed()
+        serialized_output((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
+            |(created, profile, set_active)| crate::model::text::profile::ProfileCreateResult {
+                created,
+                profile: crate::config::ProfileName(profile),
+                set_active,
+            },
+        ))
     }
 
     fn arb_profile_get_result() -> OutputDocumentStrategy {
-        arb_profile_view("profile.get.result", true)
+        serialized_output(arb_profile_view())
     }
 
     fn arb_profile_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_profile_view_value(), 0..5)
-            .prop_map(|profiles| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "profile.list.result",
-                    "profiles": profiles,
-                })
-            })
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_profile_view(), 0..5)
+                .prop_map(|profiles| crate::model::text::profile::ProfileListView { profiles }),
+        )
     }
 
-    fn arb_profile_view(output_type: &'static str, include_type: bool) -> OutputDocumentStrategy {
-        arb_profile_view_value()
-            .prop_map(move |mut value| {
-                if include_type {
-                    value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                }
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_profile_view_value() -> OutputDocumentStrategy {
+    fn arb_profile_view() -> BoxedStrategy<crate::model::ProfileView> {
         (
             any::<bool>(),
             arb_small_string(),
-            proptest::option::of(arb_small_string()),
-            proptest::option::of(arb_small_string()),
+            proptest::option::of(arb_url_string()),
+            proptest::option::of(arb_url_string()),
             any::<bool>(),
             proptest::option::of(any::<bool>()),
             arb_format_string(),
@@ -2940,96 +2443,100 @@ mod tests {
                     authenticated,
                     default_format,
                 )| {
-                    let mut value = json!({
-                        "isActive": is_active,
-                        "name": name,
-                        "config": {
-                            "defaultFormat": default_format,
+                    crate::model::ProfileView {
+                        is_active,
+                        name: crate::config::ProfileName(name),
+                        url: url.map(|url| url.parse().expect("generated URL should parse")),
+                        worker_url: worker_url
+                            .map(|url| url.parse().expect("generated URL should parse")),
+                        allow_insecure,
+                        authenticated,
+                        config: crate::config::ProfileConfig {
+                            default_format: default_format
+                                .parse()
+                                .expect("generated format should parse"),
                         },
-                    });
-                    if let Some(url) = url {
-                        value["url"] = json!(url);
                     }
-                    if let Some(worker_url) = worker_url {
-                        value["workerUrl"] = json!(worker_url);
-                    }
-                    if allow_insecure {
-                        value["allowInsecure"] = json!(allow_insecure);
-                    }
-                    if let Some(authenticated) = authenticated {
-                        value["authenticated"] = json!(authenticated);
-                    }
-                    value
                 },
             )
             .boxed()
     }
 
     fn arb_profile_switch_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string())
-            .prop_map(|(switched, profile)| {
-                json!({ CLI_OUTPUT_TYPE_FIELD: "profile.switch.result", "switched": switched, "profile": profile })
-            })
-            .boxed()
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(switched, profile)| {
+                crate::model::text::profile::ProfileSwitchResult {
+                    switched,
+                    profile: crate::config::ProfileName(profile),
+                }
+            }),
+        )
     }
 
     fn arb_profile_delete_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string())
-            .prop_map(|(deleted, profile)| {
-                json!({ CLI_OUTPUT_TYPE_FIELD: "profile.delete.result", "deleted": deleted, "profile": profile })
-            })
-            .boxed()
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(deleted, profile)| {
+                crate::model::text::profile::ProfileDeleteResult {
+                    deleted,
+                    profile: crate::config::ProfileName(profile),
+                }
+            }),
+        )
     }
 
     fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
-        (any::<bool>(), arb_small_string(), arb_format_string())
-            .prop_map(|(updated, profile, format)| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: "profile.config.set-format.result",
-                    "updated": updated,
-                    "profile": profile,
-                    "format": format,
-                })
-            })
-            .boxed()
+        serialized_output((any::<bool>(), arb_small_string(), arb_format()).prop_map(
+            |(updated, profile, format)| {
+                crate::model::text::profile::ProfileConfigSetFormatResult {
+                    updated,
+                    profile: crate::config::ProfileName(profile),
+                    format,
+                }
+            },
+        ))
     }
 
     fn arb_resource_create_result() -> OutputDocumentStrategy {
-        arb_resource_definition_value("resource.create.result")
+        serialized_output(
+            arb_resource_definition()
+                .prop_map(crate::model::text::resource_definition::ResourceDefinitionCreateView),
+        )
     }
 
     fn arb_resource_delete_result() -> OutputDocumentStrategy {
-        arb_resource_definition_value("resource.delete.result")
+        serialized_output(
+            arb_resource_definition()
+                .prop_map(crate::model::text::resource_definition::ResourceDefinitionDeleteView),
+        )
     }
 
     fn arb_resource_get_result() -> OutputDocumentStrategy {
-        arb_resource_definition_value("resource.get.result")
+        serialized_output(
+            arb_resource_definition()
+                .prop_map(crate::model::text::resource_definition::ResourceDefinitionGetView),
+        )
     }
 
     fn arb_resource_update_result() -> OutputDocumentStrategy {
-        arb_resource_definition_value("resource.update.result")
+        serialized_output(
+            arb_resource_definition()
+                .prop_map(crate::model::text::resource_definition::ResourceDefinitionUpdateView),
+        )
     }
 
     fn arb_resource_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_resource_definition_value_without_type(), 0..5)
-            .prop_map(|resources| json!({ CLI_OUTPUT_TYPE_FIELD: "resource.list.result", "resources": resources }))
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_resource_definition(), 0..5).prop_map(|resources| {
+                crate::model::text::resource_definition::ResourceDefinitionListView { resources }
+            }),
+        )
     }
 
-    fn arb_resource_definition_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_resource_definition_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_resource_definition_value_without_type() -> OutputDocumentStrategy {
+    fn arb_resource_definition() -> BoxedStrategy<golem_common::model::quota::ResourceDefinition> {
         (
-            arb_small_string(),
-            any::<u64>(),
-            arb_small_string(),
+            arb_uuid(),
+            arb_small_u64(),
+            arb_uuid(),
             arb_small_string(),
             arb_resource_limit(),
             arb_enforcement_action(),
@@ -3038,285 +2545,495 @@ mod tests {
         )
             .prop_map(
                 |(id, revision, environment_id, name, limit, enforcement_action, unit, units)| {
-                    json!({
-                        "id": id,
-                        "revision": revision,
-                        "environmentId": environment_id,
-                        "name": name,
-                        "limit": limit,
-                        "enforcementAction": enforcement_action,
-                        "unit": unit,
-                        "units": units,
-                    })
+                    golem_common::model::quota::ResourceDefinition {
+                        id: golem_common::model::quota::ResourceDefinitionId(id),
+                        revision: golem_common::model::quota::ResourceDefinitionRevision::new(
+                            revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            environment_id,
+                        ),
+                        name: golem_common::model::quota::ResourceName(name),
+                        limit,
+                        enforcement_action,
+                        unit,
+                        units,
+                    }
                 },
             )
             .boxed()
     }
 
-    fn arb_resource_limit() -> OutputDocumentStrategy {
+    fn arb_resource_limit() -> BoxedStrategy<golem_common::model::quota::ResourceLimit> {
         prop_oneof![
-            (any::<u64>(), arb_time_period(), any::<u64>()).prop_map(|(value, period, max)| {
-                json!({ "type": "Rate", "value": value, "period": period, "max": max })
+            (arb_small_u64(), arb_time_period(), arb_small_u64()).prop_map(
+                |(value, period, max)| {
+                    golem_common::model::quota::ResourceLimit::Rate(
+                        golem_common::model::quota::ResourceRateLimit { value, period, max },
+                    )
+                }
+            ),
+            arb_small_u64().prop_map(|value| {
+                golem_common::model::quota::ResourceLimit::Capacity(
+                    golem_common::model::quota::ResourceCapacityLimit { value },
+                )
             }),
-            any::<u64>().prop_map(|value| json!({ "type": "Capacity", "value": value })),
-            any::<u64>().prop_map(|value| json!({ "type": "Concurrency", "value": value })),
+            arb_small_u64().prop_map(|value| {
+                golem_common::model::quota::ResourceLimit::Concurrency(
+                    golem_common::model::quota::ResourceConcurrencyLimit { value },
+                )
+            }),
         ]
         .boxed()
     }
 
-    fn arb_enforcement_action() -> BoxedStrategy<&'static str> {
-        prop_oneof![Just("reject"), Just("throttle"), Just("terminate")].boxed()
-    }
-
-    fn arb_time_period() -> BoxedStrategy<&'static str> {
+    fn arb_enforcement_action() -> BoxedStrategy<golem_common::model::quota::EnforcementAction> {
         prop_oneof![
-            Just("second"),
-            Just("minute"),
-            Just("hour"),
-            Just("day"),
-            Just("month"),
-            Just("year")
+            Just(golem_common::model::quota::EnforcementAction::Reject),
+            Just(golem_common::model::quota::EnforcementAction::Throttle),
+            Just(golem_common::model::quota::EnforcementAction::Terminate),
         ]
         .boxed()
     }
 
-    fn arb_api_predicate_value() -> OutputDocumentStrategy {
+    fn arb_time_period() -> BoxedStrategy<golem_common::model::quota::TimePeriod> {
         prop_oneof![
-            arb_small_string().prop_map(|value| json!({ "type": "Text", "value": value })),
-            any::<i64>().prop_map(|value| json!({ "type": "Integer", "value": value })),
-            any::<bool>().prop_map(|value| json!({ "type": "Boolean", "value": value })),
+            Just(golem_common::model::quota::TimePeriod::Second),
+            Just(golem_common::model::quota::TimePeriod::Minute),
+            Just(golem_common::model::quota::TimePeriod::Hour),
+            Just(golem_common::model::quota::TimePeriod::Day),
+            Just(golem_common::model::quota::TimePeriod::Month),
+            Just(golem_common::model::quota::TimePeriod::Year)
         ]
         .boxed()
     }
 
-    fn arb_api_predicate() -> OutputDocumentStrategy {
+    fn arb_api_predicate_value()
+    -> BoxedStrategy<golem_common::base_model::retry_policy::ApiPredicateValue> {
+        prop_oneof![
+            arb_small_string().prop_map(|value| {
+                golem_common::base_model::retry_policy::ApiPredicateValue::Text(
+                    golem_common::base_model::retry_policy::ApiTextValue { value },
+                )
+            }),
+            any::<i64>().prop_map(|value| {
+                golem_common::base_model::retry_policy::ApiPredicateValue::Integer(
+                    golem_common::base_model::retry_policy::ApiIntegerValue { value },
+                )
+            }),
+            any::<bool>().prop_map(|value| {
+                golem_common::base_model::retry_policy::ApiPredicateValue::Boolean(
+                    golem_common::base_model::retry_policy::ApiBooleanValue { value },
+                )
+            }),
+        ]
+        .boxed()
+    }
+
+    fn arb_api_predicate() -> BoxedStrategy<golem_common::base_model::retry_policy::ApiPredicate> {
         arb_api_predicate_with_depth(2)
     }
 
-    fn arb_api_predicate_with_depth(depth: u32) -> OutputDocumentStrategy {
+    fn arb_api_predicate_with_depth(
+        depth: u32,
+    ) -> BoxedStrategy<golem_common::base_model::retry_policy::ApiPredicate> {
         let leaf = prop_oneof![
             (arb_small_string(), arb_api_predicate_value()).prop_map(|(property, value)| {
-                json!({ "type": "PropEq", "property": property, "value": value })
+                golem_common::base_model::retry_policy::ApiPredicate::PropEq(
+                    golem_common::base_model::retry_policy::ApiPropertyComparison {
+                        property,
+                        value,
+                    },
+                )
             }),
             (arb_small_string(), arb_api_predicate_value()).prop_map(|(property, value)| {
-                json!({ "type": "PropNeq", "property": property, "value": value })
+                golem_common::base_model::retry_policy::ApiPredicate::PropNeq(
+                    golem_common::base_model::retry_policy::ApiPropertyComparison {
+                        property,
+                        value,
+                    },
+                )
             }),
             (arb_small_string(), arb_api_predicate_value()).prop_map(|(property, value)| {
-                json!({ "type": "PropGt", "property": property, "value": value })
+                golem_common::base_model::retry_policy::ApiPredicate::PropGt(
+                    golem_common::base_model::retry_policy::ApiPropertyComparison {
+                        property,
+                        value,
+                    },
+                )
             }),
             (arb_small_string(), arb_api_predicate_value()).prop_map(|(property, value)| {
-                json!({ "type": "PropGte", "property": property, "value": value })
+                golem_common::base_model::retry_policy::ApiPredicate::PropGte(
+                    golem_common::base_model::retry_policy::ApiPropertyComparison {
+                        property,
+                        value,
+                    },
+                )
             }),
             (arb_small_string(), arb_api_predicate_value()).prop_map(|(property, value)| {
-                json!({ "type": "PropLt", "property": property, "value": value })
+                golem_common::base_model::retry_policy::ApiPredicate::PropLt(
+                    golem_common::base_model::retry_policy::ApiPropertyComparison {
+                        property,
+                        value,
+                    },
+                )
             }),
             (arb_small_string(), arb_api_predicate_value()).prop_map(|(property, value)| {
-                json!({ "type": "PropLte", "property": property, "value": value })
+                golem_common::base_model::retry_policy::ApiPredicate::PropLte(
+                    golem_common::base_model::retry_policy::ApiPropertyComparison {
+                        property,
+                        value,
+                    },
+                )
             }),
-            arb_small_string()
-                .prop_map(|property| json!({ "type": "PropExists", "property": property })),
+            arb_small_string().prop_map(|property| {
+                golem_common::base_model::retry_policy::ApiPredicate::PropExists(
+                    golem_common::base_model::retry_policy::ApiPropertyExistence { property },
+                )
+            }),
             (
                 arb_small_string(),
                 proptest::collection::vec(arb_api_predicate_value(), 0..4),
             )
                 .prop_map(|(property, values)| {
-                    json!({ "type": "PropIn", "property": property, "values": values })
+                    golem_common::base_model::retry_policy::ApiPredicate::PropIn(
+                        golem_common::base_model::retry_policy::ApiPropertySetCheck {
+                            property,
+                            values,
+                        },
+                    )
                 }),
             (arb_small_string(), arb_small_string()).prop_map(|(property, pattern)| {
-                json!({ "type": "PropMatches", "property": property, "pattern": pattern })
+                golem_common::base_model::retry_policy::ApiPredicate::PropMatches(
+                    golem_common::base_model::retry_policy::ApiPropertyPattern {
+                        property,
+                        pattern,
+                    },
+                )
             }),
             (arb_small_string(), arb_small_string()).prop_map(|(property, prefix)| {
-                json!({ "type": "PropStartsWith", "property": property, "prefix": prefix })
+                golem_common::base_model::retry_policy::ApiPredicate::PropStartsWith(
+                    golem_common::base_model::retry_policy::ApiPropertyPrefix { property, prefix },
+                )
             }),
             (arb_small_string(), arb_small_string()).prop_map(|(property, substring)| {
-                json!({ "type": "PropContains", "property": property, "substring": substring })
+                golem_common::base_model::retry_policy::ApiPredicate::PropContains(
+                    golem_common::base_model::retry_policy::ApiPropertySubstring {
+                        property,
+                        substring,
+                    },
+                )
             }),
-            Just(json!({ "type": "True" })),
-            Just(json!({ "type": "False" })),
-        ];
+            Just(golem_common::base_model::retry_policy::ApiPredicate::True(
+                golem_common::base_model::retry_policy::ApiPredicateTrue {},
+            )),
+            Just(golem_common::base_model::retry_policy::ApiPredicate::False(
+                golem_common::base_model::retry_policy::ApiPredicateFalse {},
+            )),
+        ]
+        .boxed();
 
         if depth == 0 {
-            return leaf.boxed();
+            return leaf;
         }
 
         let inner = arb_api_predicate_with_depth(depth - 1);
         prop_oneof![
             leaf,
-            (inner.clone(), inner.clone())
-                .prop_map(|(left, right)| json!({ "type": "And", "left": left, "right": right })),
-            (inner.clone(), inner.clone())
-                .prop_map(|(left, right)| json!({ "type": "Or", "left": left, "right": right })),
-            inner.prop_map(|predicate| json!({ "type": "Not", "predicate": predicate })),
+            (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                golem_common::base_model::retry_policy::ApiPredicate::And(
+                    golem_common::base_model::retry_policy::ApiPredicatePair {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                )
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                golem_common::base_model::retry_policy::ApiPredicate::Or(
+                    golem_common::base_model::retry_policy::ApiPredicatePair {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                )
+            }),
+            inner.prop_map(|predicate| {
+                golem_common::base_model::retry_policy::ApiPredicate::Not(
+                    golem_common::base_model::retry_policy::ApiPredicateNot {
+                        predicate: Box::new(predicate),
+                    },
+                )
+            }),
         ]
         .boxed()
     }
 
-    fn arb_api_retry_policy() -> OutputDocumentStrategy {
+    fn arb_api_retry_policy()
+    -> BoxedStrategy<golem_common::base_model::retry_policy::ApiRetryPolicy> {
         arb_api_retry_policy_with_depth(2)
     }
 
-    fn arb_api_retry_policy_with_depth(depth: u32) -> OutputDocumentStrategy {
+    fn arb_api_retry_policy_with_depth(
+        depth: u32,
+    ) -> BoxedStrategy<golem_common::base_model::retry_policy::ApiRetryPolicy> {
         let leaf = prop_oneof![
-            any::<u64>().prop_map(|delay_ms| json!({ "type": "Periodic", "delayMs": delay_ms })),
-            (any::<u64>(), any::<f64>())
-                .prop_map(|(base_delay_ms, factor)| json!({ "type": "Exponential", "baseDelayMs": base_delay_ms, "factor": factor })),
-            (any::<u64>(), any::<u64>())
-                .prop_map(|(first_ms, second_ms)| json!({ "type": "Fibonacci", "firstMs": first_ms, "secondMs": second_ms })),
-            Just(json!({ "type": "Immediate" })),
-            Just(json!({ "type": "Never" })),
-        ];
+            arb_small_u64().prop_map(|delay_ms| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Periodic(
+                    golem_common::base_model::retry_policy::ApiPeriodicPolicy { delay_ms },
+                )
+            }),
+            (arb_small_u64(), 0.0f64..10.0).prop_map(|(base_delay_ms, factor)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Exponential(
+                    golem_common::base_model::retry_policy::ApiExponentialPolicy {
+                        base_delay_ms,
+                        factor,
+                    },
+                )
+            }),
+            (arb_small_u64(), arb_small_u64()).prop_map(|(first_ms, second_ms)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Fibonacci(
+                    golem_common::base_model::retry_policy::ApiFibonacciPolicy {
+                        first_ms,
+                        second_ms,
+                    },
+                )
+            }),
+            Just(
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Immediate(
+                    golem_common::base_model::retry_policy::ApiImmediatePolicy {},
+                )
+            ),
+            Just(
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Never(
+                    golem_common::base_model::retry_policy::ApiNeverPolicy {},
+                )
+            ),
+        ]
+        .boxed();
 
         if depth == 0 {
-            return leaf.boxed();
+            return leaf;
         }
 
         let inner = arb_api_retry_policy_with_depth(depth - 1);
         prop_oneof![
             leaf,
             (any::<u32>(), inner.clone()).prop_map(|(max_retries, inner)| {
-                json!({ "type": "CountBox", "maxRetries": max_retries, "inner": inner })
+                golem_common::base_model::retry_policy::ApiRetryPolicy::CountBox(
+                    golem_common::base_model::retry_policy::ApiCountBoxPolicy {
+                        max_retries,
+                        inner: Box::new(inner),
+                    },
+                )
             }),
-            (any::<u64>(), inner.clone()).prop_map(|(limit_ms, inner)| {
-                json!({ "type": "TimeBox", "limitMs": limit_ms, "inner": inner })
+            (arb_small_u64(), inner.clone()).prop_map(|(limit_ms, inner)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::TimeBox(
+                    golem_common::base_model::retry_policy::ApiTimeBoxPolicy {
+                        limit_ms,
+                        inner: Box::new(inner),
+                    },
+                )
             }),
-            (any::<u64>(), any::<u64>(), inner.clone()).prop_map(
+            (arb_small_u64(), arb_small_u64(), inner.clone()).prop_map(
                 |(min_delay_ms, max_delay_ms, inner)| {
-                    json!({ "type": "Clamp", "minDelayMs": min_delay_ms, "maxDelayMs": max_delay_ms, "inner": inner })
+                    golem_common::base_model::retry_policy::ApiRetryPolicy::Clamp(
+                        golem_common::base_model::retry_policy::ApiClampPolicy {
+                            min_delay_ms,
+                            max_delay_ms,
+                            inner: Box::new(inner),
+                        },
+                    )
                 },
             ),
-            (any::<u64>(), inner.clone())
-                .prop_map(|(delay_ms, inner)| json!({ "type": "AddDelay", "delayMs": delay_ms, "inner": inner })),
-            (any::<f64>(), inner.clone())
-                .prop_map(|(factor, inner)| json!({ "type": "Jitter", "factor": factor, "inner": inner })),
-            (arb_api_predicate(), inner.clone()).prop_map(|(predicate, inner)| {
-                json!({ "type": "FilteredOn", "predicate": predicate, "inner": inner })
+            (arb_small_u64(), inner.clone()).prop_map(|(delay_ms, inner)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::AddDelay(
+                    golem_common::base_model::retry_policy::ApiAddDelayPolicy {
+                        delay_ms,
+                        inner: Box::new(inner),
+                    },
+                )
             }),
-            (inner.clone(), inner.clone()).prop_map(
-                |(first, second)| json!({ "type": "AndThen", "first": first, "second": second }),
-            ),
-            (inner.clone(), inner.clone())
-                .prop_map(|(first, second)| json!({ "type": "Union", "first": first, "second": second })),
-            (inner.clone(), inner.clone()).prop_map(
-                |(first, second)| json!({ "type": "Intersect", "first": first, "second": second }),
-            ),
+            (0.0f64..1.0, inner.clone()).prop_map(|(factor, inner)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Jitter(
+                    golem_common::base_model::retry_policy::ApiJitterPolicy {
+                        factor,
+                        inner: Box::new(inner),
+                    },
+                )
+            }),
+            (arb_api_predicate(), inner.clone()).prop_map(|(predicate, inner)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::FilteredOn(
+                    golem_common::base_model::retry_policy::ApiFilteredOnPolicy {
+                        predicate,
+                        inner: Box::new(inner),
+                    },
+                )
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::AndThen(
+                    golem_common::base_model::retry_policy::ApiRetryPolicyPair {
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    },
+                )
+            },),
+            (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Union(
+                    golem_common::base_model::retry_policy::ApiRetryPolicyPair {
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    },
+                )
+            }),
+            (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                golem_common::base_model::retry_policy::ApiRetryPolicy::Intersect(
+                    golem_common::base_model::retry_policy::ApiRetryPolicyPair {
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    },
+                )
+            }),
         ]
         .boxed()
     }
 
     fn arb_retry_policy_create_result() -> OutputDocumentStrategy {
-        arb_retry_policy_value("retry-policy.create.result")
+        serialized_output(
+            arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyCreateView),
+        )
     }
 
     fn arb_retry_policy_delete_result() -> OutputDocumentStrategy {
-        arb_retry_policy_value("retry-policy.delete.result")
+        serialized_output(
+            arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyDeleteView),
+        )
     }
 
     fn arb_retry_policy_get_result() -> OutputDocumentStrategy {
-        arb_retry_policy_value("retry-policy.get.result")
+        serialized_output(
+            arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyGetView),
+        )
     }
 
     fn arb_retry_policy_update_result() -> OutputDocumentStrategy {
-        arb_retry_policy_value("retry-policy.update.result")
+        serialized_output(
+            arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyUpdateView),
+        )
     }
 
     fn arb_retry_policy_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_retry_policy_value_without_type(), 0..5)
-            .prop_map(|retry_policies| json!({ CLI_OUTPUT_TYPE_FIELD: "retry-policy.list.result", "retryPolicies": retry_policies }))
-            .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_retry_policy(), 0..5).prop_map(|retry_policies| {
+                crate::model::text::retry_policy::RetryPolicyListView { retry_policies }
+            }),
+        )
     }
 
-    fn arb_retry_policy_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_retry_policy_value_without_type()
-            .prop_map(move |mut value| {
-                value[CLI_OUTPUT_TYPE_FIELD] = json!(output_type);
-                value
-            })
-            .boxed()
-    }
-
-    fn arb_retry_policy_value_without_type() -> OutputDocumentStrategy {
+    fn arb_retry_policy() -> BoxedStrategy<golem_common::model::retry_policy::RetryPolicyDto> {
         (
+            arb_uuid(),
+            arb_uuid(),
             arb_small_string(),
-            arb_small_string(),
-            arb_small_string(),
-            any::<u64>(),
+            arb_small_u64(),
             any::<u32>(),
             arb_api_predicate(),
             arb_api_retry_policy(),
         )
             .prop_map(
                 |(id, environment_id, name, revision, priority, predicate, policy)| {
-                    json!({
-                        "id": id,
-                        "environmentId": environment_id,
-                        "name": name,
-                        "revision": revision,
-                        "priority": priority,
-                        "predicate": predicate,
-                        "policy": policy,
-                    })
+                    golem_common::model::retry_policy::RetryPolicyDto {
+                        id: golem_common::model::retry_policy::RetryPolicyId(id),
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            environment_id,
+                        ),
+                        name,
+                        revision: golem_common::model::retry_policy::RetryPolicyRevision::new(
+                            revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        priority,
+                        predicate: golem_common::model::UntypedJsonBody(
+                            serde_json::to_value(predicate)
+                                .expect("generated predicate should serialize"),
+                        ),
+                        policy: golem_common::model::UntypedJsonBody(
+                            serde_json::to_value(policy)
+                                .expect("generated retry policy should serialize"),
+                        ),
+                    }
                 },
             )
             .boxed()
     }
 
     fn arb_secret_create_result() -> OutputDocumentStrategy {
-        arb_secret_value("secret.create.result")
+        serialized_output(arb_secret().prop_map(|secret| {
+            crate::model::text::secret::SecretCreateView {
+                secret,
+                show_sensitive: true,
+            }
+        }))
     }
 
     fn arb_secret_delete_result() -> OutputDocumentStrategy {
-        arb_secret_value("secret.delete.result")
+        serialized_output(arb_secret().prop_map(|secret| {
+            crate::model::text::secret::SecretDeleteView {
+                secret,
+                show_sensitive: true,
+            }
+        }))
     }
 
     fn arb_secret_get_result() -> OutputDocumentStrategy {
-        arb_secret_value("secret.get.result")
+        serialized_output(arb_secret().prop_map(|secret| {
+            crate::model::text::secret::SecretGetView {
+                secret,
+                show_sensitive: true,
+            }
+        }))
     }
 
     fn arb_secret_update_value_result() -> OutputDocumentStrategy {
-        arb_secret_value("secret.update-value.result")
+        serialized_output(arb_secret().prop_map(|secret| {
+            crate::model::text::secret::SecretUpdateView {
+                secret,
+                show_sensitive: true,
+            }
+        }))
     }
 
     fn arb_secret_list_result() -> OutputDocumentStrategy {
-        proptest::collection::vec(arb_secret_value_without_type(), 0..5)
-            .prop_map(|secrets| json!({ CLI_OUTPUT_TYPE_FIELD: "secret.list.result", "secrets": secrets }))
-            .boxed()
-    }
-
-    fn arb_secret_value(output_type: &'static str) -> OutputDocumentStrategy {
-        arb_secret_value_without_type()
-            .prop_map(move |secret| {
-                json!({
-                    CLI_OUTPUT_TYPE_FIELD: output_type,
-                    "secret": secret,
-                })
-            })
-            .boxed()
-    }
-
-    fn arb_secret_value_without_type() -> OutputDocumentStrategy {
-        (
-            arb_small_string(),
-            arb_small_string(),
-            proptest::collection::vec(arb_small_string(), 1..4),
-            any::<u64>(),
-            arb_json_value(2),
-            proptest::option::of(arb_json_value(2)),
+        serialized_output(
+            proptest::collection::vec(arb_secret(), 0..5).prop_map(|secrets| {
+                crate::model::text::secret::SecretListView {
+                    secrets,
+                    show_sensitive: true,
+                    environment_name: "generated".to_string(),
+                    show_ids: true,
+                }
+            }),
         )
-            .prop_map(
-                |(id, environment_id, path, revision, secret_type, secret_value)| {
-                    let mut value = json!({
-                        "id": id,
-                        "environmentId": environment_id,
-                        "path": path,
-                        "revision": revision,
-                        "secretType": secret_type,
-                    });
-                    if let Some(secret_value) = secret_value {
-                        value["secretValue"] = secret_value;
-                    }
-                    value
-                },
-            )
+    }
+
+    fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {
+        (
+            arb_uuid(),
+            arb_uuid(),
+            proptest::collection::vec(arb_small_string(), 1..4),
+            arb_small_u64(),
+            proptest::option::of(arb_small_string().prop_map(Value::String)),
+        )
+            .prop_map(|(id, environment_id, path, revision, secret_value)| {
+                golem_client::model::AgentSecretDto {
+                    id: golem_common::model::agent_secret::AgentSecretId(id),
+                    environment_id: golem_common::model::environment::EnvironmentId(environment_id),
+                    path: golem_common::model::agent_secret::CanonicalAgentSecretPath(path),
+                    revision: golem_common::model::agent_secret::AgentSecretRevision::new(revision)
+                        .expect("generated revision should be valid"),
+                    secret_type: golem_wasm::analysis::analysed_type::str(),
+                    secret_value,
+                }
+            })
             .boxed()
     }
 
@@ -3350,6 +3067,18 @@ mod tests {
             Just("pretty-yaml"),
             Just("text"),
             Just("toon")
+        ]
+        .boxed()
+    }
+
+    fn arb_format() -> BoxedStrategy<crate::model::format::Format> {
+        prop_oneof![
+            Just(crate::model::format::Format::Json),
+            Just(crate::model::format::Format::PrettyJson),
+            Just(crate::model::format::Format::Yaml),
+            Just(crate::model::format::Format::PrettyYaml),
+            Just(crate::model::format::Format::Text),
+            Just(crate::model::format::Format::Toon),
         ]
         .boxed()
     }

@@ -396,7 +396,7 @@
           "type": "string"
         },
         "currentCardId": {
-          "type": "string"
+          "type": ["string", "null"]
         },
         "data": {
           "$ref": "#/definitions/PermissionShareData"
@@ -455,7 +455,7 @@
           "type": "string"
         },
         "currentCardId": {
-          "type": "string"
+          "type": ["string", "null"]
         },
         "data": {
           "$ref": "#/definitions/PermissionShareData"
@@ -495,7 +495,7 @@
           "type": "string"
         },
         "currentCardId": {
-          "type": "string"
+          "type": ["string", "null"]
         },
         "data": {
           "$ref": "#/definitions/PermissionShareData"
@@ -575,7 +575,7 @@
           "type": "string"
         },
         "currentCardId": {
-          "type": "string"
+          "type": ["string", "null"]
         },
         "data": {
           "$ref": "#/definitions/PermissionShareData"
@@ -816,7 +816,7 @@
           "type": "string"
         },
         "agentName": {
-          "type": "string"
+          "type": ["string", "null"]
         }
       },
       "additionalProperties": false
@@ -1271,7 +1271,10 @@
       "type": "object",
       "properties": {
         "security": {
-          "$ref": "#/definitions/HttpApiDeploymentAgentSecurity"
+          "oneOf": [
+            { "$ref": "#/definitions/HttpApiDeploymentAgentSecurity" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
@@ -1950,8 +1953,8 @@
         "pluginRegistrationId": { "type": "string" },
         "pluginName": { "type": "string" },
         "pluginVersion": { "type": "string" },
-        "oplogProcessorComponentId": { "type": "string" },
-        "oplogProcessorComponentRevision": { "type": "integer", "minimum": 0 }
+        "oplogProcessorComponentId": { "type": ["string", "null"] },
+        "oplogProcessorComponentRevision": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -1968,7 +1971,7 @@
     },
     "AgentFilePermissions": {
       "type": "string",
-      "enum": ["ReadOnly", "ReadWrite"]
+      "enum": ["read-only", "read-write"]
     },
     "EnvironmentWithDetails": {
       "type": "object",
@@ -2189,7 +2192,7 @@
         "pendingInvocationCount": { "type": "integer", "minimum": 0 },
         "updates": { "type": "array", "items": { "$ref": "#/definitions/UpdateRecord" } },
         "createdAt": { "type": "string" },
-        "lastError": { "type": "string" },
+        "lastError": { "type": ["string", "null"] },
         "componentSize": { "type": "integer", "minimum": 0 },
         "totalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "exportedResourceInstances": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentResourceDescription" } }
@@ -2234,7 +2237,7 @@
             "type": { "const": "FailedUpdate" },
             "timestamp": { "type": "string" },
             "targetRevision": { "type": "integer", "minimum": 0 },
-            "details": { "type": "string" }
+            "details": { "type": ["string", "null"] }
           },
           "additionalProperties": false
         }

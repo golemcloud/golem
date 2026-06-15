@@ -19,7 +19,7 @@ use crate::model::environment::{
 };
 use crate::model::text::fmt::{Column, TextView, log_table, new_table_full_condensed};
 use golem_client::model::EnvironmentWithDetails;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
     match &environment.source {
@@ -64,7 +64,7 @@ pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIde
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentListView {
     pub environments: Vec<EnvironmentWithDetails>,

@@ -17,9 +17,9 @@ use crate::model::TemplateDescription;
 use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::*;
 use itertools::Itertools;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateListView {
     pub templates: Vec<TemplateDescription>,

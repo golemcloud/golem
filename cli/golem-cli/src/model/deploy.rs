@@ -60,45 +60,53 @@ pub enum DeploymentDisplayMode {
     Full,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupDisplay {
     #[serde(skip_serializing_if = "EnvironmentSetupDetailedSection::is_empty")]
+    #[serde(default)]
     pub to_be_applied: EnvironmentSetupDetailedSection,
     #[serde(skip_serializing_if = "EnvironmentSetupKeysOnlySection::is_empty")]
+    #[serde(default)]
     pub skipped_already_exists: EnvironmentSetupKeysOnlySection,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupDetailedSection {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub secret_values: BTreeMap<String, EnvironmentSetupSecretValueDisplay>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub retry_policies: BTreeMap<String, EnvironmentSetupRetryPolicyDisplay>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub resources: BTreeMap<String, EnvironmentSetupResourceDisplay>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupKeysOnlySection {
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub secret_values: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub retry_policies: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub resources: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupSecretValueDisplay {
     pub secret_type: String,
     pub value: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupRetryPolicyDisplay {
     pub priority: u32,
@@ -106,7 +114,7 @@ pub struct EnvironmentSetupRetryPolicyDisplay {
     pub policy: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupResourceDisplay {
     pub limit: serde_json::Value,
@@ -115,7 +123,7 @@ pub struct EnvironmentSetupResourceDisplay {
     pub units: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupPlan {
     pub display: EnvironmentSetupDisplay,

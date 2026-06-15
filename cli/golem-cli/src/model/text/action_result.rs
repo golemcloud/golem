@@ -25,10 +25,10 @@
 use crate::model::cli_output::CliOutput;
 use crate::model::text::fmt::TextView;
 use golem_common::model::component::ComponentName;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteResult {
     pub deleted: bool,
@@ -43,7 +43,7 @@ impl CliOutput for AgentDeleteResult {
     const KIND: &'static str = "agent.delete.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRevertResult {
     pub reverted: bool,
@@ -62,7 +62,7 @@ impl CliOutput for AgentRevertResult {
     const KIND: &'static str = "agent.revert.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCancelInvocationResult {
     pub canceled: bool,
@@ -78,7 +78,7 @@ impl CliOutput for AgentCancelInvocationResult {
     const KIND: &'static str = "agent.cancel-invocation.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRedeployResult {
     pub redeployed: bool,
@@ -93,7 +93,7 @@ impl CliOutput for AgentRedeployResult {
     const KIND: &'static str = "agent.redeploy.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPluginToggleResult {
     pub activated: bool,
@@ -110,7 +110,7 @@ impl CliOutput for AgentPluginToggleResult {
     const KIND: &'static str = "agent.plugin-toggle.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanResult {
     pub cleaned: bool,
@@ -124,7 +124,7 @@ impl CliOutput for CleanResult {
     const KIND: &'static str = "app.clean.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildResult {
     pub built: bool,
@@ -138,7 +138,7 @@ impl CliOutput for BuildResult {
     const KIND: &'static str = "app.build.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewAppResult {
     pub created: bool,
@@ -154,7 +154,7 @@ impl CliOutput for NewAppResult {
     const KIND: &'static str = "app.new.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployResultView {
     pub deployed: bool,
@@ -168,7 +168,7 @@ impl CliOutput for DeployResultView {
     const KIND: &'static str = "app.deploy.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateBridgeResult {
     pub generated: bool,

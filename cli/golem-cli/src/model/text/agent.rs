@@ -19,7 +19,7 @@ use crate::model::text::fmt::{
     new_table_full_condensed,
 };
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 impl MessageWithFields for AgentTypeView {
     fn message(&self) -> String {
@@ -50,7 +50,7 @@ impl From<&DeployedRegisteredAgentType> for AgentTypeView {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypeListView {
     pub agent_types: Vec<DeployedRegisteredAgentType>,

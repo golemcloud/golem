@@ -20,9 +20,9 @@ use crate::model::cli_output::CliOutput;
 use crate::model::format::Format;
 use crate::model::text::fmt::*;
 use colored::Colorize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileListView {
     pub profiles: Vec<ProfileView>,
@@ -90,7 +90,7 @@ impl CliOutput for ProfileView {
     const KIND: &'static str = "profile.get.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileCreateResult {
     pub created: bool,
@@ -106,7 +106,7 @@ impl CliOutput for ProfileCreateResult {
     const KIND: &'static str = "profile.new.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSwitchResult {
     pub switched: bool,
@@ -121,7 +121,7 @@ impl CliOutput for ProfileSwitchResult {
     const KIND: &'static str = "profile.switch.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileDeleteResult {
     pub deleted: bool,
@@ -136,7 +136,7 @@ impl CliOutput for ProfileDeleteResult {
     const KIND: &'static str = "profile.delete.result";
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileConfigSetFormatResult {
     pub updated: bool,
