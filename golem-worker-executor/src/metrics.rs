@@ -260,6 +260,12 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_worker_store_alive_count",
+            "Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted",
+            &["executor_id"]
+        )
+        .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "worker_kv_cache_value_size_bytes",
             "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
@@ -361,6 +367,7 @@ pub mod workers {
         WORKER_WAITING_FOR_MEMORY_COUNT
             .with_label_values(&[id])
             .set(0.0);
+        WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
         WORKER_MEMORY_GROW_REJECTED_TOTAL
             .with_label_values(&[id])
             .inc_by(0.0);
@@ -374,6 +381,23 @@ pub mod workers {
 
     pub fn dec_worker_memory_resident() {
         WORKER_MEMORY_RESIDENT_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    /// Incremented when a worker's wasmtime `Store` context is constructed.
+    /// Paired with [`dec_worker_store_alive`] from a guard dropped with the
+    /// `Store` itself, so the gauge tracks the `Store`'s true lifetime rather
+    /// than the owning worker's accounting.
+    pub fn inc_worker_store_alive() {
+        WORKER_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    /// Decremented when a worker's wasmtime `Store` context is dropped.
+    pub fn dec_worker_store_alive() {
+        WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
     }
