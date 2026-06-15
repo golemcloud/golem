@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::AgentId;
-use crate::base_model::account::AccountId;
+use crate::base_model::account::{AccountEmail, AccountId};
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
@@ -108,6 +108,9 @@ pub struct JsonComponentModelValue {
 pub struct RegisteredAgentTypeImplementer {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
+    pub component_name: String,
+    pub account_id: AccountId,
+    pub account_email: AccountEmail,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

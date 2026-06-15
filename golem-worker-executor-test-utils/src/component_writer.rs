@@ -19,17 +19,16 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
 use golem_common::model::diff::{Hash, Hashable};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_service_base::model::component::Component;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::{debug, info};
@@ -138,7 +137,6 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>,
         original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<Component> {
         let target_dir = &self.root;
@@ -213,7 +211,6 @@ impl FileSystemComponentWriter {
             root_package_name,
             root_package_version,
             wasm_hash,
-            environment_roles_from_shares,
             final_hash: Hash::empty(),
         }
         .with_updated_hash()?;
@@ -315,7 +312,6 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>,
         original_source_hash: Option<blake3::Hash>,
     ) -> Component {
         self.add_component(
@@ -325,7 +321,6 @@ impl FileSystemComponentWriter {
             environment_id,
             application_id,
             account_id,
-            environment_roles_from_shares,
             original_source_hash,
         )
         .await
@@ -340,7 +335,6 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>,
         original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<Component> {
         self.write_component_to_filesystem(
@@ -353,7 +347,6 @@ impl FileSystemComponentWriter {
             environment_id,
             application_id,
             account_id,
-            environment_roles_from_shares,
             original_source_hash,
         )
         .await
@@ -376,7 +369,6 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>,
     ) -> anyhow::Result<Component> {
         self.write_component_to_filesystem(
             local_path,
@@ -388,7 +380,6 @@ impl FileSystemComponentWriter {
             environment_id,
             application_id,
             account_id,
-            environment_roles_from_shares,
             None,
         )
         .await
@@ -429,7 +420,6 @@ impl FileSystemComponentWriter {
                 old_metadata.environment_id,
                 old_metadata.application_id,
                 old_metadata.account_id,
-                old_metadata.environment_roles_from_shares,
                 original_source_hash,
             )
             .await
@@ -600,7 +590,6 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub wasm_filename: String,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentType>,
-    pub environment_roles_from_shares: HashSet<EnvironmentRole>,
     pub target_path: PathBuf,
 
     pub root_package_name: Option<String>,
@@ -627,6 +616,9 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             environment_id: value.environment_id,
             application_id: value.application_id,
             account_id: value.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(

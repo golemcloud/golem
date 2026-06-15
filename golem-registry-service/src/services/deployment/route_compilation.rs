@@ -723,8 +723,7 @@ mod tests {
         AgentConstructor, AgentMethod, AgentMode, AgentType, CorsOptions as AgentCorsOptions,
         HttpMountDetails, LiteralSegment, Snapshotting,
     };
-    use golem_common::model::application::ApplicationId;
-    use golem_common::model::auth::EnvironmentRole;
+    use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::domain_registration::Domain;
@@ -743,13 +742,14 @@ mod tests {
             id: environment_id,
             revision: EnvironmentRevision::INITIAL,
             application_id: ApplicationId(Uuid::new_v4()),
+            application_name: ApplicationName::try_from("test-app").unwrap(),
             name: EnvironmentName::try_from("prod").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId(Uuid::new_v4()),
-            roles_from_active_shares: BTreeSet::<EnvironmentRole>::new(),
+            owner_account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             current_deployment: None,
         }
     }
@@ -828,6 +828,9 @@ mod tests {
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: "test-component".to_string(),
+            account_id: AccountId(Uuid::new_v4()),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         };
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();
@@ -1109,6 +1112,9 @@ mod tests {
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: "test-component".to_string(),
+            account_id: AccountId(Uuid::new_v4()),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         };
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();

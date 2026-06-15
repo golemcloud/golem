@@ -18,7 +18,6 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{
@@ -26,6 +25,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
@@ -490,7 +492,78 @@ async fn oplog_processor_in_different_env_after_unregistering(
     let client_2 = user_2.registry_service_client().await;
 
     user_1
-        .share_environment(&env_1.id, &user_2.account_id, &[EnvironmentRole::Admin])
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &user_1.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: user_2.account_email.clone(),
+                name: PermissionShareName("plugin-different-env-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "environment({}/{}) @ {} : view : {}",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            user_2.account_email.as_str(),
+                            env_1.name.0,
+                        ),
+                        format!(
+                            "environment({}/{}) @ {} : view-deployment-plan : {}",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            user_2.account_email.as_str(),
+                            env_1.name.0,
+                        ),
+                        format!(
+                            "environment({}/{}) @ {} : deploy : {}",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            user_2.account_email.as_str(),
+                            env_1.name.0,
+                        ),
+                        format!(
+                            "component({}/{}/{}) @ {} : create : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "component({}/{}/{}) @ {} : view : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : create : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : view : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : delete : *",
+                            user_1.account_email.as_str(),
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;

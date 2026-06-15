@@ -8,7 +8,6 @@ import "golem/common/application.proto";
 import "golem/common/hash.proto";
 import "golem/component/component_metadata.proto";
 import "golem/component/component_id.proto";
-import "golem/auth/environment_role.proto";
 import "google/protobuf/timestamp.proto";
 
 message Component {
@@ -24,4 +23,7 @@ message Component {
   golem.common.ApplicationId application_id = 16;
   golem.common.Hash hash = 17;
   string object_store_key = 18;
+  string application_name = 19;
+  string environment_name = 20;
+  string account_email = 21;
 }

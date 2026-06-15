@@ -9,7 +9,7 @@ date: "2024-03-14"
 
 We are happy to share the good news with you. Golem Cloud is taking an important step in furthering our involvement in the WASM ecosystem by becoming a proud sponsor of the WASMIO 2024 in Barcelona on the 14th and 15th of March and we're honored to be able to be a Silver Sponsor. We're equally excited to announce that John A. De Goes, the CEO & Founder of Golem Cloud will be speaking about Building Durable Microservices with WebAssembly, an exploration into the future of software architecture and how durable computing can remarkably simplify it.
 
-![WASMIO Golem Sponsor](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055bc_67559f0f16c5f7501359f4fa_WASMIO%20Golem%20Sponsor.jpeg)
+![WASMIO Golem Sponsor](/blog-images/wasmio-2024-golem-sponsor.png)
 
 ### About John's talk:
 

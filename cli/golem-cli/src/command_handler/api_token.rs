@@ -52,7 +52,7 @@ impl ApiTokenCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&TokenListView(tokens.values));
+            .log_view(&TokenListView(tokens.values))?;
 
         Ok(())
     }
@@ -66,7 +66,7 @@ impl ApiTokenCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&TokenNewView(token));
+        self.ctx.log_handler().log_view(&TokenNewView(token))?;
 
         Ok(())
     }

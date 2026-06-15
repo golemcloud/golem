@@ -28,12 +28,17 @@ pub use config::{
     AvailableDomainsConfig, DomainRegistrationConfig, RestrictedAvailableDomainsConfig,
 };
 pub use errors::DomainRegistrationError;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, DomainLabel, DomainNamePattern,
+    EnvironmentDomainRegistrationResourcePattern, EnvironmentDomainRegistrationVerb,
+    PermissionTarget,
+};
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use regex::Regex;
 use std::sync::Arc;
 
@@ -76,10 +81,11 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateEnvironmentPluginGrant,
+        authorize_domain_registration_permission(
+            auth,
+            &environment,
+            Some(&data.domain),
+            EnvironmentDomainRegistrationVerb::Create,
         )?;
 
         if !self
@@ -124,14 +130,15 @@ impl DomainRegistrationService {
         domain_registration_id: DomainRegistrationId,
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
-        let (_, environment) = self
+        let (domain_registration, environment) = self
             .get_by_id_with_environment(domain_registration_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteDomainRegistration,
+        authorize_domain_registration_permission(
+            auth,
+            &environment,
+            Some(&domain_registration.domain),
+            EnvironmentDomainRegistrationVerb::Delete,
         )?;
 
         let deleted_record = self
@@ -165,10 +172,11 @@ impl DomainRegistrationService {
         domain: &Domain,
         auth: &AuthCtx,
     ) -> Result<DomainRegistration, DomainRegistrationError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDomainRegistration,
+        authorize_domain_registration_permission(
+            auth,
+            environment,
+            Some(domain),
+            EnvironmentDomainRegistrationVerb::View,
         )
         .map_err(|_| DomainRegistrationError::DomainRegistrationByDomainNotFound(domain.clone()))?;
 
@@ -202,10 +210,11 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDomainRegistration,
+        authorize_domain_registration_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentDomainRegistrationVerb::View,
         )?;
 
         let domain_registrations: Vec<DomainRegistration> = self
@@ -244,10 +253,11 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDomainRegistration,
+        authorize_domain_registration_permission(
+            auth,
+            &environment,
+            Some(&domain_registration.domain),
+            EnvironmentDomainRegistrationVerb::View,
         )
         .map_err(|_| DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id))?;
 
@@ -360,6 +370,35 @@ impl DomainMatcher {
             }
         }
     }
+}
+
+fn authorize_domain_registration_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentDomainRegistrationVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentDomainRegistration(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_email.clone(),
+                application: environment.application_name.clone(),
+                environment: environment.name.clone(),
+            },
+            resource: domain
+                .map(|domain| {
+                    EnvironmentDomainRegistrationResourcePattern::Domain(DomainNamePattern {
+                        labels: domain
+                            .0
+                            .split('.')
+                            .map(|label| DomainLabel(label.to_string()))
+                            .collect(),
+                    })
+                })
+                .unwrap_or(EnvironmentDomainRegistrationResourcePattern::Any),
+        },
+    ))
 }
 
 #[cfg(test)]

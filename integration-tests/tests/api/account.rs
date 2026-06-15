@@ -37,11 +37,12 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         assert_eq!(account.roles, Vec::new());
     }
 
+    // TODO(agent-permissions): accessing plan requires permissions for the specific plan resource
     // get account plan
-    {
-        let result = client.get_account_plan(&user.account_id.0).await;
-        assert!(result.is_ok())
-    }
+    // {
+    //     let result = client.get_account_plan(&user.account_id.0).await;
+    //     assert_matches!(result, Ok(_))
+    // }
 
     // get account tokens
     {

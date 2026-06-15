@@ -21,7 +21,6 @@ tags:
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants
-- name: EnvironmentShares
 - name: HealthCheck
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.

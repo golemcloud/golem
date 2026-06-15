@@ -23,11 +23,21 @@ use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
     CanonicalAgentSecretPath,
 };
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentAgentSecretKeyPathPattern,
+    EnvironmentAgentSecretKeySegmentPattern, EnvironmentAgentSecretResourcePattern,
+    EnvironmentAgentSecretVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
+use golem_common::schema::adapters::analysed_type::{
+    analysed_type_to_schema_graph, schema_graph_to_analysed_type,
+};
+use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::agent_secret::AgentSecret;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::sync::Arc;
@@ -48,6 +58,38 @@ pub enum AgentSecretError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_agent_secret_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    key: Option<&CanonicalAgentSecretPath>,
+    verb: EnvironmentAgentSecretVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_email.clone(),
+                application: environment.application_name.clone(),
+                environment: environment.name.clone(),
+            },
+            resource: key
+                .map(|key| {
+                    EnvironmentAgentSecretResourcePattern::Key(
+                        EnvironmentAgentSecretKeyPathPattern {
+                            segments: key
+                                .0
+                                .iter()
+                                .cloned()
+                                .map(EnvironmentAgentSecretKeySegmentPattern::Literal)
+                                .collect(),
+                        },
+                    )
+                })
+                .unwrap_or(EnvironmentAgentSecretResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for AgentSecretError {
@@ -102,22 +144,45 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateAgentSecret,
+        let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
+
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret_path),
+            EnvironmentAgentSecretVerb::Create,
         )?;
 
+        // The REST DTO carries an `AnalysedType` + legacy-shaped JSON, so
+        // parse the JSON against the `AnalysedType` first and then promote
+        // the resulting `Value` into the schema layer for in-memory + repo
+        // use. This preserves the legacy wire shape (numeric `char`,
+        // `{"Case": null}` for unit variants, lenient optional record
+        // fields, etc.).
+        let secret_type_graph = analysed_type_to_schema_graph(&data.secret_type).map_err(|e| {
+            AgentSecretError::AgentSecretValueDoesNotMatchType {
+                errors: vec![format!("Invalid secret type: {e}")],
+            }
+        })?;
         let secret_value = data
             .secret_value
-            .map(|sv| ValueAndType::parse_with_type(&sv, &data.secret_type))
-            .transpose()
-            .map_err(|errors| AgentSecretError::AgentSecretValueDoesNotMatchType { errors })?
-            .map(|vat| vat.value);
+            .as_ref()
+            .map(|sv| {
+                let vat =
+                    ValueAndType::parse_with_type(sv, &data.secret_type).map_err(|errors| {
+                        AgentSecretError::AgentSecretValueDoesNotMatchType { errors }
+                    })?;
+                value_to_schema_value(&vat.value, &data.secret_type).map_err(|e| {
+                    AgentSecretError::AgentSecretValueDoesNotMatchType {
+                        errors: vec![format!(
+                            "Failed to promote secret value to schema layer: {e}"
+                        )],
+                    }
+                })
+            })
+            .transpose()?;
 
         let id = AgentSecretId::new();
-
-        let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
 
         let stored_agent_secret = self
             .agent_secret_repo
@@ -125,7 +190,7 @@ impl AgentSecretService {
                 id,
                 environment_id,
                 agent_secret_path.clone(),
-                data.secret_type,
+                secret_type_graph,
                 secret_value,
                 auth.actor_account_id(),
             ))
@@ -153,10 +218,11 @@ impl AgentSecretService {
         let (mut agent_secret, environment) =
             self.get_with_environment(agent_secret_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret.path),
+            EnvironmentAgentSecretVerb::Update,
         )?;
 
         if update.current_revision != agent_secret.revision {
@@ -168,12 +234,25 @@ impl AgentSecretService {
         match update.secret_value {
             OptionalFieldUpdate::NoChange => {}
             OptionalFieldUpdate::Set(new_secret_value) => {
-                let parsed_new_secret_value =
-                    ValueAndType::parse_with_type(&new_secret_value, &agent_secret.secret_type)
-                        .map_err(
-                            |errors| AgentSecretError::AgentSecretValueDoesNotMatchType { errors },
-                        )?
-                        .value;
+                // See `create` above for the JSON-shape rationale. Project
+                // the stored `SchemaGraph` back to `AnalysedType` so the
+                // legacy JSON parser can be used, then promote the resulting
+                // `Value` into the schema layer.
+                let legacy_type = schema_graph_to_analysed_type(&agent_secret.secret_type)
+                    .map_err(|e| AgentSecretError::AgentSecretValueDoesNotMatchType {
+                        errors: vec![format!(
+                            "Failed to project stored secret schema to AnalysedType: {e}"
+                        )],
+                    })?;
+                let vat = ValueAndType::parse_with_type(&new_secret_value, &legacy_type).map_err(
+                    |errors| AgentSecretError::AgentSecretValueDoesNotMatchType { errors },
+                )?;
+                let parsed_new_secret_value = value_to_schema_value(&vat.value, &legacy_type)
+                    .map_err(|e| AgentSecretError::AgentSecretValueDoesNotMatchType {
+                        errors: vec![format!(
+                            "Failed to promote secret value to schema layer: {e}"
+                        )],
+                    })?;
                 agent_secret.secret_value = Some(parsed_new_secret_value);
             }
             OptionalFieldUpdate::Unset => {
@@ -208,10 +287,11 @@ impl AgentSecretService {
         let (mut agent_secret, environment) =
             self.get_with_environment(agent_secret_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret.path),
+            EnvironmentAgentSecretVerb::Delete,
         )?;
 
         if agent_secret.revision != current_revision {
@@ -243,8 +323,8 @@ impl AgentSecretService {
         agent_secret_id: AgentSecretId,
         auth: &AuthCtx,
     ) -> Result<AgentSecret, AgentSecretError> {
-        let (environment_share, _) = self.get_with_environment(agent_secret_id, auth).await?;
-        Ok(environment_share)
+        let (agent_secret, _) = self.get_with_environment(agent_secret_id, auth).await?;
+        Ok(agent_secret)
     }
 
     pub async fn list_in_environment(
@@ -271,10 +351,11 @@ impl AgentSecretService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<AgentSecret>, AgentSecretError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            environment,
+            None,
+            EnvironmentAgentSecretVerb::View,
         )?;
 
         let result = self.list_in_environment_unchecked(environment.id).await?;
@@ -321,10 +402,11 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret.path),
+            EnvironmentAgentSecretVerb::View,
         )
         .map_err(|_| AgentSecretError::AgentSecretNotFound(agent_secret_id))?;
 

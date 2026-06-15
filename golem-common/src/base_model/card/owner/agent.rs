@@ -13,12 +13,17 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
+use crate::model::agent::AgentTypeName;
+use crate::model::application::ApplicationName;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentOwnerLeafPattern {
     Agent(String),
-    AgentTypeWildcard(String),
+    AgentTypeWildcard(AgentTypeName),
 }
 
 impl AgentOwnerLeafPattern {
@@ -27,7 +32,9 @@ impl AgentOwnerLeafPattern {
         if let Some(agent_type) = value.strip_suffix("(*)")
             && !agent_type.is_empty()
         {
-            return Ok(Self::AgentTypeWildcard(agent_type.to_string()));
+            return Ok(Self::AgentTypeWildcard(AgentTypeName(
+                agent_type.to_string(),
+            )));
         }
         Ok(Self::Agent(value.to_string()))
     }
@@ -36,7 +43,7 @@ impl AgentOwnerLeafPattern {
         match (self, other) {
             (Self::Agent(left), Self::Agent(right)) => left == right,
             (Self::AgentTypeWildcard(left), Self::Agent(right)) => right
-                .strip_prefix(left)
+                .strip_prefix(left.as_str())
                 .is_some_and(|suffix| suffix.starts_with('(') && suffix.ends_with(')')),
             (Self::AgentTypeWildcard(left), Self::AgentTypeWildcard(right)) => left == right,
             (Self::Agent(_), Self::AgentTypeWildcard(_)) => false,
@@ -44,33 +51,33 @@ impl AgentOwnerLeafPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentOwnerPattern {
     AnyAgents,
     AccountAgents {
-        account: String,
+        account: AccountEmail,
     },
     ApplicationAgents {
-        account: String,
-        application: String,
+        account: AccountEmail,
+        application: ApplicationName,
     },
     EnvironmentAgents {
-        account: String,
-        application: String,
-        environment: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
     },
     ComponentAgents {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
     },
     Agent {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
         agent: AgentOwnerLeafPattern,
     },
 }
@@ -80,35 +87,35 @@ impl AgentOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*", "*", "*", "*", "*"] => Ok(Self::AnyAgents),
             [account, "*", "*", "*", "*"] => Ok(Self::AccountAgents {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             [account, application, "*", "*", "*"] => Ok(Self::ApplicationAgents {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
             }),
             [account, application, environment, "*", "*"] => Ok(Self::EnvironmentAgents {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
             }),
             [account, application, environment, component, "*"] => Ok(Self::ComponentAgents {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
-                component: parse_concrete_segment(component)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
+                component: ComponentName(parse_concrete_segment(component)?.to_string()),
             }),
             [account, application, environment, component, agent] => Ok(Self::Agent {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
-                component: parse_concrete_segment(component)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
+                component: ComponentName(parse_concrete_segment(component)?.to_string()),
                 agent: AgentOwnerLeafPattern::parse(agent)?,
             }),
             _ => Err(value.to_string()),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::AnyAgents => None,
             Self::AccountAgents { account }
@@ -119,7 +126,7 @@ impl AgentOwnerPattern {
         }
     }
 
-    fn application_part(&self) -> Option<(&str, &str)> {
+    fn application_part(&self) -> Option<(&AccountEmail, &ApplicationName)> {
         match self {
             Self::ApplicationAgents {
                 account,
@@ -144,7 +151,7 @@ impl AgentOwnerPattern {
         }
     }
 
-    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+    fn environment_part(&self) -> Option<(&AccountEmail, &ApplicationName, &EnvironmentName)> {
         match self {
             Self::EnvironmentAgents {
                 account,
@@ -167,7 +174,14 @@ impl AgentOwnerPattern {
         }
     }
 
-    fn component_part(&self) -> Option<(&str, &str, &str, &str)> {
+    fn component_part(
+        &self,
+    ) -> Option<(
+        &AccountEmail,
+        &ApplicationName,
+        &EnvironmentName,
+        &ComponentName,
+    )> {
         match self {
             Self::ComponentAgents {
                 account,
@@ -190,16 +204,16 @@ impl AgentOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAgentOwnerPattern {
     Concrete(AgentOwnerPattern),
     EnvAgents,
     EnvComponentAgents {
-        component: String,
+        component: ComponentName,
     },
     EnvAgent {
-        component: String,
+        component: ComponentName,
         agent: AgentOwnerLeafPattern,
     },
     Self_,
@@ -219,11 +233,11 @@ impl OwnerPattern for AgentOwnerPattern {
             }
             Some(("?env", rest)) if rest.len() == 2 && rest[1] == "*" => {
                 Ok(PolymorphicAgentOwnerPattern::EnvComponentAgents {
-                    component: parse_concrete_segment(rest[0])?.to_string(),
+                    component: ComponentName(parse_concrete_segment(rest[0])?.to_string()),
                 })
             }
             Some(("?env", rest)) if rest.len() == 2 => Ok(PolymorphicAgentOwnerPattern::EnvAgent {
-                component: parse_concrete_segment(rest[0])?.to_string(),
+                component: ComponentName(parse_concrete_segment(rest[0])?.to_string()),
                 agent: AgentOwnerLeafPattern::parse(rest[1])?,
             }),
             Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicAgentOwnerPattern::Self_),

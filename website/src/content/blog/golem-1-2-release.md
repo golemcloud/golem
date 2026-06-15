@@ -45,25 +45,25 @@ _The following screenshots will give you a feel for the depth and breadth of wha
 
 _If you wish to download or Zoom into them for a better viewing experience, look at the screenshots_ [_here._](https://drive.google.com/drive/folders/1bpc1CfrqFxbp3lzczVvWSUBfdGiCOklg?usp=sharing)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055ca_67ee55fbcc031a429bfacf41_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055ca_67ee55fbcc031a429bfacf41_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055c7_67ee55fbcc031a429bfacf3b_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055c7_67ee55fbcc031a429bfacf3b_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055c6_67ee55fbcc031a429bfacf50_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055c6_67ee55fbcc031a429bfacf50_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055c9_67ee55fbcc031a429bfacf3e_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055c9_67ee55fbcc031a429bfacf3e_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055cb_67ee55fbcc031a429bfacf44_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055cb_67ee55fbcc031a429bfacf44_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055cd_67ee55fbcc031a429bfacf53_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055cd_67ee55fbcc031a429bfacf53_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055c5_67ee55fbcc031a429bfacf35_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055c5_67ee55fbcc031a429bfacf35_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055c4_67ee55fbcc031a429bfacf59_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055c4_67ee55fbcc031a429bfacf59_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055cc_67ee55fbcc031a429bfacf4d_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055cc_67ee55fbcc031a429bfacf4d_unnamed.png)
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055c8_67ee55fbcc031a429bfacf38_unnamed.png)
+![](/blog-images/68d76ba7edec7ec0b5c055c8_67ee55fbcc031a429bfacf38_unnamed.png)
 
 ## **Golem CLI**
 

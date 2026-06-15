@@ -14,14 +14,22 @@
 
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::schema::{McpToolSchema, get_input_mcp_schema, get_mcp_tool_schema};
-use golem_common::base_model::account::AccountId;
-use golem_common::base_model::agent::{
-    AgentMethod, AgentMode, AgentTypeName, DataSchema, ElementSchema, NamedElementSchemas,
-};
+use crate::mcp::invoke::constructor_param_extraction::validate_constructor_schema_for_mcp;
+use crate::mcp::schema::{McpToolSchema, get_mcp_tool_schema};
+use anyhow::Context;
+use golem_common::base_model::account::{AccountEmail, AccountId};
+use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::agent::AgentConstructor;
+use golem_common::schema::adapters::{
+    is_multimodal_schema_type, resolve_ref, schema_agent_constructor_to_legacy,
+    schema_agent_method_to_legacy,
+};
+use golem_common::schema::agent::{
+    AgentConstructorSchema, AgentMethodSchema, FieldSource, OutputSchema,
+};
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
 use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Tool};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -33,58 +41,91 @@ pub enum McpAgentCapability {
 }
 
 impl McpAgentCapability {
+    /// Build an MCP tool or resource capability for a single agent method.
+    ///
+    /// Performs export-time validation so we never advertise a capability that
+    /// would always fail at invoke time: the constructor and method schemas are
+    /// projected back to the legacy invoke carriers here (the same projection
+    /// the invoke path performs per call), which resolves every `SchemaType::Ref`
+    /// against `schema_graph` and rejects schema-only constructs. This also
+    /// guarantees that the (infallible) JSON Schema rendering below operates on
+    /// fully-resolvable refs, so the downstream `unwrap_or(false)` ref-classifier
+    /// calls cannot silently swallow a dangling/recursive ref.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_agent_method(
         account_id: &AccountId,
+        account_email: &AccountEmail,
         environment_id: &EnvironmentId,
         agent_type_name: &AgentTypeName,
         agent_mode: AgentMode,
-        method: &AgentMethod,
-        constructor: &AgentConstructor,
+        schema_graph: Arc<SchemaGraph>,
+        method: &AgentMethodSchema,
+        constructor: &AgentConstructorSchema,
         component_id: ComponentId,
-    ) -> Self {
-        let schemas = match &method.input_schema {
-            DataSchema::Tuple(schemas) | DataSchema::Multimodal(schemas) => schemas,
-        };
+    ) -> anyhow::Result<Self> {
+        let legacy_constructor = schema_agent_constructor_to_legacy(&schema_graph, constructor)
+            .with_context(|| {
+                format!(
+                    "constructor of agent type {} is not projectable to the MCP invoke model",
+                    agent_type_name.0
+                )
+            })?;
+        schema_agent_method_to_legacy(&schema_graph, method).with_context(|| {
+            format!(
+                "method {} of agent type {} is not projectable to the MCP invoke model",
+                method.name, agent_type_name.0
+            )
+        })?;
+        validate_constructor_schema_for_mcp(&legacy_constructor.input_schema).map_err(|e| {
+            anyhow::anyhow!(
+                "constructor of agent type {} cannot be supplied via MCP: {}",
+                agent_type_name.0,
+                e
+            )
+        })?;
 
-        if !schemas.elements.is_empty() {
+        let has_user_input = method
+            .input_schema
+            .fields()
+            .iter()
+            .any(|f| matches!(f.source, FieldSource::UserSupplied));
+
+        if has_user_input {
             tracing::debug!(
                 "Method {} of agent type {} has input parameters, exposing as tool",
                 method.name,
                 agent_type_name.0
             );
 
-            let constructor_schema = get_input_mcp_schema(&constructor.input_schema);
-
             let McpToolSchema {
-                mut input_schema,
+                input_schema,
                 output_schema,
-            } = get_mcp_tool_schema(method);
-
-            input_schema.prepend_schema(constructor_schema);
+            } = get_mcp_tool_schema(&schema_graph, constructor, method);
 
             let tool = Tool {
                 name: Cow::from(get_tool_name(agent_type_name, method)),
                 title: None,
                 description: Some(method.description.clone().into()),
-                input_schema: Arc::new(rmcp::model::JsonObject::from(input_schema)),
-                output_schema: output_schema
-                    .map(|internal| Arc::new(rmcp::model::JsonObject::from(internal))),
+                input_schema: Arc::new(input_schema),
+                output_schema: output_schema.map(Arc::new),
                 annotations: None,
                 execution: None,
                 icons: None,
                 meta: None,
             };
 
-            Self::Tool(Box::new(AgentMcpTool {
+            Ok(Self::Tool(Box::new(AgentMcpTool {
                 environment_id: *environment_id,
                 account_id: *account_id,
+                schema_graph,
+                account_email: account_email.clone(),
                 constructor: constructor.clone(),
-                raw_method: method.clone(),
+                method: method.clone(),
                 tool,
                 component_id,
                 agent_type_name: agent_type_name.clone(),
                 agent_mode,
-            }))
+            })))
         } else {
             tracing::debug!(
                 "Method {} of agent type {} has no input parameters, exposing as resource",
@@ -95,7 +136,7 @@ impl McpAgentCapability {
             let constructor_param_names = AgentMcpResource::constructor_param_names(constructor);
             let name = AgentMcpResource::resource_name(agent_type_name, method);
 
-            let mime_type = output_resource_mime_type(&method.output_schema);
+            let mime_type = output_resource_mime_type(&schema_graph, &method.output_schema);
 
             let kind = if constructor_param_names.is_empty() {
                 let uri = AgentMcpResource::static_uri(agent_type_name, method);
@@ -134,38 +175,47 @@ impl McpAgentCapability {
                 }
             };
 
-            Self::Resource(Box::new(AgentMcpResource {
+            Ok(Self::Resource(Box::new(AgentMcpResource {
                 kind,
                 environment_id: *environment_id,
                 account_id: *account_id,
+                schema_graph,
+                account_email: account_email.clone(),
                 constructor: constructor.clone(),
-                raw_method: method.clone(),
+                method: method.clone(),
                 component_id,
                 agent_type_name: agent_type_name.clone(),
                 agent_mode,
-            }))
+            })))
         }
     }
 }
 
-fn get_tool_name(agent_type_name: &AgentTypeName, method: &AgentMethod) -> String {
+fn get_tool_name(agent_type_name: &AgentTypeName, method: &AgentMethodSchema) -> String {
     format!("{}-{}", agent_type_name.0, method.name)
 }
 
-fn output_resource_mime_type(output_schema: &DataSchema) -> Option<String> {
-    match output_schema {
-        DataSchema::Tuple(NamedElementSchemas { elements }) => match elements.as_slice() {
-            [single] => match &single.schema {
-                ElementSchema::ComponentModel(_) => Some("application/json".to_string()),
-                ElementSchema::UnstructuredText(_) => Some("text/plain".to_string()),
-                // The actual mime type
-                ElementSchema::UnstructuredBinary(_) => None,
-            },
-            _ => None,
-        },
-
-        // Each individual resource contents could have its own mime type, so we can't assign a single mime type to the whole output
-        // when it comes to multimodal output schemas.
-        DataSchema::Multimodal(_) => None,
+/// MIME type advertised for a method exposed as an MCP resource.
+///
+/// - structured (component-model) single output → `application/json`
+/// - unstructured text output → `text/plain`
+/// - unstructured binary output → `None` (the actual MIME type is only known
+///   at response time)
+/// - multimodal / unit output → `None` (no single MIME type applies)
+fn output_resource_mime_type(graph: &SchemaGraph, output: &OutputSchema) -> Option<String> {
+    let OutputSchema::Single(ty) = output else {
+        return None;
+    };
+    // Refs are pre-validated in `from_agent_method` (via the legacy projection),
+    // so `is_multimodal_schema_type` / `resolve_ref` here cannot mask a real
+    // dangling/recursive ref; the fallbacks only guard truly unreachable cases.
+    if is_multimodal_schema_type(graph, ty).unwrap_or(false) {
+        return None;
+    }
+    match resolve_ref(graph, ty) {
+        Ok(SchemaType::Text { .. }) => Some("text/plain".to_string()),
+        Ok(SchemaType::Binary { .. }) => None,
+        Ok(_) => Some("application/json".to_string()),
+        Err(_) => None,
     }
 }

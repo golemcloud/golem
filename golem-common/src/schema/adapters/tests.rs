@@ -35,7 +35,7 @@ use crate::base_model::agent::{
     NamedElementSchemas, TextDescriptor, TextType,
 };
 use crate::schema::adapters::analysed_type::{
-    analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
+    SchemaGraphBuilder, analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
     schema_graph_to_analysed_type, schema_type_to_analysed_type,
 };
 use crate::schema::adapters::data_schema::{
@@ -86,17 +86,271 @@ fn legacy_type_id_bare_name() {
 }
 
 #[test]
-fn legacy_type_id_owner_without_name_is_error() {
-    let err = legacy_type_id(Some("a"), None).unwrap_err();
-    assert!(matches!(
-        err,
-        SchemaAdapterError::UnsupportedLegacyMetadata(_)
-    ));
+fn legacy_type_id_owner_without_name_is_anonymous() {
+    // An unanchored owner has nowhere to live in a dotted TypeId, so the
+    // adapter drops it and treats the type as anonymous inline. The
+    // TypeScript SDK emits this shape for built-in containers (`Result`,
+    // `Tuple`, ...) where `owner` is decorative provenance.
+    assert!(legacy_type_id(Some("a"), None).unwrap().is_none());
 }
 
 #[test]
 fn legacy_type_id_none() {
     assert!(legacy_type_id(None, None).unwrap().is_none());
+}
+
+#[test]
+fn analysed_type_to_schema_graph_disambiguates_same_name_distinct_bodies() {
+    // Two `AnalysedType::Variant` values share `name = "Bound"` but carry
+    // structurally different payloads. The Rust SDK emits this for every
+    // instantiation of `std::ops::Bound<T>` regardless of `T`. The adapter
+    // must keep both as distinct `SchemaTypeDef` entries instead of
+    // erroring.
+    use golem_wasm::analysis::{
+        AnalysedType, NameOptionTypePair, TypeS32, TypeS64, TypeTuple, TypeVariant,
+    };
+
+    fn bound_variant(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant {
+            name: Some("Bound".to_string()),
+            owner: None,
+            cases: vec![
+                NameOptionTypePair {
+                    name: "Included".into(),
+                    typ: Some(inner.clone()),
+                },
+                NameOptionTypePair {
+                    name: "Excluded".into(),
+                    typ: Some(inner),
+                },
+                NameOptionTypePair {
+                    name: "Unbounded".into(),
+                    typ: None,
+                },
+            ],
+        })
+    }
+
+    let ty = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![
+            bound_variant(AnalysedType::S32(TypeS32)),
+            bound_variant(AnalysedType::S64(TypeS64)),
+        ],
+    });
+
+    let graph = analysed_type_to_schema_graph(&ty).expect("conversion must succeed");
+
+    assert_eq!(graph.defs.len(), 2, "expected two distinct defs: {graph:?}");
+    // The original `Bound` keeps the bare TypeId; the second registration
+    // gets a `__g_<hash>` suffix (URI-safe, JSON-Schema-`$defs`-key-safe).
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id == TypeId::new("Bound") && d.name.as_deref() == Some("Bound")),
+        "expected bare `Bound` def: {graph:?}",
+    );
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id.0.starts_with("Bound__g_") && d.name.as_deref() == Some("Bound")),
+        "expected disambiguated `Bound__g_…` def: {graph:?}",
+    );
+
+    // Same-named legacy types with structurally identical bodies should still
+    // dedup to a single def.
+    let dedup_ty = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![
+            bound_variant(AnalysedType::S32(TypeS32)),
+            bound_variant(AnalysedType::S32(TypeS32)),
+        ],
+    });
+    let dedup_graph =
+        analysed_type_to_schema_graph(&dedup_ty).expect("same-body dedup must succeed");
+    assert_eq!(dedup_graph.defs.len(), 1);
+
+    // The fingerprint is deterministic across runs: converting the same
+    // disambiguating type twice must produce identical TypeIds.
+    let second_graph = analysed_type_to_schema_graph(&ty).expect("repeat conversion");
+    let mut first_ids: Vec<_> = graph.defs.iter().map(|d| d.id.0.clone()).collect();
+    let mut second_ids: Vec<_> = second_graph.defs.iter().map(|d| d.id.0.clone()).collect();
+    first_ids.sort();
+    second_ids.sort();
+    assert_eq!(
+        first_ids, second_ids,
+        "disambiguation fingerprint must be deterministic"
+    );
+}
+
+#[test]
+fn analysed_type_to_schema_graph_disambiguates_owner_qualified_duplicates() {
+    // Owner-qualified collision: two `Bound`s carry the same `owner` and
+    // `name` but distinct bodies. Reverse conversion of the disambiguated
+    // graph must still recover the original owner (i.e. the `__g_<hash>`
+    // suffix must not leak into the legacy `(owner, name)` pair).
+    use golem_wasm::analysis::{
+        AnalysedType, NameOptionTypePair, TypeS32, TypeS64, TypeTuple, TypeVariant,
+    };
+
+    fn bound_variant(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant {
+            name: Some("Bound".to_string()),
+            owner: Some("std::ops".to_string()),
+            cases: vec![
+                NameOptionTypePair {
+                    name: "Included".into(),
+                    typ: Some(inner.clone()),
+                },
+                NameOptionTypePair {
+                    name: "Excluded".into(),
+                    typ: Some(inner),
+                },
+                NameOptionTypePair {
+                    name: "Unbounded".into(),
+                    typ: None,
+                },
+            ],
+        })
+    }
+
+    let ty = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![
+            bound_variant(AnalysedType::S32(TypeS32)),
+            bound_variant(AnalysedType::S64(TypeS64)),
+        ],
+    });
+
+    let graph = analysed_type_to_schema_graph(&ty).expect("forward conversion");
+
+    // Both defs survive, both carry the same display `name`, and one keeps
+    // the bare base id while the other has the `__g_` marker.
+    assert_eq!(graph.defs.len(), 2);
+    assert!(
+        graph
+            .defs
+            .iter()
+            .all(|d| d.name.as_deref() == Some("Bound")),
+    );
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id == TypeId::new("std.ops.Bound"))
+    );
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id.0.starts_with("std.ops.Bound__g_")),
+    );
+
+    // Reverse conversion preserves owner/name on every reconstructed
+    // variant — the disambiguation suffix must not bleed through into the
+    // legacy metadata.
+    let reversed = schema_graph_to_analysed_type(&graph).expect("reverse conversion");
+    let golem_wasm::analysis::AnalysedType::Tuple(tuple) = reversed else {
+        panic!("expected tuple root after reverse: {reversed:?}");
+    };
+    for item in &tuple.items {
+        let golem_wasm::analysis::AnalysedType::Variant(v) = item else {
+            panic!("expected variant items in reverse: {tuple:?}");
+        };
+        assert_eq!(v.name.as_deref(), Some("Bound"));
+        assert_eq!(v.owner.as_deref(), Some("std.ops"));
+    }
+}
+
+#[test]
+fn schema_graph_builder_disambiguates_across_multiple_lower_calls() {
+    // Two same-name distinct legacy types appear in separate calls to
+    // `SchemaGraphBuilder::lower`. The builder's accumulated def table
+    // must drive disambiguation across calls — otherwise downstream code
+    // that imports each agent constructor / method root through its own
+    // call (e.g. CLI bridge generation) silently merges the second root's
+    // `Ref` into the first root's body.
+    use golem_wasm::analysis::{AnalysedType, NameOptionTypePair, TypeS32, TypeS64, TypeVariant};
+
+    fn bound_variant(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant {
+            name: Some("Bound".to_string()),
+            owner: None,
+            cases: vec![
+                NameOptionTypePair {
+                    name: "Included".into(),
+                    typ: Some(inner.clone()),
+                },
+                NameOptionTypePair {
+                    name: "Excluded".into(),
+                    typ: Some(inner),
+                },
+                NameOptionTypePair {
+                    name: "Unbounded".into(),
+                    typ: None,
+                },
+            ],
+        })
+    }
+
+    let mut builder = SchemaGraphBuilder::new();
+    let root_s32 = builder
+        .lower(&bound_variant(AnalysedType::S32(TypeS32)))
+        .unwrap();
+    let root_s64 = builder
+        .lower(&bound_variant(AnalysedType::S64(TypeS64)))
+        .unwrap();
+
+    let SchemaType::Ref { id: id_s32, .. } = &root_s32 else {
+        panic!("expected ref root, got {root_s32:?}");
+    };
+    let SchemaType::Ref { id: id_s64, .. } = &root_s64 else {
+        panic!("expected ref root, got {root_s64:?}");
+    };
+    assert_ne!(
+        id_s32, id_s64,
+        "two distinct same-name bodies imported across calls must produce distinct TypeIds",
+    );
+
+    let snapshot = builder.snapshot_graph(SchemaType::bool());
+    assert_eq!(snapshot.defs.len(), 2);
+    // Each root resolves to its own body inside the shared graph.
+    let s32_def = snapshot.lookup(id_s32).expect("s32 def present");
+    let s64_def = snapshot.lookup(id_s64).expect("s64 def present");
+    assert_ne!(
+        s32_def.body, s64_def.body,
+        "shared graph must keep the two distinct bodies",
+    );
+}
+
+#[test]
+fn analysed_type_to_schema_graph_drops_owner_without_name() {
+    // The TS SDK emits `owner = "@golemcloud/golem-ts-sdk"` on built-in
+    // containers without setting `name`. The adapter must accept this by
+    // dropping the unanchored owner and producing an inline (anonymous)
+    // schema type.
+    use golem_wasm::analysis::{AnalysedType, TypeF64, TypeResult, TypeStr};
+
+    let ty = AnalysedType::Result(TypeResult {
+        name: None,
+        owner: Some("@golemcloud/golem-ts-sdk".to_string()),
+        ok: Some(Box::new(AnalysedType::Str(TypeStr))),
+        err: Some(Box::new(AnalysedType::F64(TypeF64))),
+    });
+
+    let graph = analysed_type_to_schema_graph(&ty).expect("conversion must succeed");
+
+    assert!(graph.defs.is_empty(), "expected no defs: {graph:?}");
+    assert!(
+        matches!(graph.root, SchemaType::Result { .. }),
+        "expected inline `Result` root: {:?}",
+        graph.root,
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -295,10 +549,49 @@ fn data_schema_tuple_input_round_trip() {
 }
 
 #[test]
-fn data_schema_multimodal_to_input_is_error() {
-    let ds = DataSchema::Multimodal(NamedElementSchemas { elements: vec![] });
-    let err = data_schema_to_input_schema(&ds).unwrap_err();
-    assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+fn data_schema_multimodal_input_round_trip() {
+    // Multimodal input is supported generically: it maps to a single
+    // user-supplied `parts` field of type `list<variant<… Role::Multimodal>>`
+    // and round-trips back to the original multimodal `DataSchema`.
+    let ds = DataSchema::Multimodal(NamedElementSchemas {
+        elements: vec![
+            NamedElementSchema {
+                name: "text".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            },
+            NamedElementSchema {
+                name: "binary".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            },
+        ],
+    });
+    let input = data_schema_to_input_schema(&ds).unwrap();
+    let InputSchema::Parameters(fields) = &input;
+    assert_eq!(
+        fields.len(),
+        1,
+        "multimodal input is a single `parts` field"
+    );
+    assert_eq!(fields[0].name, "parts");
+    assert!(matches!(fields[0].source, FieldSource::UserSupplied));
+    match &fields[0].schema {
+        SchemaType::List { element, .. } => match element.as_ref() {
+            SchemaType::Variant { cases, metadata } => {
+                assert_eq!(metadata.role, Some(Role::Multimodal));
+                let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                assert_eq!(names, vec!["text", "binary"]);
+                assert!(
+                    cases.iter().all(|c| c.payload.is_some()),
+                    "every multimodal variant case carries an element payload"
+                );
+            }
+            other => panic!("expected list element to be Variant, got {other:?}"),
+        },
+        other => panic!("expected `parts` to be a List, got {other:?}"),
+    }
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let back = input_schema_to_data_schema(&graph, &input).unwrap();
+    assert_eq!(ds, back);
 }
 
 #[test]
@@ -343,7 +636,45 @@ fn data_schema_tuple_output_single_round_trip() {
 }
 
 #[test]
-fn data_schema_tuple_output_multi_round_trip() {
+fn data_schema_tuple_output_single_record_round_trip() {
+    // A method returning a single value of type Record (a real record),
+    // which must NOT be confused with the synthetic multi-output wrapper.
+    // Reproduces PR #3605 failure where the reverse mapping flattens the
+    // record into multiple legacy `DataSchema::Tuple` elements.
+    let ds = DataSchema::Tuple(NamedElementSchemas {
+        elements: vec![NamedElementSchema {
+            name: "value".into(),
+            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                element_type: record(vec![field("x", s32()), field("y", str())]),
+            }),
+        }],
+    });
+    let output = data_schema_to_output_schema(&ds).unwrap();
+    // The single-element case must NOT mark the inner record as the
+    // synthetic wrapper.
+    if let OutputSchema::Single(boxed) = &output {
+        if let SchemaType::Record { metadata, .. } = boxed.as_ref() {
+            assert_eq!(
+                metadata.role, None,
+                "single-element output record must not be marked as a synthetic wrapper"
+            );
+        } else {
+            panic!("expected Single(Record(...)), got {output:?}");
+        }
+    } else {
+        panic!("expected OutputSchema::Single, got {output:?}");
+    }
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let back = output_schema_to_data_schema(&graph, &output).unwrap();
+    assert_eq!(ds, back);
+}
+
+#[test]
+fn data_schema_tuple_output_multi_rejected() {
+    // Golem agent methods only ever return 0 or 1 output element. The
+    // schema-layer adapter must reject multi-element output tuples rather
+    // than silently round-tripping them (the reverse cannot distinguish a
+    // synthetic multi-output wrapper from a real user-defined record).
     let ds = DataSchema::Tuple(NamedElementSchemas {
         elements: vec![
             NamedElementSchema {
@@ -358,10 +689,8 @@ fn data_schema_tuple_output_multi_round_trip() {
             },
         ],
     });
-    let output = data_schema_to_output_schema(&ds).unwrap();
-    let graph = SchemaGraph::anonymous(SchemaType::bool());
-    let back = output_schema_to_data_schema(&graph, &output).unwrap();
-    assert_eq!(ds, back);
+    let err = data_schema_to_output_schema(&ds).unwrap_err();
+    assert!(matches!(err, SchemaAdapterError::ValueShapeMismatch(_)));
 }
 
 #[test]
@@ -379,14 +708,16 @@ fn data_schema_multimodal_output_round_trip() {
         ],
     });
     let output = data_schema_to_output_schema(&ds).unwrap();
-    // Forward should produce `Single(list<union<...> with Role::Multimodal>)`.
+    // Forward should produce `Single(list<variant<...> with Role::Multimodal>)`.
     match &output {
         OutputSchema::Single(boxed) => match boxed.as_ref() {
             SchemaType::List { element, .. } => match element.as_ref() {
-                SchemaType::Union { metadata, .. } => {
+                SchemaType::Variant { cases, metadata } => {
                     assert_eq!(metadata.role, Some(Role::Multimodal));
+                    let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                    assert_eq!(names, vec!["text", "binary"]);
                 }
-                other => panic!("expected list element to be Union, got {other:?}"),
+                other => panic!("expected list element to be Variant, got {other:?}"),
             },
             other => panic!("expected Single(List(...)), got {other:?}"),
         },
@@ -434,24 +765,15 @@ fn agent_type_round_trip() {
                     }),
                 }],
             }),
-            // Multi-element output preserves the field names through the
-            // round-trip (single-element forms collapse into an anonymous
-            // body and rehydrate with the fallback `value` name).
+            // Single-element output forms collapse into an anonymous body
+            // and rehydrate with the fallback `value` name; multi-element
+            // outputs are not supported (Golem agent methods only ever
+            // return 0 or 1 element).
             output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![
-                    NamedElementSchema {
-                        name: "report".into(),
-                        schema: ElementSchema::UnstructuredText(TextDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                    NamedElementSchema {
-                        name: "summary".into(),
-                        schema: ElementSchema::UnstructuredText(TextDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                ],
+                elements: vec![NamedElementSchema {
+                    name: "value".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                }],
             }),
             http_endpoint: vec![],
             read_only: None,
@@ -737,6 +1059,39 @@ fn agent_dependency_cannot_see_parent_refs() {
 }
 
 // --------------------------------------------------------------------------
+// Legacy resource handles
+// --------------------------------------------------------------------------
+
+#[test]
+fn lower_errors_on_handle() {
+    use golem_wasm::analysis::analysed_type::handle;
+    use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
+
+    let ty = handle(AnalysedResourceId(0), AnalysedResourceMode::Owned);
+    let mut builder = SchemaGraphBuilder::new();
+    let err = builder.lower(&ty).unwrap_err();
+    assert!(
+        matches!(err, SchemaAdapterError::LegacyHandle),
+        "builder must reject handles; got: {err:?}"
+    );
+}
+
+#[test]
+fn lower_errors_on_nested_handle() {
+    use golem_wasm::analysis::analysed_type::{handle, list};
+    use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
+
+    // Handles must be rejected recursively, e.g. inside a `list<handle>`.
+    let ty = list(handle(AnalysedResourceId(7), AnalysedResourceMode::Owned));
+    let mut builder = SchemaGraphBuilder::new();
+    let err = builder.lower(&ty).unwrap_err();
+    assert!(
+        matches!(err, SchemaAdapterError::LegacyHandle),
+        "builder must reject nested handles; got: {err:?}"
+    );
+}
+
+// --------------------------------------------------------------------------
 // Property-based round-trip tests over the shared legacy subset
 // --------------------------------------------------------------------------
 
@@ -880,5 +1235,252 @@ fn strip_value_and_type_names(vat: ValueAndType) -> ValueAndType {
     ValueAndType {
         value: vat.value,
         typ: strip_names(vat.typ),
+    }
+}
+
+// --------------------------------------------------------------------------
+// UntypedDataValue ↔ TypedSchemaValue
+// --------------------------------------------------------------------------
+
+mod untyped_round_trip {
+    use super::*;
+    use crate::base_model::agent::{
+        BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, TextReference,
+        TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
+        UntypedNamedElementValue,
+    };
+    use crate::schema::adapters::untyped::{
+        typed_input_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
+        untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,
+    };
+    use golem_wasm::Value;
+    use test_r::test;
+
+    fn input_schema_two_fields() -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "n".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: s32(),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "note".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+            ],
+        })
+    }
+
+    fn input_value_two_fields() -> UntypedDataValue {
+        UntypedDataValue::Tuple(vec![
+            UntypedElementValue::ComponentModel(Value::S32(7)),
+            UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "hi".into(),
+                    text_type: Some(TextType {
+                        language_code: "en".into(),
+                    }),
+                }),
+            }),
+        ])
+    }
+
+    #[test]
+    fn input_two_fields_round_trip() {
+        let value = input_value_two_fields();
+        let schema = input_schema_two_fields();
+        let (input_schema, values) =
+            untyped_data_value_to_typed_input(value.clone(), &schema).unwrap();
+        let back = typed_input_to_untyped_data_value(&input_schema, &values).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn input_multimodal_round_trip() {
+        // Multimodal input is supported: a multimodal schema + value lowers
+        // to a single `parts` parameter carrying a `list<union<…>>` value and
+        // round-trips back to the original multimodal `UntypedDataValue`.
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "summary".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+                NamedElementSchema {
+                    name: "image".into(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+        let value = UntypedDataValue::Multimodal(vec![
+            UntypedNamedElementValue {
+                name: "summary".into(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "ok".into(),
+                        text_type: None,
+                    }),
+                }),
+            },
+            UntypedNamedElementValue {
+                name: "image".into(),
+                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: vec![1, 2, 3],
+                        binary_type: BinaryType {
+                            mime_type: "image/png".into(),
+                        },
+                    }),
+                }),
+            },
+        ]);
+        let (input_schema, values) =
+            untyped_data_value_to_typed_input(value.clone(), &schema).unwrap();
+        let InputSchema::Parameters(fields) = &input_schema;
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "parts");
+        assert_eq!(values.len(), 1);
+        let back = typed_input_to_untyped_data_value(&input_schema, &values).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn input_multimodal_value_rejected() {
+        let err = untyped_data_value_to_typed_input(
+            UntypedDataValue::Multimodal(vec![]),
+            &DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::ValueShapeMismatch(_)));
+    }
+
+    #[test]
+    fn output_empty_round_trip() {
+        let value = UntypedDataValue::Tuple(vec![]);
+        let schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn output_single_component_model_round_trip() {
+        let value =
+            UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(Value::S32(42))]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "value".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: s32(),
+                }),
+            }],
+        });
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn output_multi_record_rejected() {
+        // Multi-element output tuples are not supported (Golem agent methods
+        // only ever return 0 or 1 output element); the adapter must reject
+        // them rather than silently flattening into / out of a synthetic
+        // wrapper record.
+        let value = input_value_two_fields();
+        let schema = input_schema_two_fields();
+        let err = untyped_data_value_to_typed_schema_output(value, &schema).unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::ValueShapeMismatch(_)));
+    }
+
+    #[test]
+    fn output_multimodal_round_trip() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "summary".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+                NamedElementSchema {
+                    name: "image".into(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+        let value = UntypedDataValue::Multimodal(vec![
+            UntypedNamedElementValue {
+                name: "summary".into(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "ok".into(),
+                        text_type: None,
+                    }),
+                }),
+            },
+            UntypedNamedElementValue {
+                name: "image".into(),
+                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: vec![1, 2, 3],
+                        binary_type: BinaryType {
+                            mime_type: "image/png".into(),
+                        },
+                    }),
+                }),
+            },
+        ]);
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn output_single_record_round_trip() {
+        // A method returning a single value of type Record (a real record,
+        // not a synthetic wrapper for multi-element output).
+        // Reproduces PR #3605 failure where the reverse mapping flattens the
+        // record into multiple tuple elements, breaking the SDK contract
+        // (`Tuple([single_record])`).
+        let inner_record_type = record(vec![field("u8v", u32()), field("s", str())]);
+        let inner_record_value =
+            Value::Record(vec![Value::U32(42), Value::String("sample".into())]);
+        let value = UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+            inner_record_value.clone(),
+        )]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "value".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: inner_record_type,
+                }),
+            }],
+        });
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn url_text_reference_is_lossy() {
+        let value = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
+            TextReferenceValue {
+                value: TextReference::Url(crate::base_model::agent::Url {
+                    value: "https://example.com/notes.txt".into(),
+                }),
+            },
+        )]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "note".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            }],
+        });
+        let err = untyped_data_value_to_typed_input(value, &schema).unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
     }
 }

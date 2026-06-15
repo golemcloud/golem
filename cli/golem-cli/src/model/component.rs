@@ -313,7 +313,14 @@ pub(crate) fn render_data_schema(
 fn render_element_schema(schema: &ElementSchema, lang: &SourceLanguage) -> String {
     match schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-            render_type_for_language(lang, element_type, true)
+            // Adapt legacy AnalysedType at the boundary.
+            match golem_common::schema::adapters::analysed_type_to_schema_graph(element_type) {
+                Ok(graph) => {
+                    let root = graph.root.clone();
+                    render_type_for_language(lang, &graph, &root, true)
+                }
+                Err(_) => "<unknown>".to_string(),
+            }
         }
         ElementSchema::UnstructuredText(text_descriptor) => {
             let mut result = "text".to_string();

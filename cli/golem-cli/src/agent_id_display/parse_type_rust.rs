@@ -13,45 +13,45 @@
 // limitations under the License.
 
 use super::parse_common::ParseError;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::{ResultSpec, SchemaType};
 
-pub(super) fn parse_type_rust(input: &str) -> Result<AnalysedType, ParseError> {
-    let result = parse_type_inner(input.trim())?;
-    Ok(result)
+pub(super) fn parse_type_rust(input: &str) -> Result<(SchemaGraph, SchemaType), ParseError> {
+    let ty = parse_type_inner(input.trim())?;
+    Ok((SchemaGraph::anonymous(ty.clone()), ty))
 }
 
-fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
+fn parse_type_inner(s: &str) -> Result<SchemaType, ParseError> {
     let s = s.trim();
 
     if let Some(inner) = strip_generic(s, "Vec", '<', '>') {
-        return Ok(analysed_type::list(parse_type_inner(inner)?));
+        return Ok(SchemaType::list(parse_type_inner(inner)?));
     }
     if let Some(inner) = strip_generic(s, "Option", '<', '>') {
-        return Ok(analysed_type::option(parse_type_inner(inner)?));
+        return Ok(SchemaType::option(parse_type_inner(inner)?));
     }
     if let Some(inner) = strip_generic(s, "Result", '<', '>') {
         let (ok_str, err_str) = split_at_top_level_comma(inner)?;
-        return Ok(analysed_type::result(
-            parse_type_inner(ok_str)?,
-            parse_type_inner(err_str)?,
-        ));
+        return Ok(SchemaType::result(ResultSpec {
+            ok: Some(Box::new(parse_type_inner(ok_str)?)),
+            err: Some(Box::new(parse_type_inner(err_str)?)),
+        }));
     }
 
     match s {
-        "String" => Ok(analysed_type::str()),
-        "char" => Ok(analysed_type::chr()),
-        "bool" => Ok(analysed_type::bool()),
-        "u8" => Ok(analysed_type::u8()),
-        "u16" => Ok(analysed_type::u16()),
-        "u32" => Ok(analysed_type::u32()),
-        "u64" => Ok(analysed_type::u64()),
-        "i8" => Ok(analysed_type::s8()),
-        "i16" => Ok(analysed_type::s16()),
-        "i32" => Ok(analysed_type::s32()),
-        "i64" => Ok(analysed_type::s64()),
-        "f32" => Ok(analysed_type::f32()),
-        "f64" => Ok(analysed_type::f64()),
+        "String" => Ok(SchemaType::string()),
+        "char" => Ok(SchemaType::char()),
+        "bool" => Ok(SchemaType::bool()),
+        "u8" => Ok(SchemaType::u8()),
+        "u16" => Ok(SchemaType::u16()),
+        "u32" => Ok(SchemaType::u32()),
+        "u64" => Ok(SchemaType::u64()),
+        "i8" => Ok(SchemaType::s8()),
+        "i16" => Ok(SchemaType::s16()),
+        "i32" => Ok(SchemaType::s32()),
+        "i64" => Ok(SchemaType::s64()),
+        "f32" => Ok(SchemaType::f32()),
+        "f64" => Ok(SchemaType::f64()),
         _ => Err(ParseError {
             position: 0,
             message: format!("unrecognized Rust type '{s}'"),

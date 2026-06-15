@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 /// not redundantly carry field names, case names, or named-ref identifiers —
 /// those come from the schema.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum SchemaValue {
     // Primitives
@@ -95,6 +97,8 @@ pub enum SchemaValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct VariantValuePayload {
     pub case: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +108,8 @@ pub struct VariantValuePayload {
 /// Result payload: exactly one of `Ok` / `Err` is set. Each inner option
 /// allows `result<_, _>` cases whose ok/err type is unit (no payload).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", rename_all = "kebab-case")]
 pub enum ResultValuePayload {
     Ok { value: Option<Box<SchemaValue>> },
@@ -111,6 +117,8 @@ pub enum ResultValuePayload {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct TextValuePayload {
     pub text: String,
     /// BCP-47 language tag, when known.
@@ -119,6 +127,8 @@ pub struct TextValuePayload {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct BinaryValuePayload {
     pub bytes: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,11 +137,15 @@ pub struct BinaryValuePayload {
 
 /// Signed duration as total nanoseconds.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct DurationValuePayload {
     pub nanoseconds: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct UnionValuePayload {
     /// Tag of the branch the decoder resolved, matching one of the
     /// [`super::UnionBranch::tag`] values. Carried so receivers do not have
@@ -148,6 +162,8 @@ pub struct UnionValuePayload {
 /// authority resolves on read. The literal secret material never crosses
 /// this carrier.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct SecretValuePayload {
     pub secret_ref: String,
 }
@@ -156,6 +172,8 @@ pub struct SecretValuePayload {
 /// re-acquires a live lease against `(environment_id, resource_name)` on
 /// demand.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct QuotaTokenValuePayload {
     pub environment_id: uuid::Uuid,
     pub resource_name: String,

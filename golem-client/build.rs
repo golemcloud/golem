@@ -218,19 +218,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "EnvironmentPluginGrantCreation",
                 "golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation",
             ),
-            // environment_share
-            (
-                "EnvironmentShare",
-                "golem_common::model::environment_share::EnvironmentShare",
-            ),
-            (
-                "EnvironmentShareCreation",
-                "golem_common::model::environment_share::EnvironmentShareCreation",
-            ),
-            (
-                "EnvironmentShareUpdate",
-                "golem_common::model::environment_share::EnvironmentShareUpdate",
-            ),
             // permission_share
             (
                 "PermissionShare",

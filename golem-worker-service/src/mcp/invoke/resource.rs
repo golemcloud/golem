@@ -19,7 +19,9 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
 use golem_common::model::agent::LegacyParsedAgentId;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_common::schema::adapters::{
+    schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
+};
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;
@@ -30,6 +32,24 @@ pub async fn invoke_resource(
     uri: &str,
     extracted_params: Option<Vec<ConstructorParam>>,
 ) -> Result<ReadResourceResult, ErrorData> {
+    // The MCP capability stores schema-layer constructor/method bodies; the
+    // invoke/runtime extraction code still uses the legacy `DataSchema` /
+    // `DataValue` carriers, so convert at this boundary, resolving any
+    // `SchemaType::Ref` against the agent's schema graph.
+    let legacy_constructor =
+        schema_agent_constructor_to_legacy(&mcp_resource.schema_graph, &mcp_resource.constructor)
+            .map_err(|e| {
+            tracing::error!("Failed to convert constructor schema: {}", e);
+            ErrorData::internal_error(format!("Failed to convert constructor schema: {}", e), None)
+        })?;
+    let legacy_method =
+        schema_agent_method_to_legacy(&mcp_resource.schema_graph, &mcp_resource.method).map_err(
+            |e| {
+                tracing::error!("Failed to convert method schema: {}", e);
+                ErrorData::internal_error(format!("Failed to convert method schema: {}", e), None)
+            },
+        )?;
+
     let constructor_params = match extracted_params {
         None => {
             vec![]
@@ -42,14 +62,15 @@ pub async fn invoke_resource(
                     serde_json::Value::String(param.value.clone()),
                 );
             }
-            extract_constructor_input_values(&args_map, &mcp_resource.constructor.input_schema)
-                .map_err(|e| {
+            extract_constructor_input_values(&args_map, &legacy_constructor.input_schema).map_err(
+                |e| {
                     tracing::error!("Failed to extract constructor parameters from URI: {}", e);
                     ErrorData::invalid_params(
                         format!("Failed to extract constructor parameters from URI: {}", e),
                         None,
                     )
-                })?
+                },
+            )?
         }
     };
 
@@ -82,12 +103,15 @@ pub async fn invoke_resource(
         agent_id: parsed_agent_id.to_string(),
     };
 
-    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent(mcp_resource.account_id);
+    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent(
+        mcp_resource.account_id,
+        mcp_resource.account_email.clone(),
+    );
 
     let agent_output = worker_service
         .invoke_agent(
             &agent_id,
-            Some(mcp_resource.raw_method.name.clone()),
+            Some(legacy_method.name.clone()),
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
@@ -111,11 +135,8 @@ pub async fn invoke_resource(
         _ => None,
     };
 
-    let contents = map_agent_response_to_resource_contents(
-        agent_result,
-        &mcp_resource.raw_method.output_schema,
-        uri,
-    )?;
+    let contents =
+        map_agent_response_to_resource_contents(agent_result, &legacy_method.output_schema, uri)?;
 
     Ok(ReadResourceResult { contents })
 }
@@ -170,12 +191,13 @@ fn convert_to_resource_content(
 ) -> Result<ResourceContents, ErrorData> {
     match element {
         ElementValue::ComponentModel(v) => {
-            let json_value = v.value.to_json_value().map_err(|e| {
-                ErrorData::internal_error(
-                    format!("Failed to serialize component model response: {e}"),
-                    None,
-                )
-            })?;
+            let json_value =
+                crate::mcp::invoke::component_model_value_to_json(&v.value).map_err(|e| {
+                    ErrorData::internal_error(
+                        format!("Failed to serialize component model response: {e}"),
+                        None,
+                    )
+                })?;
             Ok(ResourceContents::TextResourceContents {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
@@ -234,11 +256,14 @@ mod tests {
     use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentTypeName, BinaryDescriptor,
-        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-        NamedElementSchemas, TextDescriptor, UntypedNamedElementValue, Url as AgentUrl,
+        AgentMode, AgentTypeName, BinaryDescriptor, ComponentModelElementSchema, DataSchema,
+        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+        UntypedNamedElementValue, Url as AgentUrl,
     };
     use golem_common::model::AgentInvocationOutput;
+    use golem_common::schema::InputSchema;
+    use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
+    use golem_common::schema::graph::SchemaGraph;
     use golem_wasm::Value;
     use golem_wasm::analysis::analysed_type::str;
     use rmcp::model::{Annotated, RawResource};
@@ -448,18 +473,20 @@ mod tests {
             )),
             environment_id: harness.environment_id,
             account_id: harness.account_id,
-            constructor: AgentConstructor {
+            schema_graph: Arc::new(SchemaGraph::empty()),
+            account_email: golem_common::model::account::AccountEmail::new("mcp@golem"),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            raw_method: AgentMethod {
+            method: AgentMethodSchema {
                 name: "read".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![],
                 read_only: None,
             },

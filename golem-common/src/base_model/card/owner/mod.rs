@@ -37,6 +37,7 @@ pub trait OwnerPattern:
     + Clone
     + PartialEq
     + Eq
+    + std::hash::Hash
     + Serialize
     + for<'de> Deserialize<'de>
     + desert_rust::BinarySerializer
@@ -46,6 +47,7 @@ pub trait OwnerPattern:
         + Clone
         + PartialEq
         + Eq
+        + std::hash::Hash
         + Serialize
         + for<'de> Deserialize<'de>
         + desert_rust::BinarySerializer
@@ -63,9 +65,15 @@ pub trait OwnerPattern:
 
 #[cfg(not(feature = "full"))]
 pub trait OwnerPattern:
-    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>
+    Debug + Clone + PartialEq + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>
 {
-    type Polymorphic: Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>;
+    type Polymorphic: Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + std::hash::Hash
+        + Serialize
+        + for<'de> Deserialize<'de>;
 
     fn parse(value: &str) -> Result<Self, String>
     where

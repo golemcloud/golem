@@ -19,13 +19,17 @@ use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificati
 use crate::repo::application::ApplicationRepo;
 use crate::repo::model::application::{ApplicationRepoError, ApplicationRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
     ApplicationUpdate,
 };
+use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::{
+    ApplicationName as CardApplicationName, ApplicationResourcePattern, ApplicationVerb,
+    ClassPermissionTarget, PermissionTarget,
+};
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -104,17 +108,23 @@ impl ApplicationService {
         data: ApplicationCreation,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
-        self.account_service
-            .get(account_id, auth)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    ApplicationError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                        ApplicationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
-        auth.authorize_account_action(account_id, AccountAction::CreateApplication)?;
+        authorize_application_permission(
+            auth,
+            &account.email,
+            ApplicationVerb::Create,
+            ApplicationResourcePattern::Application(CardApplicationName(data.name.0.clone())),
+        )?;
 
         self.account_usage_service
             .ensure_application_within_limits(account_id)
@@ -124,6 +134,7 @@ impl ApplicationService {
             id: ApplicationId::new(),
             revision: ApplicationRevision::INITIAL,
             account_id,
+            account_email: account.email.clone(),
             name: data.name,
         };
 
@@ -153,7 +164,14 @@ impl ApplicationService {
     ) -> Result<Application, ApplicationError> {
         let mut application = self.get(application_id, auth).await?;
 
-        auth.authorize_account_action(application.account_id, AccountAction::UpdateApplication)?;
+        authorize_application_permission(
+            auth,
+            &application.account_email,
+            ApplicationVerb::Update,
+            ApplicationResourcePattern::Application(CardApplicationName(
+                application.name.0.clone(),
+            )),
+        )?;
 
         if update.current_revision != application.revision {
             return Err(ApplicationError::ConcurrentModification);
@@ -193,7 +211,14 @@ impl ApplicationService {
     ) -> Result<(), ApplicationError> {
         let mut application = self.get(application_id, auth).await?;
 
-        auth.authorize_account_action(application.account_id, AccountAction::DeleteApplication)?;
+        authorize_application_permission(
+            auth,
+            &application.account_email,
+            ApplicationVerb::Delete,
+            ApplicationResourcePattern::Application(CardApplicationName(
+                application.name.0.clone(),
+            )),
+        )?;
 
         if current_revision != application.revision {
             return Err(ApplicationError::ConcurrentModification);
@@ -230,8 +255,15 @@ impl ApplicationService {
             .ok_or(ApplicationError::ApplicationNotFound(application_id))?
             .try_into()?;
 
-        auth.authorize_account_action(application.account_id, AccountAction::ViewApplications)
-            .map_err(|_| ApplicationError::ApplicationNotFound(application_id))?;
+        authorize_application_permission(
+            auth,
+            &application.account_email,
+            ApplicationVerb::View,
+            ApplicationResourcePattern::Application(CardApplicationName(
+                application.name.0.clone(),
+            )),
+        )
+        .map_err(|_| ApplicationError::ApplicationNotFound(application_id))?;
 
         Ok(application)
     }
@@ -242,8 +274,19 @@ impl ApplicationService {
         name: &ApplicationName,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
-        auth.authorize_account_action(account_id, AccountAction::ViewApplications)
-            .map_err(|_err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
+        let account = self
+            .account_service
+            .get_optional(account_id, auth)
+            .await?
+            .ok_or_else(|| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
+
+        authorize_application_permission(
+            auth,
+            &account.email,
+            ApplicationVerb::View,
+            ApplicationResourcePattern::Application(CardApplicationName(name.0.clone())),
+        )
+        .map_err(|_err| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
 
         let result: Application = self
             .application_repo
@@ -262,14 +305,26 @@ impl ApplicationService {
     ) -> Result<Vec<Application>, ApplicationError> {
         // TODO: fetch account information from db as part of query
         // This is done this way to not leak existence of accounts
-        self.account_service
+        let account = self
+            .account_service
             .get_optional(account_id, auth)
             .await?
-            .ok_or(ApplicationError::Unauthorized(
-                AuthorizationError::AccountActionNotAllowed(AccountAction::ViewApplications),
-            ))?;
+            .ok_or_else(|| {
+                ApplicationError::Unauthorized(AuthorizationError::PermissionNotAllowed(Box::new(
+                    PermissionTarget::Application(ClassPermissionTarget {
+                        verb: Some(ApplicationVerb::View),
+                        owner: AccountOwnerPattern::Any,
+                        resource: ApplicationResourcePattern::Any,
+                    }),
+                )))
+            })?;
 
-        auth.authorize_account_action(account_id, AccountAction::ViewApplications)?;
+        authorize_application_permission(
+            auth,
+            &account.email,
+            ApplicationVerb::View,
+            ApplicationResourcePattern::Any,
+        )?;
 
         let result = self
             .application_repo
@@ -281,4 +336,31 @@ impl ApplicationService {
 
         Ok(result)
     }
+}
+
+fn authorize_application_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    verb: ApplicationVerb,
+    resource: ApplicationResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&application_permission_target(
+        account_email,
+        verb,
+        resource,
+    ))
+}
+
+fn application_permission_target(
+    account_email: &AccountEmail,
+    verb: ApplicationVerb,
+    resource: ApplicationResourcePattern,
+) -> PermissionTarget {
+    PermissionTarget::Application(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_email.clone(),
+        },
+        resource,
+    })
 }

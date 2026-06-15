@@ -421,7 +421,7 @@ mod tests {
     use crate::services::resource_limits::ResourceLimits;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use async_trait::async_trait;
-    use golem_common::model::account::AccountId;
+    use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
@@ -449,6 +449,7 @@ mod tests {
             env: vec![],
             environment_id,
             created_by,
+            created_by_email: AccountEmail::new("test@golem"),
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,

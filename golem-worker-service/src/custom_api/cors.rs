@@ -394,6 +394,7 @@ mod tests {
             domain: golem_common::model::domain_registration::Domain("example.com".to_string()),
             route: Arc::new(RichCompiledRoute {
                 account_id: AccountId(uuid::Uuid::nil()),
+                account_email: golem_common::model::account::AccountEmail::new("test@golem"),
                 environment_id: EnvironmentId(uuid::Uuid::nil()),
                 route_id: 1,
                 method: Method::GET,

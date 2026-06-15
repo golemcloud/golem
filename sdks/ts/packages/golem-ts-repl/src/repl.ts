@@ -31,7 +31,12 @@ import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO, setOutput, writeln } from './process';
 import { initTestSyncEventsFromEnv, writeTestSyncEvent } from './test-sync-events';
-import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
+import {
+  formatAsTable,
+  formatEvalError,
+  installGolemServiceErrorInspect,
+  logSnippetInfo,
+} from './format';
 import type * as base from '@golemcloud/golem-ts-bridge';
 import type {
   AgentInvocationRequest,
@@ -51,6 +56,7 @@ export class Repl {
 
   constructor(config: Config) {
     this.config = config;
+    installGolemServiceErrorInspect();
     initTestSyncEventsFromEnv();
     this.replCliFlags = loadReplCliFlags();
     this.overrideSnippetForNextEval = undefined;

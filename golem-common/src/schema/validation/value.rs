@@ -816,7 +816,7 @@ fn check(
             },
         },
 
-        (SchemaType::Union { spec, metadata }, SchemaValue::Union(vp)) => {
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(vp)) => {
             let branch = spec.branches.iter().find(|b| b.tag == vp.tag);
             match branch {
                 None => errors.push(ValueError::UnionUnknownTag {
@@ -828,15 +828,7 @@ fn check(
                     let mut sub_errors = Vec::new();
                     check(graph, &branch.body, &vp.body, path, &mut sub_errors);
                     errors.extend(sub_errors);
-                    // Multimodal unions carry a positional/external tag in
-                    // the outer envelope, so per-branch discriminators are
-                    // placeholders and must not be enforced here. See the
-                    // adapter in `schema/adapters/data_schema.rs`.
-                    let skip_discriminator = matches!(
-                        metadata.role,
-                        Some(crate::schema::metadata::Role::Multimodal)
-                    );
-                    if !skip_discriminator && !discriminator_matches(graph, branch, &vp.body) {
+                    if !discriminator_matches(graph, branch, &vp.body) {
                         errors.push(ValueError::UnionDiscriminatorMismatch {
                             path: path.snapshot(),
                             tag: vp.tag.clone(),

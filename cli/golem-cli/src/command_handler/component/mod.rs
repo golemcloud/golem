@@ -143,7 +143,7 @@ impl ComponentCommandHandler {
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&components);
+        self.ctx.log_handler().log_view(&components)?;
 
         Ok(())
     }
@@ -207,7 +207,7 @@ impl ComponentCommandHandler {
         for component_view in component_views {
             self.ctx
                 .log_handler()
-                .log_view(&ComponentGetView(component_view));
+                .log_view(&ComponentGetView(component_view))?;
             logln("");
         }
 
@@ -332,7 +332,7 @@ impl ComponentCommandHandler {
                     .component(&component_name)
                     .layer_properties()
                     .with_compacted_traces(),
-            )
+            )?
         }
 
         Ok(())
@@ -369,7 +369,7 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_view(&update_results);
+        self.ctx.log_handler().log_view(&update_results)?;
 
         if !update_results.failed.is_empty() {
             bail!(NonSuccessfulExit)

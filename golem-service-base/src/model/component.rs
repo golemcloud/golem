@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use applying::Apply;
-use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,9 @@ pub struct Component {
     pub hash: diff::Hash,
     pub application_id: ApplicationId,
     pub account_id: AccountId,
+    pub account_email: AccountEmail,
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -88,6 +91,9 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .map_err(|e| format!("Invalid account id: {}", e))?;
 
         let component_name = ComponentName(value.component_name);
+        let account_email = AccountEmail::new(value.account_email);
+        let application_name = ApplicationName(value.application_name);
+        let environment_name = EnvironmentName::try_from(value.environment_name)?;
         let component_size = value.component_size;
         let metadata = value
             .metadata
@@ -115,6 +121,9 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             environment_id,
             application_id,
             account_id,
+            account_email,
+            application_name,
+            environment_name,
             component_name,
             component_size,
             metadata,
@@ -135,8 +144,11 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             account_id: Some(value.account_id.into()),
+            account_email: value.account_email.into_inner(),
             application_id: Some(value.application_id.into()),
             environment_id: Some(value.environment_id.into()),
+            application_name: value.application_name.0,
+            environment_name: value.environment_name.0,
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                 value.created_at,
             ))),

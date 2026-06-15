@@ -16,7 +16,7 @@ use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
 use futures::future::ready;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
@@ -72,6 +72,7 @@ pub struct AgentConfig {
     pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
+    pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
 }
@@ -83,6 +84,7 @@ impl AgentConfig {
         current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
+        created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
     ) -> AgentConfig {
@@ -92,6 +94,7 @@ impl AgentConfig {
             current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
+            created_by_email,
             initial_agent_config,
             last_snapshot_index,
         }

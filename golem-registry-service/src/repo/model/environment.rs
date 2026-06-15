@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
@@ -21,7 +20,6 @@ use golem_common::model::account::AccountSummary;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationSummary;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::DIFF_MODEL_VERSION;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
@@ -32,7 +30,6 @@ use golem_common::model::environment::{
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
-use std::collections::BTreeSet;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -52,12 +49,13 @@ pub struct EnvironmentExtRecord {
     pub environment_id: Uuid,
     pub name: String,
     pub application_id: Uuid,
+    pub application_name: String,
     #[sqlx(flatten)]
     pub audit: AuditFields,
     pub current_revision_id: i64,
 
     pub owner_account_id: Uuid,
-    pub environment_roles_from_shares: i32,
+    pub owner_account_email: String,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -132,12 +130,13 @@ impl EnvironmentRevisionRecord {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentExtRevisionRecord {
     pub application_id: Uuid,
+    pub application_name: String,
 
     #[sqlx(flatten)]
     pub revision: EnvironmentRevisionRecord,
 
     pub owner_account_id: Uuid,
-    pub environment_roles_from_shares: i32,
+    pub owner_account_email: String,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -152,6 +151,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             id: EnvironmentId(value.revision.environment_id),
             revision: value.revision.revision_id.try_into()?,
             application_id: ApplicationId(value.application_id),
+            application_name: ApplicationName(value.application_name),
             name: EnvironmentName(value.revision.name),
             diff_model_version: DIFF_MODEL_VERSION,
             compatibility_check: value.revision.compatibility_check,
@@ -159,9 +159,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             security_overrides: value.revision.security_overrides,
 
             owner_account_id: AccountId(value.owner_account_id),
-            roles_from_active_shares: environment_roles_from_bit_vector(
-                value.environment_roles_from_shares,
-            ),
+            owner_account_email: AccountEmail::new(value.owner_account_email),
 
             current_deployment: match (
                 value.current_deployment_revision,
@@ -191,6 +189,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OptionalEnvironmentExtRevisionRecord {
     pub application_id: Uuid,
+    pub application_name: String,
     pub environment_id: Option<Uuid>,
     pub revision_id: Option<i64>,
     pub name: Option<String>,
@@ -203,7 +202,7 @@ pub struct OptionalEnvironmentExtRevisionRecord {
     pub security_overrides: Option<bool>,
 
     pub owner_account_id: Uuid,
-    pub environment_roles_from_shares: i32,
+    pub owner_account_email: String,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -216,8 +215,8 @@ impl OptionalEnvironmentExtRevisionRecord {
         AccountId(self.owner_account_id)
     }
 
-    pub fn environment_roles_from_shares(&self) -> BTreeSet<EnvironmentRole> {
-        environment_roles_from_bit_vector(self.environment_roles_from_shares)
+    pub fn owner_account_email(&self) -> AccountEmail {
+        AccountEmail::new(self.owner_account_email.clone())
     }
 
     pub fn into_revision_record(self) -> Option<EnvironmentExtRevisionRecord> {
@@ -233,6 +232,7 @@ impl OptionalEnvironmentExtRevisionRecord {
         let security_overrides = self.security_overrides?;
         Some(EnvironmentExtRevisionRecord {
             application_id: self.application_id,
+            application_name: self.application_name,
             revision: EnvironmentRevisionRecord {
                 environment_id,
                 revision_id,
@@ -249,7 +249,7 @@ impl OptionalEnvironmentExtRevisionRecord {
             },
 
             owner_account_id: self.owner_account_id,
-            environment_roles_from_shares: self.environment_roles_from_shares,
+            owner_account_email: self.owner_account_email,
 
             current_deployment_revision: self.current_deployment_revision,
             current_deployment_deployment_revision: self.current_deployment_deployment_revision,
@@ -269,7 +269,6 @@ pub struct EnvironmentWithDetailsRecord {
     pub environment_compatibility_check: bool,
     pub environment_version_check: bool,
     pub environment_security_overrides: bool,
-    pub environment_roles_from_shares: i32,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -296,9 +295,6 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 compatibility_check: value.environment_compatibility_check,
                 version_check: value.environment_version_check,
                 security_overrides: value.environment_security_overrides,
-                roles_from_active_shares: environment_roles_from_bit_vector(
-                    value.environment_roles_from_shares,
-                ),
                 current_deployment: match (
                     value.current_deployment_revision,
                     value.current_deployment_deployment_revision,

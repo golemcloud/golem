@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command_handler::log::print_structured_document;
+use crate::log::log_error;
+use crate::model::agent::stream::AgentStreamEvent;
 use crate::model::format::Format;
-use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
 use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fmt::Write;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -140,16 +141,12 @@ impl WorkerStreamOutput {
                 LogLevel::Critical => "CRITICAL",
             };
 
-            match self.format {
-                Format::Json => self.json(level_str, &context, &message),
-                Format::PrettyJson => self.pretty_json(level_str, &context, &message),
-                Format::Yaml => self.yaml(level_str, &context, &message),
-                Format::PrettyYaml => self.pretty_yaml(level_str, &context, &message),
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, level_str);
-                    self.colored(level, &format!("{prefix}[{context}] {message}"));
-                }
-            }
+            self.output_event(AgentStreamEvent::log(
+                timestamp,
+                level_str,
+                context.clone(),
+                message.clone(),
+            ));
         }
     }
 
@@ -161,8 +158,7 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            let prefix = self.prefix(timestamp, "STREAM");
-            self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
+            self.output_event(AgentStreamEvent::stream_closed(timestamp));
         }
     }
 
@@ -174,11 +170,7 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            let prefix = self.prefix(timestamp, "STREAM");
-            self.colored(
-                LogLevel::Warn,
-                &format!("{prefix}Stream failed with error: {error}"),
-            );
+            self.output_event(AgentStreamEvent::stream_error(timestamp, error));
         }
     }
 
@@ -199,11 +191,11 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            let prefix = self.prefix(timestamp, "INVOKE");
-            self.colored(
-                LogLevel::Trace,
-                &format!("{prefix}STARTED  {function_name} ({idempotency_key})"),
-            );
+            self.output_event(AgentStreamEvent::invocation_started(
+                timestamp,
+                function_name.clone(),
+                idempotency_key.clone(),
+            ));
         }
     }
 
@@ -224,11 +216,11 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            let prefix = self.prefix(timestamp, "INVOKE");
-            self.colored(
-                LogLevel::Trace,
-                &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
-            );
+            self.output_event(AgentStreamEvent::invocation_finished(
+                timestamp,
+                function_name.clone(),
+                idempotency_key.clone(),
+            ));
         }
     }
 
@@ -244,11 +236,10 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            let prefix = self.prefix(timestamp, "STREAM");
-            self.colored(
-                    LogLevel::Warn,
-                    &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed", ),
-                );
+            self.output_event(AgentStreamEvent::missed_messages(
+                timestamp,
+                number_of_missed_messages,
+            ));
         }
     }
 
@@ -300,64 +291,28 @@ impl WorkerStreamOutput {
     }
 
     fn print_stdout(&self, timestamp: Timestamp, message: &str) {
-        match self.format {
-            Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
-                self.json("STDOUT", "", message)
-            }
-            Format::Text => {
-                let prefix = self.prefix(timestamp, "STDOUT");
-                self.colored(LogLevel::Info, &format!("{prefix}{message}"));
-            }
-        }
+        self.output_event(AgentStreamEvent::stdout(timestamp, message));
     }
 
     fn print_stderr(&self, timestamp: Timestamp, message: &str) {
-        match self.format {
-            Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
-                self.json("STDERR", "", message)
-            }
-            Format::Text => {
-                let prefix = self.prefix(timestamp, "STDERR");
-                self.colored(LogLevel::Error, &format!("{prefix}{message}"));
-            }
-        }
+        self.output_event(AgentStreamEvent::stderr(timestamp, message));
     }
 
-    fn json(&self, level_or_source: &str, context: &str, message: &str) {
-        let json = self.json_value(level_or_source, context, message);
-        println!("{json}");
-    }
-
-    fn pretty_json(&self, level_or_source: &str, context: &str, message: &str) {
-        if self.options.colors {
-            let json = self.json_value(level_or_source, context, message);
-            println!("{}", to_colored_json(&json).unwrap());
+    fn output_event(&self, event: AgentStreamEvent) {
+        if self.format.is_structured() {
+            self.machine_event(&event);
         } else {
-            self.json(level_or_source, context, message);
+            self.colored(event.text_log_level(), &event.render_text(&self.options));
         }
     }
 
-    fn yaml(&self, level_or_source: &str, context: &str, message: &str) {
-        let json = self.json_value(level_or_source, context, message);
-        println!("{}", serde_yaml::to_string(&json).unwrap());
-    }
-
-    fn pretty_yaml(&self, level_or_source: &str, context: &str, message: &str) {
-        if self.options.colors {
-            let json = self.json_value(level_or_source, context, message);
-            println!("{}", to_colored_yaml(&json).unwrap());
-        } else {
-            self.yaml(level_or_source, context, message);
+    fn machine_event(&self, event: &AgentStreamEvent) {
+        // Stream events are flat structures, so rendering them cannot
+        // realistically fail; as this is called from the websocket read loop,
+        // errors are logged instead of being propagated
+        if let Err(error) = print_structured_document(self.format, self.options.colors, event) {
+            log_error(format!("Failed to render agent stream event: {error:#}"));
         }
-    }
-
-    fn json_value(&self, level_or_source: &str, context: &str, message: &str) -> serde_json::Value {
-        serde_json::json!({
-            "timestamp": Timestamp::now_utc(),
-            "level": level_or_source,
-            "context": context,
-            "message": message,
-        })
     }
 
     fn colored(&self, level: LogLevel, s: &str) {
@@ -374,22 +329,5 @@ impl WorkerStreamOutput {
         } else {
             println!("{s}");
         }
-    }
-
-    fn prefix(&self, timestamp: Timestamp, level_or_source: &str) -> String {
-        let mut result = String::new();
-        if self.options.show_timestamp {
-            let _ = write!(&mut result, "[{timestamp}] ");
-        }
-        if self.options.show_level {
-            let _ = result.write_char('[');
-            let _ = result.write_str(level_or_source);
-            for _ in level_or_source.len()..8 {
-                let _ = result.write_char(' ');
-            }
-            let _ = result.write_char(']');
-            let _ = result.write_char(' ');
-        }
-        result
     }
 }

@@ -14,9 +14,7 @@
 
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
-use crate::schema::schema_type::{
-    DiscriminatorRule, NamedFieldType, SchemaType, SecretSpec, UnionBranch, UnionSpec,
-};
+use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
 use crate::schema::validation::placement::{PlacementError, SchemaScope, validate_placement};
 use test_r::test;
 
@@ -55,16 +53,11 @@ fn multimodal_list_in_constructor_is_rejected_via_field_metadata() {
         fields: vec![NamedFieldType {
             name: "parts".to_string(),
             body: SchemaType::List {
-                element: Box::new(SchemaType::union(UnionSpec {
-                    branches: vec![UnionBranch {
-                        tag: "t".to_string(),
-                        body: SchemaType::string(),
-                        discriminator: DiscriminatorRule::Prefix {
-                            prefix: String::new(),
-                        },
-                        metadata: Default::default(),
-                    }],
-                })),
+                element: Box::new(SchemaType::variant(vec![VariantCaseType {
+                    name: "t".to_string(),
+                    payload: Some(SchemaType::string()),
+                    metadata: Default::default(),
+                }])),
                 metadata: Default::default(),
             },
             metadata: multimodal,
@@ -87,16 +80,11 @@ fn multimodal_list_in_persisted_is_allowed() {
         fields: vec![NamedFieldType {
             name: "parts".to_string(),
             body: SchemaType::List {
-                element: Box::new(SchemaType::union(UnionSpec {
-                    branches: vec![UnionBranch {
-                        tag: "t".to_string(),
-                        body: SchemaType::string(),
-                        discriminator: DiscriminatorRule::Prefix {
-                            prefix: String::new(),
-                        },
-                        metadata: Default::default(),
-                    }],
-                })),
+                element: Box::new(SchemaType::variant(vec![VariantCaseType {
+                    name: "t".to_string(),
+                    payload: Some(SchemaType::string()),
+                    metadata: Default::default(),
+                }])),
                 metadata: Default::default(),
             },
             metadata: multimodal,
@@ -119,16 +107,11 @@ fn multimodal_list_in_constructor_is_rejected_via_def_metadata() {
             id: TypeId::new("ParticipantList"),
             name: None,
             body: SchemaType::List {
-                element: Box::new(SchemaType::union(UnionSpec {
-                    branches: vec![UnionBranch {
-                        tag: "t".to_string(),
-                        body: SchemaType::string(),
-                        discriminator: DiscriminatorRule::Prefix {
-                            prefix: String::new(),
-                        },
-                        metadata: Default::default(),
-                    }],
-                })),
+                element: Box::new(SchemaType::variant(vec![VariantCaseType {
+                    name: "t".to_string(),
+                    payload: Some(SchemaType::string()),
+                    metadata: Default::default(),
+                }])),
                 metadata: multimodal,
             },
         }],
@@ -140,27 +123,22 @@ fn multimodal_list_in_constructor_is_rejected_via_def_metadata() {
 }
 
 #[test]
-fn multimodal_list_in_constructor_is_rejected_via_inner_union_metadata() {
+fn multimodal_list_in_constructor_is_rejected_via_inner_variant_metadata() {
     // Mirrors the shape produced by `data_schema_to_output_schema` for
     // multimodal: the `Role::Multimodal` marker lives on the inner
-    // `Union`, not on the wrapping `List` or its enclosing field.
-    let mut inner_union = SchemaType::union(UnionSpec {
-        branches: vec![UnionBranch {
-            tag: "text".to_string(),
-            body: SchemaType::string(),
-            discriminator: DiscriminatorRule::Prefix {
-                prefix: String::new(),
-            },
-            metadata: Default::default(),
-        }],
-    });
-    inner_union.metadata_mut().role = Some(Role::Multimodal);
+    // `Variant`, not on the wrapping `List` or its enclosing field.
+    let mut inner_variant = SchemaType::variant(vec![VariantCaseType {
+        name: "text".to_string(),
+        payload: Some(SchemaType::string()),
+        metadata: Default::default(),
+    }]);
+    inner_variant.metadata_mut().role = Some(Role::Multimodal);
 
     let graph = SchemaGraph::anonymous(SchemaType::Record {
         fields: vec![NamedFieldType {
             name: "parts".to_string(),
             body: SchemaType::List {
-                element: Box::new(inner_union),
+                element: Box::new(inner_variant),
                 metadata: Default::default(),
             },
             metadata: Default::default(),
@@ -403,17 +381,12 @@ mod agent {
             ..Default::default()
         };
 
-        let list_union = SchemaType::List {
-            element: Box::new(SchemaType::union(UnionSpec {
-                branches: vec![UnionBranch {
-                    tag: "t".to_string(),
-                    body: SchemaType::string(),
-                    discriminator: DiscriminatorRule::Prefix {
-                        prefix: "t-".into(),
-                    },
-                    metadata: MetadataEnvelope::default(),
-                }],
-            })),
+        let list_variant = SchemaType::List {
+            element: Box::new(SchemaType::variant(vec![VariantCaseType {
+                name: "t".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: MetadataEnvelope::default(),
+            }])),
             metadata: MetadataEnvelope::default(),
         };
 
@@ -421,7 +394,7 @@ mod agent {
         agent.constructor.input_schema = InputSchema::Parameters(vec![NamedField {
             name: "parts".into(),
             source: crate::schema::agent::FieldSource::UserSupplied,
-            schema: list_union,
+            schema: list_variant,
             metadata: field_md,
         }]);
 

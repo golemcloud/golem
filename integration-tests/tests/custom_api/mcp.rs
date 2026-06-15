@@ -331,7 +331,7 @@ async fn call_tool_weather_agent_string(ctx: &McpTestContext) -> anyhow::Result<
 
     assert_eq!(result["isError"], json!(false));
     assert_eq!(
-        result["structuredContent"]["return_value"],
+        result["structuredContent"]["value"],
         json!("Agent test-agent: This is a weather report for Sydney")
     );
 
@@ -435,7 +435,7 @@ async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"]["return_value"];
+    let structured = &result["structuredContent"]["value"];
 
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
@@ -459,7 +459,7 @@ async fn call_tool_singleton_string(ctx: &McpTestContext) -> anyhow::Result<()> 
 
     assert_eq!(result["isError"], json!(false));
     assert_eq!(
-        result["structuredContent"]["return_value"],
+        result["structuredContent"]["value"],
         json!("This is a weather report for Darwin.")
     );
 
@@ -480,7 +480,7 @@ async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Re
 
     assert_eq!(result["isError"], json!(false));
 
-    let location = &result["structuredContent"]["return_value"];
+    let location = &result["structuredContent"]["value"];
 
     assert_eq!(location["lat"], json!(0.0));
     assert_eq!(location["long"], json!(0.0));

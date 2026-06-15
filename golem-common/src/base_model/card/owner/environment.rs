@@ -13,22 +13,25 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
+use crate::model::application::ApplicationName;
+use crate::model::environment::EnvironmentName;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentOwnerPattern {
     AnyEnvironments,
     AccountEnvironments {
-        account: String,
+        account: AccountEmail,
     },
     ApplicationEnvironments {
-        account: String,
-        application: String,
+        account: AccountEmail,
+        application: ApplicationName,
     },
     Environment {
-        account: String,
-        application: String,
-        environment: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
     },
 }
 
@@ -37,22 +40,22 @@ impl EnvironmentOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*", "*", "*"] => Ok(Self::AnyEnvironments),
             [account, "*", "*"] => Ok(Self::AccountEnvironments {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             [account, application, "*"] => Ok(Self::ApplicationEnvironments {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
             }),
             [account, application, environment] => Ok(Self::Environment {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
             }),
             _ => Err(value.to_string()),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::AnyEnvironments => None,
             Self::AccountEnvironments { account }
@@ -61,7 +64,7 @@ impl EnvironmentOwnerPattern {
         }
     }
 
-    fn application_part(&self) -> Option<(&str, &str)> {
+    fn application_part(&self) -> Option<(&AccountEmail, &ApplicationName)> {
         match self {
             Self::ApplicationEnvironments {
                 account,
@@ -77,7 +80,7 @@ impl EnvironmentOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentOwnerPattern {
     Concrete(EnvironmentOwnerPattern),

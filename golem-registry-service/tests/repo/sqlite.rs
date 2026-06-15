@@ -21,7 +21,6 @@ use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
-use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
@@ -93,7 +92,6 @@ async fn deps(db: &SqliteDb) -> Deps {
         mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(db.pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
-        environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(db.pool.clone())),
         test_db: TestDb::Sqlite(db.pool.clone()),
@@ -177,16 +175,6 @@ async fn test_update_call_counts_batch(deps: &Deps) {
 #[test]
 async fn test_resolve_agent_type_owner_no_email(deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_owner_no_email(deps).await;
-}
-
-#[test]
-async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
-    crate::repo::common::test_resolve_agent_type_shared_with_email(deps).await;
-}
-
-#[test]
-async fn test_resolve_agent_type_no_share_returns_zero_roles(deps: &Deps) {
-    crate::repo::common::test_resolve_agent_type_no_share_returns_zero_roles(deps).await;
 }
 
 #[test]

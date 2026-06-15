@@ -21,7 +21,7 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -69,6 +69,7 @@ fn make_agent_metadata(
         env: vec![],
         environment_id,
         created_by,
+        created_by_email: AccountEmail::new("test@golem"),
         config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,

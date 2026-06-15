@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountOwnerPattern {
     Any,
-    Account { account: String },
+    Account { account: AccountEmail },
 }
 
 impl AccountOwnerPattern {
@@ -26,14 +27,14 @@ impl AccountOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*"] => Ok(Self::Any),
             [account] => Ok(Self::Account {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             _ => Err(value.to_string()),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAccountOwnerPattern {
     Concrete(AccountOwnerPattern),

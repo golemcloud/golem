@@ -15,22 +15,30 @@
 use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::base_model::account::AccountId;
-use golem_common::base_model::agent::{AgentConstructor, AgentMethod, AgentMode, AgentTypeName};
+use golem_common::base_model::account::{AccountEmail, AccountId};
+use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
+use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema};
+use golem_common::schema::graph::SchemaGraph;
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
 use rmcp::model::{CallToolResult, Tool};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AgentMcpTool {
     pub tool: Tool,
     pub environment_id: EnvironmentId,
     pub account_id: AccountId,
-    pub constructor: AgentConstructor,
-    pub raw_method: AgentMethod,
+    /// Per-agent schema graph that constructor / method `SchemaType::Ref`
+    /// bodies resolve against, both while rendering and while converting to
+    /// the still-legacy invoke types.
+    pub schema_graph: Arc<SchemaGraph>,
+    pub account_email: AccountEmail,
+    pub constructor: AgentConstructorSchema,
+    pub method: AgentMethodSchema,
     pub component_id: ComponentId,
     pub agent_type_name: AgentTypeName,
     pub agent_mode: AgentMode,

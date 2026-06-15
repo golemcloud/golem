@@ -19,6 +19,11 @@ use crate::repo::model::environment_plugin_grant::{
     EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentPluginGrantName, EnvironmentPluginGrantResourcePattern,
+    EnvironmentPluginGrantVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
@@ -26,7 +31,6 @@ use golem_common::model::environment_plugin_grant::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,7 +114,8 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        self.plugin_registration_service
+        let plugin = self
+            .plugin_registration_service
             .get_plugin(data.plugin_registration_id, false, auth)
             .await
             .map_err(|err| match err {
@@ -120,10 +125,11 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            &environment,
+            EnvironmentPluginGrantVerb::Create,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(plugin.name)),
         )?;
 
         let record = EnvironmentPluginGrantRecord::creation(
@@ -156,10 +162,13 @@ impl EnvironmentPluginGrantService {
             .get_by_id_with_environment(environment_plugin_grant_id, false, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            &environment,
+            EnvironmentPluginGrantVerb::Delete,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                grant.plugin.name,
+            )),
         )?;
 
         if grant.plugin_account.id == self.builtin_plugin_owner_account_id {
@@ -193,10 +202,11 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            &environment,
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Any,
         )?;
 
         let grants: Vec<EnvironmentPluginGrantWithDetails> = self
@@ -244,10 +254,13 @@ impl EnvironmentPluginGrantService {
             ));
         };
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            environment,
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                grant.plugin.name.clone(),
+            )),
         )
         .map_err(|_| {
             EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(environment_plugin_grant_id)
@@ -273,10 +286,11 @@ impl EnvironmentPluginGrantService {
             return Ok(HashMap::new());
         }
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            environment,
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Any,
         )?;
 
         let records = self
@@ -337,10 +351,13 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironmentPluginGrant,
+        authorize_environment_plugin_grant_permission(
+            auth,
+            &environment,
+            EnvironmentPluginGrantVerb::View,
+            EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                grant.plugin.name.clone(),
+            )),
         )
         .map_err(|_| {
             EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(environment_plugin_grant_id)
@@ -348,4 +365,23 @@ impl EnvironmentPluginGrantService {
 
         Ok((grant, environment))
     }
+}
+
+fn authorize_environment_plugin_grant_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentPluginGrantVerb,
+    resource: EnvironmentPluginGrantResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentPluginGrant(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_email.clone(),
+                application: environment.application_name.clone(),
+                environment: environment.name.clone(),
+            },
+            resource,
+        },
+    ))
 }

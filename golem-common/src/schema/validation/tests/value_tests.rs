@@ -523,38 +523,29 @@ fn union_discriminator_mismatch_is_reported() {
 }
 
 #[test]
-fn multimodal_union_skips_placeholder_discriminator_check() {
-    // Multimodal unions carry a positional tag in their outer envelope,
-    // so the per-branch discriminators are placeholders that must not
-    // be enforced by the value validator. A scalar `caption: string`
-    // body must validate successfully against a `string` branch even
-    // though its `FieldAbsent { field_name: "" }` discriminator would
-    // reject any non-object JSON shape.
-    let mut ty = SchemaType::union(UnionSpec {
-        branches: vec![
-            UnionBranch {
-                tag: "caption".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-            UnionBranch {
-                tag: "image_url".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-        ],
-    });
+fn multimodal_variant_value_validates() {
+    // Multimodal is modelled as a tagged `variant` (each part carries its
+    // alternative name), so the value validator handles it with the generic
+    // variant rules: a scalar `caption: string` body validates against the
+    // `caption` case with no discriminator machinery involved. The
+    // `Role::Multimodal` marker does not change value validation.
+    let mut ty = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "caption".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "image_url".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+    ]);
     ty.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
     let graph = SchemaGraph::anonymous(ty.clone());
-    let value = SchemaValue::Union(UnionValuePayload {
-        tag: "caption".to_string(),
-        body: Box::new(SchemaValue::String("hello world".to_string())),
+    let value = SchemaValue::Variant(VariantValuePayload {
+        case: 0,
+        payload: Some(Box::new(SchemaValue::String("hello world".to_string()))),
     });
     validate_value(&graph, &ty, &value).expect("multimodal scalar body must validate");
 }

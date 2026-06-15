@@ -13,17 +13,19 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
+use crate::model::application::ApplicationName;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ApplicationOwnerPattern {
     AnyApplications,
     AccountApplications {
-        account: String,
+        account: AccountEmail,
     },
     Application {
-        account: String,
-        application: String,
+        account: AccountEmail,
+        application: ApplicationName,
     },
 }
 
@@ -32,17 +34,17 @@ impl ApplicationOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*", "*"] => Ok(Self::AnyApplications),
             [account, "*"] => Ok(Self::AccountApplications {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             [account, application] => Ok(Self::Application {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
             }),
             _ => Err(value.to_string()),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::AnyApplications => None,
             Self::AccountApplications { account } | Self::Application { account, .. } => {
@@ -52,7 +54,7 @@ impl ApplicationOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicApplicationOwnerPattern {
     Concrete(ApplicationOwnerPattern),

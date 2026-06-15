@@ -146,7 +146,7 @@ impl ProfileCommandHandler {
             })
             .collect::<Vec<_>>();
 
-        self.ctx.log_handler().log_view(&profiles);
+        self.ctx.log_handler().log_view(&profiles)?;
 
         Ok(())
     }
@@ -184,7 +184,7 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ProfileView::from_profile(&default_profile_name, profile));
+            .log_view(&ProfileView::from_profile(&default_profile_name, profile))?;
 
         Ok(())
     }

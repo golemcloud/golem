@@ -17,12 +17,16 @@ use super::component::{ComponentError, ComponentService};
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::PluginRecord;
 use crate::repo::plugin::PluginRepo;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::{
+    AccountPluginName, AccountPluginResourcePattern, AccountPluginVerb, ClassPermissionTarget,
+    PermissionTarget,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 use golem_service_base::repo::RepoError;
@@ -89,17 +93,23 @@ impl PluginRegistrationService {
         data: PluginRegistrationCreation,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
-        self.account_service
-            .get(account_id, auth)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(account_id) => {
-                    PluginRegistrationError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(account_id) => {
+                        PluginRegistrationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
-        auth.authorize_account_action(account_id, AccountAction::RegisterPlugin)?;
+        authorize_account_plugin_permission(
+            auth,
+            &account.email,
+            AccountPluginVerb::Register,
+            AccountPluginResourcePattern::Name(AccountPluginName(data.name.clone())),
+        )?;
 
         let spec = match data.spec {
             PluginSpecDto::OplogProcessor(inner) => {
@@ -141,8 +151,18 @@ impl PluginRegistrationService {
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         let plugin = self.get_plugin(plugin_id, false, auth).await?;
+        let account = self
+            .account_service
+            .get(plugin.account_id, &AuthCtx::System)
+            .await
+            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
 
-        auth.authorize_account_action(plugin.account_id, AccountAction::DeletePlugin)?;
+        authorize_account_plugin_permission(
+            auth,
+            &account.email,
+            AccountPluginVerb::Delete,
+            AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
+        )?;
 
         let plugin = self
             .plugin_repo
@@ -171,8 +191,19 @@ impl PluginRegistrationService {
             ))?
             .try_into()?;
 
-        auth.authorize_account_action(plugin.account_id, AccountAction::ViewPlugin)
+        let account = self
+            .account_service
+            .get(plugin.account_id, &AuthCtx::System)
+            .await
             .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
+
+        authorize_account_plugin_permission(
+            auth,
+            &account.email,
+            AccountPluginVerb::View,
+            AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
+        )
+        .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
 
         Ok(plugin)
     }
@@ -184,17 +215,23 @@ impl PluginRegistrationService {
     ) -> Result<Vec<PluginRegistration>, PluginRegistrationError> {
         // Optimally this is fetched together with the plugin data instead of up front
         // see EnvironmentService::list_in_application for a better pattern
-        self.account_service
-            .get(account_id, auth)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(account_id) => {
-                    PluginRegistrationError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(account_id) => {
+                        PluginRegistrationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
-        auth.authorize_account_action(account_id, AccountAction::ViewPlugin)?;
+        authorize_account_plugin_permission(
+            auth,
+            &account.email,
+            AccountPluginVerb::View,
+            AccountPluginResourcePattern::Any,
+        )?;
 
         let plugins: Vec<PluginRegistration> = self
             .plugin_repo
@@ -238,4 +275,31 @@ impl PluginRegistrationService {
 
         Ok(())
     }
+}
+
+fn authorize_account_plugin_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    verb: AccountPluginVerb,
+    resource: AccountPluginResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&account_plugin_permission_target(
+        account_email,
+        verb,
+        resource,
+    ))
+}
+
+fn account_plugin_permission_target(
+    account_email: &AccountEmail,
+    verb: AccountPluginVerb,
+    resource: AccountPluginResourcePattern,
+) -> PermissionTarget {
+    PermissionTarget::AccountPlugin(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_email.clone(),
+        },
+        resource,
+    })
 }

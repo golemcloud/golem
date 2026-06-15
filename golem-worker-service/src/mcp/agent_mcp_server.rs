@@ -112,6 +112,7 @@ pub async fn get_agent_capabilities(
     let mut prompts = vec![];
 
     let account_id = compiled_mcp.account_id;
+    let account_email = compiled_mcp.account_email.clone();
     let environment_id = compiled_mcp.environment_id;
 
     tracing::info!(
@@ -141,6 +142,11 @@ pub async fn get_agent_capabilities(
 
         let agent_type = &registered_agent_type.agent_type;
         let component_id = registered_agent_type.implemented_by.component_id;
+        // One `SchemaGraph` per agent type, shared by its constructor and
+        // methods; `SchemaType::Ref` bodies resolve against it both while
+        // rendering MCP schemas and while converting to the legacy invoke
+        // types.
+        let schema_graph = Arc::new(agent_type.schema.clone());
 
         if let Some(prompt_hint) = &agent_type.constructor.prompt_hint {
             prompts.push(AgentMcpPrompt::from_constructor_hint(
@@ -151,32 +157,49 @@ pub async fn get_agent_capabilities(
         }
 
         for method in &agent_type.methods {
-            if let Some(prompt_hint) = &method.prompt_hint {
-                prompts.push(AgentMcpPrompt::from_method_hint(
-                    &agent_type.type_name,
-                    method,
-                    &agent_type.constructor,
-                    prompt_hint,
-                ));
-            }
-
+            // Validate (project to the legacy invoke model) before advertising
+            // anything for this method. If the capability cannot be projected,
+            // invoking it would always fail, so we skip both the tool/resource
+            // and its prompt instead of exposing a broken method.
             let agent_method_mcp = McpAgentCapability::from_agent_method(
                 &account_id,
+                &account_email,
                 &environment_id,
                 &agent_type.type_name,
                 agent_type.mode,
+                schema_graph.clone(),
                 method,
                 &agent_type.constructor,
                 component_id,
             );
 
             match agent_method_mcp {
-                McpAgentCapability::Tool(agent_mcp_tool) => {
+                Ok(McpAgentCapability::Tool(agent_mcp_tool)) => {
                     tools.push(*agent_mcp_tool);
                 }
-                McpAgentCapability::Resource(agent_mcp_resource) => {
+                Ok(McpAgentCapability::Resource(agent_mcp_resource)) => {
                     resources.push(*agent_mcp_resource);
                 }
+                Err(e) => {
+                    tracing::warn!(
+                        "Skipping method {} of agent type {} for domain {}: {:#}",
+                        method.name,
+                        agent_type.type_name.0,
+                        domain.0,
+                        e
+                    );
+                    continue;
+                }
+            }
+
+            if let Some(prompt_hint) = &method.prompt_hint {
+                prompts.push(AgentMcpPrompt::from_method_hint(
+                    &agent_type.type_name,
+                    &schema_graph,
+                    method,
+                    &agent_type.constructor,
+                    prompt_hint,
+                ));
             }
         }
     }

@@ -15,11 +15,17 @@
 pub mod error;
 
 use self::error::LimitExceededError;
+use super::account::{AccountError, AccountService};
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
 use crate::services::account_usage::error::AccountUsageError;
-use golem_common::model::account::AccountId;
-use golem_service_base::model::auth::{AccountAction, AuthCtx};
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::{
+    AccountUsageResourcePattern, AccountUsageVerb, ClassPermissionTarget, PermissionTarget,
+};
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
 use golem_service_base::repo::SqlDateTime;
 use std::collections::HashMap;
@@ -34,13 +40,27 @@ pub struct ResourceUsageUpdate {
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
+    account_service: Option<Arc<AccountService>>,
 }
 
 // TODO: do we want to add component max size limit?
 //       if so, probably should be much bigger then the previous 50mb
 impl AccountUsageService {
     pub fn new(account_usage_repo: Arc<dyn AccountUsageRepo>) -> Self {
-        Self { account_usage_repo }
+        Self {
+            account_usage_repo,
+            account_service: None,
+        }
+    }
+
+    pub fn new_with_account_service(
+        account_usage_repo: Arc<dyn AccountUsageRepo>,
+        account_service: Arc<AccountService>,
+    ) -> Self {
+        Self {
+            account_usage_repo,
+            account_service: Some(account_service),
+        }
     }
 
     pub async fn ensure_application_within_limits(
@@ -125,7 +145,8 @@ impl AccountUsageService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
-        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        auth.authorize_system_only("update account usage")?;
+
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount))
             .await?;
@@ -139,7 +160,8 @@ impl AccountUsageService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
-        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        auth.authorize_system_only("update account usage")?;
+
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount))
             .await?;
@@ -157,9 +179,10 @@ impl AccountUsageService {
         updates: HashMap<AccountId, ResourceUsageUpdate>,
         auth: &AuthCtx,
     ) -> Result<AccountResourceLimits, AccountUsageError> {
+        auth.authorize_system_only("update account usage")?;
+
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
-            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
             match self.get_account_usage(account_id, None).await {
                 Ok(mut account_usage) => {
                     // Usage can slightly exceed the monthly limit. The worker executor
@@ -214,7 +237,22 @@ impl AccountUsageService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
-        auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
+        let account_service = self
+            .account_service
+            .as_ref()
+            .ok_or_else(|| AccountUsageError::AccountNotfound(account_id))?;
+
+        let account = account_service
+            .get(account_id, &AuthCtx::System)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    AccountUsageError::AccountNotfound(account_id)
+                }
+                other => AccountUsageError::InternalError(other.into()),
+            })?;
+
+        authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
 
         let account_usage = self
             .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
@@ -263,6 +301,27 @@ impl AccountUsageService {
 
         Ok(())
     }
+}
+
+fn authorize_account_usage_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    verb: AccountUsageVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&account_usage_permission_target(account_email, verb))
+}
+
+fn account_usage_permission_target(
+    account_email: &AccountEmail,
+    verb: AccountUsageVerb,
+) -> PermissionTarget {
+    PermissionTarget::AccountUsage(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_email.clone(),
+        },
+        resource: AccountUsageResourcePattern,
+    })
 }
 
 #[cfg(test)]

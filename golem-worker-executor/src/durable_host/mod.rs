@@ -91,7 +91,7 @@ use futures::TryFutureExt;
 use futures::TryStreamExt;
 use futures::future::try_join_all;
 use golem_common::model::TransactionId;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
@@ -483,6 +483,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
+                worker_config.created_by_email,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -588,6 +589,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn created_by(&self) -> AccountId {
         self.state.created_by
+    }
+
+    pub fn created_by_email(&self) -> &AccountEmail {
+        &self.state.created_by_email
     }
 
     pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
@@ -4313,6 +4318,7 @@ struct PrivateDurableWorkerState {
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
     agent_id: Option<LegacyParsedAgentId>,
+    created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -4501,6 +4507,7 @@ impl PrivateDurableWorkerState {
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
+        created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
@@ -4578,6 +4585,7 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
+            created_by_email,
             initial_agent_config,
             config,
             cached_agent_config_retry_policies: None,

@@ -80,6 +80,7 @@ pub(super) fn schema_mirror_error(err: SchemaAdapterError) -> DeploymentError {
 mod tests {
     use super::*;
     use golem_common::model::Empty;
+    use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, AgentTypeName,
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
@@ -120,9 +121,12 @@ mod tests {
     }
 
     /// Build a representative agent type with a constructor, three
-    /// methods (empty output, multi-field tuple output, multimodal
-    /// output) and one dependency. Shapes are chosen so the schema →
-    /// legacy round trip is name-preserving.
+    /// methods (empty output, single-element output, multimodal output)
+    /// and one dependency. Shapes are chosen so the schema → legacy
+    /// round trip is name-preserving.
+    ///
+    /// Golem agent methods only ever return 0 or 1 output element, so
+    /// no method uses a multi-element output tuple.
     fn representative_agent_type() -> AgentType {
         AgentType {
             type_name: AgentTypeName("note-agent".to_string()),
@@ -149,7 +153,9 @@ mod tests {
                     description: "describe".to_string(),
                     prompt_hint: None,
                     input_schema: tuple_data_schema(&["query"]),
-                    output_schema: tuple_data_schema(&["summary", "details"]),
+                    // Single-element output: the only legal non-empty,
+                    // non-multimodal output shape.
+                    output_schema: tuple_data_schema(&["value"]),
                     http_endpoint: vec![],
                     read_only: None,
                 },
@@ -195,6 +201,9 @@ mod tests {
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: ComponentId(Uuid::new_v4()),
                 component_revision: ComponentRevision::INITIAL,
+                component_name: "test:component".to_string(),
+                account_id: AccountId(Uuid::new_v4()),
+                account_email: AccountEmail::new("test@golem.cloud"),
             },
             webhook_prefix_authority_and_path: Some("example.com/webhooks".to_string()),
         }
@@ -244,6 +253,9 @@ mod tests {
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: "test:component".to_string(),
+            account_id: AccountId(Uuid::new_v4()),
+            account_email: AccountEmail::new("test@golem.cloud"),
         };
         let resolved = ResolvedAgentType {
             registered_agent_type: RegisteredAgentType {

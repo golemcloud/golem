@@ -20,7 +20,7 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountOauth2IdentityResourcePattern {
     Any,
@@ -77,7 +77,7 @@ impl ResourcePattern for AccountOauth2IdentityResourcePattern {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountOauth2IdentityVerb {
     View,
@@ -95,7 +95,7 @@ impl VerbPattern for AccountOauth2IdentityVerb {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AccountOauth2IdentityClass;
 

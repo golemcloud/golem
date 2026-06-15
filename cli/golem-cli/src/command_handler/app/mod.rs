@@ -158,7 +158,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::BuildResult { built: true });
+                .log_view(&crate::model::text::action_result::BuildResult { built: true })?;
         }
         outcome
     }
@@ -176,7 +176,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true });
+                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true })?;
         }
         outcome
     }
@@ -360,9 +360,9 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx
-                .log_handler()
-                .log_view(&crate::model::text::action_result::DeployResultView { deployed: true });
+            self.ctx.log_handler().log_view(
+                &crate::model::text::action_result::DeployResultView { deployed: true },
+            )?;
         }
         outcome
     }
@@ -478,7 +478,7 @@ impl AppCommandHandler {
             .map(|template| TemplateDescription::from_template(&template.0))
             .collect();
 
-        self.ctx.log_handler().log_view(&templates);
+        self.ctx.log_handler().log_view(&templates)?;
 
         Ok(())
     }
@@ -492,7 +492,7 @@ impl AppCommandHandler {
 
         let agent_types = self.list_agent_types(&environment).await?;
 
-        self.ctx.log_handler().log_view(&agent_types);
+        self.ctx.log_handler().log_view(&agent_types)?;
 
         Ok(())
     }
@@ -517,7 +517,7 @@ impl AppCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentTypeView::new(&agent_type, true));
+            .log_view(&AgentTypeView::new(&agent_type, true))?;
 
         Ok(())
     }
@@ -615,7 +615,10 @@ impl AppCommandHandler {
                 "Multiple deployment found with version {}, use deployment revision instead!",
                 version.log_color_error_highlight()
             ));
-            self.ctx.log_handler().log_view(&deployments);
+            self.ctx
+                .log_handler()
+                .log_view(&deployments)
+                .map_err(DeployError::PrepareError)?;
             return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         }
 
@@ -975,7 +978,7 @@ impl AppCommandHandler {
                     Some(diff_stage) => {
                         log_action("Planned", "changes to be applied to the staging area:");
                         let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                        self.ctx.log_handler().log_view(diff_stage)
+                        self.ctx.log_handler().log_view(diff_stage)?
                     }
                     None => log_skipping_up_to_date("planning changes for staging area"),
                 }
@@ -1003,7 +1006,7 @@ impl AppCommandHandler {
                     self.ctx.log_handler().log_view(&DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
-                    });
+                    })?;
                 }
             }
         }
@@ -1554,7 +1557,7 @@ impl AppCommandHandler {
         {
             log_action("Planned", "changes to be applied to the environment:");
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
-            self.ctx.log_handler().log_view(&rollback_diff.diff)
+            self.ctx.log_handler().log_view(&rollback_diff.diff)?
         }
 
         Ok(Some(rollback_diff))
@@ -2172,7 +2175,7 @@ impl AppCommandHandler {
             application_name: deploy_diff.environment.application_name.clone(),
             environment_name: deploy_diff.environment.environment_name.clone(),
             deployment: result.clone(),
-        });
+        })?;
 
         Ok(result)
     }
@@ -2218,7 +2221,7 @@ impl AppCommandHandler {
             application_name: rollback_diff.environment.application_name.clone(),
             environment_name: rollback_diff.environment.environment_name.clone(),
             deployment: result.clone(),
-        });
+        })?;
 
         Ok(result)
     }
@@ -2695,7 +2698,7 @@ impl AppCommandHandler {
             .await
             .map_service_error()?
             .values;
-        self.ctx.log_handler().log_view(&deployments);
+        self.ctx.log_handler().log_view(&deployments)?;
 
         Ok(())
     }

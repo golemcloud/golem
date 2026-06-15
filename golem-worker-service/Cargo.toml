@@ -59,7 +59,6 @@ hyper = { workspace = true }
 include_dir = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
-openapiv3 = { workspace = true }
 openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
@@ -98,11 +97,13 @@ uuid = { workspace = true }
 
 
 [dev-dependencies]
+golem-common = { workspace = true, features = ["proptest"] }
 golem-test-framework.workspace = true
 
 assert2 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
+proptest = { workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }

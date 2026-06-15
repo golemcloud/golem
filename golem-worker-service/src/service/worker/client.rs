@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -202,6 +202,7 @@ pub trait WorkerClient: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         environment_id: EnvironmentId,
         account_id: AccountId,
+        account_email: AccountEmail,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -1177,6 +1178,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         oplog_index_cut_off: OplogIndex,
         environment_id: EnvironmentId,
         account_id: AccountId,
+        account_email: AccountEmail,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_agent_id = source_agent_id.clone();
@@ -1191,6 +1193,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     source_agent_id: Some(source_agent_id.into()),
                     target_agent_id: Some(target_agent_id.into()),
                     component_owner_account_id: Some(account_id.into()),
+                    component_owner_account_email: account_email.as_str().to_string(),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),

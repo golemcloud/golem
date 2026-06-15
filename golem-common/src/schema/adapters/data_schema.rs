@@ -22,27 +22,39 @@
 //! - `DataSchema::Tuple(elements)` as **output** → [`OutputSchema`]:
 //!   - empty → [`OutputSchema::Unit`]
 //!   - single → [`OutputSchema::Single`] with the element's schema inline
-//!   - many → [`OutputSchema::Single`] wrapped in a [`SchemaType::Record`]
-//! - `DataSchema::Multimodal(elements)` as **input** → error
-//!   (multimodal is an output-only concern).
+//!   - many → error. Golem agent methods only ever return 0 or 1 element;
+//!     multi-element output tuples are not supported.
+//! - `DataSchema::Multimodal(elements)` as **input** →
+//!   [`InputSchema::Parameters`] with a single synthetic
+//!   [`MULTIMODAL_PARTS_FIELD_NAME`] field whose schema is the structural
+//!   multimodal form `list<variant<… Role::Multimodal>>`. Multimodal is a
+//!   valid input at the model level; consumers that cannot represent it
+//!   (e.g. an agent constructor exposed over MCP) enforce that as a
+//!   separate, consumer-specific validation rather than failing here.
 //! - `DataSchema::Multimodal(elements)` as **output** →
-//!   [`OutputSchema::Single`] wrapping a `list<union<…>>` where the inner
-//!   union has one branch per named element and carries
-//!   [`Role::Multimodal`] on its metadata envelope. This matches §4.1 of
-//!   the design doc (multimodal = composable `list<union<…>>` with the
-//!   intent annotation on the inner element type).
+//!   [`OutputSchema::Single`] wrapping a `list<variant<…>>` where the inner
+//!   variant has one case per named element and carries
+//!   [`Role::Multimodal`] on its metadata envelope. Multimodal is modelled
+//!   as a tagged sum (`variant`), not an inferred-tag `union`, because each
+//!   part carries its alternative name and the alternatives are not
+//!   distinguishable by a structural discriminator.
 //!
 //! Reverse (`InputSchema` / `OutputSchema` → `DataSchema`) is partial:
 //!
-//! - [`InputSchema::Parameters`] only round-trips when every field's source
-//!   is [`FieldSource::UserSupplied`] (legacy `DataSchema` has no notion of
-//!   auto-injected fields).
+//! - [`InputSchema::Parameters`] with a single [`MULTIMODAL_PARTS_FIELD_NAME`]
+//!   field carrying the structural multimodal form
+//!   `list<variant<… Role::Multimodal>>` round-trips back to
+//!   `DataSchema::Multimodal`.
+//! - Any other [`InputSchema::Parameters`] only round-trips when every
+//!   field's source is [`FieldSource::UserSupplied`] (legacy `DataSchema`
+//!   has no notion of auto-injected fields).
 //! - [`OutputSchema::Unit`] → empty tuple.
-//! - [`OutputSchema::Single`] with a [`SchemaType::Record`] → tuple form.
-//! - [`OutputSchema::Single`] wrapping a `list<union<…>>` where the union
+//! - [`OutputSchema::Single`] wrapping a `list<variant<…>>` where the variant
 //!   carries `Role::Multimodal` → `DataSchema::Multimodal`.
-//! - Other [`OutputSchema::Single`] shapes round-trip as a single-element
-//!   tuple with the synthetic name `"value"`.
+//! - Any other [`OutputSchema::Single`] shape (including a real user-defined
+//!   [`SchemaType::Record`]) round-trips as a single-element tuple with the
+//!   synthetic name `"value"`. The single-element output is the only legal
+//!   shape, so the reverse never flattens.
 
 use crate::base_model::agent::{DataSchema, NamedElementSchema, NamedElementSchemas};
 use crate::schema::adapters::element_schema::{
@@ -52,14 +64,100 @@ use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
 use crate::schema::agent::{FieldSource, InputSchema, NamedField, OutputSchema};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::Role;
-use crate::schema::schema_type::{
-    DiscriminatorRule, NamedFieldType, SchemaType, UnionBranch, UnionSpec,
-};
+use crate::schema::schema_type::{SchemaType, VariantCaseType};
 
 /// The synthetic name used when reverse-converting an
-/// [`OutputSchema::Single`] whose body is not a record back into a
-/// single-element [`DataSchema::Tuple`].
-const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
+/// [`OutputSchema::Single`] back into a single-element [`DataSchema::Tuple`].
+///
+/// The new schema model carries no output element name (an agent method
+/// returns 0 or 1 positional value, §4.7), so consumers that need a JSON
+/// object key for the single return value (e.g. the MCP exporter, which must
+/// advertise an `object` output schema) use this same name to stay in sync
+/// with the reverse adapter.
+pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
+
+/// The synthetic parameter name used to carry a multimodal input as a single
+/// field of the structural form `list<variant<… Role::Multimodal>>` inside an
+/// [`InputSchema::Parameters`]. Shared with the consumers that render or
+/// extract multimodal inputs (e.g. the MCP exporter's `parts` array) so the
+/// name stays consistent across the forward conversion, the reverse
+/// conversion, and the protocol surface.
+pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
+
+/// Build the structural form of a multimodal schema: a `list<variant<…>>`
+/// whose inner [`SchemaType::Variant`] carries [`Role::Multimodal`] on its
+/// metadata, with one case per named element. Shared by the input and
+/// output multimodal conversions.
+///
+/// Multimodal is a *tagged* sum (each part carries its alternative name), so
+/// it is modelled as a [`SchemaType::Variant`] rather than a
+/// [`SchemaType::Union`]: a variant is self-contained and round-trips through
+/// the generic value codec for any payload type, whereas an inferred-tag
+/// union would need every alternative to be distinguishable by a structural
+/// discriminator (which multimodal parts are not). The [`Role::Multimodal`]
+/// marker only distinguishes a multimodal variant from an ordinary
+/// user-defined `list<variant<…>>`; it does not change codec or validation
+/// behaviour.
+fn multimodal_elements_to_list_variant(
+    elements: &[NamedElementSchema],
+) -> Result<SchemaType, SchemaAdapterError> {
+    if elements.is_empty() {
+        return Err(SchemaAdapterError::LossySchemaType(
+            "multimodal DataSchema has no alternatives".into(),
+        ));
+    }
+    let cases = elements
+        .iter()
+        .map(|e| {
+            let body = element_schema_to_schema_type(&e.schema)?;
+            Ok(VariantCaseType {
+                name: e.name.clone(),
+                payload: Some(body),
+                metadata: Default::default(),
+            })
+        })
+        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+    let mut variant = SchemaType::variant(cases);
+    variant.metadata_mut().role = Some(Role::Multimodal);
+    Ok(SchemaType::list(variant))
+}
+
+/// If `ty` (resolved against `graph`) is the structural multimodal form
+/// `list<variant<… Role::Multimodal>>`, return the variant's cases (one per
+/// named alternative, with the case `name` carrying the alternative name).
+///
+/// Public, graph-aware detector used by consumers (e.g. the MCP exporter)
+/// that need to special-case multimodal schemas.
+pub fn multimodal_variant_cases<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> Result<Option<&'a [VariantCaseType]>, SchemaAdapterError> {
+    as_multimodal_list_variant(graph, ty)
+}
+
+/// Whether `ty` (resolved against `graph`) is the structural multimodal form
+/// `list<variant<… Role::Multimodal>>`.
+pub fn is_multimodal_schema_type(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+) -> Result<bool, SchemaAdapterError> {
+    Ok(as_multimodal_list_variant(graph, ty)?.is_some())
+}
+
+/// If `ty` (resolved against `graph`) is the structural multimodal form
+/// `list<variant<… Role::Multimodal>>`, return the variant's cases.
+pub(crate) fn as_multimodal_list_variant<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> Result<Option<&'a [VariantCaseType]>, SchemaAdapterError> {
+    if let SchemaType::List { element, .. } = resolve_ref(graph, ty)?
+        && let SchemaType::Variant { cases, metadata } = resolve_ref(graph, element)?
+        && metadata.role == Some(Role::Multimodal)
+    {
+        return Ok(Some(cases));
+    }
+    Ok(None)
+}
 
 // --------------------------------------------------------------------------
 // Forward: DataSchema → InputSchema / OutputSchema
@@ -67,8 +165,11 @@ const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 
 /// Convert a [`DataSchema`] in input position into an [`InputSchema`].
 ///
-/// Fails if `schema` is [`DataSchema::Multimodal`]; multimodal is an
-/// output-only concept.
+/// - `Tuple` → [`InputSchema::Parameters`] with one user-supplied field per
+///   named element.
+/// - `Multimodal` → [`InputSchema::Parameters`] carrying a single
+///   user-supplied [`MULTIMODAL_PARTS_FIELD_NAME`] field whose schema is the
+///   structural form `list<variant<… Role::Multimodal>>`.
 pub fn data_schema_to_input_schema(schema: &DataSchema) -> Result<InputSchema, SchemaAdapterError> {
     match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => {
@@ -83,9 +184,13 @@ pub fn data_schema_to_input_schema(schema: &DataSchema) -> Result<InputSchema, S
                 .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
             Ok(InputSchema::Parameters(fields))
         }
-        DataSchema::Multimodal(_) => Err(SchemaAdapterError::LossySchemaType(
-            "multimodal DataSchema is output-only and cannot become an InputSchema".into(),
-        )),
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
+            let parts = multimodal_elements_to_list_variant(elements)?;
+            Ok(InputSchema::Parameters(vec![NamedField::user_supplied(
+                MULTIMODAL_PARTS_FIELD_NAME,
+                parts,
+            )]))
+        }
     }
 }
 
@@ -94,10 +199,10 @@ pub fn data_schema_to_input_schema(schema: &DataSchema) -> Result<InputSchema, S
 /// - `Tuple` arity 0 → [`OutputSchema::Unit`].
 /// - `Tuple` arity 1 → [`OutputSchema::Single`] containing the element's
 ///   schema directly.
-/// - `Tuple` arity ≥ 2 → [`OutputSchema::Single`] wrapping a
-///   [`SchemaType::Record`].
+/// - `Tuple` arity ≥ 2 → error. Golem agent methods only ever return 0 or 1
+///   element; multi-element output tuples are not supported.
 /// - `Multimodal` (any arity) → [`OutputSchema::Single`] wrapping a
-///   `list<union<…>>` whose inner [`SchemaType::Union`] metadata carries
+///   `list<variant<…>>` whose inner [`SchemaType::Variant`] metadata carries
 ///   [`Role::Multimodal`].
 pub fn data_schema_to_output_schema(
     schema: &DataSchema,
@@ -108,51 +213,15 @@ pub fn data_schema_to_output_schema(
             [single] => Ok(OutputSchema::Single(Box::new(
                 element_schema_to_schema_type(&single.schema)?,
             ))),
-            many => {
-                let fields = many
-                    .iter()
-                    .map(|e| {
-                        Ok(NamedFieldType {
-                            name: e.name.clone(),
-                            body: element_schema_to_schema_type(&e.schema)?,
-                            metadata: Default::default(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-                Ok(OutputSchema::Single(Box::new(SchemaType::record(fields))))
-            }
+            many => Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                "output DataSchema with {} tuple elements is not supported; \
+                 Golem agent methods must declare 0 or 1 output element",
+                many.len()
+            ))),
         },
-        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            if elements.is_empty() {
-                return Err(SchemaAdapterError::LossySchemaType(
-                    "multimodal DataSchema has no alternatives".into(),
-                ));
-            }
-            let branches = elements
-                .iter()
-                .map(|e| {
-                    let body = element_schema_to_schema_type(&e.schema)?;
-                    Ok(UnionBranch {
-                        tag: e.name.clone(),
-                        body,
-                        // Multimodal unions are not resolved by the generic
-                        // inferred-tag discriminator pipeline: the
-                        // alternative is carried positionally inside the
-                        // outer `list` envelope. The validator special-cases
-                        // `Role::Multimodal` and skips per-branch structural
-                        // discriminator checks, so this slot only needs to
-                        // satisfy the type; pick the cheapest legal rule.
-                        discriminator: DiscriminatorRule::FieldAbsent {
-                            field_name: String::new(),
-                        },
-                        metadata: Default::default(),
-                    })
-                })
-                .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-            let mut union = SchemaType::union(UnionSpec { branches });
-            union.metadata_mut().role = Some(Role::Multimodal);
-            Ok(OutputSchema::Single(Box::new(SchemaType::list(union))))
-        }
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => Ok(OutputSchema::Single(
+            Box::new(multimodal_elements_to_list_variant(elements)?),
+        )),
     }
 }
 
@@ -170,6 +239,16 @@ pub fn input_schema_to_data_schema(
 ) -> Result<DataSchema, SchemaAdapterError> {
     match input {
         InputSchema::Parameters(fields) => {
+            // Structural multimodal input: a single user-supplied field whose
+            // schema is `list<variant<… Role::Multimodal>>` projects back to a
+            // legacy multimodal `DataSchema` (one alternative per case).
+            if let [field] = fields.as_slice()
+                && matches!(field.source, FieldSource::UserSupplied)
+                && let Some(cases) = as_multimodal_list_variant(graph, &field.schema)?
+            {
+                let elements = multimodal_cases_to_elements(graph, cases)?;
+                return Ok(DataSchema::Multimodal(NamedElementSchemas { elements }));
+            }
             let elements = fields
                 .iter()
                 .map(|f| {
@@ -195,15 +274,14 @@ pub fn input_schema_to_data_schema(
 /// Reverse: project an [`OutputSchema`] back into a legacy [`DataSchema`].
 ///
 /// - `Unit` → empty `DataSchema::Tuple`.
-/// - `Single(Record)` → `DataSchema::Tuple` with one named element per
-///   record field.
-/// - `Single(list<union<…>>)` whose inner union metadata role is
+/// - `Single(list<variant<…>>)` whose inner variant metadata role is
 ///   [`Role::Multimodal`] → `DataSchema::Multimodal` (one alternative per
-///   union branch, using the branch's tag as the alternative name).
-/// - any other `Single(_)` → `DataSchema::Tuple` with a single
+///   variant case, using the case's name as the alternative name).
+/// - any other `Single(_)` (including a real user-defined
+///   [`SchemaType::Record`]) → `DataSchema::Tuple` with a single
 ///   [`FALLBACK_OUTPUT_FIELD_NAME`] element. This is inherently lossy
-///   because non-record single outputs in the schema layer carry no field
-///   name, so they all rehydrate under the same synthetic name.
+///   because the schema layer carries no field name for the single output,
+///   so single outputs all rehydrate under the same synthetic name.
 pub fn output_schema_to_data_schema(
     graph: &SchemaGraph,
     output: &OutputSchema,
@@ -212,39 +290,45 @@ pub fn output_schema_to_data_schema(
         OutputSchema::Unit => Ok(DataSchema::Tuple(NamedElementSchemas { elements: vec![] })),
         OutputSchema::Single(top_ty) => match resolve_ref(graph, top_ty)? {
             SchemaType::List { element, .. } => {
-                // Multimodal output: `list<union<...> with Role::Multimodal>`.
-                if let SchemaType::Union { spec, metadata } = resolve_ref(graph, element)?
+                // Multimodal output: `list<variant<...> with Role::Multimodal>`.
+                if let SchemaType::Variant { cases, metadata } = resolve_ref(graph, element)?
                     && metadata.role == Some(Role::Multimodal)
                 {
-                    let elements = spec
-                        .branches
-                        .iter()
-                        .map(|UnionBranch { tag, body, .. }| {
-                            Ok(NamedElementSchema {
-                                name: tag.clone(),
-                                schema: schema_type_to_element_schema(graph, body)?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+                    let elements = multimodal_cases_to_elements(graph, cases)?;
                     return Ok(DataSchema::Multimodal(NamedElementSchemas { elements }));
                 }
                 synthetic_single_element(graph, top_ty)
             }
-            SchemaType::Record { fields, .. } => {
-                let elements = fields
-                    .iter()
-                    .map(|f| {
-                        Ok(NamedElementSchema {
-                            name: f.name.clone(),
-                            schema: schema_type_to_element_schema(graph, &f.body)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-                Ok(DataSchema::Tuple(NamedElementSchemas { elements }))
-            }
-            other => synthetic_single_element(graph, other),
+            _ => synthetic_single_element(graph, top_ty),
         },
     }
+}
+
+/// Project the cases of a multimodal `list<variant<… Role::Multimodal>>`
+/// back into legacy [`NamedElementSchema`]s: each case becomes an alternative
+/// named after the case, schema taken from the case payload. A payload-less
+/// case cannot occur in a well-formed multimodal schema (every alternative
+/// carries an element schema), so it is rejected.
+fn multimodal_cases_to_elements(
+    graph: &SchemaGraph,
+    cases: &[VariantCaseType],
+) -> Result<Vec<NamedElementSchema>, SchemaAdapterError> {
+    cases
+        .iter()
+        .map(|case| {
+            let body = case.payload.as_ref().ok_or_else(|| {
+                SchemaAdapterError::LossySchemaType(format!(
+                    "multimodal variant case `{}` has no payload; legacy DataSchema \
+                     multimodal alternatives must carry an element schema",
+                    case.name
+                ))
+            })?;
+            Ok(NamedElementSchema {
+                name: case.name.clone(),
+                schema: schema_type_to_element_schema(graph, body)?,
+            })
+        })
+        .collect::<Result<Vec<_>, SchemaAdapterError>>()
 }
 
 fn synthetic_single_element(

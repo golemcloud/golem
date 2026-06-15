@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::account::{AccountId, AccountSummary};
-use crate::base_model::application::{ApplicationId, ApplicationSummary};
-use crate::base_model::auth::EnvironmentRole;
+use crate::base_model::account::{AccountEmail, AccountId, AccountSummary};
+use crate::base_model::application::{ApplicationId, ApplicationName, ApplicationSummary};
 use crate::base_model::deployment::{
     CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion,
 };
@@ -22,7 +21,6 @@ use crate::base_model::diff::Hash;
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
-use std::collections::BTreeSet;
 use std::str::FromStr;
 
 newtype_uuid!(
@@ -36,6 +34,8 @@ declare_revision!(EnvironmentRevision);
 
 declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
     pub struct EnvironmentName(pub String);
 }
 
@@ -91,6 +91,7 @@ declare_structs! {
         pub id: EnvironmentId,
         pub revision: EnvironmentRevision,
         pub application_id: ApplicationId,
+        pub application_name: ApplicationName,
         pub name: EnvironmentName,
         pub diff_model_version: u32,
         pub compatibility_check: bool,
@@ -98,9 +99,7 @@ declare_structs! {
         pub security_overrides: bool,
 
         pub owner_account_id: AccountId,
-        /// Roles in the environment that were given to the current user by shares. The owner always has full access.
-        /// Note that even if getting a deleted environment only non-deleted shares are considered.
-        pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
+        pub owner_account_email: AccountEmail,
 
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }
@@ -113,7 +112,6 @@ declare_structs! {
         pub compatibility_check: bool,
         pub version_check: bool,
         pub security_overrides: bool,
-        pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }
 

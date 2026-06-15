@@ -43,7 +43,7 @@ use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
@@ -180,6 +180,9 @@ pub trait WorkerCtx:
 
     /// Gets the account created this worker
     fn created_by(&self) -> AccountId;
+
+    /// Gets the email of the account that created this worker
+    fn created_by_email(&self) -> &AccountEmail;
 
     fn component_metadata(&self) -> &Component;
 

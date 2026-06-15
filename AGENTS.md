@@ -75,6 +75,7 @@ Load these skills for guided workflows on complex tasks:
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
+| `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
@@ -118,7 +119,6 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-registry-service/` - Component registry
 - `golem-common/` - Shared types and utilities
 - `golem-wasm/` - WASM utilities
-- `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
 - `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala, MoonBit) - **not part of main build flow, see SDK-specific AGENTS.md**
 - `docs/` - User-facing documentation site at [learn.golem.cloud](https://learn.golem.cloud) (Next.js / Nextra / Bun) - **not part of main build flow, see `docs/AGENTS.md`**

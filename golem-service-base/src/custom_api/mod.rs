@@ -18,7 +18,7 @@ pub mod router;
 use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod, ReadOnlyConfig};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -234,6 +234,7 @@ pub enum MethodParameter {
 #[derive(Debug)]
 pub struct CompiledRoutes {
     pub account_id: AccountId,
+    pub account_email: AccountEmail,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,

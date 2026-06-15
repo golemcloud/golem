@@ -55,7 +55,7 @@ use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::Streaming;
 use tracing::debug;
@@ -171,7 +171,6 @@ impl TestDsl for TestWorkerExecutor {
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
-                        HashSet::new(),
                         Some(original_source_hash),
                     )
                     .await
@@ -186,7 +185,6 @@ impl TestDsl for TestWorkerExecutor {
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
-                        HashSet::new(),
                         Some(original_source_hash),
                     )
                     .await
@@ -1148,6 +1146,7 @@ impl TestDsl for TestWorkerExecutor {
                 oplog_index_cutoff: oplog_index.into(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
+                component_owner_account_email: "test@golem".to_string(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
             })

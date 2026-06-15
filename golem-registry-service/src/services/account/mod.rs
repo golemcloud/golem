@@ -25,11 +25,16 @@ use crate::services::registry_change_notifier::{
 };
 use anyhow::anyhow;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
+    Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
+    AccountUpdate,
+};
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
+use golem_common::model::card::{
+    AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
+    SystemResourcePattern, SystemVerb,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, GlobalAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -122,7 +127,7 @@ impl AccountService {
         account: AccountCreation,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
 
         let id = AccountId::new();
         info!("Creating account: {}", id);
@@ -136,9 +141,9 @@ impl AccountService {
         update: AccountUpdate,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
+        let mut account: Account = self.load(account_id).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::UpdateAccount)?;
+        authorize_account_permission(auth, &account.email, AccountVerb::Update)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -159,9 +164,9 @@ impl AccountService {
         update: AccountSetPlan,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
+        let mut account: Account = self.load(account_id).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::SetPlan)?;
+        authorize_account_permission(auth, &account.email, AccountVerb::SetPlan)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -171,7 +176,7 @@ impl AccountService {
 
         // check that plan exists
         self.plan_service
-            .get(&update.plan, auth)
+            .get(&update.plan, &AuthCtx::System)
             .await
             .map_err(|e| match e {
                 PlanError::PlanNotFound(plan_id) => AccountError::PlanByIdNotFound(plan_id),
@@ -189,9 +194,9 @@ impl AccountService {
         current_revision: AccountRevision,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
+        let mut account: Account = self.load(account_id).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::DeleteAccount)?;
+        authorize_account_permission(auth, &account.email, AccountVerb::Delete)?;
 
         if current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -223,15 +228,9 @@ impl AccountService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_account_action(account_id, AccountAction::ViewAccount)
+        let account = self.load(account_id).await?;
+        authorize_account_permission(auth, &account.email, AccountVerb::View)
             .map_err(|_| AccountError::AccountNotFound(account_id))?;
-
-        let account = self
-            .account_repo
-            .get_by_id(account_id.0)
-            .await?
-            .ok_or(AccountError::AccountNotFound(account_id))?
-            .try_into()?;
 
         Ok(account)
     }
@@ -250,7 +249,7 @@ impl AccountService {
             ))?
             .try_into()?;
 
-        auth.authorize_account_action(account.id, AccountAction::ViewAccount)
+        authorize_account_permission(auth, &account.email, AccountVerb::View)
             .map_err(|_| AccountError::AccountByEmailNotFound(account_email.to_string()))?;
 
         Ok(account)
@@ -275,14 +274,14 @@ impl AccountService {
         plan_id: PlanId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
 
         if id == AccountId::SYSTEM {
             Err(anyhow!("Cannot create account with reserved account id"))?
         };
 
-        let email = account.email.into_inner();
-        let account_root_card = account_root_card_record(id, &account.roles);
+        let email = account.email.clone().into_inner();
+        let account_root_card = account_root_card_record(id, account.email.clone(), &account.roles);
 
         let record = AccountRevisionRecord::new(
             id,
@@ -302,6 +301,15 @@ impl AccountService {
             }
             Err(other) => Err(other)?,
         }
+    }
+
+    async fn load(&self, account_id: AccountId) -> Result<Account, AccountError> {
+        self.account_repo
+            .get_by_id(account_id.0)
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id))?
+            .try_into()
+            .map_err(AccountError::from)
     }
 
     async fn update_internal(
@@ -327,4 +335,30 @@ impl AccountService {
             Err(other) => Err(other)?,
         }
     }
+}
+
+fn authorize_account_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    verb: AccountVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&account_permission_target(account_email, verb))
+}
+
+fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
+    }))
+}
+
+fn account_permission_target(account_email: &AccountEmail, verb: AccountVerb) -> PermissionTarget {
+    PermissionTarget::Account(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_email.clone(),
+        },
+        resource: AccountResourcePattern,
+    })
 }

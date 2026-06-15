@@ -3,7 +3,8 @@ use crate::app::{TestContext, check_component_metadata, cmd, flag, pattern};
 
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
-use indoc::indoc;
+use golem_cli::versions;
+use indoc::{formatdoc, indoc};
 use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::time::Duration;
@@ -21,6 +22,48 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(outputs.stderr_contains(pattern::HELP_USAGE));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
+}
+
+#[test]
+async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
+    let app_name = "test-app-help-no-upgrade";
+
+    let mut ctx = TestContext::new();
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let old_manifest = indoc! {"
+        manifestVersion: 1.5.0
+
+        app: test-app-help-no-upgrade
+
+        environments:
+          local:
+            server: local
+            componentPresets: debug
+
+        components:
+          test-app-help-no-upgrade:ts-main:
+            templates: ts
+    "};
+    fs::write_str(&manifest_path, old_manifest).unwrap();
+
+    // Help runs (without --yes, in a non-interactive shell) must not plan or
+    // apply manifest upgrades, while still showing application help
+    let outputs = ctx.cli(cmd::NO_ARGS).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
+    assert!(!outputs.stderr_contains("Planned automatic application manifest upgrade"));
+    assert!(!outputs.stderr_contains("This action requires confirmation"));
+    assert!(!outputs.stdout_contains("Planned automatic application manifest upgrade"));
+
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), old_manifest);
 }
 
 #[test]
@@ -616,8 +659,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-name
 
@@ -642,7 +685,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
                       targetPath: /src/lib.rs
                       permissions: read-write
 
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -668,8 +711,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-name
 
@@ -694,7 +737,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
                       targetPath: /src/lib.rs
                       permissions: read-only
 
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -788,9 +831,9 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {
+        formatdoc! {
             r#"
-            manifestVersion: 1.5.0
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-reset-incompatible
 
@@ -807,7 +850,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
               CounterAgent:
                 config:
                   value: 1
-            "#
+            "#,
+            MANIFEST_VERSION = versions::sdk::MANIFEST
         },
     )
     .unwrap();
@@ -864,9 +908,9 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {
+        formatdoc! {
             r#"
-            manifestVersion: 1.5.0
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-reset-incompatible
 
@@ -886,7 +930,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: first
-            "#
+            "#,
+            MANIFEST_VERSION = versions::sdk::MANIFEST
         },
     )
     .unwrap();
@@ -937,9 +982,9 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {
+        formatdoc! {
             r#"
-            manifestVersion: 1.5.0
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-reset-incompatible
 
@@ -959,7 +1004,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: 42
-            "#
+            "#,
+            MANIFEST_VERSION = versions::sdk::MANIFEST
         },
     )
     .unwrap();
@@ -1092,8 +1138,8 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-component-level-ifs
 
@@ -1111,7 +1157,7 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
                     - sourcePath: src/main.ts
                       targetPath: /main.ts
                       permissions: read-only
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -1154,8 +1200,8 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-component-level-ifs
 
@@ -1179,7 +1225,7 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
                 - sourcePath: src/main.ts
                   targetPath: /sample-main.ts
                   permissions: read-only
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 
@@ -1219,8 +1265,8 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-            manifestVersion: 1.5.0
+        formatdoc! {"
+            manifestVersion: {MANIFEST_VERSION}
 
             app: test-app-component-level-ifs
 
@@ -1244,7 +1290,7 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
                 - sourcePath: src/sample-agent.ts
                   targetPath: /shared.ts
                   permissions: read-only
-        "},
+        ", MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
 

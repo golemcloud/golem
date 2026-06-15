@@ -17,8 +17,8 @@ use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, Pr
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
-use crate::model::GuestLanguage;
 use crate::model::format::Format;
+use crate::model::repl::ReplLanguage;
 use crate::model::worker::RawAgentId;
 use anyhow::bail;
 use colored::Colorize;
@@ -34,7 +34,6 @@ use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 use itertools::Itertools;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -69,6 +68,16 @@ impl InteractiveHandler {
             yes,
             true,
             "Application manifest was loaded with warnings.\nDo you want to continue?",
+            None,
+        )
+    }
+
+    // NOTE: static because happens during context construction, before Context exists.
+    pub fn confirm_manifest_upgrade_plan_apply(yes: bool) -> anyhow::Result<bool> {
+        confirm(
+            yes,
+            true,
+            "The above application manifest upgrade steps will now be applied. Do you want to continue?",
             None,
         )
     }
@@ -274,7 +283,14 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         let rendered_agent_name = match parsed_agent_id {
             Some(parsed) if source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, source_language)
+                // Adapt LegacyParsedAgentId at the boundary into the schema-layer
+                // ParsedAgentId before calling the schema-typed renderer.
+                match golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed) {
+                    Ok(parsed_schema) => {
+                        crate::agent_id_display::render_agent_id(&parsed_schema, source_language)
+                    }
+                    Err(_) => agent_name.0.clone(),
+                }
             }
             _ => agent_name.0.clone(),
         };
@@ -401,22 +417,9 @@ impl InteractiveHandler {
 
     pub fn select_repl_language(
         &self,
-        used_languages: &HashSet<GuestLanguage>,
-    ) -> anyhow::Result<GuestLanguage> {
-        Ok(Select::new(
-            "Select REPL language:",
-            used_languages
-                .iter()
-                .cloned()
-                .sorted()
-                .chain(
-                    GuestLanguage::iter()
-                        .filter(|lang| !used_languages.contains(lang))
-                        .sorted(),
-                )
-                .collect::<Vec<_>>(),
-        )
-        .prompt()?)
+        repl_languages: Vec<ReplLanguage>,
+    ) -> anyhow::Result<ReplLanguage> {
+        Ok(Select::new("Select REPL language:", repl_languages).prompt()?)
     }
 
     pub fn select_new_app_name(

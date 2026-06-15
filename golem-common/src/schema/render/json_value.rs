@@ -293,12 +293,8 @@ fn encode(
             encode_result(r, graph, spec, payload)
         }
 
-        (SchemaType::Union { spec, metadata }, SchemaValue::Union(payload)) => {
-            let multimodal = matches!(
-                metadata.role,
-                Some(crate::schema::metadata::Role::Multimodal)
-            );
-            encode_union(r, graph, spec, payload, multimodal)
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(payload)) => {
+            encode_union(r, graph, spec, payload)
         }
 
         (SchemaType::Future { .. }, _) | (SchemaType::Stream { .. }, _) => Err(
@@ -364,7 +360,6 @@ fn encode_union(
     graph: &SchemaGraph,
     spec: &UnionSpec,
     payload: &UnionValuePayload,
-    multimodal: bool,
 ) -> Result<Value, RenderError> {
     let branch = find_branch(spec, &payload.tag)
         .ok_or_else(|| r.mismatch(format!("unknown union branch tag `{}`", payload.tag)))?;
@@ -375,10 +370,7 @@ fn encode_union(
     // Sanity check: the produced JSON should match the branch's
     // discriminator rule. Validation should have caught a tag/body
     // disagreement at construction time; this is the runtime safety net.
-    // Multimodal unions are positionally tagged in their outer envelope
-    // and carry placeholder discriminator rules per branch, so the rule
-    // check does not apply.
-    if !multimodal && !rule_matches(&branch.discriminator, &rendered) {
+    if !rule_matches(&branch.discriminator, &rendered) {
         return Err(RenderError::UnionTagMismatch {
             tag: payload.tag.clone(),
             reason: format!(
@@ -765,7 +757,7 @@ fn from_json_body(
 
         SchemaType::Result { spec, .. } => decode_result(graph, spec, json, path, &mut visited),
 
-        SchemaType::Union { spec, metadata } => decode_union(graph, spec, metadata, json, path),
+        SchemaType::Union { spec, .. } => decode_union(graph, spec, json, path),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => Err(RenderError::Unsupported(
             "future/stream values have no JSON representation",
@@ -834,26 +826,9 @@ fn decode_result(
 fn decode_union(
     graph: &SchemaGraph,
     spec: &UnionSpec,
-    metadata: &crate::schema::metadata::MetadataEnvelope,
     json: &Value,
     path: &mut PathStack,
 ) -> Result<SchemaValue, RenderError> {
-    // Multimodal unions are positionally tagged in their outer envelope
-    // (a `list<union<…>>` whose element index picks the branch). The bare
-    // union body cannot be decoded by this generic discriminator-based
-    // pipeline because every branch carries a placeholder discriminator
-    // rule. Picking a branch by body shape would silently mis-tag values
-    // whenever two branches accept the same JSON shape, so we refuse
-    // explicitly and let multimodal-aware callers decode through their
-    // own envelope.
-    if matches!(
-        metadata.role,
-        Some(crate::schema::metadata::Role::Multimodal)
-    ) {
-        return Err(RenderError::Unsupported(
-            "multimodal union JSON decoding requires an external multimodal envelope",
-        ));
-    }
     // First: find every branch whose discriminator rule matches the
     // incoming JSON value. Validation rules out multi-match at construction
     // time; a runtime safety net catches the case where the value is bad.

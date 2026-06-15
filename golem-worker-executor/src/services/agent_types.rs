@@ -272,6 +272,9 @@ mod local {
                             implemented_by: RegisteredAgentTypeImplementer {
                                 component_id: component.id,
                                 component_revision: component.revision,
+                                component_name: component.component_name.0.clone(),
+                                account_id: component.account_id,
+                                account_email: component.account_email.clone(),
                             },
                         })
                         .collect::<Vec<_>>()

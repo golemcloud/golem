@@ -691,7 +691,7 @@ pub enum GolemCliSubcommand {
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
     Repl {
-        /// Select the language for the REPL, defaults to the component's language
+        /// Select the REPL language. Currently only TypeScript is supported.
         #[arg(long)]
         language: Option<ReplLanguage>,
         #[command(flatten)]
@@ -741,7 +741,7 @@ pub enum GolemCliSubcommand {
         /// definitions, API objects). The text format is intended for human
         /// review and is not stable.
         ///
-        /// In `--format json/yaml` the result document only carries
+        /// In `--format json/yaml/toon` the result document only carries
         /// `{"deployed": true}` indicating that planning succeeded; the
         /// detailed diff is not yet emitted as structured data.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
@@ -984,15 +984,15 @@ pub mod shared_args {
 
     #[derive(Debug, Args)]
     pub struct StreamArgs {
-        /// Hide log levels in stream output
+        /// Hide log levels in text stream output. Structured formats still include the `level` field.
         #[clap(long)]
         pub stream_no_log_level: bool,
-        /// Hide timestamp in stream output
+        /// Hide timestamps in text stream output. Structured formats still include the `timestamp` field.
         #[clap(long)]
         pub stream_no_timestamp: bool,
-        /// Only show entries coming from the agent, no output about invocation markers
-        /// and stream status. Does NOT change the process exit code: the exit code
-        /// reflects whether the invocation could be placed and (for non-`--trigger`
+        /// Only show entries coming from the agent, suppressing invocation markers
+        /// and stream status events. Does NOT change the process exit code: the exit
+        /// code reflects whether the invocation could be placed and (for non-`--trigger`
         /// calls) completed at the protocol level. A function-level error returned by
         /// the agent itself is reported in the result payload, not in the exit code.
         #[clap(long)]
@@ -1295,7 +1295,7 @@ pub mod worker {
             /// Set idempotency key for the call. Use `-` for an auto-generated key.
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
-            /// line on stderr, and in `--format json/yaml` mode as the
+            /// line on stderr, and in `--format json/yaml/toon` mode as the
             /// `idempotency_key` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
@@ -1355,7 +1355,7 @@ pub mod worker {
             /// in the previous response.
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             ///
-            /// Returned cursors: in `--format json/yaml` the response includes a
+            /// Returned cursors: in `--format json/yaml/toon` the response includes a
             /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
@@ -1379,7 +1379,7 @@ pub mod worker {
             ///
             /// Watch mode redraws into the alternate terminal screen, so it is
             /// intended for interactive use. It is not meaningful with
-            /// `--format json/yaml`: structured output is overwritten on every
+            /// `--format json/yaml/toon`: structured output is overwritten on every
             /// frame and the alternate-screen restore on exit will leave you with
             /// no captured payload.
             ///
@@ -2168,7 +2168,82 @@ pub mod api_token {
 
 pub mod account {
     use crate::command::shared_args::AccountIdOptionalArg;
-    use clap::Subcommand;
+    use clap::{Args, Subcommand};
+    use golem_common::model::permission_share::PermissionShareId;
+
+    #[derive(Debug, Args)]
+    pub struct PermissionShareGrantArgs {
+        /// Lower positive permission grant. Can be specified multiple times.
+        #[arg(long = "lower-positive", action = clap::ArgAction::Append)]
+        pub lower_positive: Option<Vec<String>>,
+
+        /// Lower negative permission grant. Can be specified multiple times.
+        #[arg(long = "lower-negative", action = clap::ArgAction::Append)]
+        pub lower_negative: Option<Vec<String>>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum PermissionShareSubcommand {
+        /// List permission shares owned by this account, or received by this account with --received.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_LIST)]
+        List {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// List permission shares targeting the account instead of owned by the account.
+            #[arg(long)]
+            received: bool,
+        },
+        /// Get a permission share by ID.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET)]
+        Get {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+        },
+        /// Get a permission share by owner account and name.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET_BY_NAME)]
+        GetByName {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Permission share name.
+            name: String,
+        },
+        /// Create a new permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_NEW)]
+        New {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Target account email receiving the permissions.
+            target_account_email: String,
+
+            /// Permission share name.
+            name: String,
+
+            #[command(flatten)]
+            grants: PermissionShareGrantArgs,
+        },
+        /// Update an existing permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_UPDATE)]
+        Update {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+
+            /// New permission share name. Defaults to the existing name.
+            #[arg(long)]
+            name: Option<String>,
+
+            #[command(flatten)]
+            grants: PermissionShareGrantArgs,
+        },
+        /// Delete an existing permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_DELETE)]
+        Delete {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+        },
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum AccountSubcommand {
@@ -2201,6 +2276,11 @@ pub mod account {
         Delete {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
+        },
+        /// Manage permission shares owned by an account.
+        PermissionShare {
+            #[command(subcommand)]
+            subcommand: PermissionShareSubcommand,
         },
     }
 }

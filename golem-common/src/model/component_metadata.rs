@@ -21,9 +21,9 @@ pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::component_introspection::wit_parser::WitAnalysisContext;
+use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::component::InstalledPlugin;
-use golem_wasm::analysis::{AnalysedExport, AnalysisFailure, AnalysisResult};
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -792,7 +792,7 @@ mod protobuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
+    use crate::component_introspection::{AnalysedExport, AnalysedInstance};
     use test_r::test;
 
     fn instance_export(name: &str) -> AnalysedExport {

@@ -1,538 +1,624 @@
-openapi: 3.0.0
+components:
+  schemas:
+    JsonBodyResponse:
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+      required:
+      - ok
+      title: JsonBodyResponse
+      type: object
+    JsonResponse:
+      additionalProperties: false
+      properties:
+        value:
+          type: string
+      required:
+      - value
+      title: JsonResponse
+      type: object
+    MultiPathVarsResponse:
+      additionalProperties: false
+      properties:
+        joined:
+          type: string
+      required:
+      - joined
+      title: MultiPathVarsResponse
+      type: object
+    OkResponse:
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+      required:
+      - ok
+      title: OkResponse
+      type: object
+    OptionalResponse:
+      additionalProperties: false
+      properties:
+        value:
+          type: string
+      required:
+      - value
+      title: OptionalResponse
+      type: object
+    PathAndHeaderResponse:
+      additionalProperties: false
+      properties:
+        request_id:
+          type: string
+        resource_id:
+          type: string
+      required:
+      - resource_id
+      - request_id
+      title: PathAndHeaderResponse
+      type: object
+    PathAndQueryResponse:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        limit:
+          maximum: 18446744073709551615
+          minimum: 0
+          type: integer
+      required:
+      - id
+      - limit
+      title: PathAndQueryResponse
+      type: object
+    PreflightRequest:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+      required:
+      - name
+      title: PreflightRequest
+      type: object
+    PreflightResponse:
+      additionalProperties: false
+      properties:
+        received:
+          type: string
+      required:
+      - received
+      title: PreflightResponse
+      type: object
+    RemainingPathResponse:
+      additionalProperties: false
+      properties:
+        tail:
+          type: string
+      required:
+      - tail
+      title: RemainingPathResponse
+      type: object
+    ResourceResponse:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        method:
+          type: string
+        updated:
+          type: boolean
+      required:
+      - id
+      - updated
+      - method
+      title: ResourceResponse
+      type: object
+    ResourceUpdate:
+      additionalProperties: false
+      properties:
+        description:
+          oneOf:
+          - type: 'null'
+          - type: string
+        enabled:
+          oneOf:
+          - type: 'null'
+          - type: boolean
+        name:
+          oneOf:
+          - type: 'null'
+          - type: string
+      required: []
+      title: ResourceUpdate
+      type: object
+    ResultErrResponse:
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+      required:
+      - error
+      title: ResultErrResponse
+      type: object
+    ResultOkResponse:
+      additionalProperties: false
+      properties:
+        value:
+          type: string
+      required:
+      - value
+      title: ResultOkResponse
+      type: object
+    StringPathVarResponse:
+      additionalProperties: false
+      properties:
+        value:
+          type: string
+      required:
+      - value
+      title: StringPathVarResponse
+      type: object
+    WebhookResponse:
+      additionalProperties: false
+      properties:
+        payload_length:
+          maximum: 18446744073709551615
+          minimum: 0
+          type: integer
+      required:
+      - payload_length
+      title: WebhookResponse
+      type: object
 info:
   title: Managed api provided by Golem
   version: 1.0.0
-servers:
-- url: https://<ENV_ID>.golem.cloud
-- url: http://<ENV_ID>.golem.cloud
+openapi: 3.1.0
 paths:
   /cors-agents/{agent-name}/inherited:
     get:
       description: ''
       operationId: CorsAgent-inherited
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                required:
-                - ok
+                $ref: '#/components/schemas/OkResponse'
+          description: Response 200
     options:
       responses:
         '204':
           description: Response 204
           headers:
-            Access-Control-Allow-Origin:
-              description: 'Response header: Access-Control-Allow-Origin'
-              style: simple
-              required: true
-              schema:
-                type: string
-            Access-Control-Allow-Headers:
-              description: 'Response header: Access-Control-Allow-Headers'
-              style: simple
-              required: true
-              schema:
-                type: string
             Access-Control-Allow-Credentials:
               description: 'Response header: Access-Control-Allow-Credentials'
-              style: simple
               required: true
               schema:
                 type: string
+              style: simple
+            Access-Control-Allow-Headers:
+              description: 'Response header: Access-Control-Allow-Headers'
+              required: true
+              schema:
+                type: string
+              style: simple
             Access-Control-Allow-Methods:
               description: 'Response header: Access-Control-Allow-Methods'
+              required: true
+              schema:
+                enum:
+                - GET
+                type: string
               style: simple
+            Access-Control-Allow-Origin:
+              description: 'Response header: Access-Control-Allow-Origin'
               required: true
               schema:
                 type: string
-                enum:
-                - GET
+              style: simple
   /cors-agents/{agent-name}/preflight-required:
+    options:
+      responses:
+        '204':
+          description: Response 204
+          headers:
+            Access-Control-Allow-Credentials:
+              description: 'Response header: Access-Control-Allow-Credentials'
+              required: true
+              schema:
+                type: string
+              style: simple
+            Access-Control-Allow-Headers:
+              description: 'Response header: Access-Control-Allow-Headers'
+              required: true
+              schema:
+                type: string
+              style: simple
+            Access-Control-Allow-Methods:
+              description: 'Response header: Access-Control-Allow-Methods'
+              required: true
+              schema:
+                enum:
+                - POST
+                type: string
+              style: simple
+            Access-Control-Allow-Origin:
+              description: 'Response header: Access-Control-Allow-Origin'
+              required: true
+              schema:
+                type: string
+              style: simple
     post:
       description: ''
       operationId: CorsAgent-preflight
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: JSON body
         content:
           application/json:
             schema:
-              type: object
+              additionalProperties: false
               properties:
                 body:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                  required:
-                  - name
+                  $ref: '#/components/schemas/PreflightRequest'
               required:
               - body
+              type: object
+        description: JSON body
         required: true
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  received:
-                    type: string
-                required:
-                - received
-    options:
-      responses:
-        '204':
-          description: Response 204
-          headers:
-            Access-Control-Allow-Origin:
-              description: 'Response header: Access-Control-Allow-Origin'
-              style: simple
-              required: true
-              schema:
-                type: string
-            Access-Control-Allow-Headers:
-              description: 'Response header: Access-Control-Allow-Headers'
-              style: simple
-              required: true
-              schema:
-                type: string
-            Access-Control-Allow-Credentials:
-              description: 'Response header: Access-Control-Allow-Credentials'
-              style: simple
-              required: true
-              schema:
-                type: string
-            Access-Control-Allow-Methods:
-              description: 'Response header: Access-Control-Allow-Methods'
-              style: simple
-              required: true
-              schema:
-                type: string
-                enum:
-                - POST
+                $ref: '#/components/schemas/PreflightResponse'
+          description: Response 200
   /cors-agents/{agent-name}/wildcard:
     get:
       description: ''
       operationId: CorsAgent-wildcard
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                required:
-                - ok
+                $ref: '#/components/schemas/OkResponse'
+          description: Response 200
     options:
       responses:
         '204':
           description: Response 204
           headers:
-            Access-Control-Allow-Origin:
-              description: 'Response header: Access-Control-Allow-Origin'
-              style: simple
-              required: true
-              schema:
-                type: string
-            Access-Control-Allow-Headers:
-              description: 'Response header: Access-Control-Allow-Headers'
-              style: simple
-              required: true
-              schema:
-                type: string
             Access-Control-Allow-Credentials:
               description: 'Response header: Access-Control-Allow-Credentials'
-              style: simple
               required: true
               schema:
                 type: string
+              style: simple
+            Access-Control-Allow-Headers:
+              description: 'Response header: Access-Control-Allow-Headers'
+              required: true
+              schema:
+                type: string
+              style: simple
             Access-Control-Allow-Methods:
               description: 'Response header: Access-Control-Allow-Methods'
+              required: true
+              schema:
+                enum:
+                - GET
+                type: string
               style: simple
+            Access-Control-Allow-Origin:
+              description: 'Response header: Access-Control-Allow-Origin'
               required: true
               schema:
                 type: string
-                enum:
-                - GET
+              style: simple
   /http-agents/{agent-name}/json-body/{id}:
     post:
       description: Accepts JSON body parameters and returns a success response
       operationId: HttpAgent-json_body
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: id'
+        explode: false
+        in: path
         name: id
-        description: 'Path parameter: id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: JSON body
         content:
           application/json:
             schema:
-              type: object
+              additionalProperties: false
               properties:
+                count:
+                  maximum: 18446744073709551615
+                  minimum: 0
+                  type: integer
                 name:
                   type: string
-                count:
-                  type: integer
-                  format: int64
-                  minimum: 0
               required:
               - name
               - count
+              type: object
+        description: JSON body
         required: true
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                required:
-                - ok
+                $ref: '#/components/schemas/JsonBodyResponse'
+          description: Response 200
   /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
     get:
       description: Combines two path variables with a colon separator
       operationId: HttpAgent-multi_path_vars
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: first'
+        explode: false
+        in: path
         name: first
-        description: 'Path parameter: first'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: second'
+        explode: false
+        in: path
         name: second
-        description: 'Path parameter: second'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  joined:
-                    type: string
-                required:
-                - joined
+                $ref: '#/components/schemas/MultiPathVarsResponse'
+          description: Response 200
   /http-agents/{agent-name}/path-and-header/{resource-id}:
     get:
       description: Combines a path variable with a header value in the response
       operationId: HttpAgent-path_and_header
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: resource-id'
+        explode: false
+        in: path
         name: resource-id
-        description: 'Path parameter: resource-id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: header
+      - description: 'Header parameter: x-request-id'
+        explode: false
+        in: header
         name: x-request-id
-        description: 'Header parameter: x-request-id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  resource_id:
-                    type: string
-                  request_id:
-                    type: string
-                required:
-                - resource_id
-                - request_id
+                $ref: '#/components/schemas/PathAndHeaderResponse'
+          description: Response 200
   /http-agents/{agent-name}/path-and-query/{item-id}:
     get:
       description: Combines a path variable with a query parameter in the response
       operationId: HttpAgent-path_and_query
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: item-id'
+        explode: false
+        in: path
         name: item-id
-        description: 'Path parameter: item-id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: query
-        name: limit
+      - allowEmptyValue: false
         description: 'Query parameter: limit'
+        explode: false
+        in: query
+        name: limit
         required: true
         schema:
-          type: integer
-          format: int64
+          maximum: 18446744073709551615
           minimum: 0
-        explode: false
+          type: integer
         style: form
-        allowEmptyValue: false
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  limit:
-                    type: integer
-                    format: int64
-                    minimum: 0
-                required:
-                - id
-                - limit
+                $ref: '#/components/schemas/PathAndQueryResponse'
+          description: Response 200
   /http-agents/{agent-name}/resource/{id}:
     patch:
       description: Updates a resource using PATCH method with provided update data
       operationId: HttpAgent-patch_resource
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: id'
+        explode: false
+        in: path
         name: id
-        description: 'Path parameter: id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: JSON body
         content:
           application/json:
             schema:
-              type: object
+              additionalProperties: false
               properties:
                 update:
-                  type: object
-                  properties:
-                    name:
-                      nullable: true
-                      type: string
-                    description:
-                      nullable: true
-                      type: string
-                    enabled:
-                      nullable: true
-                      type: boolean
+                  $ref: '#/components/schemas/ResourceUpdate'
               required:
               - update
+              type: object
+        description: JSON body
         required: true
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  updated:
-                    type: boolean
-                  method:
-                    type: string
-                required:
-                - id
-                - updated
-                - method
+                $ref: '#/components/schemas/ResourceResponse'
+          description: Response 200
   /http-agents/{agent-name}/resource/{id}/partial:
     patch:
       description: Performs a partial update on a resource using PATCH method
       operationId: HttpAgent-patch_partial
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: id'
+        explode: false
+        in: path
         name: id
-        description: 'Path parameter: id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  updated:
-                    type: boolean
-                  method:
-                    type: string
-                required:
-                - id
-                - updated
-                - method
+                $ref: '#/components/schemas/ResourceResponse'
+          description: Response 200
   /http-agents/{agent-name}/resp/binary:
     get:
       description: Returns binary data as an unstructured binary response
       operationId: HttpAgent-binary_response
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/octet-stream:
               schema:
-                type: string
                 format: binary
+                type: string
+          description: Response 200
   /http-agents/{agent-name}/resp/json:
     get:
       description: Returns a JSON response with a value field
       operationId: HttpAgent-json_response_func
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                required:
-                - value
+                $ref: '#/components/schemas/JsonResponse'
+          description: Response 200
   /http-agents/{agent-name}/resp/no-content:
     get:
       description: Returns a 204 No Content response
       operationId: HttpAgent-no_content
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '204':
@@ -542,34 +628,29 @@ paths:
       description: Returns an optional response based on the found parameter
       operationId: HttpAgent-optional_response_func
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: found'
+        explode: false
+        in: path
         name: found
-        description: 'Path parameter: found'
         required: true
         schema:
           type: boolean
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                required:
-                - value
+                $ref: '#/components/schemas/OptionalResponse'
+          description: Response 200
         '404':
           description: Response 404
   /http-agents/{agent-name}/resp/result-json-json/{ok}:
@@ -577,294 +658,257 @@ paths:
       description: Returns either a success or error result based on the ok parameter
       operationId: HttpAgent-result_ok_or_err
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: ok'
+        explode: false
+        in: path
         name: ok
-        description: 'Path parameter: ok'
         required: true
         schema:
           type: boolean
-        explode: false
         style: simple
       responses:
         '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultOkResponse'
           description: Response 200
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                required:
-                - value
         '500':
-          description: Response 500
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                required:
-                - error
+                $ref: '#/components/schemas/ResultErrResponse'
+          description: Response 500
   /http-agents/{agent-name}/resp/result-json-void:
     get:
       description: Returns either a JSON success result or unit error
       operationId: HttpAgent-result_json_void
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                required:
-                - value
+                $ref: '#/components/schemas/ResultOkResponse'
+          description: Response 200
         '500':
           description: Response 500
-          content:
-            '*/*':
-              schema:
-                type: string
-                format: binary
   /http-agents/{agent-name}/resp/result-void-json:
     post:
       description: Returns either unit success or a JSON error result
       operationId: HttpAgent-result_void_err
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '204':
           description: Response 204
-          content:
-            '*/*':
-              schema:
-                type: string
-                format: binary
         '500':
-          description: Response 500
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                required:
-                - error
+                $ref: '#/components/schemas/ResultErrResponse'
+          description: Response 500
   /http-agents/{agent-name}/rest/{tail}:
     get:
       description: Returns the remaining path after the /rest prefix
       operationId: HttpAgent-remaining_path
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: tail'
+        explode: false
+        in: path
         name: tail
-        description: 'Path parameter: tail'
         required: true
         schema:
           description: Parameter represents the remaining path, including slashes.
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  tail:
-                    type: string
-                required:
-                - tail
+                $ref: '#/components/schemas/RemainingPathResponse'
+          description: Response 200
   /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
     post:
       description: Accepts restricted binary data (image/gif only) and returns the payload size
       operationId: HttpAgent-restricted_unstructured_binary
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: bucket'
+        explode: false
+        in: path
         name: bucket
-        description: 'Path parameter: bucket'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: Restricted binary body
         content:
           image/gif:
             schema:
-              type: string
               format: binary
+              type: string
+        description: Restricted binary body
         required: true
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
+                maximum: 9223372036854775807
+                minimum: -9223372036854775808
                 type: integer
-                format: int64
+          description: Response 200
   /http-agents/{agent-name}/string-path-var/{path-var}:
     get:
       description: Returns the provided path variable as a response
       operationId: HttpAgent-string_path_var
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: path-var'
+        explode: false
+        in: path
         name: path-var
-        description: 'Path parameter: path-var'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                required:
-                - value
+                $ref: '#/components/schemas/StringPathVarResponse'
+          description: Response 200
   /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
     post:
       description: Accepts unrestricted binary data and returns the payload size
       operationId: HttpAgent-unrestricted_unstructured_binary
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
-      - in: path
+      - description: 'Path parameter: bucket'
+        explode: false
+        in: path
         name: bucket
-        description: 'Path parameter: bucket'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: Unrestricted binary body
         content:
           '*/*':
             schema:
-              type: string
               format: binary
+              type: string
+        description: Unrestricted binary body
         required: true
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
+                maximum: 9223372036854775807
+                minimum: -9223372036854775808
                 type: integer
-                format: int64
+          description: Response 200
   /openapi.json:
     get:
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
                 additionalProperties: true
+                type: object
+          description: Response 200
   /openapi.yaml:
     get:
       responses:
         '200':
-          description: Response 200
           content:
             application/yaml:
               schema:
-                type: object
                 additionalProperties: true
+                type: object
+          description: Response 200
   /webhook-agents/{agent-name}/set-test-server-url:
     post:
       description: ''
       operationId: WebhookAgent-set_test_server_url
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: JSON body
         content:
           application/json:
             schema:
-              type: object
+              additionalProperties: false
               properties:
                 test_server_url:
                   type: string
               required:
               - test_server_url
+              type: object
+        description: JSON body
         required: true
       responses:
         '204':
@@ -874,46 +918,39 @@ paths:
       description: ''
       operationId: WebhookAgent-test_webhook
       parameters:
-      - in: path
+      - description: 'Path parameter: agent-name'
+        explode: false
+        in: path
         name: agent-name
-        description: 'Path parameter: agent-name'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       responses:
         '200':
-          description: Response 200
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  payload_length:
-                    type: integer
-                    format: int64
-                    minimum: 0
-                required:
-                - payload_length
+                $ref: '#/components/schemas/WebhookResponse'
+          description: Response 200
   /webhooks/cors-agent/{promise-id}:
     post:
       parameters:
-      - in: path
+      - description: 'Path parameter: promise-id'
+        explode: false
+        in: path
         name: promise-id
-        description: 'Path parameter: promise-id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: Unrestricted binary body
         content:
           '*/*':
             schema:
-              type: string
               format: binary
+              type: string
+        description: Unrestricted binary body
         required: true
       responses:
         '204':
@@ -923,21 +960,21 @@ paths:
   /webhooks/http-agent/{promise-id}:
     post:
       parameters:
-      - in: path
+      - description: 'Path parameter: promise-id'
+        explode: false
+        in: path
         name: promise-id
-        description: 'Path parameter: promise-id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: Unrestricted binary body
         content:
           '*/*':
             schema:
-              type: string
               format: binary
+              type: string
+        description: Unrestricted binary body
         required: true
       responses:
         '204':
@@ -947,25 +984,27 @@ paths:
   /webhooks/webhook-agent/{promise-id}:
     post:
       parameters:
-      - in: path
+      - description: 'Path parameter: promise-id'
+        explode: false
+        in: path
         name: promise-id
-        description: 'Path parameter: promise-id'
         required: true
         schema:
           type: string
-        explode: false
         style: simple
       requestBody:
-        description: Unrestricted binary body
         content:
           '*/*':
             schema:
-              type: string
               format: binary
+              type: string
+        description: Unrestricted binary body
         required: true
       responses:
         '204':
           description: Response 204
         '404':
           description: Response 404
-components: {}
+servers:
+- url: https://<ENV_ID>.golem.cloud
+- url: http://<ENV_ID>.golem.cloud

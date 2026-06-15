@@ -10,121 +10,367 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use super::call_agent;
-use crate::custom_api::openapi::response_schema::{
-    ResponseBodyOpenApiSchema, get_route_response_schema,
+//! Emits the OpenAPI 3.1 document for a deployed HTTP API as a
+//! [`serde_json::Value`].
+//!
+//! All `SchemaType` rendering goes through [`render_schema`] (the Wave-1
+//! renderer); named types lowered from the routes are emitted once into
+//! `components/schemas`. The legacy compiled-route schema types are touched
+//! only by the boundary adapter [`build_document_schema`].
+
+use super::response_schema::{
+    ResponseBodyOpenApiSchema, RouteResponseOpenApiSchema, get_route_response_schema,
 };
-use crate::custom_api::openapi::schema_mapping::{
-    arbitrary_binary_schema, create_schema_from_analysed_type,
+use super::route_schema::{RequestBodyModel, RouteSchema, build_document_schema};
+use super::schema_mapping::{
+    arbitrary_binary_schema, render_schema, string_enum_schema, string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use golem_common::model::domain_registration::Domain;
-use golem_service_base::custom_api::{
-    PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, SecuritySchemeDetails,
-};
-use golem_wasm::analysis::AnalysedType;
-use indexmap::IndexMap;
-use openapiv3::{
-    Components, Header, HeaderStyle, Info, MediaType, OpenAPI, Operation, Parameter, ParameterData,
-    ParameterSchemaOrContent, PathItem, PathStyle, QueryStyle, ReferenceOr, RequestBody, Response,
-    Schema, SecurityScheme, Server, StatusCode,
-};
+use golem_common::schema::graph::SchemaGraph;
+use golem_service_base::custom_api::PathSegment;
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
-pub struct HttpApiOpenApiSpec(pub OpenAPI);
+pub struct HttpApiOpenApiSpec(pub Value);
 
 impl HttpApiOpenApiSpec {
     pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
-        let security_scheme_details = get_security_scheme_details(routes);
+        let document = build_document_schema(routes).map_err(|e| e.to_string())?;
+        let graph = &document.graph;
 
-        let mut open_api = create_base_openapi(&security_scheme_details, domain);
+        let mut component_schemas: Map<String, Value> = Map::new();
+        let mut security_schemes: Map<String, Value> = Map::new();
+        let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
 
-        let mut paths = BTreeMap::new();
+        for (route, route_schema) in routes.iter().zip(document.per_route.iter()) {
+            collect_security_scheme(route, &mut security_schemes);
 
-        for route in routes {
-            add_route_to_paths(route, &mut paths)?;
+            let operation = build_operation(route, route_schema, graph, &mut component_schemas)?;
+            let path_item = paths.entry(render_full_path(&route.path)).or_default();
+            insert_operation(path_item, route.method.as_str(), operation);
         }
 
-        open_api.paths.paths = paths
+        let mut components = Map::new();
+        if !component_schemas.is_empty() {
+            components.insert("schemas".to_string(), Value::Object(component_schemas));
+        }
+        if !security_schemes.is_empty() {
+            components.insert(
+                "securitySchemes".to_string(),
+                Value::Object(security_schemes),
+            );
+        }
+
+        let paths_value: Map<String, Value> = paths
             .into_iter()
-            .map(|(k, v)| (k, ReferenceOr::Item(v)))
+            .map(|(k, v)| (k, Value::Object(v)))
             .collect();
 
-        Ok(HttpApiOpenApiSpec(open_api))
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": {
+                "title": "Managed api provided by Golem",
+                "version": "1.0.0",
+            },
+            "servers": [
+                { "url": format!("https://{}", domain.0) },
+                { "url": format!("http://{}", domain.0) },
+            ],
+            "paths": Value::Object(paths_value),
+            "components": Value::Object(components),
+        });
+
+        Ok(HttpApiOpenApiSpec(spec))
     }
 }
 
-fn get_security_scheme_details(
-    compiled_routes: &[RichCompiledRoute],
-) -> Vec<Arc<SecuritySchemeDetails>> {
-    let mut schemes = Vec::new();
+fn build_operation(
+    route: &RichCompiledRoute,
+    route_schema: &RouteSchema,
+    graph: &SchemaGraph,
+    components: &mut Map<String, Value>,
+) -> Result<Value, String> {
+    let mut operation = Map::new();
 
-    for route in compiled_routes {
-        if let RichRouteSecurity::SecurityScheme(details) = &route.security {
-            schemes.push(details.security_scheme.clone());
+    if let RichRouteBehaviour::CallAgent(inner) = &route.behavior {
+        operation.insert(
+            "operationId".to_string(),
+            json!(format!("{}-{}", inner.agent_type.0, inner.method_name)),
+        );
+        if let Some(description) = &inner.method_description {
+            operation.insert("description".to_string(), json!(description));
         }
     }
 
-    schemes
-}
+    let mut parameters: Vec<Value> = Vec::new();
+    add_route_parameters(route, route_schema, graph, components, &mut parameters)?;
 
-fn create_base_openapi(
-    security_schemes: &Vec<Arc<SecuritySchemeDetails>>,
-    domain: &Domain,
-) -> OpenAPI {
-    let mut open_api = OpenAPI {
-        openapi: "3.0.0".to_string(),
-        info: Info {
-            title: "Managed api provided by Golem".to_string(),
-            description: None,
-            terms_of_service: None,
-            contact: None,
-            license: None,
-            version: "1.0.0".to_string(),
-            extensions: Default::default(),
-        },
-        servers: vec![
-            Server {
-                url: format!("https://{}", domain.0),
-                description: None,
-                variables: Default::default(),
-                extensions: Default::default(),
-            },
-            Server {
-                url: format!("http://{}", domain.0),
-                description: None,
-                variables: Default::default(),
-                extensions: Default::default(),
-            },
-        ],
-        ..Default::default()
-    };
-
-    let mut components = Components::default();
-    for security_scheme in security_schemes {
-        let issuer_url = match security_scheme.provider_type.issuer_url() {
-            Ok(url) => url,
-            Err(_) => continue,
-        };
-        let openid_config_url = format!("{}/.well-known/openid-configuration", issuer_url.url());
-
-        let scheme = SecurityScheme::OpenIDConnect {
-            open_id_connect_url: openid_config_url,
-            description: Some(format!(
-                "OpenID Connect provider for {}",
-                security_scheme.name
-            )),
-            extensions: Default::default(),
-        };
-
-        components
-            .security_schemes
-            .insert(security_scheme.name.0.clone(), ReferenceOr::Item(scheme));
+    if let Some(request_body) = build_request_body(
+        &route_schema.request_body,
+        graph,
+        components,
+        &mut parameters,
+    )? {
+        operation.insert("requestBody".to_string(), request_body);
     }
 
-    open_api.components = Some(components);
-    open_api
+    if !parameters.is_empty() {
+        operation.insert("parameters".to_string(), Value::Array(parameters));
+    }
+
+    let response_model = get_route_response_schema(route, route_schema, graph, components)?;
+    operation.insert("responses".to_string(), build_responses(response_model));
+
+    if let Some(security) = build_security(route) {
+        operation.insert("security".to_string(), security);
+    }
+
+    Ok(Value::Object(operation))
+}
+
+fn add_route_parameters(
+    route: &RichCompiledRoute,
+    route_schema: &RouteSchema,
+    graph: &SchemaGraph,
+    components: &mut Map<String, Value>,
+    parameters: &mut Vec<Value>,
+) -> Result<(), String> {
+    match &route.behavior {
+        RichRouteBehaviour::CallAgent(_) => {
+            if let Some(call_agent) = &route_schema.call_agent {
+                for param in &call_agent.path_params {
+                    let mut schema = render_schema(graph, &param.schema, components)?;
+                    if param.is_catchall {
+                        set_schema_description(
+                            &mut schema,
+                            "Parameter represents the remaining path, including slashes.",
+                        );
+                    }
+                    parameters.push(path_parameter(&param.name, schema));
+                }
+                for param in &call_agent.query_params {
+                    let schema = render_schema(graph, &param.schema, components)?;
+                    parameters.push(query_parameter(&param.name, param.required, schema));
+                }
+                for param in &call_agent.header_params {
+                    let schema = render_schema(graph, &param.schema, components)?;
+                    parameters.push(header_parameter(&param.name, param.required, schema));
+                }
+            }
+        }
+        RichRouteBehaviour::WebhookCallback(_) => {
+            // Webhook callbacks carry a single fixed string path parameter (the
+            // promise id); it is not an agent parameter, so it is emitted here
+            // directly rather than via the schema model.
+            for segment in &route.path {
+                match segment {
+                    PathSegment::Variable { display_name }
+                    | PathSegment::CatchAll { display_name } => {
+                        parameters.push(path_parameter(display_name, string_schema()));
+                    }
+                    PathSegment::Literal { .. } => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn build_request_body(
+    body: &RequestBodyModel,
+    graph: &SchemaGraph,
+    components: &mut Map<String, Value>,
+    parameters: &mut Vec<Value>,
+) -> Result<Option<Value>, String> {
+    Ok(match body {
+        RequestBodyModel::Unused => None,
+        RequestBodyModel::Json(ty) => {
+            let schema = render_schema(graph, ty, components)?;
+            Some(request_body_value(
+                "JSON body",
+                vec![("application/json".to_string(), schema)],
+            ))
+        }
+        RequestBodyModel::UnrestrictedBinary => Some(request_body_value(
+            "Unrestricted binary body",
+            vec![("*/*".to_string(), arbitrary_binary_schema())],
+        )),
+        RequestBodyModel::RestrictedBinary { mime_types } => {
+            let content = mime_types
+                .iter()
+                .map(|mime| (mime.clone(), arbitrary_binary_schema()))
+                .collect();
+            Some(request_body_value("Restricted binary body", content))
+        }
+        RequestBodyModel::UnrestrictedText => {
+            parameters.push(header_parameter("Content-Language", false, string_schema()));
+            Some(request_body_value(
+                "Unrestricted text body",
+                vec![("text/plain".to_string(), string_schema())],
+            ))
+        }
+        RequestBodyModel::RestrictedText { language_codes } => {
+            parameters.push(header_parameter(
+                "Content-Language",
+                false,
+                string_enum_schema(language_codes),
+            ));
+            Some(request_body_value(
+                "Restricted text body",
+                vec![("text/plain".to_string(), string_schema())],
+            ))
+        }
+    })
+}
+
+fn request_body_value(description: &str, content: Vec<(String, Value)>) -> Value {
+    let content_map: Map<String, Value> = content
+        .into_iter()
+        .map(|(content_type, schema)| (content_type, json!({ "schema": schema })))
+        .collect();
+    json!({
+        "description": description,
+        "content": Value::Object(content_map),
+        "required": true,
+    })
+}
+
+fn build_responses(model: RouteResponseOpenApiSchema) -> Value {
+    let headers_value = build_response_headers(&model);
+
+    let mut responses = Map::new();
+    for (status_code, body) in model.body_and_status_codes {
+        let mut response = Map::new();
+        response.insert(
+            "description".to_string(),
+            json!(format!("Response {status_code}")),
+        );
+
+        match body {
+            ResponseBodyOpenApiSchema::Known {
+                schema,
+                content_type,
+            } => {
+                let mut content = Map::new();
+                content.insert(content_type, json!({ "schema": schema }));
+                response.insert("content".to_string(), Value::Object(content));
+            }
+            ResponseBodyOpenApiSchema::Unknown => {
+                let mut content = Map::new();
+                content.insert(
+                    "*/*".to_string(),
+                    json!({ "schema": arbitrary_binary_schema() }),
+                );
+                response.insert("content".to_string(), Value::Object(content));
+            }
+            ResponseBodyOpenApiSchema::NoBody => {}
+        }
+
+        if let Some(headers) = &headers_value {
+            response.insert("headers".to_string(), headers.clone());
+        }
+
+        responses.insert(status_code.to_string(), Value::Object(response));
+    }
+
+    Value::Object(responses)
+}
+
+fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Value> {
+    if model.headers.is_empty() {
+        return None;
+    }
+    let mut headers = Map::new();
+    for (name, header) in &model.headers {
+        headers.insert(
+            name.clone(),
+            json!({
+                "description": format!("Response header: {name}"),
+                "style": "simple",
+                "required": header.required,
+                "schema": header.schema.clone(),
+            }),
+        );
+    }
+    Some(Value::Object(headers))
+}
+
+fn build_security(route: &RichCompiledRoute) -> Option<Value> {
+    if let RichRouteSecurity::SecurityScheme(inner) = &route.security {
+        let scopes: Vec<String> = inner
+            .security_scheme
+            .scopes
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut requirement = Map::new();
+        requirement.insert(inner.security_scheme.name.0.clone(), json!(scopes));
+        Some(json!([Value::Object(requirement)]))
+    } else {
+        None
+    }
+}
+
+fn collect_security_scheme(route: &RichCompiledRoute, schemes: &mut Map<String, Value>) {
+    if let RichRouteSecurity::SecurityScheme(inner) = &route.security {
+        let details = &inner.security_scheme;
+        let issuer_url = match details.provider_type.issuer_url() {
+            Ok(url) => url,
+            Err(_) => return,
+        };
+        let openid_config_url = format!("{}/.well-known/openid-configuration", issuer_url.url());
+        let scheme = json!({
+            "type": "openIdConnect",
+            "openIdConnectUrl": openid_config_url,
+            "description": format!("OpenID Connect provider for {}", details.name),
+        });
+        schemes.insert(details.name.0.clone(), scheme);
+    }
+}
+
+fn path_parameter(name: &str, schema: Value) -> Value {
+    json!({
+        "in": "path",
+        "name": name,
+        "description": format!("Path parameter: {name}"),
+        "required": true,
+        "schema": schema,
+        "explode": false,
+        "style": "simple",
+    })
+}
+
+fn query_parameter(name: &str, required: bool, schema: Value) -> Value {
+    json!({
+        "in": "query",
+        "name": name,
+        "description": format!("Query parameter: {name}"),
+        "required": required,
+        "schema": schema,
+        "explode": false,
+        "style": "form",
+        "allowEmptyValue": false,
+    })
+}
+
+fn header_parameter(name: &str, required: bool, schema: Value) -> Value {
+    json!({
+        "in": "header",
+        "name": name,
+        "description": format!("Header parameter: {name}"),
+        "required": required,
+        "schema": schema,
+        "explode": false,
+        "style": "simple",
+    })
+}
+
+fn set_schema_description(schema: &mut Value, description: &str) {
+    if let Value::Object(obj) = schema {
+        obj.insert("description".to_string(), json!(description));
+    }
 }
 
 fn render_full_path(path_segments: &[PathSegment]) -> String {
@@ -133,440 +379,26 @@ fn render_full_path(path_segments: &[PathSegment]) -> String {
         .map(|ps| match ps {
             PathSegment::Literal { value } => value.clone(),
             PathSegment::Variable { display_name } => format!("{{{display_name}}}"),
-            PathSegment::CatchAll { display_name } => {
-                // Note: this is the same as variable on purpose. The difference between both types is only communicated
-                // in openapi in the variable type.
-                format!("{{{display_name}}}")
-            }
+            // Note: same rendering as Variable on purpose. The difference is
+            // only communicated through the parameter type in OpenAPI.
+            PathSegment::CatchAll { display_name } => format!("{{{display_name}}}"),
         })
         .collect::<Vec<String>>()
         .join("/");
     format!("/{suffix}")
 }
 
-fn add_route_to_paths(
-    route: &RichCompiledRoute,
-    paths: &mut BTreeMap<String, PathItem>,
-) -> Result<(), String> {
-    let path_str = render_full_path(&route.path);
-
-    let path_item = paths.entry(path_str).or_default();
-    let mut operation = Operation::default();
-
-    // Set operation_id and description for CallAgent routes
-    if let RichRouteBehaviour::CallAgent(inner) = &route.behavior {
-        operation.operation_id = Some(format!("{}-{}", inner.agent_type.0, inner.method_name));
-        operation.description = inner.method_description.clone();
-    }
-
-    let path_params_raw = match &route.behavior {
-        RichRouteBehaviour::CallAgent(inner) => call_agent::get_path_variables_and_types(
-            &route.path,
-            &inner.constructor_parameters,
-            &inner.method_parameters,
-        ),
-        RichRouteBehaviour::WebhookCallback(_) => {
-            vec![("promise-id", false, &PathSegmentType::Str)]
-        }
-        _ => Vec::new(),
+fn insert_operation(path_item: &mut Map<String, Value>, method: &str, operation: Value) {
+    let key = match method {
+        "GET" => "get",
+        "POST" => "post",
+        "PUT" => "put",
+        "DELETE" => "delete",
+        "PATCH" => "patch",
+        "OPTIONS" => "options",
+        "HEAD" => "head",
+        "TRACE" => "trace",
+        _ => return,
     };
-    let query_params_raw = match &route.behavior {
-        RichRouteBehaviour::CallAgent(inner) => {
-            call_agent::get_query_variable_and_types(&inner.method_parameters)
-        }
-        _ => Vec::new(),
-    };
-    let header_params_raw = match &route.behavior {
-        RichRouteBehaviour::CallAgent(inner) => {
-            call_agent::get_header_variable_and_types(&inner.method_parameters)
-        }
-        _ => Vec::new(),
-    };
-
-    add_parameters(
-        &mut operation,
-        path_params_raw,
-        query_params_raw,
-        header_params_raw,
-    );
-    add_request_body(&mut operation, &route.body);
-    add_responses(&mut operation, route);
-    add_security(&mut operation, route);
-
-    add_operation_to_path_item(path_item, route.method.as_str(), operation)?;
-
-    Ok(())
-}
-
-fn add_parameters(
-    operation: &mut Operation,
-    path_params_raw: Vec<(&str, bool, &PathSegmentType)>,
-    query_params_raw: Vec<(&str, &QueryOrHeaderType)>,
-    header_params_raw: Vec<(&str, &QueryOrHeaderType)>,
-) {
-    for (name, is_catchall_segment, path_segment_type) in path_params_raw {
-        let schema = create_schema_from_path_segment_type(path_segment_type, is_catchall_segment);
-        operation
-            .parameters
-            .push(ReferenceOr::Item(create_path_parameter(name, schema)));
-    }
-
-    for (name, query_or_header_type) in query_params_raw {
-        let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        operation
-            .parameters
-            .push(ReferenceOr::Item(create_query_parameter(name, schema)));
-    }
-
-    for (name, query_or_header_type) in header_params_raw {
-        let schema = create_schema_from_query_or_header_type(query_or_header_type);
-        operation
-            .parameters
-            .push(ReferenceOr::Item(create_header_parameter(name, schema)));
-    }
-}
-
-fn create_schema_from_path_segment_type(
-    path_segment_type: &PathSegmentType,
-    is_catchall_segment: bool,
-) -> Schema {
-    let analysed_type = AnalysedType::from(path_segment_type);
-    let mut schema = create_schema_from_analysed_type(&analysed_type);
-    if is_catchall_segment {
-        schema.schema_data.description =
-            Some("Parameter represents the remaining path, including slashes.".to_string())
-    }
-    schema
-}
-
-fn create_schema_from_query_or_header_type(query_or_header_type: &QueryOrHeaderType) -> Schema {
-    let analysed_type = AnalysedType::from(query_or_header_type.clone());
-    create_schema_from_analysed_type(&analysed_type)
-}
-
-fn create_path_parameter(name: &str, schema: Schema) -> Parameter {
-    Parameter::Path {
-        parameter_data: ParameterData {
-            name: name.to_string(),
-            description: Some(format!("Path parameter: {name}")),
-            required: true,
-            deprecated: None,
-            explode: Some(false),
-            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
-            example: None,
-            examples: Default::default(),
-            extensions: Default::default(),
-        },
-        style: PathStyle::Simple,
-    }
-}
-
-fn create_query_parameter(name: &str, schema: Schema) -> Parameter {
-    let required = !schema.schema_data.nullable;
-
-    Parameter::Query {
-        parameter_data: ParameterData {
-            name: name.to_string(),
-            description: Some(format!("Query parameter: {name}")),
-            required,
-            deprecated: None,
-            explode: Some(false),
-            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
-            example: None,
-            examples: Default::default(),
-            extensions: Default::default(),
-        },
-        style: QueryStyle::Form,
-        allow_empty_value: Some(false),
-        allow_reserved: false,
-    }
-}
-
-fn create_header_parameter(name: &str, schema: Schema) -> Parameter {
-    let required = !schema.schema_data.nullable;
-
-    Parameter::Header {
-        parameter_data: ParameterData {
-            name: name.to_string(),
-            description: Some(format!("Header parameter: {name}")),
-            required,
-            deprecated: None,
-            explode: Some(false),
-            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
-            example: None,
-            examples: Default::default(),
-            extensions: Default::default(),
-        },
-        style: HeaderStyle::Simple,
-    }
-}
-
-fn add_request_body(operation: &mut Operation, request_body_schema: &RequestBodySchema) {
-    let request_body = create_request_body(request_body_schema);
-
-    if let Some(rb) = request_body {
-        operation.request_body = Some(ReferenceOr::Item(rb));
-    }
-
-    // For text bodies, add Content-Language as an optional header parameter
-    match request_body_schema {
-        RequestBodySchema::UnrestrictedText => {
-            let schema = plain_text_schema(&[]);
-            operation
-                .parameters
-                .push(ReferenceOr::Item(create_optional_header_parameter(
-                    "Content-Language",
-                    schema,
-                )));
-        }
-        RequestBodySchema::RestrictedText {
-            allowed_language_codes,
-        } => {
-            let schema = plain_text_schema(allowed_language_codes);
-            operation
-                .parameters
-                .push(ReferenceOr::Item(create_optional_header_parameter(
-                    "Content-Language",
-                    schema,
-                )));
-        }
-        _ => {}
-    }
-}
-
-fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<RequestBody> {
-    match request_body_schema {
-        RequestBodySchema::Unused => None,
-        RequestBodySchema::JsonBody { expected_type } => {
-            let schema = create_schema_from_analysed_type(expected_type);
-            Some(RequestBody {
-                description: Some("JSON body".to_string()),
-                content: {
-                    let mut content = IndexMap::new();
-                    content.insert(
-                        "application/json".to_string(),
-                        MediaType {
-                            schema: Some(ReferenceOr::Item(schema)),
-                            ..Default::default()
-                        },
-                    );
-                    content
-                },
-                required: true,
-                extensions: Default::default(),
-            })
-        }
-
-        RequestBodySchema::UnrestrictedBinary => Some(RequestBody {
-            description: Some("Unrestricted binary body".to_string()),
-            content: {
-                let mut content = IndexMap::new();
-                content.insert(
-                    "*/*".to_string(),
-                    MediaType {
-                        schema: Some(ReferenceOr::Item(arbitrary_binary_schema())),
-                        ..Default::default()
-                    },
-                );
-                content
-            },
-            required: true,
-            extensions: Default::default(),
-        }),
-
-        RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
-            let mut content = IndexMap::new();
-            for mime in allowed_mime_types {
-                content.insert(
-                    mime.clone(),
-                    MediaType {
-                        schema: Some(ReferenceOr::Item(arbitrary_binary_schema())),
-                        ..Default::default()
-                    },
-                );
-            }
-            Some(RequestBody {
-                description: Some("Restricted binary body".to_string()),
-                content,
-                required: true,
-                extensions: Default::default(),
-            })
-        }
-
-        RequestBodySchema::UnrestrictedText => Some(RequestBody {
-            description: Some("Unrestricted text body".to_string()),
-            content: {
-                let mut content = IndexMap::new();
-                content.insert(
-                    "text/plain".to_string(),
-                    MediaType {
-                        schema: Some(ReferenceOr::Item(plain_text_schema(&[]))),
-                        ..Default::default()
-                    },
-                );
-                content
-            },
-            required: true,
-            extensions: Default::default(),
-        }),
-
-        RequestBodySchema::RestrictedText {
-            allowed_language_codes: _,
-        } => Some(RequestBody {
-            description: Some("Restricted text body".to_string()),
-            content: {
-                let mut content = IndexMap::new();
-                content.insert(
-                    "text/plain".to_string(),
-                    MediaType {
-                        schema: Some(ReferenceOr::Item(plain_text_schema(&[]))),
-                        ..Default::default()
-                    },
-                );
-                content
-            },
-            required: true,
-            extensions: Default::default(),
-        }),
-    }
-}
-
-fn plain_text_schema(allowed_language_codes: &[String]) -> Schema {
-    let enumeration: Vec<Option<String>> = allowed_language_codes
-        .iter()
-        .map(|s| Some(s.clone()))
-        .collect();
-
-    Schema {
-        schema_data: openapiv3::SchemaData::default(),
-        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(openapiv3::StringType {
-            format: openapiv3::VariantOrUnknownOrEmpty::Empty,
-            pattern: None,
-            enumeration,
-            min_length: None,
-            max_length: None,
-        })),
-    }
-}
-
-/// Create an optional header parameter (regardless of schema nullability).
-fn create_optional_header_parameter(name: &str, schema: Schema) -> Parameter {
-    Parameter::Header {
-        parameter_data: ParameterData {
-            name: name.to_string(),
-            description: Some(format!("Header parameter: {name}")),
-            required: false,
-            deprecated: None,
-            explode: Some(false),
-            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
-            example: None,
-            examples: Default::default(),
-            extensions: Default::default(),
-        },
-        style: HeaderStyle::Simple,
-    }
-}
-
-fn add_responses(operation: &mut Operation, route: &RichCompiledRoute) {
-    let agent_response_schema = get_route_response_schema(route);
-
-    for (status_code, response_schema) in agent_response_schema.body_and_status_codes {
-        let mut response = Response {
-            description: format!("Response {}", status_code),
-            ..Default::default()
-        };
-
-        match response_schema {
-            ResponseBodyOpenApiSchema::Known {
-                schema,
-                content_type,
-            } => {
-                let mut content = IndexMap::new();
-                content.insert(
-                    content_type,
-                    MediaType {
-                        schema: Some(ReferenceOr::Item(*schema)),
-                        ..Default::default()
-                    },
-                );
-                response.content = content;
-            }
-            ResponseBodyOpenApiSchema::Unknown => {
-                let mut content = IndexMap::new();
-                content.insert(
-                    "*/*".to_string(),
-                    MediaType {
-                        schema: Some(ReferenceOr::Item(arbitrary_binary_schema())),
-                        ..Default::default()
-                    },
-                );
-                response.content = content;
-            }
-            ResponseBodyOpenApiSchema::NoBody => {
-                response.content = IndexMap::new();
-            }
-        }
-
-        let mut response_headers = IndexMap::new();
-
-        for (name, header_schema) in agent_response_schema.headers.iter() {
-            let description = format!("Response header: {}", name);
-            response_headers.insert(
-                name.clone(),
-                ReferenceOr::Item(Header {
-                    description: Some(description),
-                    required: header_schema.required,
-                    deprecated: None,
-                    format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(
-                        header_schema.schema.clone(),
-                    )),
-                    example: None,
-                    examples: Default::default(),
-                    extensions: Default::default(),
-                    style: HeaderStyle::Simple,
-                }),
-            );
-        }
-        response.headers = response_headers;
-
-        operation
-            .responses
-            .responses
-            .insert(StatusCode::Code(status_code), ReferenceOr::Item(response));
-    }
-}
-
-fn add_security(operation: &mut Operation, route: &RichCompiledRoute) {
-    if let RichRouteSecurity::SecurityScheme(inner) = &route.security {
-        let scopes_vec: Vec<String> = inner
-            .security_scheme
-            .scopes
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-
-        let mut requirement: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
-        requirement.insert(inner.security_scheme.name.0.clone(), scopes_vec);
-
-        operation.security = Some(vec![requirement]);
-    }
-}
-
-fn add_operation_to_path_item(
-    path_item: &mut PathItem,
-    method: &str,
-    operation: Operation,
-) -> Result<(), String> {
-    match method {
-        "GET" => path_item.get = Some(operation),
-        "POST" => path_item.post = Some(operation),
-        "PUT" => path_item.put = Some(operation),
-        "DELETE" => path_item.delete = Some(operation),
-        "PATCH" => path_item.patch = Some(operation),
-        "OPTIONS" => path_item.options = Some(operation),
-        "HEAD" => path_item.head = Some(operation),
-        "TRACE" => path_item.trace = Some(operation),
-        _ => {}
-    }
-    Ok(())
+    path_item.insert(key.to_string(), operation);
 }

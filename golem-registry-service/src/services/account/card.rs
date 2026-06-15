@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::card::CardRecord;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::AccountRole;
 use golem_common::model::card::owner::{
     AccountOwnerPattern, AgentOwnerPattern, ApplicationOwnerPattern, ComponentOwnerPattern,
@@ -21,27 +21,30 @@ use golem_common::model::card::owner::{
 };
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountOauth2IdentityResourcePattern, AccountPluginResourcePattern, AccountResourcePattern,
-    AccountTokenResourcePattern, AccountUsageResourcePattern, AgentResourcePattern,
-    ApplicationResourcePattern, BlobResourcePattern, CardId, CardManagedBy, CardResourcePattern,
-    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
+    AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
+    AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
+    BlobResourcePattern, CardId, CardManagedBy, CardResourcePattern, ClassPermissionPattern,
+    ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
     EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
     EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
     EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
     EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern,
     EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern,
     EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
-    EnvironmentShareResourcePattern, FilesystemResourcePattern, KvResourcePattern,
-    NetworkResourcePattern, OplogResourcePattern, PermissionPattern, PlanResourcePattern,
-    RdbmsResourcePattern, SecretResourcePattern, SystemResourcePattern, SystemVerb,
-    ToolResourcePattern,
+    FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
+    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
+    SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
 
-pub(super) fn account_root_card_record(account_id: AccountId, roles: &[AccountRole]) -> CardRecord {
-    let account = account_id.to_string();
+pub(super) fn account_root_card_record(
+    account_id: AccountId,
+    account_email: AccountEmail,
+    roles: &[AccountRole],
+) -> CardRecord {
     let mut grants = Vec::new();
 
-    add_own_account_grants(&mut grants, &account);
+    add_own_account_grants(&mut grants, &account_email);
 
     if roles.contains(&AccountRole::Admin) {
         add_admin_grants(&mut grants);
@@ -64,26 +67,26 @@ pub(super) fn account_root_card_record(account_id: AccountId, roles: &[AccountRo
     )
 }
 
-fn add_own_account_grants(grants: &mut Vec<PermissionPattern>, account: &str) {
+fn add_own_account_grants(grants: &mut Vec<PermissionPattern>, account_email: &AccountEmail) {
     add_account_grants(
         grants,
         AccountOwnerPattern::Account {
-            account: account.to_string(),
+            account: account_email.clone(),
         },
         ApplicationOwnerPattern::AccountApplications {
-            account: account.to_string(),
+            account: account_email.clone(),
         },
         AgentOwnerPattern::AccountAgents {
-            account: account.to_string(),
+            account: account_email.clone(),
         },
         EnvironmentOwnerPattern::AccountEnvironments {
-            account: account.to_string(),
+            account: account_email.clone(),
         },
         ComponentOwnerPattern::AccountComponents {
-            account: account.to_string(),
+            account: account_email.clone(),
         },
         ToolOwnerPattern::AccountTools {
-            account: account.to_string(),
+            account: account_email.clone(),
         },
     );
 }
@@ -165,6 +168,12 @@ fn add_account_grants(
             owner: account_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: AccountPluginResourcePattern::Any,
+        }),
+        PermissionPattern::AccountPermissionShare(ClassPermissionPattern {
+            verb: None,
+            owner: account_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: AccountPermissionShareResourcePattern::Any,
         }),
         PermissionPattern::AccountToken(ClassPermissionPattern {
             verb: None,
@@ -261,12 +270,6 @@ fn add_account_grants(
             owner: environment_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: EnvironmentSecuritySchemeResourcePattern::Any,
-        }),
-        PermissionPattern::EnvironmentShare(ClassPermissionPattern {
-            verb: None,
-            owner: environment_owner.clone(),
-            recipient: RecipientPattern::Any,
-            resource: EnvironmentShareResourcePattern::Any,
         }),
         PermissionPattern::Blob(ClassPermissionPattern {
             verb: None,
