@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, DataValue, GolemUserPrincipal, LegacyParsedAgentId, Principal,
+    AgentMode, AgentTypeName, DataValue, GolemUserPrincipal, ParsedAgentId, Principal,
 };
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
@@ -62,7 +62,7 @@ fn build_public_agent_id(
     phantom_id: Option<uuid::Uuid>,
     agent_mode: AgentMode,
 ) -> WorkerResult<AgentId> {
-    let agent_id = LegacyParsedAgentId::new_auto_phantom(
+    let agent_id = ParsedAgentId::from_legacy_parameters_auto_phantom(
         agent_type_name,
         constructor_parameters,
         phantom_id,

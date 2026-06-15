@@ -1267,15 +1267,7 @@ pub fn format_timestamp(timestamp: u64) -> String {
 pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
     let rendered_agent_name = match &agent_name_match.parsed_agent_id {
         Some(parsed) if agent_name_match.source_language.is_known() => {
-            // Adapt LegacyParsedAgentId at the boundary into the schema-layer
-            // ParsedAgentId before calling the schema-typed renderer.
-            match golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed) {
-                Ok(parsed_schema) => crate::agent_id_display::render_agent_id(
-                    &parsed_schema,
-                    &agent_name_match.source_language,
-                ),
-                Err(_) => agent_name_match.agent_name.0.clone(),
-            }
+            crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
         }
         _ => agent_name_match.agent_name.0.clone(),
     };

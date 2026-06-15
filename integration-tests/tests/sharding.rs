@@ -40,7 +40,7 @@ mod tests {
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
-    use golem_common::model::agent::LegacyParsedAgentId;
+    use golem_common::model::agent::ParsedAgentId;
     use rand::prelude::*;
     use rand::rng;
     use std::collections::{BTreeMap, HashSet};
@@ -389,11 +389,11 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<LegacyParsedAgentId>);
+        ) -> (ComponentDto, Vec<ParsedAgentId>);
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[LegacyParsedAgentId],
+            agent_ids: &[ParsedAgentId],
         ) -> Result<(), worker::v1::agent_error::Error>;
         async fn start_all_worker_executors(
             &self,
@@ -457,7 +457,7 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<LegacyParsedAgentId>) {
+        ) -> (ComponentDto, Vec<ParsedAgentId>) {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
@@ -490,7 +490,7 @@ mod tests {
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[LegacyParsedAgentId],
+            agent_ids: &[ParsedAgentId],
         ) -> Result<(), worker::v1::agent_error::Error> {
             let mut tasks = JoinSet::new();
             for agent_id in agent_ids {
@@ -821,7 +821,7 @@ mod tests {
         InvokeAndAwaitWorkers {
             name: String,
             component: Box<ComponentDto>,
-            agent_ids: Vec<LegacyParsedAgentId>,
+            agent_ids: Vec<ParsedAgentId>,
         },
         Stop,
     }

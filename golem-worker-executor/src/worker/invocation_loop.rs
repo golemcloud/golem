@@ -30,7 +30,7 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{parsed_agent_id_parameters_to_legacy_data_value, AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -1262,7 +1262,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &IdempotencyKey,
         invocation: &AgentInvocation,
         agent_id: &AgentId,
-        parsed_agent_id: &Option<LegacyParsedAgentId>,
+        parsed_agent_id: &Option<ParsedAgentId>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
@@ -1293,7 +1293,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),
                 AttributeValue::String(
-                    format_structural(&parsed_agent_id.parameters)
+                    parsed_agent_id_parameters_to_legacy_data_value(&parsed_agent_id.parameters)
+                        .and_then(|parameters| format_structural(&parameters).map_err(|err| err.to_string()))
                         .unwrap_or_else(|err| format!("Cannot render: {}", err)),
                 ),
             )

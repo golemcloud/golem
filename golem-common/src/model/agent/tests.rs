@@ -16,15 +16,22 @@ use crate::base_model::Empty;
 use crate::base_model::agent::{
     Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
 };
+use crate::model::agent::AgentTypeSchemaResolver;
 use crate::model::agent::{
     AgentConstructor, AgentMode, AgentType, AgentTypeName, AgentTypeResolver, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    JsonComponentModelValue, LegacyParsedAgentId, NamedElementSchema, NamedElementSchemas,
-    NamedElementValue, NamedElementValues, TextDescriptor, TextReference, TextReferenceValue,
-    TextSource, TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-    UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues, Url,
+    JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
+    TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue, UntypedJsonDataValue,
+    UntypedJsonElementValue, UntypedJsonElementValues, Url,
+    parsed_agent_id_parameters_to_legacy_data_value, typed_constructor_parameters,
 };
+use crate::schema::AgentTypeSchema;
+use crate::schema::adapters::agent::{
+    agent_type_to_schema, legacy_data_value_to_typed_schema_value,
+};
+use crate::schema::adapters::{input_schema_to_data_schema, untyped_data_value_to_input_value};
 use crate::{agent_id, data_value, phantom_agent_id};
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
@@ -44,14 +51,14 @@ use uuid::Uuid;
 fn agent_id_structural_normalization() {
     {
         let agent_id =
-            LegacyParsedAgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new())
+            ParsedAgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new())
                 .unwrap();
         assert_eq!(agent_id.to_string(), "agent-7([12,13,14])");
     }
 
     {
         // Structural format: record is positional `(x,y,flags)`, flags are `f(indices...)`
-        let agent_id = LegacyParsedAgentId::parse(
+        let agent_id = ParsedAgentId::parse(
             "agent-3(  32 ,( 12, 32, f(0,    1  , 2   ) ))",
             TestAgentTypes::new(),
         )
@@ -115,14 +122,16 @@ fn roundtrip_test_4_1() {
         DataValue::Tuple(ElementValues {
             elements: vec![
                 ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Url(Url {
-                        value: "https://url1.com/".to_string(),
+                    value: TextReference::Inline(TextSource {
+                        data: "https://url1.com/".to_string(),
+                        text_type: None,
                     }),
                     descriptor: TextDescriptor::default(),
                 }),
                 ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Url(Url {
-                        value: "https://url2.com/".to_string(),
+                    value: TextReference::Inline(TextSource {
+                        data: "https://url2.com/".to_string(),
+                        text_type: None,
                     }),
                     descriptor: TextDescriptor::default(),
                 }),
@@ -168,58 +177,38 @@ fn text_type_strat() -> impl Strategy<Value = Option<TextType>> {
 }
 
 fn text_reference_strat() -> impl Strategy<Value = TextReference> {
-    prop_oneof! {
-        Just(TextReference::Url(Url { value: "https://example.com/xyz?a=1".to_string() })),
-        (string_regex(".*\\p{Cc}.*").unwrap(), text_type_strat()).prop_map(|(data, text_type)| TextReference::Inline(TextSource {
-            data,
-            text_type
-        }))
-    }
+    (string_regex(".*\\p{Cc}.*").unwrap(), text_type_strat())
+        .prop_map(|(data, text_type)| TextReference::Inline(TextSource { data, text_type }))
 }
 
 proptest! {
     #[test]
-    fn roundtrip_test_arbitrary_unstructured_text_in_multimodal(txt in text_reference_strat()) {
-        let parameters = DataValue::Multimodal(
-            NamedElementValues {
-                elements: vec![
-                    NamedElementValue {
-                        name: "y".to_string(),
-                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt, descriptor: TextDescriptor::default() }),
-                        schema_index: 1,
-                    },
-                ]
-            }
-        );
-        let id = LegacyParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
+    fn roundtrip_test_arbitrary_unstructured_text(txt in text_reference_strat()) {
+        let parameters = DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt, descriptor: TextDescriptor::default() }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Inline(TextSource { data: "fixed".to_string(), text_type: None }), descriptor: TextDescriptor::default() }),
+            ]
+        });
+        let id = parsed_agent_id_from_test_schema("agent-4", parameters, None).unwrap();
         let s = id.to_string();
         println!("{s}");
-        let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
         prop_assert_eq!(id, id2);
     }
 
     #[test]
-    fn roundtrip_test_multiple_arbitrary_unstructured_text_in_multimodal(txt1 in text_reference_strat(), txt2 in text_reference_strat()) {
-        let parameters = DataValue::Multimodal(
-            NamedElementValues {
-                elements: vec![
-                    NamedElementValue {
-                        name: "y".to_string(),
-                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt1, descriptor: TextDescriptor::default() }),
-                        schema_index: 1,
-                    },
-                    NamedElementValue {
-                        name: "y".to_string(),
-                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt2, descriptor: TextDescriptor::default() }),
-                        schema_index: 1,
-                    },
-                ]
-            }
-        );
-        let id = LegacyParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
+    fn roundtrip_test_multiple_arbitrary_unstructured_text(txt1 in text_reference_strat(), txt2 in text_reference_strat()) {
+        let parameters = DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt1, descriptor: TextDescriptor::default() }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt2, descriptor: TextDescriptor::default() }),
+            ]
+        });
+        let id = parsed_agent_id_from_test_schema("agent-4", parameters, None).unwrap();
         let s = id.to_string();
         println!("{s}");
-        let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
         prop_assert_eq!(id, id2);
     }
 }
@@ -231,14 +220,20 @@ fn roundtrip_test_5_1() {
         DataValue::Tuple(ElementValues {
             elements: vec![
                 ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Url(Url {
-                        value: "https://url1.com/".to_string(),
+                    value: BinaryReference::Inline(BinarySource {
+                        data: "https://url1.com/".as_bytes().to_vec(),
+                        binary_type: BinaryType {
+                            mime_type: "text/plain".to_string(),
+                        },
                     }),
                     descriptor: BinaryDescriptor::default(),
                 }),
                 ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Url(Url {
-                        value: "https://url2.com/".to_string(),
+                    value: BinaryReference::Inline(BinarySource {
+                        data: "https://url2.com/".as_bytes().to_vec(),
+                        binary_type: BinaryType {
+                            mime_type: "text/plain".to_string(),
+                        },
                     }),
                     descriptor: BinaryDescriptor::default(),
                 }),
@@ -279,30 +274,14 @@ fn roundtrip_test_5_2() {
 #[test]
 fn roundtrip_test_6() {
     roundtrip_test(
-        "agent-6",
-        DataValue::Multimodal(NamedElementValues {
-            elements: vec![
-                NamedElementValue {
-                    name: "z".to_string(),
-                    value: ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                        value: BinaryReference::Inline(BinarySource {
-                            data: "Hello world!".as_bytes().to_vec(),
-                            binary_type: BinaryType {
-                                mime_type: "application/json".to_string(),
-                            },
-                        }),
-                        descriptor: BinaryDescriptor::default(),
-                    }),
-                    schema_index: 2,
-                },
-                NamedElementValue {
-                    name: "x".to_string(),
-                    value: ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: 101u32.into_value_and_type(),
-                    }),
-                    schema_index: 0,
-                },
-            ],
+        "agent-7",
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::List(vec![Value::U32(1), Value::U32(2)]),
+                    list(u32()),
+                ),
+            })],
         }),
     )
 }
@@ -343,21 +322,23 @@ fn invalid_agent_param_type() {
 }
 
 #[test]
-fn text_url_roundtrips_without_validation() {
-    // Structural format does not validate URLs; validation happens elsewhere
+fn text_content_that_looks_like_url_roundtrips_without_validation() {
+    // Structural format does not validate URL-like text; validation happens elsewhere
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
             elements: vec![
                 ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Url(Url {
-                        value: "https://url1.com/".to_string(),
+                    value: TextReference::Inline(TextSource {
+                        data: "https://url1.com/".to_string(),
+                        text_type: None,
                     }),
                     descriptor: TextDescriptor::default(),
                 }),
                 ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Url(Url {
-                        value: "not?a/valid!url".to_string(),
+                    value: TextReference::Inline(TextSource {
+                        data: "not?a/valid!url".to_string(),
+                        text_type: None,
                     }),
                     descriptor: TextDescriptor::default(),
                 }),
@@ -538,7 +519,7 @@ fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
 #[test]
 fn normalize_strips_whitespace_in_wave_values() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
+        ParsedAgentId::normalize_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
         "agent-7([12,13,14])"
     );
 }
@@ -546,7 +527,7 @@ fn normalize_strips_whitespace_in_wave_values() {
 #[test]
 fn normalize_strips_whitespace_in_records() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text(
+        ParsedAgentId::normalize_text(
             r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#
         )
         .unwrap(),
@@ -557,7 +538,7 @@ fn normalize_strips_whitespace_in_records() {
 #[test]
 fn normalize_preserves_already_compact() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-1()").unwrap(),
+        ParsedAgentId::normalize_text("agent-1()").unwrap(),
         "agent-1()"
     );
 }
@@ -565,7 +546,7 @@ fn normalize_preserves_already_compact() {
 #[test]
 fn normalize_preserves_strings() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text(r#"agent-2("hello world")"#).unwrap(),
+        ParsedAgentId::normalize_text(r#"agent-2("hello world")"#).unwrap(),
         r#"agent-2("hello world")"#
     );
 }
@@ -573,34 +554,31 @@ fn normalize_preserves_strings() {
 #[test]
 fn normalize_handles_phantom_id() {
     let result =
-        LegacyParsedAgentId::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]")
-            .unwrap();
+        ParsedAgentId::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_handles_phantom_id_with_whitespace() {
     let result =
-        LegacyParsedAgentId::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]")
-            .unwrap();
+        ParsedAgentId::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]").unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_rejects_invalid_format() {
-    assert!(LegacyParsedAgentId::normalize_text("not-an-agent-id").is_err());
+    assert!(ParsedAgentId::normalize_text("not-an-agent-id").is_err());
 }
 
 #[test]
 fn normalize_rejects_invalid_phantom_id() {
-    assert!(LegacyParsedAgentId::normalize_text("agent-1()[not-a-uuid]").is_err());
+    assert!(ParsedAgentId::normalize_text("agent-1()[not-a-uuid]").is_err());
 }
 
 #[test]
 fn normalize_handles_urls() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-4(https://url1.com/,https://url2.com/)")
-            .unwrap(),
+        ParsedAgentId::normalize_text("agent-4(https://url1.com/,https://url2.com/)").unwrap(),
         "agent-4(https://url1.com/,https://url2.com/)"
     );
 }
@@ -608,7 +586,7 @@ fn normalize_handles_urls() {
 #[test]
 fn normalize_handles_inline_text() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
+        ParsedAgentId::normalize_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
         r#"agent-4("hello, world!","goodbye")"#
     );
 }
@@ -616,7 +594,7 @@ fn normalize_handles_inline_text() {
 #[test]
 fn normalize_handles_multimodal_elements() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
+        ParsedAgentId::normalize_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
         "agent-6(x(42),y(https://example.com/))"
     );
 }
@@ -624,7 +602,7 @@ fn normalize_handles_multimodal_elements() {
 #[test]
 fn normalize_handles_nested_records_with_whitespace() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text(
+        ParsedAgentId::normalize_text(
             r#"non-kebab-agent({ agent-id : { component-id : { uuid : { high-bits : 115746831381919841 , low-bits : 13556493125794766855 } } , agent-id : "some-agent-id(\"hello\")" } , oplog-idx : 1234 })"#
         )
         .unwrap(),
@@ -635,19 +613,19 @@ fn normalize_handles_nested_records_with_whitespace() {
 #[test]
 fn normalize_handles_options_and_results() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( some( 42 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( some( 42 ) )").unwrap(),
         "agent-x(some(42))"
     );
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( none )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( none )").unwrap(),
         "agent-x(none)"
     );
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( ok( 1 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( ok( 1 ) )").unwrap(),
         "agent-x(ok(1))"
     );
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( err( 2 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( err( 2 ) )").unwrap(),
         "agent-x(err(2))"
     );
 }
@@ -655,7 +633,7 @@ fn normalize_handles_options_and_results() {
 #[test]
 fn normalize_handles_empty_record() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( {  :  } )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( {  :  } )").unwrap(),
         "agent-x({:})"
     );
 }
@@ -663,7 +641,7 @@ fn normalize_handles_empty_record() {
 #[test]
 fn normalize_handles_empty_flags() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( {  } )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( {  } )").unwrap(),
         "agent-x({})"
     );
 }
@@ -671,7 +649,7 @@ fn normalize_handles_empty_flags() {
 #[test]
 fn normalize_handles_char_values() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( 'a' , 'b' )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( 'a' , 'b' )").unwrap(),
         "agent-x('a','b')"
     );
 }
@@ -679,7 +657,7 @@ fn normalize_handles_char_values() {
 #[test]
 fn normalize_handles_variant_with_percent_prefix() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x( %true( 42 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( %true( 42 ) )").unwrap(),
         "agent-x(%true(42))"
     );
 }
@@ -687,7 +665,7 @@ fn normalize_handles_variant_with_percent_prefix() {
 #[test]
 fn normalize_trims_outer_whitespace() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("  agent-7(  [  12, 13 ]  )  ").unwrap(),
+        ParsedAgentId::normalize_text("  agent-7(  [  12, 13 ]  )  ").unwrap(),
         "agent-7([12,13])"
     );
 }
@@ -695,7 +673,7 @@ fn normalize_trims_outer_whitespace() {
 #[test]
 fn normalize_phantom_id_with_casing_and_whitespace() {
     let result =
-        LegacyParsedAgentId::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]")
+        ParsedAgentId::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]")
             .unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
@@ -703,7 +681,7 @@ fn normalize_phantom_id_with_casing_and_whitespace() {
 #[test]
 fn normalize_empty_params_stays_empty() {
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-1(   )").unwrap(),
+        ParsedAgentId::normalize_text("agent-1(   )").unwrap(),
         "agent-1()"
     );
 }
@@ -712,7 +690,7 @@ fn normalize_empty_params_stays_empty() {
 fn normalize_preserves_double_comma() {
     // normalize_structural only strips whitespace, it does not validate structure
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x(1,,2)").unwrap(),
+        ParsedAgentId::normalize_text("agent-x(1,,2)").unwrap(),
         "agent-x(1,,2)"
     );
 }
@@ -721,20 +699,20 @@ fn normalize_preserves_double_comma() {
 fn normalize_preserves_leading_comma() {
     // normalize_structural only strips whitespace, it does not validate structure
     assert_eq!(
-        LegacyParsedAgentId::normalize_text("agent-x(,1)").unwrap(),
+        ParsedAgentId::normalize_text("agent-x(,1)").unwrap(),
         "agent-x(,1)"
     );
 }
 
 #[test]
 fn normalize_rejects_empty_agent_type() {
-    assert!(LegacyParsedAgentId::normalize_text("()").is_err());
+    assert!(ParsedAgentId::normalize_text("()").is_err());
 }
 
 proptest! {
     #[test]
     fn normalize_text_idempotent_for_simple_agent(x in 0u32..10000) {
-        let agent_id = LegacyParsedAgentId::new(
+        let agent_id = ParsedAgentId::from_legacy_parameters(
             AgentTypeName("agent-2".to_string()),
             DataValue::Tuple(ElementValues {
                 elements: vec![
@@ -744,7 +722,7 @@ proptest! {
             None,
         ).unwrap();
         let canonical = agent_id.to_string();
-        let normalized = LegacyParsedAgentId::normalize_text(&canonical).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
     }
 
@@ -754,7 +732,7 @@ proptest! {
         b in 0u32..100,
         c in 0u32..100,
     ) {
-        let agent_id = LegacyParsedAgentId::new(
+        let agent_id = ParsedAgentId::from_legacy_parameters(
             AgentTypeName("agent-7".to_string()),
             DataValue::Tuple(ElementValues {
                 elements: vec![
@@ -767,14 +745,14 @@ proptest! {
             None,
         ).unwrap();
         let canonical = agent_id.to_string();
-        let normalized = LegacyParsedAgentId::normalize_text(&canonical).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
     }
 
     #[test]
     fn normalize_text_strips_whitespace_for_simple_agent(x in 0u32..10000) {
         let with_spaces = format!("agent-2(  {x}  )");
-        let normalized = LegacyParsedAgentId::normalize_text(&with_spaces).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&with_spaces).unwrap();
         prop_assert_eq!(normalized, format!("agent-2({x})"));
     }
 
@@ -785,49 +763,66 @@ proptest! {
         c in 0u32..100,
     ) {
         let with_spaces = format!("agent-7( [ {a} , {b} , {c} ] )");
-        let normalized = LegacyParsedAgentId::normalize_text(&with_spaces).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&with_spaces).unwrap();
         prop_assert_eq!(normalized, format!("agent-7([{a},{b},{c}])"));
     }
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id =
-        LegacyParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
+    let id = parsed_agent_id_from_test_schema(agent_type, parameters, None).unwrap();
     let s = id.to_string();
     println!("{s}");
-    let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
 }
 
 fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
-    let id = LegacyParsedAgentId::new(
-        AgentTypeName(agent_type.to_string()),
-        parameters,
-        phantom_id,
-    )
-    .unwrap();
+    let id = parsed_agent_id_from_test_schema(agent_type, parameters, phantom_id).unwrap();
     let s = id.to_string();
     println!("{s}");
-    let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
     assert_eq!(id.phantom_id, phantom_id);
 }
 
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id =
-        LegacyParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
+    let id = ParsedAgentId::from_legacy_parameters(
+        AgentTypeName(agent_type.to_string()),
+        parameters,
+        None,
+    )
+    .unwrap();
     let s = id.to_string();
-    let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new())
+    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new())
         .err()
         .unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 
 fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
-    let id2 = LegacyParsedAgentId::parse(agent_id_str, TestAgentTypes::new())
+    let id2 = ParsedAgentId::parse(agent_id_str, TestAgentTypes::new())
         .err()
         .unwrap();
     assert_eq!(id2, expected_failure.to_string());
+}
+
+fn parsed_agent_id_from_test_schema(
+    agent_type: &str,
+    parameters: DataValue,
+    phantom_id: Option<Uuid>,
+) -> Result<ParsedAgentId, String> {
+    let agent_type_name = AgentTypeName(agent_type.to_string());
+    let agent_type = TestAgentTypes::new().resolve_agent_type_schema_by_name(&agent_type_name)?;
+    let data_schema =
+        input_schema_to_data_schema(&agent_type.schema, &agent_type.constructor.input_schema)
+            .map_err(|e| e.to_string())?;
+    let value = untyped_data_value_to_input_value(parameters.into(), &data_schema)
+        .map_err(|e| e.to_string())?;
+    ParsedAgentId::try_new(
+        agent_type_name,
+        typed_constructor_parameters(&agent_type, value),
+        phantom_id,
+    )
 }
 
 struct TestAgentTypes {
@@ -850,6 +845,35 @@ impl AgentTypeResolver for TestAgentTypes {
             .cloned()
             .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
     }
+}
+
+impl AgentTypeSchemaResolver for TestAgentTypes {
+    fn resolve_agent_type_schema_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentTypeSchema, String> {
+        self.types
+            .get(agent_type)
+            .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
+            .and_then(|agent_type| agent_type_to_schema(agent_type).map_err(|e| e.to_string()))
+    }
+}
+
+fn parsed_agent_id_lenient(
+    agent_type: AgentTypeName,
+    parameters: DataValue,
+    phantom_id: Option<Uuid>,
+) -> ParsedAgentId {
+    let parameters =
+        legacy_data_value_to_typed_schema_value(&parameters).expect("promote parameters");
+    ParsedAgentId::new(agent_type, parameters, phantom_id)
+}
+
+fn assert_legacy_parameters_eq(parameters: &crate::schema::TypedSchemaValue, expected: DataValue) {
+    assert_eq!(
+        parsed_agent_id_parameters_to_legacy_data_value(parameters).unwrap(),
+        expected
+    );
 }
 
 fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
@@ -1197,9 +1221,9 @@ fn data_value_macro_trailing_comma() {
 fn agent_id_macro_no_parameters() {
     let id = agent_id!("agent-1");
     assert_eq!(id.agent_type, AgentTypeName("agent-1".to_string()));
-    assert_eq!(
-        id.parameters,
-        DataValue::Tuple(ElementValues { elements: vec![] })
+    assert_legacy_parameters_eq(
+        &id.parameters,
+        DataValue::Tuple(ElementValues { elements: vec![] }),
     );
     assert_eq!(id.phantom_id, None);
 }
@@ -1208,13 +1232,13 @@ fn agent_id_macro_no_parameters() {
 fn agent_id_macro_single_parameter() {
     let id = agent_id!("agent-2", 42u32);
     assert_eq!(id.agent_type, AgentTypeName("agent-2".to_string()));
-    assert_eq!(
-        id.parameters,
+    assert_legacy_parameters_eq(
+        &id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 42u32.into_value_and_type()
-            })]
-        })
+                value: 42u32.into_value_and_type(),
+            })],
+        }),
     );
     assert_eq!(id.phantom_id, None);
 }
@@ -1236,7 +1260,7 @@ fn agent_id_macro_multiple_parameters() {
             }),
         ],
     });
-    assert_eq!(id.parameters, expected_params);
+    assert_legacy_parameters_eq(&id.parameters, expected_params);
     assert_eq!(id.phantom_id, None);
 }
 
@@ -1244,18 +1268,18 @@ fn agent_id_macro_multiple_parameters() {
 fn agent_id_macro_with_trailing_comma() {
     let id = agent_id!("agent-4", 42u32, 100u64,);
     assert_eq!(id.agent_type, AgentTypeName("agent-4".to_string()));
-    assert_eq!(
-        id.parameters,
+    assert_legacy_parameters_eq(
+        &id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![
                 ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type()
+                    value: 42u32.into_value_and_type(),
                 }),
                 ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type()
+                    value: 100u64.into_value_and_type(),
                 }),
-            ]
-        })
+            ],
+        }),
     );
     assert_eq!(id.phantom_id, None);
 }
@@ -1265,9 +1289,9 @@ fn phantom_agent_id_macro_no_parameters() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-1", phantom_uuid);
     assert_eq!(id.agent_type, AgentTypeName("phantom-1".to_string()));
-    assert_eq!(
-        id.parameters,
-        DataValue::Tuple(ElementValues { elements: vec![] })
+    assert_legacy_parameters_eq(
+        &id.parameters,
+        DataValue::Tuple(ElementValues { elements: vec![] }),
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1277,13 +1301,13 @@ fn phantom_agent_id_macro_single_parameter() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-2", phantom_uuid, 42u32);
     assert_eq!(id.agent_type, AgentTypeName("phantom-2".to_string()));
-    assert_eq!(
-        id.parameters,
+    assert_legacy_parameters_eq(
+        &id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 42u32.into_value_and_type()
-            })]
-        })
+                value: 42u32.into_value_and_type(),
+            })],
+        }),
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1293,18 +1317,18 @@ fn phantom_agent_id_macro_multiple_parameters() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-3", phantom_uuid, 42u32, 100u64);
     assert_eq!(id.agent_type, AgentTypeName("phantom-3".to_string()));
-    assert_eq!(
-        id.parameters,
+    assert_legacy_parameters_eq(
+        &id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![
                 ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type()
+                    value: 42u32.into_value_and_type(),
                 }),
                 ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type()
+                    value: 100u64.into_value_and_type(),
                 }),
-            ]
-        })
+            ],
+        }),
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1314,18 +1338,18 @@ fn phantom_agent_id_macro_with_trailing_comma() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-4", phantom_uuid, 42u32, 100u64,);
     assert_eq!(id.agent_type, AgentTypeName("phantom-4".to_string()));
-    assert_eq!(
-        id.parameters,
+    assert_legacy_parameters_eq(
+        &id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![
                 ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type()
+                    value: 42u32.into_value_and_type(),
                 }),
                 ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type()
+                    value: 100u64.into_value_and_type(),
                 }),
-            ]
-        })
+            ],
+        }),
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1361,15 +1385,18 @@ fn agent_id_too_long_rejected() {
         })],
     });
 
-    let err = LegacyParsedAgentId::new(AgentTypeName("t".to_string()), parameters.clone(), None)
-        .expect_err("LegacyParsedAgentId::new should reject too-long ids");
+    let err = ParsedAgentId::from_legacy_parameters(
+        AgentTypeName("t".to_string()),
+        parameters.clone(),
+        None,
+    )
+    .expect_err("ParsedAgentId::new should reject too-long ids");
     assert!(
         err.contains("too long"),
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed = LegacyParsedAgentId::new_lenient(AgentTypeName("t".to_string()), parameters, None)
-        .expect("LegacyParsedAgentId::new_lenient should succeed");
+    let parsed = parsed_agent_id_lenient(AgentTypeName("t".to_string()), parameters, None);
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
     let err = result.unwrap_err();
@@ -1395,21 +1422,19 @@ fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
         })],
     });
 
-    let err = LegacyParsedAgentId::new_auto_phantom(
+    let err = ParsedAgentId::from_legacy_parameters_auto_phantom(
         agent_type.clone(),
         params.clone(),
         None,
         AgentMode::Durable,
     )
-    .expect_err("LegacyParsedAgentId::new_auto_phantom should reject too-long ids");
+    .expect_err("ParsedAgentId::new_auto_phantom should reject too-long ids");
     assert!(
         err.contains("too long"),
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed =
-        LegacyParsedAgentId::new_auto_phantom_lenient(agent_type, params, None, AgentMode::Durable)
-            .expect("LegacyParsedAgentId::new_auto_phantom_lenient should succeed");
+    let parsed = parsed_agent_id_lenient(agent_type, params, None);
 
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
@@ -1428,7 +1453,7 @@ fn agent_id_at_max_length_accepted() {
     let component_id = ComponentId(Uuid::nil());
     // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512
     let content = "a".repeat(507);
-    let parsed = LegacyParsedAgentId::new(
+    let parsed = ParsedAgentId::from_legacy_parameters(
         AgentTypeName("t".to_string()),
         DataValue::Tuple(ElementValues {
             elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
@@ -1440,11 +1465,11 @@ fn agent_id_at_max_length_accepted() {
         }),
         None,
     )
-    .expect("LegacyParsedAgentId::new should succeed");
+    .expect("ParsedAgentId::new should succeed");
     assert_eq!(
         parsed.to_string().len(),
         512,
-        "LegacyParsedAgentId string should be exactly 512 chars"
+        "ParsedAgentId string should be exactly 512 chars"
     );
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(
@@ -1489,8 +1514,13 @@ fn source_language_protobuf_roundtrip() {
 fn new_auto_phantom_durable_none() {
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = LegacyParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Durable)
-        .unwrap();
+    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+        agent_type,
+        params,
+        None,
+        AgentMode::Durable,
+    )
+    .unwrap();
     assert_eq!(
         id.phantom_id, None,
         "Durable agent with no phantom_id should remain None"
@@ -1502,7 +1532,7 @@ fn new_auto_phantom_durable_some() {
     let supplied = Uuid::new_v4();
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = LegacyParsedAgentId::new_auto_phantom(
+    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
         agent_type,
         params,
         Some(supplied),
@@ -1520,8 +1550,13 @@ fn new_auto_phantom_durable_some() {
 fn new_auto_phantom_ephemeral_none() {
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = LegacyParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Ephemeral)
-        .unwrap();
+    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+        agent_type,
+        params,
+        None,
+        AgentMode::Ephemeral,
+    )
+    .unwrap();
     assert!(
         id.phantom_id.is_some(),
         "Ephemeral agent with no phantom_id should auto-generate one"
@@ -1539,7 +1574,7 @@ fn new_auto_phantom_ephemeral_some() {
     let supplied = Uuid::new_v4();
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = LegacyParsedAgentId::new_auto_phantom(
+    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
         agent_type,
         params,
         Some(supplied),

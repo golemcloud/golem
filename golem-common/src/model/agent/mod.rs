@@ -25,10 +25,19 @@ pub mod structural_format;
 pub mod text_utils;
 
 use crate::model::component_metadata::ComponentMetadata;
+use crate::schema::AgentTypeSchema;
+use crate::schema::adapters::{
+    input_schema_to_data_schema, legacy_data_value_to_typed_schema_value,
+    untyped_data_value_to_input_value,
+};
+use crate::schema::adapters::analysed_type::schema_type_to_analysed_type;
 use crate::schema::adapters::value::{
+    schema_value_to_value,
     typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
 };
 use crate::schema::graph::TypedSchemaValue;
+use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_value::{BinaryValuePayload, SchemaValue, TextValuePayload};
 use crate::schema::render::cli_text::value_to_cli_text;
 use async_trait::async_trait;
 use base64::Engine;
@@ -44,6 +53,7 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 pub use crate::base_model::agent::*;
+pub use crate::schema::agent::ParsedAgentId;
 use crate::model::AgentId;
 
 impl TryFrom<i32> for AgentMode {
@@ -572,6 +582,231 @@ impl LegacyParsedAgentId {
 impl Display for LegacyParsedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_string)
+    }
+}
+
+pub trait AgentTypeSchemaResolver {
+    fn resolve_agent_type_schema_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentTypeSchema, String>;
+}
+
+impl AgentTypeSchemaResolver for &ComponentMetadata {
+    fn resolve_agent_type_schema_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<AgentTypeSchema, String> {
+        self.find_agent_type_by_name(agent_type)
+            .ok_or_else(|| format!("Agent type not found: {agent_type}"))
+    }
+}
+
+impl ParsedAgentId {
+    pub fn try_new(
+        agent_type: AgentTypeName,
+        parameters: TypedSchemaValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, String> {
+        let parsed = Self::new(agent_type, parameters, phantom_id);
+        AgentId::validate_length(&parsed.to_string())?;
+        Ok(parsed)
+    }
+
+    pub fn new_auto_phantom(
+        agent_type: AgentTypeName,
+        parameters: TypedSchemaValue,
+        phantom_id: Option<Uuid>,
+        mode: AgentMode,
+    ) -> Result<Self, String> {
+        let phantom_id = match (mode, phantom_id) {
+            (_, Some(id)) => Some(id),
+            (AgentMode::Ephemeral, None) => Some(Uuid::new_v4()),
+            (AgentMode::Durable, None) => None,
+        };
+        Self::try_new(agent_type, parameters, phantom_id)
+    }
+
+    pub fn from_legacy_parameters(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, String> {
+        let parameters =
+            legacy_data_value_to_typed_schema_value(&parameters).map_err(|e| e.to_string())?;
+        Self::try_new(agent_type, parameters, phantom_id)
+    }
+
+    pub fn from_legacy_parameters_auto_phantom(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+        mode: AgentMode,
+    ) -> Result<Self, String> {
+        let parameters =
+            legacy_data_value_to_typed_schema_value(&parameters).map_err(|e| e.to_string())?;
+        Self::new_auto_phantom(agent_type, parameters, phantom_id, mode)
+    }
+
+    pub fn parse(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeSchemaResolver,
+    ) -> Result<Self, String> {
+        Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
+    }
+
+    pub fn parse_and_resolve_type(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeSchemaResolver,
+    ) -> Result<(Self, AgentTypeSchema), String> {
+        use crate::model::agent::structural_format::{normalize_structural, parse_structural};
+
+        let s = s.as_ref();
+        let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
+        let agent_type_name = AgentTypeName(agent_type_name.to_string());
+        let phantom_id = phantom_id_str
+            .map(Uuid::parse_str)
+            .transpose()
+            .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
+        let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
+        let data_schema = input_schema_to_data_schema(
+            &agent_type.schema,
+            &agent_type.constructor.input_schema,
+        )
+        .map_err(|e| e.to_string())?;
+        let data_value = parse_structural(&normalize_structural(param_list), &data_schema)
+            .map_err(|e| e.to_string())?;
+        let value = untyped_data_value_to_input_value(data_value.into(), &data_schema)
+            .map_err(|e| e.to_string())?;
+        let parameters = typed_constructor_parameters(&agent_type, value);
+        let agent_id = Self::try_new(agent_type_name, parameters, phantom_id)?;
+        Ok((agent_id, agent_type))
+    }
+
+    pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
+        let (agent_type_name, _, _) = parse_agent_id_parts(s)?;
+        Ok(AgentTypeName(agent_type_name.to_string()))
+    }
+
+    pub fn normalize_text(s: &str) -> Result<String, String> {
+        normalisation::normalize_agent_id_text(s)
+    }
+
+    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
+        Self::try_new(
+            self.agent_type.clone(),
+            self.parameters.clone(),
+            phantom_id,
+        )
+    }
+}
+
+impl Display for ParsedAgentId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let rendered = render_parsed_agent_id_parameters(&self.parameters).map_err(|_| std::fmt::Error)?;
+        write!(f, "{}({rendered})", self.agent_type)?;
+        if let Some(phantom_id) = self.phantom_id {
+            write!(f, "[{phantom_id}]")?;
+        }
+        Ok(())
+    }
+}
+
+pub fn typed_constructor_parameters(
+    agent_type: &AgentTypeSchema,
+    value: SchemaValue,
+) -> TypedSchemaValue {
+    use crate::schema::schema_type::NamedFieldType;
+
+    let root = SchemaType::record(
+        agent_type
+            .constructor
+            .input_schema
+            .fields()
+            .iter()
+            .map(|field| NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect(),
+    );
+    let mut graph = agent_type.schema.clone();
+    graph.root = root;
+    TypedSchemaValue::new(graph, value)
+}
+
+fn render_parsed_agent_id_parameters(parameters: &TypedSchemaValue) -> Result<String, String> {
+    use crate::model::agent::structural_format::format_structural;
+
+    format_structural(&parsed_agent_id_parameters_to_legacy_data_value(parameters)?)
+        .map_err(|e| e.to_string())
+}
+
+pub fn parsed_agent_id_parameters_to_legacy_data_value(
+    parameters: &TypedSchemaValue,
+) -> Result<DataValue, String> {
+    let SchemaType::Record { fields, .. } = parameters.root_type() else {
+        return Err("agent id parameters must be a record".to_string());
+    };
+    let SchemaValue::Record { fields: values } = parameters.value() else {
+        return Err("agent id parameter value must be a record".to_string());
+    };
+    if fields.len() != values.len() {
+        return Err(format!(
+            "agent id parameter count mismatch: expected {}, got {}",
+            fields.len(),
+            values.len()
+        ));
+    }
+
+    let mut elements = Vec::with_capacity(fields.len());
+    for (field, value) in fields.iter().zip(values) {
+        elements.push(schema_parameter_to_legacy_element(
+            parameters.graph(),
+            &field.body,
+            value,
+        )?);
+    }
+    Ok(DataValue::Tuple(ElementValues { elements }))
+}
+
+fn schema_parameter_to_legacy_element(
+    graph: &crate::schema::SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+) -> Result<ElementValue, String> {
+    let resolved = crate::schema::adapters::resolve_ref(graph, ty).map_err(|e| e.to_string())?;
+    match (resolved, value) {
+        (SchemaType::Text { .. }, SchemaValue::Text(TextValuePayload { text, language })) => {
+            Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                value: TextReference::Inline(TextSource {
+                    data: text.clone(),
+                    text_type: language.as_ref().map(|language_code| TextType {
+                        language_code: language_code.clone(),
+                    }),
+                }),
+                descriptor: TextDescriptor::default(),
+            }))
+        }
+        (SchemaType::Binary { .. }, SchemaValue::Binary(BinaryValuePayload { bytes, mime_type })) => {
+            Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                value: BinaryReference::Inline(BinarySource {
+                    data: bytes.clone(),
+                    binary_type: BinaryType {
+                        mime_type: mime_type.clone().unwrap_or_default(),
+                    },
+                }),
+                descriptor: BinaryDescriptor::default(),
+            }))
+        }
+        _ => {
+            let value = schema_value_to_value(graph, ty, value).map_err(|e| e.to_string())?;
+            let typ = schema_type_to_analysed_type(graph, ty).map_err(|e| e.to_string())?;
+            Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType { value, typ },
+            }))
+        }
     }
 }
 

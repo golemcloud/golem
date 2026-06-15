@@ -19,8 +19,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, DataSchema, DataValue, LegacyParsedAgentId,
-    RegisteredAgentType,
+    AgentConfigSource, AgentTypeName, DataSchema, DataValue, ParsedAgentId, RegisteredAgentType,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
@@ -33,9 +32,7 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
-use golem_common::schema::adapters::agent::{
-    agent_type_to_schema, legacy_data_value_to_typed_schema_value, schema_agent_type_to_legacy,
-};
+use golem_common::schema::adapters::agent::{agent_type_to_schema, schema_agent_type_to_legacy};
 use golem_common::schema::adapters::analysed_type::{
     analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
 };
@@ -413,7 +410,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 &agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = LegacyParsedAgentId::new(
+                    let agent_id = ParsedAgentId::from_legacy_parameters(
                         AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),
@@ -437,11 +434,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
-        match LegacyParsedAgentId::parse(agent_id, component_metadata) {
+        match ParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => {
-                let typed = legacy_data_value_to_typed_schema_value(&agent_id.parameters)
-                    .map_err(|e| anyhow!("Failed to convert agent id parameters to schema: {e}"))?;
-                let wire_typed = encode_typed(&typed)
+                let wire_typed = encode_typed(&agent_id.parameters)
                     .map_err(|e| anyhow!("Failed to encode agent id parameters: {e}"))?;
                 Ok(Ok((
                     agent_id.agent_type.to_string(),

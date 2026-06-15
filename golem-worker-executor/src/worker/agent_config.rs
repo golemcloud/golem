@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{AgentConfigSource, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::schema::AgentTypeSchema;
@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 pub fn ensure_required_agent_secrets_are_configured(
     agent_secrets: &HashMap<CanonicalAgentSecretPath, AgentSecret>,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<(), WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -101,7 +101,7 @@ pub fn ensure_required_agent_secrets_are_configured(
 
 pub fn parse_worker_creation_agent_config(
     worker_agent_config: Vec<AgentConfigEntryDto>,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<Vec<TypedAgentConfigEntry>, WorkerExecutorError> {
     let Some(agent_id) = agent_id else {

@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -1101,7 +1101,7 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let agent_type = LegacyParsedAgentId::parse_agent_type_name(
+        let agent_type = ParsedAgentId::parse_agent_type_name(
             &self.initial_worker_metadata.agent_id.agent_id,
         )
         .ok();
@@ -1518,7 +1518,7 @@ impl ForwardingOplogState {
                 }
             }
 
-            let agent_type = LegacyParsedAgentId::parse_agent_type_name(
+            let agent_type = ParsedAgentId::parse_agent_type_name(
                 &self.initial_worker_metadata.agent_id.agent_id,
             )
             .ok();

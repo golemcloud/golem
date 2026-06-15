@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
+use golem_common::base_model::agent::DataValue;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
@@ -107,7 +108,7 @@ impl InvokeResult {
 pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    agent_id: &LegacyParsedAgentId,
+    agent_id: &ParsedAgentId,
     method_name: &str,
     params: DataValue,
 ) -> InvokeResult {

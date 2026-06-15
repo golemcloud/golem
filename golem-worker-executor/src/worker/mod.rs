@@ -58,7 +58,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
-    AgentMode, LegacyParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
+    AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
@@ -194,7 +194,7 @@ fn build_read_only_cache_entry(
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
-    parsed_agent_id: Option<LegacyParsedAgentId>,
+    parsed_agent_id: Option<ParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -518,17 +518,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && last_oplog_idx <= OplogIndex::from_u64(2)
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
-            let init_input =
-                golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(
-                    &agent_id.parameters,
-                )
-                .map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to convert agent constructor parameters to schema value: {e}"
-                    ))
-                })?
-                .into_parts()
-                .1;
+            let init_input = agent_id.parameters.clone().into_parts().1;
             worker
                 .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                     idempotency_key: init_idempotency_key,
@@ -2552,7 +2542,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let current_status = Arc::new(RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = LegacyParsedAgentId::parse(
+                    let agent_id = ParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &initial_component.metadata,
                     )
@@ -2610,7 +2600,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
-                    let agent_id = LegacyParsedAgentId::parse(
+                    let agent_id = ParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &component.metadata,
                     )
@@ -3882,7 +3872,7 @@ struct ResolvedAgentProperties {
 
 fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     let resolved_agent_type =
@@ -3986,7 +3976,7 @@ struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
     current_status: Arc<RwLock<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<LegacyParsedAgentId>,
+    agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
     /// Loaded during `get_or_create_worker_metadata` and stored on the

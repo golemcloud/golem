@@ -60,11 +60,10 @@ use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
 use self::worker::TypedAgentConfigEntry;
 use crate::base_model::agent::AgentMode;
-use crate::base_model::agent::LegacyParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
-use crate::model::agent::AgentTypeResolver;
+use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
@@ -118,7 +117,7 @@ impl AgentId {
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
         Self::validate_length(&agent_id)?;
@@ -131,11 +130,11 @@ impl AgentId {
     pub fn from_agent_id_literal<S: AsRef<str>>(
         component_id: ComponentId,
         agent_id: S,
-        resolver: impl AgentTypeResolver,
+        resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentId, String> {
         Self::from_agent_id(
             component_id,
-            &LegacyParsedAgentId::parse(agent_id, resolver)?,
+            &ParsedAgentId::parse(agent_id, resolver)?,
         )
     }
 
@@ -176,7 +175,7 @@ impl AgentId {
     ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match LegacyParsedAgentId::normalize_text(id) {
+        match ParsedAgentId::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(

@@ -35,7 +35,7 @@ use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataValue, ElementValue, ElementValues,
-    LegacyParsedAgentId, OidcPrincipal, Principal, ReadOnlyConfig, TextReference,
+    ParsedAgentId, OidcPrincipal, Principal, ReadOnlyConfig, TextReference,
     UnstructuredBinaryElementValue, UnstructuredTextElementValue,
 };
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
@@ -306,7 +306,7 @@ impl CallAgentHandler {
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id = LegacyParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
+        let agent_id = ParsedAgentId::from_legacy_parameters(agent_type.clone(), data_value, phantom_id)
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {

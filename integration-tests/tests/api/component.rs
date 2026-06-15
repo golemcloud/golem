@@ -34,6 +34,7 @@ use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::schema::adapters::agent::{agent_type_to_schema, schema_agent_type_to_legacy};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::analysed_type::{option, str};
@@ -231,6 +232,7 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
     let mut other_agent = component.metadata.agent_types()[0].clone();
     other_agent.type_name = AgentTypeName("OtherAgent".to_string());
     other_agent.description = "Constructs the agent OtherAgent".to_string();
+    let other_agent = schema_agent_type_to_legacy(&other_agent)?;
 
     let updated_component = client
         .update_component(
@@ -807,9 +809,10 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         )
         .await?;
 
+    let agent_type_schema = agent_type_to_schema(&agent_type)?;
     assert_eq!(
         component.metadata.agent_types(),
-        std::slice::from_ref(&agent_type)
+        std::slice::from_ref(&agent_type_schema)
     );
 
     let deployment = user.deploy_environment(env.id).await?;

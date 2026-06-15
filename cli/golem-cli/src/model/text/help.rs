@@ -23,7 +23,7 @@ use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::{
-    AgentType, AgentTypeName, DeployedRegisteredAgentType, ElementSchema, LegacyParsedAgentId,
+    AgentType, AgentTypeName, DeployedRegisteredAgentType, ElementSchema, ParsedAgentId,
 };
 use golem_common::model::component::ComponentName;
 use indoc::indoc;
@@ -190,7 +190,7 @@ pub struct AvailableFunctionNamesHelp {
 impl AvailableFunctionNamesHelp {
     pub fn new_agent(
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         agent_type: &AgentType,
     ) -> Self {
         AvailableFunctionNamesHelp {

@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, DataSchema, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, DataSchema, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
@@ -52,8 +52,7 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
 use golem_common::schema::adapters::{
-    data_schema_to_input_schema, data_schema_to_output_schema,
-    legacy_data_value_to_typed_schema_value, value_and_type_to_typed_schema_value,
+    data_schema_to_input_schema, data_schema_to_output_schema, value_and_type_to_typed_schema_value,
 };
 use golem_common::schema::{
     NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
@@ -913,12 +912,12 @@ fn parse_multipart_snapshot(snapshot: RawSnapshotData) -> PublicSnapshotData {
 async fn try_resolve_agent_id(
     component_service: Arc<dyn ComponentService>,
     agent_id: &AgentId,
-) -> Option<LegacyParsedAgentId> {
+) -> Option<ParsedAgentId> {
     if let Ok(component) = component_service
         .get_metadata(agent_id.component_id, None)
         .await
     {
-        LegacyParsedAgentId::parse(&agent_id.agent_id, &component.metadata).ok()
+        ParsedAgentId::parse(&agent_id.agent_id, &component.metadata).ok()
     } else {
         None
     }
@@ -932,8 +931,7 @@ async fn enrich_golem_rpc_invoke(
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id
-        .and_then(|agent_id| legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok());
+    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
     payload
 }
 
@@ -945,8 +943,7 @@ async fn enrich_golem_rpc_scheduled_invocation(
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id
-        .and_then(|agent_id| legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok());
+    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
     payload
 }
 
@@ -954,7 +951,7 @@ fn resolve_agent_type_from_worker_name(
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
     worker_name: &str,
 ) -> Option<golem_common::model::agent::AgentType> {
-    LegacyParsedAgentId::parse_agent_type_name(worker_name)
+    ParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
         .and_then(|type_name| {
             metadata

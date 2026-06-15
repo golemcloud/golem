@@ -21,7 +21,7 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
@@ -589,7 +589,7 @@ enum LoweredCall {
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     match invocation {
         AgentInvocation::AgentInitialization {
@@ -753,7 +753,7 @@ fn validate_schema_input_against_method_schema(
 /// component declares zero or multiple types and no id was provided).
 fn resolve_agent_type(
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
 ) -> Result<AgentTypeSchema, WorkerExecutorError> {
     match agent_id {
         Some(id) => component_metadata

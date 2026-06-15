@@ -14,8 +14,8 @@
 
 use crate::Tracing;
 use golem_common::base_model::AgentId;
-use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::agent::DataValue;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::{agent_id, data_value};
@@ -1659,7 +1659,7 @@ async fn rdbms_component_test<T: RdbmsType>(
 async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    workers: Vec<(AgentId, LegacyParsedAgentId)>,
+    workers: Vec<(AgentId, ParsedAgentId)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
     let mut workers_results: HashMap<AgentId, DataValue> = HashMap::new();
@@ -1706,7 +1706,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 async fn execute_worker_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &LegacyParsedAgentId,
+    agent_id: &ParsedAgentId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
 ) -> anyhow::Result<DataValue> {
@@ -1811,8 +1811,8 @@ async fn start_workers<T: RdbmsType>(
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
-) -> anyhow::Result<Vec<(AgentId, LegacyParsedAgentId)>> {
-    let mut workers: Vec<(AgentId, LegacyParsedAgentId)> = Vec::new();
+) -> anyhow::Result<Vec<(AgentId, ParsedAgentId)>> {
+    let mut workers: Vec<(AgentId, ParsedAgentId)> = Vec::new();
     let db_type = T::default().to_string();
 
     let mut env = HashMap::new();

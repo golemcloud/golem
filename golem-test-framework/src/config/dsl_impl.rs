@@ -29,7 +29,8 @@ use golem_client::api::{
     WorkerError,
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
-use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
+use golem_common::base_model::agent::DataValue;
+use golem_common::model::agent::{parsed_agent_id_parameters_to_legacy_data_value, ParsedAgentId};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
@@ -333,7 +334,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
@@ -359,7 +360,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -386,7 +387,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: legacy_data_value_to_json(agent_id.parameters.clone()),
+                    parameters: legacy_data_value_to_json(
+                        parsed_agent_id_parameters_to_legacy_data_value(&agent_id.parameters)
+                            .map_err(|err| anyhow!("Agent id parameter conversion error: {err}"))?,
+                    ),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
                     method_parameters: legacy_data_value_to_json(params),
@@ -405,7 +409,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
@@ -450,7 +454,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: legacy_data_value_to_json(agent_id.parameters.clone()),
+                    parameters: legacy_data_value_to_json(
+                        parsed_agent_id_parameters_to_legacy_data_value(&agent_id.parameters)
+                            .map_err(|err| anyhow!("Agent id parameter conversion error: {err}"))?,
+                    ),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
                     method_parameters: legacy_data_value_to_json(params),

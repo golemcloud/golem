@@ -23,7 +23,7 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
@@ -675,7 +675,7 @@ impl WorkerService for DefaultWorkerService {
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 let agent_mode = persisted_agent_mode;
                 let agent_type_name =
-                    LegacyParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+                    ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
                 let component_metadata = self
                     .component_service
                     .get_metadata(agent_id.component_id, Some(component_revision))

@@ -64,8 +64,8 @@ use golem_client::model::{
 };
 use golem_common::model::agent::{
     AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
-    ElementSchema, ElementValues, LegacyParsedAgentId, NamedElementSchema, NamedElementSchemas,
-    UntypedJsonDataValue,
+    ElementSchema, ElementValues, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
+    UntypedJsonDataValue, parsed_agent_id_parameters_to_legacy_data_value,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -78,7 +78,9 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::{data_schema_to_input_schema, legacy_data_value_to_json};
+use golem_common::schema::adapters::{
+    data_schema_to_input_schema, legacy_data_value_to_json, schema_agent_type_to_legacy,
+};
 use golem_wasm::analysis::AnalysedType;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -318,14 +320,8 @@ impl WorkerCommandHandler {
 
         let display_agent_name: RawAgentId = match &agent_name_match.parsed_agent_id {
             Some(parsed) if agent_name_match.source_language.is_known() => {
-                match golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed) {
-                    Ok(parsed_schema) => crate::agent_id_display::render_agent_id(
-                        &parsed_schema,
-                        &agent_name_match.source_language,
-                    )
-                    .into(),
-                    Err(_) => agent_name,
-                }
+                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+                    .into()
             }
             _ => agent_name,
         };
@@ -521,7 +517,10 @@ impl WorkerCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: legacy_data_value_to_json(agent_id.parameters.clone()),
+            parameters: legacy_data_value_to_json(
+                parsed_agent_id_parameters_to_legacy_data_value(&agent_id.parameters)
+                    .map_err(anyhow::Error::msg)?,
+            ),
             phantom_id: agent_id.phantom_id,
             method_name: method_name.clone(),
             method_parameters: serde_json::to_value(method_parameters)?,
@@ -1074,7 +1073,7 @@ impl WorkerCommandHandler {
                     .await?;
 
                 let parsed_agent_type_name =
-                    LegacyParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
+                    ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
 
                 let defaults = parsed_agent_type_name
                     .as_ref()
@@ -1103,13 +1102,10 @@ impl WorkerCommandHandler {
 
                 if source_language.is_known()
                     && let Ok(parsed) =
-                        LegacyParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
-                    && let Ok(parsed_schema) =
-                        golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(&parsed)
+                        ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
                 {
                     agent_view.agent_name =
-                        crate::agent_id_display::render_agent_id(&parsed_schema, &source_language)
-                            .into();
+                        crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
                 }
 
                 view.agents
@@ -1288,14 +1284,10 @@ impl WorkerCommandHandler {
             .with_source_language(agent_name_match.source_language.clone());
         if let Some(parsed) = &agent_name_match.parsed_agent_id
             && agent_name_match.source_language.is_known()
-            && let Ok(parsed_schema) =
-                golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed)
         {
-            metadata_view.agent_name = crate::agent_id_display::render_agent_id(
-                &parsed_schema,
-                &agent_name_match.source_language,
-            )
-            .into();
+            metadata_view.agent_name =
+                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+                    .into();
         }
 
         self.ctx
@@ -1592,7 +1584,7 @@ impl WorkerCommandHandler {
         plugin_name: &str,
         explicit_priority: Option<i32>,
     ) -> anyhow::Result<i32> {
-        let agent_type_name = LegacyParsedAgentId::parse_agent_type_name(&agent_name.0)
+        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_name.0)
             .map(|n| n.0)
             .unwrap_or_default();
 
@@ -2211,10 +2203,10 @@ impl WorkerCommandHandler {
 pub(crate) fn try_recanonicalize_agent_name_with_parsed(
     agent_name: &RawAgentId,
     component: &ComponentDto,
-) -> (RawAgentId, Option<LegacyParsedAgentId>) {
+) -> (RawAgentId, Option<ParsedAgentId>) {
     let raw = &agent_name.0;
 
-    // Extract type name and params using LegacyParsedAgentId::parse_agent_type_name
+    // Extract type name and params using ParsedAgentId::parse_agent_type_name
     // and manual splitting for the params portion
     let Some(paren_pos) = raw.find('(') else {
         return (agent_name.clone(), None);
@@ -2265,7 +2257,7 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
 
     // Try language-aware parse via the schema-typed API and convert the
     // resulting SchemaValue back to a legacy DataValue at the boundary
-    // (the LegacyParsedAgentId logic below still consumes DataValue).
+    // (the ParsedAgentId logic below still consumes DataValue).
     let Ok(constructor_input_schema) = golem_common::schema::adapters::input_schema_to_data_schema(
         &agent_type.schema,
         &agent_type.constructor.input_schema,
@@ -2295,8 +2287,12 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed =
-        LegacyParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
+    let parsed = ParsedAgentId::from_legacy_parameters(
+        agent_type.type_name.clone(),
+        data_value,
+        phantom_uuid,
+    )
+    .ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2342,7 +2338,7 @@ impl WorkerCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_name: String,
     ) -> anyhow::Result<AgentNameMatch> {
-        let parsed_agent_type_name = match LegacyParsedAgentId::parse_agent_type_name(&agent_name) {
+        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_name) {
             Ok(agent_type_name) => agent_type_name,
             Err(err) => {
                 logln("");
@@ -2534,68 +2530,72 @@ impl WorkerCommandHandler {
         component: &ComponentDto,
         agent_name: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(LegacyParsedAgentId, AgentType)>> {
+    ) -> anyhow::Result<Option<(ParsedAgentId, AgentType)>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
-        match LegacyParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
-            Ok((agent_id, agent_type)) => match function_name {
-                Some(function_name) => {
-                    let parsed = match ParsedFunctionName::parse(function_name) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            logln("");
-                            log_error(format!(
-                                "Incompatible agent type ({}) and method ({})",
-                                agent_id.agent_type.as_str().log_color_error_highlight(),
-                                function_name.log_color_error_highlight()
-                            ));
-                            logln("");
-                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                                component,
-                                &agent_id,
-                                &agent_type,
-                            ));
-                            bail!(NonSuccessfulExit);
-                        }
-                    };
+        match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
+            Ok((agent_id, agent_type_schema)) => {
+                let agent_type = schema_agent_type_to_legacy(&agent_type_schema)
+                    .map_err(|e| anyhow!("Failed to adapt agent type metadata: {e}"))?;
+                match function_name {
+                    Some(function_name) => {
+                        let parsed = match ParsedFunctionName::parse(function_name) {
+                            Ok(p) => p,
+                            Err(_) => {
+                                logln("");
+                                log_error(format!(
+                                    "Incompatible agent type ({}) and method ({})",
+                                    agent_id.agent_type.as_str().log_color_error_highlight(),
+                                    function_name.log_color_error_highlight()
+                                ));
+                                logln("");
+                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                    component,
+                                    &agent_id,
+                                    &agent_type,
+                                ));
+                                bail!(NonSuccessfulExit);
+                            }
+                        };
 
-                    if let ParsedFunctionSite::PackagedInterface {
-                        namespace,
-                        package,
-                        interface,
-                        ..
-                    } = parsed.site()
-                    {
-                        let component_name = format!("{namespace}:{package}");
-                        if *interface == agent_id.agent_type.0
-                            && component.component_name.0 == component_name
+                        if let ParsedFunctionSite::PackagedInterface {
+                            namespace,
+                            package,
+                            interface,
+                            ..
+                        } = parsed.site()
                         {
-                            return Ok(Some((agent_id, agent_type.clone())));
+                            let component_name = format!("{namespace}:{package}");
+                            if *interface == agent_id.agent_type.0
+                                && component.component_name.0 == component_name
+                            {
+                                return Ok(Some((agent_id, agent_type.clone())));
+                            }
                         }
+
+                        logln("");
+                        log_error(format!(
+                            "Incompatible agent type ({}) and method ({})",
+                            agent_id.agent_type.as_str().log_color_error_highlight(),
+                            function_name.log_color_error_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                            component,
+                            &agent_id,
+                            &agent_type,
+                        ));
+                        bail!(NonSuccessfulExit);
                     }
 
-                    logln("");
-                    log_error(format!(
-                        "Incompatible agent type ({}) and method ({})",
-                        agent_id.agent_type.as_str().log_color_error_highlight(),
-                        function_name.log_color_error_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                        component,
-                        &agent_id,
-                        &agent_type,
-                    ));
-                    bail!(NonSuccessfulExit);
+                    None => Ok(Some((agent_id, agent_type.clone()))),
                 }
-
-                None => Ok(Some((agent_id, agent_type.clone()))),
-            },
+            }
             Err(err) => {
                 let parsed_agent_type_name =
-                    LegacyParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
+                    ParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
 
                 logln("");
                 log_error(format!(
@@ -2906,7 +2906,7 @@ fn parse_method_argument_schema_value(
 /// `DataSchema` into a [`SchemaGraph`] + [`InputSchema`], invokes the
 /// schema-typed parser, then walks the resulting `SchemaValue::Record`
 /// back into a legacy `DataValue::Tuple` with the same per-element type
-/// information (used by `LegacyParsedAgentId::new(...)` downstream).
+/// information (used by `ParsedAgentId::new(...)` downstream).
 fn parse_agent_id_params_legacy_shim(
     input: &str,
     schema: &DataSchema,
@@ -3116,10 +3116,11 @@ fn build_repl_agent_id(
     agent_type: &AgentType,
     typed_parameters: DataValue,
     phantom_id: Option<Uuid>,
-) -> anyhow::Result<LegacyParsedAgentId> {
-    LegacyParsedAgentId::new_auto_phantom(
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
         agent_type.type_name.clone(),
-        typed_parameters,
+        golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(&typed_parameters)
+            .map_err(|e| anyhow!("Failed to adapt agent ID parameters: {e}"))?,
         phantom_id,
         agent_type.mode,
     )
@@ -3127,10 +3128,16 @@ fn build_repl_agent_id(
 }
 
 fn normalize_public_agent_id(
-    agent_id: &LegacyParsedAgentId,
+    agent_id: &ParsedAgentId,
     agent_type: &AgentType,
-) -> anyhow::Result<LegacyParsedAgentId> {
-    build_repl_agent_id(agent_type, agent_id.parameters.clone(), agent_id.phantom_id)
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
+        agent_type.type_name.clone(),
+        agent_id.parameters.clone(),
+        agent_id.phantom_id,
+        agent_type.mode,
+    )
+    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
 }
 
 #[cfg(test)]
@@ -3143,8 +3150,8 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
-        DataSchema, ElementSchema, ElementValues, LegacyParsedAgentId, NamedElementSchemas,
-        Snapshotting, TextDescriptor,
+        DataSchema, ElementSchema, ElementValues, NamedElementSchemas, ParsedAgentId, Snapshotting,
+        TextDescriptor,
     };
     use golem_common::schema::SchemaValue;
     use pretty_assertions::assert_eq;
@@ -3276,9 +3283,12 @@ mod tests {
 
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id =
-            LegacyParsedAgentId::new(AgentTypeName("repl-agent".to_string()), empty_tuple(), None)
-                .unwrap();
+        let agent_id = ParsedAgentId::from_legacy_parameters(
+            AgentTypeName("repl-agent".to_string()),
+            empty_tuple(),
+            None,
+        )
+        .unwrap();
         let normalized =
             normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
 

@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMethod, AgentType, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMethod, AgentType, ParsedAgentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -117,7 +117,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // `DataSchema` from this cached value to drive the typed flow.
         let remote_agent_type: Arc<AgentType> = Arc::new(agent_type.agent_type.clone());
 
-        let agent_id = golem_common::model::agent::LegacyParsedAgentId::new(
+        let agent_id = golem_common::model::agent::ParsedAgentId::from_legacy_parameters(
             golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
@@ -1571,7 +1571,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     default_retry_policy: NamedRetryPolicy,
     agent_config_retry_policies: Vec<NamedRetryPolicy>,
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
-    enrichment: Option<(&LegacyParsedAgentId, bool)>,
+    enrichment: Option<(&ParsedAgentId, bool)>,
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
