@@ -39,7 +39,8 @@ use golem_common::model::agent::{
     UnstructuredBinaryElementValue, UnstructuredTextElementValue,
 };
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
-use golem_common::schema::adapters::legacy_data_value_to_typed_schema_value;
+use golem_common::schema::adapters::value_to_schema_value;
+use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
 };
@@ -97,18 +98,7 @@ impl CallAgentHandler {
 
         debug!("Invoking agent {agent_id}");
 
-        let method_params_data_value = DataValue::Tuple(ElementValues {
-            elements: method_params,
-        });
-
-        let (_graph, method_params_value) =
-            legacy_data_value_to_typed_schema_value(&method_params_data_value)
-                .map_err(|err| {
-                    RequestHandlerError::InternalError(anyhow!(
-                        "Failed to convert method parameters: {err}"
-                    ))
-                })?
-                .into_parts();
+        let method_params_value = method_params_to_schema_value(method_params)?;
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
             method_params_value.into();
@@ -458,6 +448,51 @@ impl CallAgentHandler {
 
         Ok(values)
     }
+}
+
+fn method_params_to_schema_value(
+    method_params: Vec<ElementValue>,
+) -> Result<SchemaValue, RequestHandlerError> {
+    let fields = method_params
+        .into_iter()
+        .map(|param| match param {
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                value_to_schema_value(&value.value, &value.typ).map_err(|err| {
+                    RequestHandlerError::InternalError(anyhow!(
+                        "Failed to convert method parameter: {err}"
+                    ))
+                })
+            }
+            ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                value: TextReference::Inline(source),
+                ..
+            }) => Ok(SchemaValue::Text(TextValuePayload {
+                text: source.data,
+                language: source.text_type.map(|text_type| text_type.language_code),
+            })),
+            ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                value: TextReference::Url(_),
+                ..
+            }) => Err(RequestHandlerError::invariant_violated(
+                "Unexpected unstructured text URL parameter",
+            )),
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                value: BinaryReference::Inline(source),
+                ..
+            }) => Ok(SchemaValue::Binary(BinaryValuePayload {
+                bytes: source.data,
+                mime_type: Some(source.binary_type.mime_type),
+            })),
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                value: BinaryReference::Url(_),
+                ..
+            }) => Err(RequestHandlerError::invariant_violated(
+                "Unexpected unstructured binary URL parameter",
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(SchemaValue::Record { fields })
 }
 
 /// Look up the [`AnalysedType`] of a JSON-object body field by index from the

@@ -1160,6 +1160,7 @@ mod tests {
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::schema::adapters::agent::agent_type_to_schema;
     use golem_service_base::model::component::Component;
     use test_r::test;
     use uuid::Uuid;
@@ -1210,7 +1211,7 @@ mod tests {
                 vec![],
                 None,
                 None,
-                vec![test_agent_type(mode)],
+                vec![agent_type_to_schema(&test_agent_type(mode)).unwrap()],
                 std::collections::BTreeMap::new(),
             ),
             created_at: Utc::now(),

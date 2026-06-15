@@ -21,12 +21,15 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
-use golem_common::model::agent::{AgentMode, AgentType, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::wit::decode_agent_error;
+use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
+use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
+use golem_common::schema::validation::value::validate_value;
 use golem_common::schema::wit::wire as core_wire;
 use golem_common::schema::wit::{decode_value, encode_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -628,6 +631,12 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
+            validate_schema_input_against_method_schema(
+                &input,
+                &agent_type,
+                &method.input_schema,
+                &method_name,
+            )?;
 
             Ok(LoweredInvocation {
                 display_name: method_name.clone(),
@@ -695,13 +704,57 @@ pub fn lower_invocation(
     }
 }
 
-/// Resolves the [`AgentType`] an invocation targets: by name when an agent id
+fn validate_schema_input_against_method_schema(
+    input: &SchemaValue,
+    agent_type: &AgentTypeSchema,
+    input_schema: &InputSchema,
+    method_name: &str,
+) -> Result<(), WorkerExecutorError> {
+    let SchemaValue::Record { fields } = input else {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}': expected input parameter record"
+        )));
+    };
+
+    let fields_schema = input_schema.fields();
+    if fields.len() != fields_schema.len() {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}': expected {} parameters, got {}",
+            fields_schema.len(),
+            fields.len()
+        )));
+    }
+
+    let record_type = SchemaType::record(
+        fields_schema
+            .iter()
+            .map(|field| NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect(),
+    );
+
+    validate_value(&agent_type.schema, &record_type, input).map_err(|errors| {
+        WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}': invalid input parameter value: {}",
+            errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })
+}
+
+/// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
 /// is available, otherwise the single declared agent type (or an error when the
 /// component declares zero or multiple types and no id was provided).
 fn resolve_agent_type(
     component_metadata: &ComponentMetadata,
     agent_id: Option<&LegacyParsedAgentId>,
-) -> Result<AgentType, WorkerExecutorError> {
+) -> Result<AgentTypeSchema, WorkerExecutorError> {
     match agent_id {
         Some(id) => component_metadata
             .find_agent_type_by_name(&id.agent_type)

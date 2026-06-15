@@ -104,11 +104,11 @@ pub struct ComponentView {
 
 impl ComponentView {
     pub fn new(show_sensitive: bool, value: ComponentDto) -> Self {
-        let exports = {
-            let agent_types = value.metadata.agent_types().to_vec();
-
-            show_exported_agents(&agent_types, true, true)
-        };
+        let agent_types = value
+            .metadata
+            .legacy_agent_types()
+            .expect("component metadata agent types must be legacy-convertible for CLI display");
+        let exports = { show_exported_agents(&agent_types, true, true) };
 
         ComponentView {
             show_sensitive,
@@ -120,7 +120,7 @@ impl ComponentView {
             created_at: value.created_at,
             environment_id: value.environment_id,
             exports,
-            agent_types: value.metadata.agent_types().to_vec(),
+            agent_types,
             agent_type_provision_configs: value.metadata.agent_type_provision_configs().clone(),
         }
     }

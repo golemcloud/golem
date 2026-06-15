@@ -233,6 +233,7 @@ mod local {
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::schema::adapters::agent::schema_agent_type_to_legacy;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Arc;
 
@@ -256,30 +257,30 @@ mod local {
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             // NOTE: we can't filter the component metadata by component revision because in local mode we don't have a concept of components deployed together
 
-            let result = self
+            let mut result = Vec::new();
+            for component in self
                 .component_service
                 .all_cached_metadata()
                 .await
                 .iter()
                 .filter(|component| component.environment_id == owner_environment)
-                .flat_map(|component| {
-                    component
-                        .metadata
-                        .agent_types()
-                        .iter()
-                        .map(|agent_type| RegisteredAgentType {
-                            agent_type: agent_type.clone(),
-                            implemented_by: RegisteredAgentTypeImplementer {
-                                component_id: component.id,
-                                component_revision: component.revision,
-                                component_name: component.component_name.0.clone(),
-                                account_id: component.account_id,
-                                account_email: component.account_email.clone(),
-                            },
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect();
+            {
+                for agent_type in component.metadata.agent_types() {
+                    let agent_type = schema_agent_type_to_legacy(agent_type).map_err(|err| {
+                        WorkerExecutorError::runtime(format!("Invalid agent metadata: {err}"))
+                    })?;
+                    result.push(RegisteredAgentType {
+                        agent_type,
+                        implemented_by: RegisteredAgentTypeImplementer {
+                            component_id: component.id,
+                            component_revision: component.revision,
+                            component_name: component.component_name.0.clone(),
+                            account_id: component.account_id,
+                            account_email: component.account_email.clone(),
+                        },
+                    });
+                }
+            }
             Ok(result)
         }
 

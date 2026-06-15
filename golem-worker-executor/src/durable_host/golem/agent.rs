@@ -19,8 +19,8 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentTypeName, DataSchema, DataValue,
-    LegacyParsedAgentId, RegisteredAgentType,
+    AgentConfigSource, AgentTypeName, DataSchema, DataValue, LegacyParsedAgentId,
+    RegisteredAgentType,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
@@ -563,15 +563,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let declaration = agent_type.config.iter().find(|c| c.path == path);
 
-        let declaration_value_type = declaration
-            .map(|d| {
-                analysed_type_to_schema_type_inline(&d.value_type).map_err(|e| {
-                    anyhow!(
-                        "Declared config type for path {path_str} is not representable as SchemaType: {e}"
-                    )
-                })
-            })
-            .transpose()?;
+        let declaration_value_type = declaration.map(|d| d.value_type.clone());
 
         let schema_value: SchemaValue = match declaration {
             // Allow reading undeclared optional config keys so that
@@ -580,30 +572,31 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 SchemaValue::Option { inner: None }
             }
             None => return Err(anyhow!("No config declared for path {path_str}")),
-            Some(AgentConfigDeclaration {
-                source: AgentConfigSource::Local,
-                ..
-            }) => self.resolve_local_config(
-                &path,
-                &path_str,
-                &expected_type,
-                declaration_value_type
-                    .as_ref()
-                    .expect("existing config declaration must have converted value type"),
-            )?,
-            Some(AgentConfigDeclaration {
-                source: AgentConfigSource::Secret,
-                ..
-            }) => {
+            Some(declaration) if declaration.source == AgentConfigSource::Local => self
+                .resolve_local_config(
+                    &path,
+                    &path_str,
+                    &expected_type,
+                    declaration_value_type
+                        .as_ref()
+                        .expect("existing config declaration must have a value type"),
+                )?,
+            Some(declaration) if declaration.source == AgentConfigSource::Secret => {
                 self.resolve_secret_config(
                     path,
                     &path_str,
                     expected_type,
                     declaration_value_type
                         .as_ref()
-                        .expect("existing config declaration must have converted value type"),
+                        .expect("existing config declaration must have a value type"),
                 )
                 .await?
+            }
+            Some(declaration) => {
+                return Err(anyhow!(
+                    "Unsupported config source {:?} for path {path_str}",
+                    declaration.source
+                ));
             }
         };
 

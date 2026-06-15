@@ -46,9 +46,9 @@ use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::adapters::{
-    json_data_value_to_input_value, json_data_value_to_legacy_data_value,
-    output_value_to_typed_schema_value,
+    json_data_value_to_legacy_data_value, json_schema_value_to_input_value,
 };
+use golem_common::schema::{SchemaType, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -1011,7 +1011,7 @@ impl WorkerService {
             })?;
 
         let method_parameters =
-            json_data_value_to_input_value(request.method_parameters, &method.input_schema)
+            json_schema_value_to_input_value(request.method_parameters, &method.input_schema)
                 .map_err(|err| {
                     WorkerServiceError::TypeChecker(format!(
                         "Agent method parameters type error: {err}"
@@ -1102,13 +1102,13 @@ impl WorkerService {
                             "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
                         ))
                     })?;
-                let typed_output =
-                    output_value_to_typed_schema_value(&decode_method.output_schema, output_value)
-                        .map_err(|err| {
-                            WorkerServiceError::TypeChecker(format!(
-                                "Agent output conversion error: {err}"
-                            ))
-                        })?;
+                let mut output_graph = decode_agent_type.schema.clone();
+                output_graph.root = decode_method
+                    .output_schema
+                    .schema()
+                    .cloned()
+                    .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+                let typed_output = TypedSchemaValue::new(output_graph, output_value);
                 Ok(AgentInvocationResult {
                     agent_id: agent_id.clone(),
                     result: Some(typed_output),
@@ -1159,6 +1159,7 @@ mod tests {
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+    use golem_common::schema::adapters::agent::agent_type_to_schema;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
@@ -1838,7 +1839,7 @@ mod tests {
                 vec![],
                 None,
                 None,
-                vec![agent_type],
+                vec![agent_type_to_schema(&agent_type).unwrap()],
                 BTreeMap::new(),
             ),
             created_at: Utc::now(),

@@ -956,7 +956,12 @@ fn resolve_agent_type_from_worker_name(
 ) -> Option<golem_common::model::agent::AgentType> {
     LegacyParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
-        .and_then(|type_name| metadata.find_agent_type_by_name(&type_name))
+        .and_then(|type_name| {
+            metadata
+                .find_legacy_agent_type_by_name(&type_name)
+                .ok()
+                .flatten()
+        })
 }
 
 /// A schema-native empty value (`()`), used as the best-effort fallback when

@@ -268,20 +268,20 @@ impl AvailableAgentConstructorsHelp {
         component: &ComponentDto,
         target_agent_type: Option<&AgentTypeName>,
     ) -> Self {
+        let agent_types = component
+            .metadata
+            .legacy_agent_types()
+            .expect("component metadata agent types must be legacy-convertible for CLI help");
         let constructors = if let Some(target_agent_type) = target_agent_type {
-            component
-                .metadata
-                .agent_types()
+            agent_types
                 .iter()
                 .find(|agent_type| agent_type.type_name == *target_agent_type)
                 .map(|agent_type| {
                     show_exported_agent_constructors(std::slice::from_ref(agent_type), true)
                 })
-                .unwrap_or_else(|| {
-                    show_exported_agent_constructors(component.metadata.agent_types(), true)
-                })
+                .unwrap_or_else(|| show_exported_agent_constructors(&agent_types, true))
         } else {
-            show_exported_agent_constructors(component.metadata.agent_types(), true)
+            show_exported_agent_constructors(&agent_types, true)
         };
 
         let component_name = &component.component_name.0;

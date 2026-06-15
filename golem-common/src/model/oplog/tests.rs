@@ -15,6 +15,7 @@
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::lucene::Query;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -255,6 +256,52 @@ fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn matcher_matches_payload_less_variant_case_name() {
+    let entry = PublicOplogEntry::HostCall(HostCallParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        function_name: "test".to_string(),
+        request: typed(
+            SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
+            SchemaValue::Variant(VariantValuePayload {
+                case: 0,
+                payload: None,
+            }),
+        ),
+        response: typed(
+            SchemaType::tuple(Vec::new()),
+            SchemaValue::Tuple { elements: vec![] },
+        ),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+
+    assert!(entry.matches(&Query::parse("none").unwrap()));
+    assert!(entry.matches(&Query::parse("request:none").unwrap()));
+}
+
+#[test]
+fn matcher_matches_variant_payload_under_case_path() {
+    let entry = PublicOplogEntry::HostCall(HostCallParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        function_name: "test".to_string(),
+        request: typed(
+            SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
+            SchemaValue::Variant(VariantValuePayload {
+                case: 1,
+                payload: Some(Box::new(SchemaValue::U32(42))),
+            }),
+        ),
+        response: typed(
+            SchemaType::tuple(Vec::new()),
+            SchemaValue::Tuple { elements: vec![] },
+        ),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+
+    assert!(entry.matches(&Query::parse("some").unwrap()));
+    assert!(entry.matches(&Query::parse("request.some:42").unwrap()));
 }
 
 #[test]

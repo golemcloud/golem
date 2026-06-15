@@ -21,7 +21,7 @@
 //! `golem-wasm`. We deliberately do **not** render the full recursive schema
 //! into OpenAPI metadata.
 
-use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+use crate::schema::{AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
 use serde_json::Value;
@@ -79,3 +79,4 @@ impl_json_backed_poem_type!(SchemaGraph, "SchemaGraph");
 impl_json_backed_poem_type!(SchemaType, "SchemaType");
 impl_json_backed_poem_type!(SchemaValue, "SchemaValue");
 impl_json_backed_poem_type!(TypedSchemaValue, "TypedSchemaValue");
+impl_json_backed_poem_type!(AgentTypeSchema, "AgentTypeSchema");

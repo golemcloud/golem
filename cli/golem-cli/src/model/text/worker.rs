@@ -399,12 +399,12 @@ impl TextView for InvokeResultView {
             return;
         }
 
-        if self.result.is_none() && self.result_json.is_none() && self.results_json.is_none() {
+        if self.result.is_none() && self.result_json.is_none() {
             return;
         }
 
         if let Some(result) = &self.result {
-            log_result_format(self.result_format.as_deref(), self.results_json.is_some());
+            log_result_format(self.result_format.as_deref(), false);
             logln(result);
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
@@ -414,15 +414,6 @@ impl TextView for InvokeResultView {
                 "
             )));
             log_result_format(Some("JSON"), false);
-            logln(serde_json::to_string_pretty(json).unwrap());
-        } else if let Some(json) = &self.results_json {
-            logln(format_warn(indoc!(
-                "
-                Failed to convert invocation results to the requested format.
-                At the moment it does not support Handle (aka Resource) data type.
-                "
-            )));
-            log_result_format(Some("JSON"), true);
             logln(serde_json::to_string_pretty(json).unwrap());
         }
     }

@@ -578,7 +578,7 @@ impl Display for LegacyParsedAgentId {
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
     fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
-        self.find_agent_type_by_name(agent_type)
+        self.find_legacy_agent_type_by_name(agent_type)?
             .ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

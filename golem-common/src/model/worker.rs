@@ -17,6 +17,8 @@ use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
+use crate::schema::SchemaGraph;
+use crate::schema::adapters::schema_type_to_analysed_type;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::BTreeMap;
@@ -70,6 +72,8 @@ impl UntypedAgentConfigEntry {
                 )
             })?
             .value_type;
+        let value_type = schema_type_to_analysed_type(&SchemaGraph::empty(), &value_type)
+            .map_err(|err| format!("failed to convert config type: {err}"))?;
 
         Ok(TypedAgentConfigEntry {
             path: self.path,

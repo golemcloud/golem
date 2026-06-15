@@ -54,7 +54,9 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use golem_common::schema::adapters::{legacy_data_value_to_json, output_json_to_legacy_data_value};
+use golem_common::schema::adapters::{
+    legacy_data_value_to_json, output_json_to_legacy_data_value, output_schema_to_data_schema,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -487,7 +489,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                         anyhow!("Agent method not found: {}", method_name)
                     })?;
 
-                output_json_to_legacy_data_value(typed_output.0, &agent_method.output_schema)
+                let output_schema =
+                    output_schema_to_data_schema(&agent_type.schema, &agent_method.output_schema)
+                        .map_err(|err| anyhow!("Output schema conversion error: {err}"))?;
+
+                output_json_to_legacy_data_value(typed_output.0, &output_schema)
                     .map_err(|err| anyhow!("DataValue conversion error: {err}"))
             }
             None => Ok(DataValue::Tuple(

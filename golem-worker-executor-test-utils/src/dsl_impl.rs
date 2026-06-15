@@ -46,9 +46,12 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
+use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::SchemaValue;
+use golem_common::schema::adapters::analysed_type::schema_type_to_analysed_type;
 use golem_common::schema::adapters::{
-    legacy_data_value_to_typed_schema_value, schema_output_value_to_legacy_data_value,
+    legacy_data_value_to_typed_schema_value, output_schema_to_data_schema,
+    schema_output_value_to_legacy_data_value,
 };
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -525,11 +528,14 @@ impl TestDsl for TestWorkerExecutor {
                                 anyhow!("Agent method not found: {}", method_name)
                             })?;
 
-                        schema_output_value_to_legacy_data_value(
-                            schema_value,
+                        let output_schema = output_schema_to_data_schema(
+                            &agent_type.schema,
                             &agent_method.output_schema,
                         )
-                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))
+                        .map_err(|err| anyhow!("Output schema conversion error: {err}"))?;
+
+                        schema_output_value_to_legacy_data_value(schema_value, &output_schema)
+                            .map_err(|err| anyhow!("DataValue conversion error: {err}"))
                     }
                     None => Ok(DataValue::Tuple(
                         golem_common::base_model::agent::ElementValues { elements: vec![] },
@@ -1208,7 +1214,47 @@ fn parse_provision_config_from_component_metadata(
         .find_agent_type_by_name(agent_type_name)
         .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
 
-    parse_provision_config_from_agent_type(&agent_type, agent_type_name, config)
+    parse_provision_config_from_agent_type_schema(&agent_type, agent_type_name, config)
+}
+
+fn parse_provision_config_from_agent_type_schema(
+    agent_type: &AgentTypeSchema,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    config
+        .into_iter()
+        .map(|entry| {
+            let declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.path == entry.path)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Agent type {agent_type_name} does not declare config {}",
+                        entry.path.join(".")
+                    )
+                })?;
+
+            let declaration_type =
+                schema_type_to_analysed_type(&agent_type.schema, &declaration.value_type)
+                    .map_err(|err| anyhow!("Config type conversion error: {err}"))?;
+
+            let parsed_value = ValueAndType::parse_with_type(&entry.value.0, &declaration_type)
+                .map_err(|err| {
+                    anyhow!(
+                        "config value for path {} does not match expected schema: [{}]",
+                        entry.path.join("."),
+                        err.join(", ")
+                    )
+                })?;
+
+            Ok(TypedAgentConfigEntry {
+                path: entry.path,
+                value: parsed_value,
+            })
+        })
+        .collect()
 }
 
 fn parse_provision_config_from_agent_type(

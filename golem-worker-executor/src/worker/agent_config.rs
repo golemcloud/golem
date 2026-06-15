@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{AgentConfigSource, AgentType, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, LegacyParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
+use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::adapters::analysed_type::{
+    schema_graph_to_analysed_type, schema_type_to_analysed_type,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
@@ -46,6 +49,17 @@ pub fn ensure_required_agent_secrets_are_configured(
         let canonical_agent_secret_path =
             CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_entry.path);
 
+        let expected_secret_type = schema_type_to_analysed_type(
+            &agent_type.schema,
+            &config_entry.value_type,
+        )
+        .map_err(|e| {
+            WorkerExecutorError::runtime(format!(
+                "Declared secret config type for {} is not representable as AnalysedType: {e}",
+                config_entry.path.join(".")
+            ))
+        })?;
+
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
                 let secret_type_legacy = schema_graph_to_analysed_type(&agent_secret.secret_type)
@@ -55,12 +69,12 @@ pub fn ensure_required_agent_secrets_are_configured(
                         config_entry.path.join(".")
                     ))
                 })?;
-                if secret_type_legacy != config_entry.value_type {
+                if secret_type_legacy != expected_secret_type {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
                         config_entry.path.join("."),
                         secret_type_legacy,
-                        config_entry.value_type
+                        expected_secret_type
                     )));
                 }
                 if agent_secret.secret_value.is_none()
@@ -72,7 +86,7 @@ pub fn ensure_required_agent_secrets_are_configured(
                     )));
                 }
             }
-            None if matches!(config_entry.value_type, AnalysedType::Option(_)) => {}
+            None if matches!(expected_secret_type, AnalysedType::Option(_)) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
@@ -113,16 +127,23 @@ pub fn parse_worker_creation_agent_config(
                 ))
             })?;
 
-        let parsed_value =
-            ValueAndType::parse_with_type(&entry.value.0, &config_declaration.value_type).map_err(
-                |err| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "config value for path {} does not match expected schema: [{}]",
-                        entry.path.join("."),
-                        err.join(", ")
+        let config_declaration_type =
+            schema_type_to_analysed_type(&agent_type.schema, &config_declaration.value_type)
+                .map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Declared config type for {} is not representable as AnalysedType: {e}",
+                        entry.path.join(".")
                     ))
-                },
-            )?;
+                })?;
+
+        let parsed_value = ValueAndType::parse_with_type(&entry.value.0, &config_declaration_type)
+            .map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "config value for path {} does not match expected schema: [{}]",
+                    entry.path.join("."),
+                    err.join(", ")
+                ))
+            })?;
 
         initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,
@@ -170,26 +191,34 @@ pub fn effective_agent_config(
 
 pub fn validate_agent_config(
     config: &HashMap<Vec<String>, ValueAndType>,
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
         if entry.source != AgentConfigSource::Local {
             continue;
         };
 
+        let entry_value_type = schema_type_to_analysed_type(&agent_type.schema, &entry.value_type)
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!(
+                    "Declared config type for {} is not representable as AnalysedType: {e}",
+                    entry.path.join(".")
+                ))
+            })?;
+
         match config.get(&entry.path) {
             Some(config_value) => {
-                if config_value.typ != entry.value_type {
+                if config_value.typ != entry_value_type {
                     // TODO: better rendering of analysed type.
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Type mismatch for config {}. expected: {:?}; found: {:?}",
                         entry.path.join("."),
-                        entry.value_type,
+                        entry_value_type,
                         config_value.typ
                     )));
                 }
             }
-            None if matches!(entry.value_type, AnalysedType::Option(_)) => {}
+            None if matches!(entry_value_type, AnalysedType::Option(_)) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Config {} was not provided a value",

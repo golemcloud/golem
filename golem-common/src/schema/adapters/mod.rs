@@ -60,12 +60,12 @@ pub use element_schema::{element_schema_to_schema_type, schema_type_to_element_s
 pub use error::{SchemaAdapterError, legacy_type_id, resolve_ref};
 pub use untyped::{
     input_value_to_typed_schema_value, json_data_value_to_input_value,
-    json_data_value_to_legacy_data_value, legacy_data_value_to_json,
-    output_json_to_legacy_data_value, output_value_to_typed_schema_value,
-    schema_output_value_to_legacy_data_value, typed_input_to_untyped_data_value,
-    typed_output_value_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
-    untyped_data_value_to_input_value, untyped_data_value_to_typed_input,
-    untyped_data_value_to_typed_schema_output,
+    json_data_value_to_legacy_data_value, json_schema_value_to_input_value,
+    legacy_data_value_to_json, output_json_to_legacy_data_value,
+    output_value_to_typed_schema_value, schema_output_value_to_legacy_data_value,
+    typed_input_to_untyped_data_value, typed_output_value_to_untyped_data_value,
+    typed_schema_value_to_untyped_data_value, untyped_data_value_to_input_value,
+    untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,
 };
 pub use value::{
     schema_value_to_value, typed_schema_value_to_value_and_type,

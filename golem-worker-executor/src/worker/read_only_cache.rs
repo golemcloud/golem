@@ -40,10 +40,11 @@
 
 use golem_common::model::AgentInvocation;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::agent::{AgentMethod, AgentTypeName, Principal};
+use golem_common::model::agent::{AgentTypeName, Principal};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::schema::SchemaValue;
+use golem_common::schema::agent::AgentMethodSchema;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tokio::time::Instant;
@@ -54,7 +55,7 @@ use tokio::time::Instant;
 /// component updates lazily invalidate cached entries.
 ///
 /// `principal_digest` is populated only when the method's
-/// [`AgentMethod::read_only`] has `uses_principal == true`.
+/// [`AgentMethodSchema::read_only`] has `uses_principal == true`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ReadOnlyCacheKey {
     pub method_name: String,
@@ -113,20 +114,20 @@ impl InvocationEffect {
     }
 }
 
-/// Looks up the [`AgentMethod`] for `method_name` on `agent_type` in the
+/// Looks up the [`AgentMethodSchema`] for `method_name` on `agent_type` in the
 /// already-loaded component metadata. Returns `None` if either is missing;
 /// callers should fall back to the normal invocation path.
 pub fn resolve_read_only_method(
     metadata: &ComponentMetadata,
     agent_type: &AgentTypeName,
     method_name: &str,
-) -> Option<AgentMethod> {
+) -> Option<AgentMethodSchema> {
     let at = metadata.find_agent_type_by_name(agent_type)?;
     at.methods.into_iter().find(|m| m.name == method_name)
 }
 
 /// Statically classifies an [`AgentInvocation`] for cache invalidation
-/// purposes. Read-only `AgentMethod`s are detected by inspecting the given
+/// purposes. Read-only agent methods are detected by inspecting the given
 /// component metadata snapshot.
 pub fn classify_invocation(
     metadata: Option<&ComponentMetadata>,
@@ -199,12 +200,13 @@ mod tests {
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMode, AgentPrincipal, AgentType, AgentTypeName, CachePolicy,
-        DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting,
+        AgentConstructor, AgentMethod, AgentMode, AgentPrincipal, AgentType, AgentTypeName,
+        CachePolicy, DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting,
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::schema::UnionValuePayload;
+    use golem_common::schema::adapters::agent::agent_type_to_schema;
     use golem_wasm::Value;
     use std::collections::BTreeMap;
     use test_r::test;
@@ -256,7 +258,7 @@ mod tests {
             vec![],
             None,
             None,
-            vec![at],
+            vec![agent_type_to_schema(&at).unwrap()],
             BTreeMap::new(),
         )
     }

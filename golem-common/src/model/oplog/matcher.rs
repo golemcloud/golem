@@ -102,8 +102,18 @@ impl PublicOplogEntry {
                     || Self::string_match("host-call", &[], query_path, query)
                     || Self::string_match("imported-function", &[], query_path, query)
                     || Self::string_match(&params.function_name, &[], query_path, query)
-                    || Self::match_typed_schema_value(&params.request, &[], query_path, query)
-                    || Self::match_typed_schema_value(&params.response, &[], query_path, query)
+                    || Self::match_typed_schema_value(
+                        &params.request,
+                        &["request".to_string()],
+                        query_path,
+                        query,
+                    )
+                    || Self::match_typed_schema_value(
+                        &params.response,
+                        &["response".to_string()],
+                        query_path,
+                        query,
+                    )
             }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 Self::string_match("agentinvocationstarted", &[], query_path, query)
@@ -598,16 +608,21 @@ impl PublicOplogEntry {
             SchemaValue::Variant(payload) => {
                 if let SchemaType::Variant { cases, .. } = ty {
                     match cases.get(payload.case as usize) {
-                        Some(case) => match (&payload.payload, &case.payload) {
-                            (Some(v), Some(case_ty)) => {
-                                let mut new_path: Vec<String> = path_stack.to_vec();
-                                new_path.push(case.name.clone());
-                                Self::match_schema_value(
-                                    graph, case_ty, v, &new_path, query_path, query,
-                                )
-                            }
-                            _ => false,
-                        },
+                        Some(case) => {
+                            let case_name_matches =
+                                Self::string_match(&case.name, path_stack, query_path, query);
+                            let payload_matches = match (&payload.payload, &case.payload) {
+                                (Some(v), Some(case_ty)) => {
+                                    let mut new_path: Vec<String> = path_stack.to_vec();
+                                    new_path.push(case.name.clone());
+                                    Self::match_schema_value(
+                                        graph, case_ty, v, &new_path, query_path, query,
+                                    )
+                                }
+                                _ => false,
+                            };
+                            case_name_matches || payload_matches
+                        }
                         None => false,
                     }
                 } else {

@@ -37,6 +37,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::schema::adapters::agent::agent_type_to_schema;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
@@ -554,25 +555,28 @@ impl InvocationHarness {
                 vec![],
                 None,
                 None,
-                vec![AgentType {
-                    type_name: AgentTypeName("mcp-agent".to_string()),
-                    description: String::new(),
-                    source_language: String::new(),
-                    constructor: golem_common::model::agent::AgentConstructor {
-                        name: None,
+                vec![
+                    agent_type_to_schema(&AgentType {
+                        type_name: AgentTypeName("mcp-agent".to_string()),
                         description: String::new(),
-                        prompt_hint: None,
-                        input_schema: golem_common::model::agent::DataSchema::Tuple(
-                            NamedElementSchemas::empty(),
-                        ),
-                    },
-                    methods: vec![],
-                    dependencies: vec![],
-                    mode: AgentMode::Durable,
-                    http_mount: None,
-                    snapshotting: Snapshotting::Disabled(golem_common::model::Empty {}),
-                    config: vec![],
-                }],
+                        source_language: String::new(),
+                        constructor: golem_common::model::agent::AgentConstructor {
+                            name: None,
+                            description: String::new(),
+                            prompt_hint: None,
+                            input_schema: golem_common::model::agent::DataSchema::Tuple(
+                                NamedElementSchemas::empty(),
+                            ),
+                        },
+                        methods: vec![],
+                        dependencies: vec![],
+                        mode: AgentMode::Durable,
+                        http_mount: None,
+                        snapshotting: Snapshotting::Disabled(golem_common::model::Empty {}),
+                        config: vec![],
+                    })
+                    .unwrap(),
+                ],
                 BTreeMap::new(),
             ),
             created_at: Utc::now(),

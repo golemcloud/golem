@@ -440,15 +440,25 @@ impl DeployDiff {
                 self.diffable_staged_deployment
                     .components
                     .insert(component_name.0.clone(), component.to_diffable()?.into());
-                self.staged_agent_types
-                    .insert(component_name.0, component.metadata.agent_types().to_vec());
+                self.staged_agent_types.insert(
+                    component_name.0,
+                    component
+                        .metadata
+                        .legacy_agent_types()
+                        .map_err(anyhow::Error::msg)?,
+                );
             }
             DeployDiffKind::Current => {
                 self.diffable_current_deployment
                     .components
                     .insert(component_name.0.clone(), component.to_diffable()?.into());
-                self.current_agent_types
-                    .insert(component_name.0, component.metadata.agent_types().to_vec());
+                self.current_agent_types.insert(
+                    component_name.0,
+                    component
+                        .metadata
+                        .legacy_agent_types()
+                        .map_err(anyhow::Error::msg)?,
+                );
             }
         }
 
@@ -657,7 +667,10 @@ impl RollbackDiff {
             );
             self.target_agent_types.insert(
                 component_details.name.0.clone(),
-                component.metadata.agent_types().to_vec(),
+                component
+                    .metadata
+                    .legacy_agent_types()
+                    .map_err(anyhow::Error::msg)?,
             );
         }
         if let Some(component) = component_details.current {
@@ -667,7 +680,10 @@ impl RollbackDiff {
             );
             self.current_agent_types.insert(
                 component_details.name.0.clone(),
-                component.metadata.agent_types().to_vec(),
+                component
+                    .metadata
+                    .legacy_agent_types()
+                    .map_err(anyhow::Error::msg)?,
             );
         }
 

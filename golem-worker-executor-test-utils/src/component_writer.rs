@@ -26,6 +26,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::schema::adapters::agent::agent_type_to_schema;
 use golem_service_base::model::component::Component;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -626,7 +627,12 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.memories,
                 value.root_package_name,
                 value.root_package_version,
-                value.agent_types,
+                value
+                    .agent_types
+                    .iter()
+                    .map(agent_type_to_schema)
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("cached analysis agent types must be schema-convertible"),
                 value.agent_type_provision_configs,
             ),
             created_at: Default::default(),

@@ -109,6 +109,7 @@ use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
+use crate::schema::validation::value::validate_value;
 use serde_json::Value as JsonValue;
 
 // ===========================================================================
@@ -635,6 +636,32 @@ pub fn input_value_to_typed_schema_value(
         SchemaGraph::anonymous(SchemaType::record(fields)),
         value,
     ))
+}
+
+/// Convert raw client JSON carrying a schema-native [`SchemaValue`] into the
+/// guest-facing parameter record expected by the executor invoke path.
+///
+/// This is the schema-native replacement for [`json_data_value_to_input_value`]:
+/// the request body contains only the value tree, while the looked-up
+/// [`DataSchema`] supplies the expected record shape for validation.
+pub fn json_schema_value_to_input_value(
+    json: JsonValue,
+    schema: &DataSchema,
+) -> Result<SchemaValue, SchemaAdapterError> {
+    let value: SchemaValue = serde_json::from_value(json).map_err(|e| {
+        SchemaAdapterError::ValueShapeMismatch(format!("invalid schema value: {e}"))
+    })?;
+    let typed = input_value_to_typed_schema_value(schema, value.clone())?;
+    validate_value(typed.graph(), typed.root_type(), &value).map_err(|errors| {
+        SchemaAdapterError::ValueShapeMismatch(
+            errors
+                .into_iter()
+                .map(|err| err.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })?;
+    Ok(value)
 }
 
 /// Pair a schema-native invocation **output** value with the schema derived

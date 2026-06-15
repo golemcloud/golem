@@ -24,6 +24,8 @@ use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::component::InstalledPlugin;
+use crate::schema::adapters::{agent_type_to_schema, schema_agent_type_to_legacy};
+use crate::schema::agent::AgentTypeSchema;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -35,6 +37,11 @@ impl ComponentMetadata {
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Result<Self, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
+        let agent_types = agent_types
+            .iter()
+            .map(agent_type_to_schema)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| ComponentProcessingError::Metadata(format!("{err}")))?;
         Ok(Self {
             data: Arc::new(raw.into_metadata(agent_types, agent_type_provision_configs)),
         })
@@ -45,7 +52,7 @@ impl ComponentMetadata {
         memories: Vec<LinearMemory>,
         root_package_name: Option<String>,
         root_package_version: Option<String>,
-        agent_types: Vec<AgentType>,
+        agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Self {
         Self {
@@ -102,8 +109,18 @@ impl ComponentMetadata {
         &self.data.root_package_version
     }
 
-    pub fn agent_types(&self) -> &[AgentType] {
+    pub fn agent_types(&self) -> &[AgentTypeSchema] {
         &self.data.agent_types
+    }
+
+    pub fn legacy_agent_types(&self) -> Result<Vec<AgentType>, String> {
+        self.data
+            .agent_types
+            .iter()
+            .map(|agent_type| {
+                schema_agent_type_to_legacy(agent_type).map_err(|err| err.to_string())
+            })
+            .collect()
     }
 
     pub fn agent_type_provision_configs(
@@ -204,12 +221,23 @@ impl ComponentMetadata {
             .map(|iface| format!("{iface}.{{process}}"))
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentTypeSchema> {
         self.data
             .agent_types
             .iter()
             .find(|t| &t.type_name == agent_type)
             .cloned()
+    }
+
+    pub fn find_legacy_agent_type_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentType>, String> {
+        self.find_agent_type_by_name(agent_type)
+            .map(|agent_type| {
+                schema_agent_type_to_legacy(&agent_type).map_err(|err| err.to_string())
+            })
+            .transpose()
     }
 }
 
@@ -413,7 +441,7 @@ impl RawComponentMetadata {
 
     pub fn into_metadata(
         self,
-        agent_types: Vec<AgentType>,
+        agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> ComponentMetadataInnerData {
         let producers = self
@@ -498,6 +526,7 @@ impl From<ProducerField> for crate::component_introspection::metadata::Producers
 pub enum ComponentProcessingError {
     Parsing(String),
     Analysis(AnalysisFailure),
+    Metadata(String),
 }
 
 impl SafeDisplay for ComponentProcessingError {
@@ -505,6 +534,7 @@ impl SafeDisplay for ComponentProcessingError {
         match self {
             ComponentProcessingError::Parsing(_) => self.to_string(),
             ComponentProcessingError::Analysis(_) => self.to_string(),
+            ComponentProcessingError::Metadata(_) => self.to_string(),
         }
     }
 }
@@ -517,6 +547,7 @@ impl Display for ComponentProcessingError {
                 let AnalysisFailure { reason } = source;
                 write!(f, "Analysis error: {reason}")
             }
+            ComponentProcessingError::Metadata(e) => write!(f, "Metadata error: {e}"),
         }
     }
 }
