@@ -14,11 +14,21 @@ harness = false
 
 [features]
 default = []
+bigdecimal = []
+bit_vec = []
+bytes = ["dep:bytes"]
+chrono = []
 derive = []
 full = ["dep:desert_rust", "dep:golem-api-grpc", "dep:poem", "dep:poem-openapi"]
 guest = ["dep:wasip2", "dep:wit-bindgen"]
 host = ["dep:wasmtime", "dep:wasmtime-wasi"]
+mac_address = ["dep:mac_address"]
+nonempty_collections = ["dep:nonempty-collections"]
+num_bigint = ["dep:num-bigint"]
 proptest = ["dep:proptest"]
+rust_decimal = ["dep:rust_decimal"]
+serde_json_types = []
+url = []
 
 [dependencies]
 golem-schema-derive = { workspace = true }
@@ -26,15 +36,20 @@ golem-schema-derive = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+bytes = { workspace = true, optional = true }
 chrono = { workspace = true }
 combine = { workspace = true }
 desert_rust = { workspace = true, optional = true }
 golem-api-grpc = { workspace = true, optional = true }
+mac_address = { workspace = true, optional = true }
+nonempty-collections = { workspace = true, optional = true }
+num-bigint = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
 proptest = { workspace = true, optional = true }
 range-set-blaze = { workspace = true }
 regex = { workspace = true }
+rust_decimal = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

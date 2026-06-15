@@ -19,6 +19,47 @@ pub use uuid::Uuid;
 pub use wasip2;
 pub use wstd;
 
+pub use golem_schema;
+pub use golem_schema::schema;
+pub use golem_schema::schema::{
+    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue,
+};
+
+pub fn encode_schema_graph(
+    graph: &SchemaGraph,
+) -> Result<schema::wit::wire::SchemaGraph, schema::wit::EncodeError> {
+    schema::wit::encode_graph(graph)
+}
+
+pub fn decode_schema_graph(
+    graph: &schema::wit::wire::SchemaGraph,
+) -> Result<SchemaGraph, schema::wit::DecodeError> {
+    schema::wit::decode_graph(graph)
+}
+
+pub fn encode_schema_value(value: &SchemaValue) -> schema::wit::wire::SchemaValueTree {
+    schema::wit::encode_value(value)
+}
+
+pub fn decode_schema_value(
+    value: &schema::wit::wire::SchemaValueTree,
+) -> Result<SchemaValue, schema::wit::DecodeError> {
+    schema::wit::decode_value(value)
+}
+
+pub fn encode_typed_schema_value(
+    value: &TypedSchemaValue,
+) -> Result<schema::wit::wire::TypedSchemaValue, schema::wit::EncodeError> {
+    schema::wit::encode_typed(value)
+}
+
+pub fn decode_typed_schema_value(
+    value: &schema::wit::wire::TypedSchemaValue,
+) -> Result<TypedSchemaValue, schema::wit::DecodeError> {
+    schema::wit::decode_typed(value)
+}
+
 pub mod bindings {
     use wit_bindgen::generate;
 
@@ -30,6 +71,7 @@ pub mod bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
         }
@@ -48,6 +90,7 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
@@ -86,6 +129,7 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
@@ -125,6 +169,7 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
@@ -175,6 +220,7 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "wasi:io/poll@0.2.3": wasip2::io::poll,
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 

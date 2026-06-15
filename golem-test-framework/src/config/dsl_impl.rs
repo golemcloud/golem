@@ -30,11 +30,11 @@ use golem_client::api::{
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
 use golem_common::base_model::agent::DataValue;
-use golem_common::model::agent::{parsed_agent_id_parameters_to_legacy_data_value, ParsedAgentId};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::{ParsedAgentId, parsed_agent_id_parameters_to_legacy_data_value};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };

@@ -23,8 +23,15 @@ client = ["golem-wasm/client"]
 proptest = ["dep:proptest", "golem-schema/proptest"]
 full = [
     "client",
+    "golem-schema/bigdecimal",
+    "golem-schema/bit_vec",
+    "golem-schema/chrono",
     "golem-schema/full",
     "golem-schema/host",
+    "golem-schema/mac_address",
+    "golem-schema/nonempty_collections",
+    "golem-schema/serde_json_types",
+    "golem-schema/url",
     "golem-wasm/host",
     "dep:golem-api-grpc",
     "dep:applying",

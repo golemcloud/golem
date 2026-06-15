@@ -37,6 +37,29 @@ use crate::schema::validation::{SchemaError, validate_graph};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
+#[cfg(feature = "bigdecimal")]
+mod bigdecimal;
+#[cfg(feature = "bit_vec")]
+mod bit_vec;
+#[cfg(feature = "bytes")]
+mod bytes;
+#[cfg(feature = "chrono")]
+mod chrono;
+#[cfg(feature = "full")]
+mod full;
+#[cfg(feature = "mac_address")]
+mod mac_address;
+#[cfg(feature = "nonempty_collections")]
+mod nonempty_collections;
+#[cfg(feature = "num_bigint")]
+mod num_bigint;
+#[cfg(feature = "rust_decimal")]
+mod rust_decimal;
+#[cfg(feature = "serde_json_types")]
+mod serde_json_types;
+#[cfg(feature = "url")]
+mod url;
+
 // =====================================================================
 // Trait surface
 // =====================================================================
@@ -912,10 +935,10 @@ impl<T: FromSchema, E: FromSchema> FromSchema for Result<T, E> {
 }
 
 // =====================================================================
-// chrono / std::time
+// chrono::DateTime / std::time
 // =====================================================================
 
-impl IntoSchema for chrono::DateTime<chrono::Utc> {
+impl IntoSchema for ::chrono::DateTime<::chrono::Utc> {
     fn type_id() -> TypeId {
         TypeId::new("chrono.DateTime<chrono.Utc>")
     }
@@ -927,7 +950,7 @@ impl IntoSchema for chrono::DateTime<chrono::Utc> {
     }
 }
 
-impl FromSchema for chrono::DateTime<chrono::Utc> {
+impl FromSchema for ::chrono::DateTime<::chrono::Utc> {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
             SchemaValue::Datetime { value } => Ok(*value),
@@ -976,35 +999,6 @@ impl FromSchema for std::time::Duration {
                 "duration",
                 value_kind(other),
                 "Duration",
-            )),
-        }
-    }
-}
-
-impl IntoSchema for chrono::Duration {
-    fn type_id() -> TypeId {
-        TypeId::new("chrono.Duration")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::duration()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::Duration(DurationValuePayload {
-            nanoseconds: self
-                .num_nanoseconds()
-                .unwrap_or(self.num_seconds() * 1_000_000_000),
-        })
-    }
-}
-
-impl FromSchema for chrono::Duration {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::Duration(p) => Ok(chrono::Duration::nanoseconds(p.nanoseconds)),
-            other => Err(FromSchemaError::shape_mismatch(
-                "duration",
-                value_kind(other),
-                "chrono::Duration",
             )),
         }
     }
@@ -1081,192 +1075,6 @@ impl FromSchema for uuid::Uuid {
                 "record",
                 value_kind(other),
                 "Uuid",
-            )),
-        }
-    }
-}
-
-// =====================================================================
-// Foreign value types used by the oplog payloads (schema-native A2 shapes)
-// =====================================================================
-//
-// These mirror the legacy `golem_wasm::IntoValue` impls for the same types but
-// use the simplest schema-native representation (the oplog persisted/public
-// format is being reset by the cutover, so byte-for-byte fidelity to the legacy
-// shapes is not required — see the seam-cutover charter §0.5 / A2 decision).
-
-impl IntoSchema for bigdecimal::BigDecimal {
-    fn type_id() -> TypeId {
-        TypeId::new("bigdecimal.BigDecimal")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.to_string())
-    }
-}
-
-impl FromSchema for bigdecimal::BigDecimal {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => s
-                .parse()
-                .map_err(|e| FromSchemaError::custom(format!("invalid BigDecimal: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "BigDecimal",
-            )),
-        }
-    }
-}
-
-impl IntoSchema for bit_vec::BitVec {
-    fn type_id() -> TypeId {
-        TypeId::new("bit_vec.BitVec")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::list(SchemaType::bool())
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::List {
-            elements: self.iter().map(SchemaValue::Bool).collect(),
-        }
-    }
-}
-
-impl FromSchema for bit_vec::BitVec {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::List { elements } => {
-                let mut bv = bit_vec::BitVec::with_capacity(elements.len());
-                for e in elements {
-                    match e {
-                        SchemaValue::Bool(b) => bv.push(*b),
-                        other => {
-                            return Err(FromSchemaError::shape_mismatch(
-                                "bool",
-                                value_kind(other),
-                                "BitVec",
-                            ));
-                        }
-                    }
-                }
-                Ok(bv)
-            }
-            other => Err(FromSchemaError::shape_mismatch(
-                "list",
-                value_kind(other),
-                "BitVec",
-            )),
-        }
-    }
-}
-
-impl IntoSchema for serde_json::Value {
-    fn type_id() -> TypeId {
-        TypeId::new("serde_json.Value")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.to_string())
-    }
-}
-
-impl FromSchema for serde_json::Value {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => serde_json::from_str(s)
-                .map_err(|e| FromSchemaError::custom(format!("invalid JSON: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "serde_json::Value",
-            )),
-        }
-    }
-}
-
-const NAIVE_DATE_FMT: &str = "%Y-%m-%d";
-const NAIVE_DATE_TIME_FMT: &str = "%Y-%m-%dT%H:%M:%S%.9f";
-const NAIVE_TIME_FMT: &str = "%H:%M:%S%.9f";
-
-impl IntoSchema for chrono::NaiveDate {
-    fn type_id() -> TypeId {
-        TypeId::new("chrono.NaiveDate")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.format(NAIVE_DATE_FMT).to_string())
-    }
-}
-
-impl FromSchema for chrono::NaiveDate {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => chrono::NaiveDate::parse_from_str(s, NAIVE_DATE_FMT)
-                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDate: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "NaiveDate",
-            )),
-        }
-    }
-}
-
-impl IntoSchema for chrono::NaiveDateTime {
-    fn type_id() -> TypeId {
-        TypeId::new("chrono.NaiveDateTime")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.format(NAIVE_DATE_TIME_FMT).to_string())
-    }
-}
-
-impl FromSchema for chrono::NaiveDateTime {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => chrono::NaiveDateTime::parse_from_str(s, NAIVE_DATE_TIME_FMT)
-                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDateTime: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "NaiveDateTime",
-            )),
-        }
-    }
-}
-
-impl IntoSchema for chrono::NaiveTime {
-    fn type_id() -> TypeId {
-        TypeId::new("chrono.NaiveTime")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.format(NAIVE_TIME_FMT).to_string())
-    }
-}
-
-impl FromSchema for chrono::NaiveTime {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => chrono::NaiveTime::parse_from_str(s, NAIVE_TIME_FMT)
-                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveTime: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "NaiveTime",
             )),
         }
     }
@@ -1367,84 +1175,6 @@ impl<T: FromSchema> FromSchema for std::ops::Bound<T> {
                 "variant",
                 value_kind(other),
                 "Bound",
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "full")]
-impl IntoSchema for golem_api_grpc::proto::golem::worker::UpdateMode {
-    fn type_id() -> TypeId {
-        TypeId::new("golem_api_grpc.proto.golem.worker.UpdateMode")
-    }
-
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::r#enum(vec!["automatic".to_string(), "snapshot-based".to_string()])
-    }
-
-    fn to_value(&self) -> SchemaValue {
-        use golem_api_grpc::proto::golem::worker::UpdateMode;
-        match self {
-            UpdateMode::Automatic => SchemaValue::Enum { case: 0 },
-            UpdateMode::Manual => SchemaValue::Enum { case: 1 },
-        }
-    }
-}
-
-#[cfg(feature = "full")]
-impl FromSchema for golem_api_grpc::proto::golem::worker::UpdateMode {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        use golem_api_grpc::proto::golem::worker::UpdateMode;
-        match v {
-            SchemaValue::Enum { case: 0 } => Ok(UpdateMode::Automatic),
-            SchemaValue::Enum { case: 1 } => Ok(UpdateMode::Manual),
-            SchemaValue::Enum { case } => {
-                Err(FromSchemaError::out_of_range(*case, 2, "UpdateMode"))
-            }
-            other => Err(FromSchemaError::shape_mismatch(
-                "enum",
-                value_kind(other),
-                "UpdateMode",
-            )),
-        }
-    }
-}
-
-// =====================================================================
-// Model newtype wrappers (schema-native A2 shapes)
-// =====================================================================
-//
-// These mirror the legacy `golem_wasm::IntoValue` impls for the same wrapper
-// types but use the simplest schema-native representation. They live here
-// (rather than at each type's definition site) because the wrapped types are
-// generated by the `newtype_uuid!` / `declare_revision!` macros, which hand-
-// implement the legacy value traits (so a derive cannot be attached at the
-// macro call site).
-
-// A `url::Url` is modelled as its string form, mirroring the legacy
-// `golem_wasm::IntoValue for Url` representation.
-impl IntoSchema for url::Url {
-    fn type_id() -> TypeId {
-        TypeId::new("url.Url")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.to_string())
-    }
-}
-
-impl FromSchema for url::Url {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => {
-                url::Url::parse(s).map_err(|e| FromSchemaError::custom(format!("invalid Url: {e}")))
-            }
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "Url",
             )),
         }
     }
