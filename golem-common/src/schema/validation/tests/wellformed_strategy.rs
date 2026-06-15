@@ -141,6 +141,12 @@ fn unnest_nullable_options(ty: &SchemaType, graph: &SchemaGraph) -> SchemaType {
                 })
                 .collect(),
         }),
+        SchemaType::Future { inner, .. } => {
+            SchemaType::future(inner.as_ref().map(|t| unnest_nullable_options(t, graph)))
+        }
+        SchemaType::Stream { inner, .. } => {
+            SchemaType::stream(inner.as_ref().map(|t| unnest_nullable_options(t, graph)))
+        }
         other => other.clone(),
     }
 }
