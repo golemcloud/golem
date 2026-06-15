@@ -50,6 +50,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
+pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
+pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
+pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
+
 oplog_payload! {
     HostRequest => {
         NoInput {},
@@ -327,7 +332,7 @@ oplog_payload! {
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
         HttpFutureTrailersGet {
-            result:  Result<Option<Result<Result<Option<HashMap<String, Vec<Vec<u8>>>>, SerializableHttpErrorCode>, ()>>, String>
+            result: HttpFutureTrailersGetResult
         },
         HttpResponse {
             response: SerializableHttpResponse

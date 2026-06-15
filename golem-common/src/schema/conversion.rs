@@ -103,6 +103,7 @@ pub fn try_into_typed_schema_value<T: IntoSchema + ?Sized>(
 /// [`try_into_typed_schema_value`], mirroring the legacy
 /// `IntoValueAndType::into_value_and_type` method shape.
 pub trait IntoTypedSchemaValue: IntoSchema {
+    #[allow(clippy::wrong_self_convention)]
     fn into_typed_schema_value(&self) -> Result<TypedSchemaValue, SchemaError>;
 }
 
@@ -1234,10 +1235,8 @@ impl IntoSchema for chrono::NaiveDateTime {
 impl FromSchema for chrono::NaiveDateTime {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
-            SchemaValue::String(s) => {
-                chrono::NaiveDateTime::parse_from_str(s, NAIVE_DATE_TIME_FMT)
-                    .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDateTime: {e}")))
-            }
+            SchemaValue::String(s) => chrono::NaiveDateTime::parse_from_str(s, NAIVE_DATE_TIME_FMT)
+                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDateTime: {e}"))),
             other => Err(FromSchemaError::shape_mismatch(
                 "string",
                 value_kind(other),
@@ -1401,7 +1400,9 @@ impl FromSchema for golem_api_grpc::proto::golem::worker::UpdateMode {
         match v {
             SchemaValue::Enum { case: 0 } => Ok(UpdateMode::Automatic),
             SchemaValue::Enum { case: 1 } => Ok(UpdateMode::Manual),
-            SchemaValue::Enum { case } => Err(FromSchemaError::out_of_range(*case, 2, "UpdateMode")),
+            SchemaValue::Enum { case } => {
+                Err(FromSchemaError::out_of_range(*case, 2, "UpdateMode"))
+            }
             other => Err(FromSchemaError::shape_mismatch(
                 "enum",
                 value_kind(other),

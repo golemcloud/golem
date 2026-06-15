@@ -22,8 +22,8 @@
 //! `from_value()` decodes it back. This is the mechanism oplog carriers use to
 //! persist a bare `SchemaValue` field (see the seam-cutover charter §0.5 N7).
 
-use super::strategies;
 use crate::schema::conversion::{IntoTypedSchemaValue, try_into_schema_graph};
+use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_value::SchemaValue;
 use crate::schema::validation::validate_graph;
 use crate::schema::{FromSchema, IntoSchema};
@@ -205,14 +205,16 @@ fn foreign_leaf_types_round_trip() {
     });
 
     // SerializableMacAddress: decode a known string, then round-trip the value.
-    let mac = SerializableMacAddress::from_value(&SchemaValue::String(
-        "01:23:45:67:89:AB".to_string(),
-    ))
-    .expect("decode mac");
+    let mac =
+        SerializableMacAddress::from_value(&SchemaValue::String("01:23:45:67:89:AB".to_string()))
+            .expect("decode mac");
     round_trip(mac);
 
     // ValuesRange<i64> (derived): Included/Excluded/Unbounded combinations.
-    round_trip(ValuesRange::new(Bound::Included(1i64), Bound::Excluded(10i64)));
+    round_trip(ValuesRange::new(
+        Bound::Included(1i64),
+        Bound::Excluded(10i64),
+    ));
     round_trip(ValuesRange::new(Bound::Unbounded, Bound::Included(5i64)));
     round_trip(ValuesRange::<i64>::new(Bound::Unbounded, Bound::Unbounded));
 }

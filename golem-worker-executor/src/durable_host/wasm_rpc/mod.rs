@@ -284,7 +284,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await;
                 let result: Result<SchemaValue, InternalRpcError> = match either_result {
-                    Either::Left((result, _)) => result.map_err(Into::into),
+                    Either::Left((result, _)) => result,
                     Either::Right((interrupt_kind, _)) => {
                         tracing::info!("Interrupted while waiting for RPC result");
                         return Err(interrupt_kind.into());

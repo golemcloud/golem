@@ -568,7 +568,7 @@ mod tests {
         // a swap observable: constructor = string, method = u32).
         let harness = InvocationHarness::new(AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentMethod {
-                output: UntypedDataValue::Tuple(vec![]),
+                output: SchemaValue::Tuple { elements: vec![] },
             },
             consumed_fuel: None,
             invocation_status: None,

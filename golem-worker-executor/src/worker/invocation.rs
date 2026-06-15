@@ -662,8 +662,7 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let component_id: golem_wasm::ComponentId =
-                metadata.agent_id.component_id.clone().into();
+            let component_id: golem_wasm::ComponentId = metadata.agent_id.component_id.into();
             let agent_id: golem_wasm::AgentId = metadata.agent_id.clone().into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),

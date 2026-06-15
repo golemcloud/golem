@@ -1086,12 +1086,8 @@ fn value_to_string(value: &ValueAndType) -> String {
 }
 
 fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
-    golem_common::schema::render::value_to_cli_text(
-        value.graph(),
-        value.root_type(),
-        value.value(),
-    )
-    .unwrap_or_else(|err| format!("<rendering error: {err}>"))
+    golem_common::schema::render::value_to_cli_text(value.graph(), value.root_type(), value.value())
+        .unwrap_or_else(|err| format!("<rendering error: {err}>"))
 }
 
 fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue, source_language: &SourceLanguage) {

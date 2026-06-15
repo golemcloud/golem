@@ -23,7 +23,17 @@ use std::fmt::{Display, Formatter};
 /// type name); cross-language interop requires the same `TypeId` on every side,
 /// which users can pin via the SDK's `named` attribute.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]

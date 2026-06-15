@@ -106,8 +106,7 @@ pub(crate) fn schema_value_tree_to_data_value(
     input: &core_wire::SchemaValueTree,
     data_schema: &DataSchema,
 ) -> Result<DataValue, String> {
-    let schema_value =
-        decode_value(input).map_err(|e| format!("invalid input value tree: {e}"))?;
+    let schema_value = decode_value(input).map_err(|e| format!("invalid input value tree: {e}"))?;
     let fields = match schema_value {
         SchemaValue::Record { fields } => fields,
         other => {
@@ -347,9 +346,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            let result = result.and_then(|maybe_type| {
-                maybe_type.map(registered_agent_type_to_schema).transpose()
-            });
+            let result = result
+                .and_then(|maybe_type| maybe_type.map(registered_agent_type_to_schema).transpose());
             durability
                 .persist(
                     self,
@@ -455,10 +453,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn create_webhook(
-        &mut self,
-        promise_id: core_wire::PromiseId,
-    ) -> anyhow::Result<String> {
+    async fn create_webhook(&mut self, promise_id: core_wire::PromiseId) -> anyhow::Result<String> {
         let durability =
             Durability::<GolemAgentCreateWebhook>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -544,12 +539,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let expected_graph = decode_graph(&expected).map_err(|e| {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
-        let expected_type_flattened =
-            schema_type_to_analysed_type(&expected_graph, &expected_graph.root).map_err(|e| {
-                anyhow!(
-                    "Expected config type for path {path_str} is not representable as a flat type: {e}"
-                )
-            })?;
+        let expected_type_flattened = schema_type_to_analysed_type(
+            &expected_graph,
+            &expected_graph.root,
+        )
+        .map_err(|e| {
+            anyhow!(
+                "Expected config type for path {path_str} is not representable as a flat type: {e}"
+            )
+        })?;
         let expected_type =
             analysed_type_to_schema_type_inline(&expected_type_flattened).map_err(|e| {
                 anyhow!(

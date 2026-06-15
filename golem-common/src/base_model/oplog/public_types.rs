@@ -78,9 +78,7 @@ declare_structs! {
     }
 }
 
-#[derive(
-    Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize,
-)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -387,18 +385,7 @@ pub enum PublicUpdateDescription {
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialOrd,
-    Ord,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
@@ -443,9 +430,7 @@ pub enum LogLevel {
     Critical,
 }
 
-#[derive(
-    Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize,
-)]
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum PersistenceLevel {
     PersistNothing,
@@ -513,10 +498,7 @@ pub enum PublicSnapshotData {
 
 /// API-facing counter state for a retry policy.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(poem_openapi::Object)
-)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateCounter {
     /// Number of retry attempts recorded so far.
@@ -525,10 +507,7 @@ pub struct PublicRetryPolicyStateCounter {
 
 /// API-facing wrapper state that delegates to an inner retry policy state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(poem_openapi::Object)
-)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateWrapper {
     /// The wrapped inner retry policy state.

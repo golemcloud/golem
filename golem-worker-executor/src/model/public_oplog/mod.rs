@@ -19,11 +19,6 @@ use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, AgentTypeName, DataSchema, LegacyParsedAgentId};
-use golem_common::schema::adapters::{
-    data_schema_to_input_schema, data_schema_to_output_schema,
-    legacy_data_value_to_typed_schema_value, value_and_type_to_typed_schema_value,
-};
-use golem_common::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
@@ -55,6 +50,13 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
+};
+use golem_common::schema::adapters::{
+    data_schema_to_input_schema, data_schema_to_output_schema,
+    legacy_data_value_to_typed_schema_value, value_and_type_to_typed_schema_value,
+};
+use golem_common::schema::{
+    NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -284,8 +286,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let local_agent_config = local_agent_config
                     .into_iter()
                     .map(|lac| {
-                        let typed =
-                            lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
+                        let typed = lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
                         let value = value_and_type_to_typed_schema_value(&typed.value)
                             .map_err(|e| e.to_string())?;
                         Ok::<_, String>(PublicTypedAgentConfigEntry {
@@ -931,9 +932,8 @@ async fn enrich_golem_rpc_invoke(
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id.and_then(|agent_id| {
-        legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok()
-    });
+    payload.remote_agent_parameters = agent_id
+        .and_then(|agent_id| legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok());
     payload
 }
 
@@ -945,9 +945,8 @@ async fn enrich_golem_rpc_scheduled_invocation(
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id.and_then(|agent_id| {
-        legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok()
-    });
+    payload.remote_agent_parameters = agent_id
+        .and_then(|agent_id| legacy_data_value_to_typed_schema_value(&agent_id.parameters).ok());
     payload
 }
 

@@ -22,7 +22,10 @@ pub fn parse_path_segment_value(
     r#type: &PathSegmentType,
 ) -> Result<ValueAndType, RequestHandlerError> {
     let component_value = parse_path_segment_value_to_component_model(value, r#type)?;
-    Ok(ValueAndType::new(component_value, AnalysedType::from(r#type)))
+    Ok(ValueAndType::new(
+        component_value,
+        AnalysedType::from(r#type),
+    ))
 }
 
 pub fn parse_path_segment_value_to_component_model(

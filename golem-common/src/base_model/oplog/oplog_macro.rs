@@ -91,6 +91,7 @@ macro_rules! oplog_entry {
         #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
         #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
         #[serde(tag = "type")]
+        #[allow(clippy::large_enum_variant)]
         pub enum PublicOplogEntry {
             $($case(
                 ident_mash::mash! {

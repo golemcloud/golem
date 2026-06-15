@@ -112,6 +112,7 @@ use golem_common::model::{
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -120,7 +121,6 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::Uri;
-use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;

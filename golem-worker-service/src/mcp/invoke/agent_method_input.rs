@@ -164,8 +164,7 @@ fn extract_single_element_value(
 mod tests {
     use super::*;
     use golem_common::base_model::agent::{
-        BinaryDescriptor, BinaryReference, ComponentModelElementSchema, NamedElementSchemas,
-        TextDescriptor, TextReference,
+        BinaryDescriptor, ComponentModelElementSchema, NamedElementSchemas, TextDescriptor,
     };
     use golem_wasm::analysis::analysed_type::{option, str};
     use serde_json::json;
@@ -283,17 +282,14 @@ mod tests {
             .clone();
         let result = get_agent_method_input(&args, &schema).unwrap();
         match result {
-            UntypedDataValue::Tuple(elems) => match &elems[0] {
-                UntypedElementValue::UnstructuredBinary(b) => match &b.value {
-                    BinaryReference::Inline(src) => {
-                        assert_eq!(src.data, b"abc");
-                        assert_eq!(src.binary_type.mime_type, "");
-                    }
-                    _ => panic!("expected inline binary"),
-                },
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Binary(b) => {
+                    assert_eq!(b.bytes, b"abc");
+                    assert_eq!(b.mime_type.as_deref(), Some(""));
+                }
                 _ => panic!("expected unstructured binary"),
             },
-            _ => panic!("expected tuple"),
+            _ => panic!("expected record"),
         }
     }
 

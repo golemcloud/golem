@@ -387,7 +387,8 @@ impl CallAgentHandler {
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
                     ParsedRequestBody::JsonBody(golem_wasm::Value::Record(fields)) => {
-                        let field_type = json_body_field_type(&resolved_route.route.body, *field_index)?;
+                        let field_type =
+                            json_body_field_type(&resolved_route.route.body, *field_index)?;
                         ElementValue::ComponentModel(ComponentModelElementValue {
                             value: ValueAndType::new(
                                 fields[usize::from(*field_index)].clone(),

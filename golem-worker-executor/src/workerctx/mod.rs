@@ -54,10 +54,10 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
     OwnedAgentId,
 };
+use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_common::resource_runtime::ResourceStore;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;

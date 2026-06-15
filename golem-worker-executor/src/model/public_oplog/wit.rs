@@ -1551,10 +1551,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     payload: oplog_payload_to_wit(payload)?,
                     trace_id: trace_id.to_string(),
                     trace_states,
-                    invocation_context: invocation_context
-                        .into_iter()
-                        .map(|s| s.into())
-                        .collect(),
+                    invocation_context: invocation_context.into_iter().map(|s| s.into()).collect(),
                 },
             )),
             M::AgentInvocationFinished {
@@ -1626,10 +1623,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     payload: oplog_payload_to_wit(payload)?,
                     trace_id: trace_id.to_string(),
                     trace_states,
-                    invocation_context: invocation_context
-                        .into_iter()
-                        .map(|s| s.into())
-                        .collect(),
+                    invocation_context: invocation_context.into_iter().map(|s| s.into()).collect(),
                 },
             )),
             M::PendingUpdate {
@@ -1644,15 +1638,14 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 target_revision,
                 new_component_size,
                 new_active_plugins,
-            } => Ok(Self::SuccessfulUpdate(oplog::RawSuccessfulUpdateParameters {
-                timestamp: timestamp.into(),
-                target_revision: target_revision.into(),
-                new_component_size,
-                new_active_plugins: new_active_plugins
-                    .into_iter()
-                    .map(|g| g.into())
-                    .collect(),
-            })),
+            } => Ok(Self::SuccessfulUpdate(
+                oplog::RawSuccessfulUpdateParameters {
+                    timestamp: timestamp.into(),
+                    target_revision: target_revision.into(),
+                    new_component_size,
+                    new_active_plugins: new_active_plugins.into_iter().map(|g| g.into()).collect(),
+                },
+            )),
             M::FailedUpdate {
                 timestamp,
                 target_revision,
@@ -1662,18 +1655,18 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 target_revision: target_revision.into(),
                 details,
             })),
-            M::GrowMemory { timestamp, delta } => Ok(Self::GrowMemory(oplog::GrowMemoryParameters {
-                timestamp: timestamp.into(),
-                delta,
-            })),
-            M::FilesystemStorageUsageUpdate { timestamp, delta } => {
-                Ok(Self::FilesystemStorageUsageUpdate(
-                    oplog::FilesystemStorageUsageUpdateParameters {
-                        timestamp: timestamp.into(),
-                        delta,
-                    },
-                ))
+            M::GrowMemory { timestamp, delta } => {
+                Ok(Self::GrowMemory(oplog::GrowMemoryParameters {
+                    timestamp: timestamp.into(),
+                    delta,
+                }))
             }
+            M::FilesystemStorageUsageUpdate { timestamp, delta } => Ok(
+                Self::FilesystemStorageUsageUpdate(oplog::FilesystemStorageUsageUpdateParameters {
+                    timestamp: timestamp.into(),
+                    delta,
+                }),
+            ),
             M::CreateResource {
                 timestamp,
                 id,
@@ -1870,12 +1863,12 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     policy: policy.into(),
                 }))
             }
-            M::RemoveRetryPolicy { timestamp, name } => {
-                Ok(Self::RemoveRetryPolicy(oplog::RemoveRetryPolicyParameters {
+            M::RemoveRetryPolicy { timestamp, name } => Ok(Self::RemoveRetryPolicy(
+                oplog::RemoveRetryPolicyParameters {
                     timestamp: timestamp.into(),
                     name,
-                }))
-            }
+                },
+            )),
         }
     }
 }

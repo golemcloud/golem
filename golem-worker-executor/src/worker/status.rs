@@ -1161,7 +1161,6 @@ mod test {
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal};
-    use golem_common::schema::SchemaValue;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
@@ -1180,9 +1179,10 @@ mod test {
         Timestamp,
     };
     use golem_common::read_only_lock;
+    use golem_common::schema::IntoTypedSchemaValue;
+    use golem_common::schema::SchemaValue;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::component::Component;
-    use golem_common::schema::IntoTypedSchemaValue;
     use golem_wasm::Value;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};

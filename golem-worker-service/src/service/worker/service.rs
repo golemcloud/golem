@@ -30,10 +30,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, AgentTypeName, DataValue, GolemUserPrincipal, LegacyParsedAgentId, Principal,
 };
-use golem_common::schema::adapters::{
-    json_data_value_to_input_value, json_data_value_to_legacy_data_value,
-    output_value_to_typed_schema_value,
-};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
@@ -49,6 +45,10 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::schema::adapters::{
+    json_data_value_to_input_value, json_data_value_to_legacy_data_value,
+    output_value_to_typed_schema_value,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -1102,15 +1102,13 @@ impl WorkerService {
                             "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
                         ))
                     })?;
-                let typed_output = output_value_to_typed_schema_value(
-                    &decode_method.output_schema,
-                    output_value,
-                )
-                .map_err(|err| {
-                    WorkerServiceError::TypeChecker(format!(
-                        "Agent output conversion error: {err}"
-                    ))
-                })?;
+                let typed_output =
+                    output_value_to_typed_schema_value(&decode_method.output_schema, output_value)
+                        .map_err(|err| {
+                            WorkerServiceError::TypeChecker(format!(
+                                "Agent output conversion error: {err}"
+                            ))
+                        })?;
                 Ok(AgentInvocationResult {
                     agent_id: agent_id.clone(),
                     result: Some(typed_output),

@@ -29,14 +29,14 @@
 //! [`crate::model::agent::conversions`].
 
 use crate::base_model::Empty;
+use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
-    AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy, CachePolicyTtl,
-    CorsOptions, CustomHttpMethod, GolemUserPrincipal, HeaderVariable, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment, PathVariable,
-    Principal, QueryVariable, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
+    AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy,
+    CachePolicyTtl, CorsOptions, CustomHttpMethod, GolemUserPrincipal, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment,
+    PathVariable, Principal, QueryVariable, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
     SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
-use crate::base_model::agent::AgentTypeName;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
     AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
@@ -246,7 +246,7 @@ pub fn decode_agent_type(w: &wire::AgentType) -> Result<AgentTypeSchema, AgentWi
         dependencies,
         mode: w.mode.into(),
         http_mount: w.http_mount.clone().map(Into::into),
-        snapshotting: w.snapshotting.clone().into(),
+        snapshotting: w.snapshotting.into(),
         config,
     })
 }
@@ -259,7 +259,7 @@ pub fn encode_registered_agent_type(
 ) -> Result<wire::RegisteredAgentType, AgentWitError> {
     Ok(wire::RegisteredAgentType {
         agent_type: encode_agent_type(&rt.agent_type)?,
-        implemented_by: rt.implemented_by.component_id.clone().into(),
+        implemented_by: rt.implemented_by.component_id.into(),
     })
 }
 
@@ -350,7 +350,7 @@ fn decode_method(
         input_schema: decode_input_schema(dec, &m.input_schema)?,
         output_schema: decode_output_schema(dec, &m.output_schema)?,
         http_endpoint: m.http_endpoint.iter().cloned().map(Into::into).collect(),
-        read_only: m.read_only.clone().map(Into::into),
+        read_only: m.read_only.map(Into::into),
     })
 }
 
@@ -696,9 +696,11 @@ impl From<wire::PathSegment> for PathSegment {
     fn from(value: wire::PathSegment) -> Self {
         match value {
             wire::PathSegment::Literal(value) => Self::Literal(LiteralSegment { value }),
-            wire::PathSegment::SystemVariable(value) => Self::SystemVariable(SystemVariableSegment {
-                value: value.into(),
-            }),
+            wire::PathSegment::SystemVariable(value) => {
+                Self::SystemVariable(SystemVariableSegment {
+                    value: value.into(),
+                })
+            }
             wire::PathSegment::PathVariable(v) => Self::PathVariable(v.into()),
             wire::PathSegment::RemainingPathVariable(v) => Self::RemainingPathVariable(v.into()),
         }

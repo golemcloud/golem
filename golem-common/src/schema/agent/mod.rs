@@ -141,7 +141,9 @@ impl NamedField {
 }
 
 /// Where the value for a field comes from at invocation time.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]

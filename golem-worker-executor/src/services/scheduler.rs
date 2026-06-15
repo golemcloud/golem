@@ -561,7 +561,6 @@ mod tests {
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal};
-    use golem_common::schema::SchemaValue;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::InvocationContextStack;
@@ -570,6 +569,7 @@ mod tests {
         AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
         ScheduleId, ScheduledAction, ShardAssignment, ShardId,
     };
+    use golem_common::schema::SchemaValue;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::collections::HashSet;
