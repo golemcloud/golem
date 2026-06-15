@@ -2262,8 +2262,8 @@ mod tests {
             arb_deployment_diff_map_value(depth),
             0..4,
         )
-            .prop_map(|entries| Value::Object(entries.into_iter().collect()))
-            .boxed()
+        .prop_map(|entries| Value::Object(entries.into_iter().collect()))
+        .boxed()
     }
 
     fn arb_deployment_diff_map_value(depth: u32) -> OutputDocumentStrategy {
@@ -2370,10 +2370,10 @@ mod tests {
                 )| {
                     json!({
                         "display": display,
-                        "agent_secret_defaults": agent_secret_defaults,
-                        "skipped_existing_agent_secret_defaults": skipped_existing_agent_secret_defaults,
-                        "retry_policy_defaults": retry_policy_defaults,
-                        "resource_defaults": resource_defaults,
+                        "agentSecretDefaults": agent_secret_defaults,
+                        "skippedExistingAgentSecretDefaults": skipped_existing_agent_secret_defaults,
+                        "retryPolicyDefaults": retry_policy_defaults,
+                        "resourceDefaults": resource_defaults,
                     })
                 },
             )

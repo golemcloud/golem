@@ -2367,26 +2367,26 @@
       "type": "object",
       "required": [
         "display",
-        "agent_secret_defaults",
-        "skipped_existing_agent_secret_defaults",
-        "retry_policy_defaults",
-        "resource_defaults"
+        "agentSecretDefaults",
+        "skippedExistingAgentSecretDefaults",
+        "retryPolicyDefaults",
+        "resourceDefaults"
       ],
       "properties": {
         "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
-        "agent_secret_defaults": {
+        "agentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "skipped_existing_agent_secret_defaults": {
+        "skippedExistingAgentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "retry_policy_defaults": {
+        "retryPolicyDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentRetryPolicyDefault" }
         },
-        "resource_defaults": {
+        "resourceDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/ResourceDefinitionCreation" }
         }
@@ -2645,29 +2645,29 @@
       "required": [
         "$type",
         "display",
-        "agent_secret_defaults",
-        "skipped_existing_agent_secret_defaults",
-        "retry_policy_defaults",
-        "resource_defaults"
+        "agentSecretDefaults",
+        "skippedExistingAgentSecretDefaults",
+        "retryPolicyDefaults",
+        "resourceDefaults"
       ],
       "properties": {
         "$type": {
           "const": "environment.setup-plan.result"
         },
         "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
-        "agent_secret_defaults": {
+        "agentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "skipped_existing_agent_secret_defaults": {
+        "skippedExistingAgentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "retry_policy_defaults": {
+        "retryPolicyDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentRetryPolicyDefault" }
         },
-        "resource_defaults": {
+        "resourceDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/ResourceDefinitionCreation" }
         }

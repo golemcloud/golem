@@ -116,6 +116,7 @@ pub struct EnvironmentSetupResourceDisplay {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupPlan {
     pub display: EnvironmentSetupDisplay,
     pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
