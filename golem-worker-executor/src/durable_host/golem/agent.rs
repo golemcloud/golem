@@ -19,7 +19,8 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, DataSchema, DataValue, ParsedAgentId, RegisteredAgentType,
+    AgentConfigSource, AgentTypeName, ParsedAgentId, RegisteredAgentType,
+    typed_constructor_parameters,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
@@ -36,15 +37,15 @@ use golem_common::schema::adapters::agent::{agent_type_to_schema, schema_agent_t
 use golem_common::schema::adapters::analysed_type::{
     analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
 };
-use golem_common::schema::adapters::data_schema::data_schema_to_input_schema;
-use golem_common::schema::adapters::untyped::typed_input_to_untyped_data_value;
 use golem_common::schema::adapters::value::value_to_schema_value;
-use golem_common::schema::agent::RegisteredAgentTypeSchema;
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
+use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::graph::TypedSchemaValue;
+use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::validation::subtyping::is_assignable;
+use golem_common::schema::validation::value::validate_value;
 use golem_common::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
 use golem_wasm::golem_core_2_0_x::types as core_wire;
 
@@ -61,6 +62,13 @@ fn encode_registered_agent_type_wire(
         agent_type,
         implemented_by: registered.implemented_by,
     };
+    encode_registered_agent_type(&schema)
+        .map_err(|e| anyhow!("Failed to encode agent type to wire form: {e}"))
+}
+
+fn encode_registered_agent_type_schema_wire(
+    schema: RegisteredAgentTypeSchema,
+) -> anyhow::Result<wire::RegisteredAgentType> {
     encode_registered_agent_type(&schema)
         .map_err(|e| anyhow!("Failed to encode agent type to wire form: {e}"))
 }
@@ -91,31 +99,59 @@ fn registered_agent_type_from_schema(
 }
 
 /// Convert a guest-supplied `golem:core/types@2.0.0` `schema-value-tree`
-/// (whose root encodes the constructor's parameter list) into the legacy
-/// canonical [`DataValue`] used by the agent-id / service / oplog layers.
+/// (whose root encodes the constructor's parameter list) into the
+/// schema-native constructor parameter payload stored in [`ParsedAgentId`].
 ///
-/// The chain is `SchemaValueTree -> SchemaValue::Record fields ->
-/// UntypedDataValue -> DataValue`, driven by the constructor's declared
-/// [`DataSchema`]. Failures are returned as a plain `String` so callers can
-/// surface them as the agent-domain [`wire::AgentError::InvalidInput`]
-/// (matching the previous `try_from_bindings` behaviour) rather than trapping.
-pub(crate) fn schema_value_tree_to_data_value(
+/// The decoded value is validated directly against the constructor's
+/// [`AgentTypeSchema`] before being paired with that same schema graph. This
+/// stays on the hot path without lowering through legacy value carriers.
+pub(crate) fn schema_value_tree_to_typed_constructor_parameters(
     input: &core_wire::SchemaValueTree,
-    data_schema: &DataSchema,
-) -> Result<DataValue, String> {
+    agent_type: &AgentTypeSchema,
+) -> Result<TypedSchemaValue, String> {
     let schema_value = decode_value(input).map_err(|e| format!("invalid input value tree: {e}"))?;
-    let fields = match schema_value {
-        SchemaValue::Record { fields } => fields,
-        other => {
-            return Err(format!(
-                "expected a record-valued parameter list as input, got {other:?}"
-            ));
-        }
+    validate_constructor_input_value(&schema_value, agent_type)?;
+    Ok(typed_constructor_parameters(agent_type, schema_value))
+}
+
+fn validate_constructor_input_value(
+    input: &SchemaValue,
+    agent_type: &AgentTypeSchema,
+) -> Result<(), String> {
+    let SchemaValue::Record { fields } = input else {
+        return Err("expected input parameter record".to_string());
     };
-    let input_schema = data_schema_to_input_schema(data_schema).map_err(|e| e.to_string())?;
-    let untyped =
-        typed_input_to_untyped_data_value(&input_schema, &fields).map_err(|e| e.to_string())?;
-    DataValue::try_from_untyped(untyped, data_schema.clone())
+
+    let fields_schema = agent_type.constructor.input_schema.fields();
+    if fields.len() != fields_schema.len() {
+        return Err(format!(
+            "expected {} parameters, got {}",
+            fields_schema.len(),
+            fields.len()
+        ));
+    }
+
+    let record_type = SchemaType::record(
+        fields_schema
+            .iter()
+            .map(|field| NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect(),
+    );
+
+    validate_value(&agent_type.schema, &record_type, input).map_err(|errors| {
+        format!(
+            "invalid input parameter value: {}",
+            errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -313,12 +349,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Durable lookup of a single registered agent type by name, returning the
-    /// canonical [`RegisteredAgentType`] model. The schema-native WIT wire form
-    /// is produced only at the host-import boundary in [`Host::get_agent_type`].
-    pub(crate) async fn get_agent_type_model(
+    /// schema-native model persisted in the oplog.
+    pub(crate) async fn get_agent_type_schema_model(
         &mut self,
         agent_type_name: AgentTypeName,
-    ) -> anyhow::Result<Option<RegisteredAgentType>> {
+    ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
         let mut durability =
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -357,10 +392,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => result
-                .map(registered_agent_type_from_schema)
-                .transpose()
-                .map_err(|err| anyhow!(err)),
+            Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err)),
         }
     }
@@ -387,9 +419,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
     ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
-        self.get_agent_type_model(AgentTypeName(agent_type_name))
+        self.get_agent_type_schema_model(AgentTypeName(agent_type_name))
             .await?
-            .map(encode_registered_agent_type_wire)
+            .map(encode_registered_agent_type_schema_wire)
             .transpose()
     }
 
@@ -401,16 +433,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<String, wire::AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
 
-        if let Some(agent_type) = self
-            .get_agent_type_model(AgentTypeName(agent_type_name.clone()))
+        if let Some(registered) = self
+            .get_agent_type_schema_model(AgentTypeName(agent_type_name.clone()))
             .await?
         {
-            match schema_value_tree_to_data_value(
-                &input,
-                &agent_type.agent_type.constructor.input_schema,
-            ) {
+            match schema_value_tree_to_typed_constructor_parameters(&input, &registered.agent_type)
+            {
                 Ok(input) => {
-                    let agent_id = ParsedAgentId::from_legacy_parameters(
+                    let agent_id = ParsedAgentId::try_new(
                         AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),

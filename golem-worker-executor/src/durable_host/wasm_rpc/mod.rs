@@ -50,12 +50,13 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
     OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
+use golem_common::schema::adapters::agent::schema_agent_type_to_legacy;
 use golem_common::schema::adapters::typed_schema_value_to_value_and_type;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::wit::{decode_typed, decode_value, encode_value};
 use golem_common::serialization::{deserialize, serialize};
 
-use crate::durable_host::golem::agent::schema_value_tree_to_data_value;
+use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
 use golem_wasm::golem_core_2_0_x::types as core_wire;
 use golem_wasm::{CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, WasmRpcEntry};
 use std::any::Any;
@@ -94,30 +95,28 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        // Resolve the canonical (legacy-model) registered agent type; the
-        // schema-native WIT wire form is only produced at the host-import
-        // boundary, never for internal agent-id / service / oplog use.
-        let agent_type = self
-            .get_agent_type_model(golem_common::model::agent::AgentTypeName(
+        let registered_agent_type = self
+            .get_agent_type_schema_model(golem_common::model::agent::AgentTypeName(
                 agent_type_name.clone(),
             ))
             .await?
             .ok_or_else(|| anyhow::anyhow!("Agent type '{}' not found", agent_type_name))?;
 
-        // Lower the guest's `golem:core@2.0.0` constructor value tree to the
-        // legacy canonical `DataValue` against the constructor's input schema.
-        let input = schema_value_tree_to_data_value(
+        let input = schema_value_tree_to_typed_constructor_parameters(
             &constructor,
-            &agent_type.agent_type.constructor.input_schema,
+            &registered_agent_type.agent_type,
         )
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
         // Share the canonical agent type through `WasmRpcEntryPayload`. Every
         // subsequent RPC entry resolves the per-method input/output
         // `DataSchema` from this cached value to drive the typed flow.
-        let remote_agent_type: Arc<AgentType> = Arc::new(agent_type.agent_type.clone());
+        let remote_agent_type: Arc<AgentType> = Arc::new(
+            schema_agent_type_to_legacy(&registered_agent_type.agent_type)
+                .map_err(|err| anyhow::anyhow!("Invalid agent type metadata: {err}"))?,
+        );
 
-        let agent_id = golem_common::model::agent::ParsedAgentId::from_legacy_parameters(
+        let agent_id = golem_common::model::agent::ParsedAgentId::try_new(
             golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
@@ -125,7 +124,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let component_id: golem_common::model::component::ComponentId =
-            agent_type.implemented_by.component_id;
+            registered_agent_type.implemented_by.component_id;
         let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
 
