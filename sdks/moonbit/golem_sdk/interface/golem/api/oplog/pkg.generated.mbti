@@ -30,6 +30,10 @@ pub(all) suberror WorkerError {
   NodeOutOfFilesystemStorage
   AgentExceededFilesystemStorageLimit
   AgentTerminatedByQuota(AgentTerminatedByQuotaError)
+  EphemeralSleepTooLong(EphemeralSleepTooLong)
+  EphemeralFuelExhausted(EphemeralFuelExhausted)
+  EphemeralCannotSuspend(EphemeralCannotSuspend)
+  ReadOnlyViolation(ReadOnlyViolation)
 } derive(Eq, @debug.Debug)
 
 // Types and methods
@@ -89,6 +93,13 @@ pub(all) struct AgentMethodInvocationParameters {
   invocation_context : Array[Array[SpanData]]
 } derive(Eq, @debug.Debug)
 
+pub(all) enum AgentMode {
+  DURABLE
+  EPHEMERAL
+} derive(Eq, @debug.Debug)
+pub fn AgentMode::from(Int) -> Self
+pub fn AgentMode::ordinal(Self) -> Int
+
 pub(all) struct AgentTerminatedByQuotaError {
   environment_id : @host.EnvironmentId
   resource_name : String
@@ -110,6 +121,12 @@ pub(all) struct CancelPendingInvocationParameters {
   idempotency_key : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct CancelledParameters {
+  timestamp : @wallClock.Datetime
+  start_index : UInt64
+  partial : @types.ValueAndType?
+} derive(Eq, @debug.Debug)
+
 pub(all) struct ChangePersistenceLevelParameters {
   timestamp : @wallClock.Datetime
   persistence_level : @host.PersistenceLevel
@@ -123,6 +140,7 @@ pub(all) struct CountBoxState {
 pub(all) struct CreateParameters {
   timestamp : @wallClock.Datetime
   agent_id : @types.AgentId
+  agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
   created_by : @types.AccountId
@@ -131,9 +149,9 @@ pub(all) struct CreateParameters {
   component_size : UInt64
   initial_total_linear_memory_size : UInt64
   initial_active_plugins : Array[PluginInstallationDescription]
-  config_vars : Array[(String, String)]
   local_agent_config : Array[LocalAgentConfigEntry]
   original_phantom_id : @types.Uuid?
+  instance_id : @types.Uuid
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CreateResourceParameters {
@@ -160,13 +178,28 @@ pub(all) struct EndAtomicRegionParameters {
   begin_index : UInt64
 } derive(Eq, @debug.Debug)
 
-pub(all) struct EndRemoteWriteParameters {
+pub(all) struct EndParameters {
   timestamp : @wallClock.Datetime
-  begin_index : UInt64
+  start_index : UInt64
+  response : @types.ValueAndType?
+  forced_commit : Bool
 } derive(Eq, @debug.Debug)
 
 pub(all) struct EnvironmentPluginGrantId {
   uuid : @types.Uuid
+} derive(Eq, @debug.Debug)
+
+pub(all) struct EphemeralCannotSuspend {
+  reason : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct EphemeralFuelExhausted {
+  overdraft_limit : UInt64
+} derive(Eq, @debug.Debug)
+
+pub(all) struct EphemeralSleepTooLong {
+  requested_nanos : UInt64
+  max_nanos : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ErrorParameters {
@@ -209,14 +242,6 @@ pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
 pub(all) struct GrowMemoryParameters {
   timestamp : @wallClock.Datetime
   delta : UInt64
-} derive(Eq, @debug.Debug)
-
-pub(all) struct HostCallParameters {
-  timestamp : @wallClock.Datetime
-  function_name : String
-  request : @types.ValueAndType
-  response : @types.ValueAndType
-  durable_function_type : WrappedFunctionType
 } derive(Eq, @debug.Debug)
 
 pub(all) struct JumpParameters {
@@ -268,7 +293,9 @@ pub(all) struct ManualUpdateParameters {
 
 pub(all) enum OplogEntry {
   Create(RawCreateParameters)
-  HostCall(RawHostCallParameters)
+  Start(RawStartParameters)
+  End(RawEndParameters)
+  Cancelled(RawCancelledParameters)
   AgentInvocationStarted(RawAgentInvocationStartedParameters)
   AgentInvocationFinished(RawAgentInvocationFinishedParameters)
   Suspend(Timestamp)
@@ -279,8 +306,6 @@ pub(all) enum OplogEntry {
   Exited(Timestamp)
   BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
-  BeginRemoteWrite(Timestamp)
-  EndRemoteWrite(EndRemoteWriteParameters)
   PendingAgentInvocation(RawPendingAgentInvocationParameters)
   PendingUpdate(RawPendingUpdateParameters)
   SuccessfulUpdate(RawSuccessfulUpdateParameters)
@@ -364,7 +389,9 @@ pub(all) struct ProcessOplogEntriesParameters {
 
 pub(all) enum PublicOplogEntry {
   Create(CreateParameters)
-  HostCall(HostCallParameters)
+  Start(StartParameters)
+  End(EndParameters)
+  Cancelled(CancelledParameters)
   AgentInvocationStarted(AgentInvocationStartedParameters)
   AgentInvocationFinished(AgentInvocationFinishedParameters)
   Suspend(Timestamp)
@@ -375,8 +402,6 @@ pub(all) enum PublicOplogEntry {
   Exited(Timestamp)
   BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
-  BeginRemoteWrite(Timestamp)
-  EndRemoteWrite(EndRemoteWriteParameters)
   PendingAgentInvocation(PendingAgentInvocationParameters)
   PendingUpdate(PendingUpdateParameters)
   SuccessfulUpdate(SuccessfulUpdateParameters)
@@ -433,9 +458,16 @@ pub(all) struct RawBeginRemoteTransactionParameters {
   original_begin_index : UInt64?
 } derive(Eq, @debug.Debug)
 
+pub(all) struct RawCancelledParameters {
+  timestamp : @wallClock.Datetime
+  start_index : UInt64
+  partial : OplogPayload?
+} derive(Eq, @debug.Debug)
+
 pub(all) struct RawCreateParameters {
   timestamp : @wallClock.Datetime
   agent_id : @types.AgentId
+  agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
   environment_id : @host.EnvironmentId
@@ -444,9 +476,9 @@ pub(all) struct RawCreateParameters {
   component_size : UInt64
   initial_total_linear_memory_size : UInt64
   initial_active_plugins : Array[EnvironmentPluginGrantId]
-  config_vars : Array[(String, String)]
   local_agent_config : Array[RawLocalAgentConfigEntry]
   original_phantom_id : @types.Uuid?
+  instance_id : @types.Uuid
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawCreateResourceParameters {
@@ -466,20 +498,19 @@ pub(all) struct RawDropResourceParameters {
   resource_type_id : ResourceTypeId
 } derive(Eq, @debug.Debug)
 
+pub(all) struct RawEndParameters {
+  timestamp : @wallClock.Datetime
+  start_index : UInt64
+  response : OplogPayload?
+  forced_commit : Bool
+} derive(Eq, @debug.Debug)
+
 pub(all) struct RawErrorParameters {
   timestamp : @wallClock.Datetime
   error : WorkerError
   retry_from : UInt64
   inside_atomic_region : Bool
   retry_policy_state : RetryPolicyState?
-} derive(Eq, @debug.Debug)
-
-pub(all) struct RawHostCallParameters {
-  timestamp : @wallClock.Datetime
-  function_name : String
-  request : OplogPayload
-  response : OplogPayload
-  durable_function_type : WrappedFunctionType
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawLocalAgentConfigEntry {
@@ -522,6 +553,14 @@ pub(all) struct RawSnapshotParameters {
   mime_type : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct RawStartParameters {
+  timestamp : @wallClock.Datetime
+  parent_start_index : UInt64?
+  function_name : String
+  request : OplogPayload?
+  durable_function_type : WrappedFunctionType
+} derive(Eq, @debug.Debug)
+
 pub(all) struct RawSuccessfulUpdateParameters {
   timestamp : @wallClock.Datetime
   target_revision : UInt64
@@ -532,6 +571,11 @@ pub(all) struct RawSuccessfulUpdateParameters {
 pub(all) enum RawUpdateDescription {
   Automatic(UInt64)
   SnapshotBased(RawSnapshotBasedUpdate)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ReadOnlyViolation {
+  method_ : String
+  host_function : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RemoteTransactionParameters {
@@ -592,6 +636,14 @@ pub(all) struct SnapshotParameters {
 pub(all) enum SpanData {
   LocalSpan(LocalSpanData)
   ExternalSpan(ExternalSpanData)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct StartParameters {
+  timestamp : @wallClock.Datetime
+  parent_start_index : UInt64?
+  function_name : String
+  request : @types.ValueAndType?
+  durable_function_type : WrappedFunctionType
 } derive(Eq, @debug.Debug)
 
 pub(all) struct StartSpanParameters {

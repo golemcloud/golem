@@ -52,6 +52,7 @@ pub(all) struct AgentMethod {
   prompt_hint : String?
   input_schema : @types.DataSchema
   output_schema : @types.DataSchema
+  read_only : ReadOnlyConfig?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum AgentMode {
@@ -80,6 +81,12 @@ pub(all) struct AgentType {
 
 pub(all) struct AuthDetails {
   required : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) enum CachePolicy {
+  NoCache
+  UntilWrite
+  Ttl(UInt64)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CorsOptions {
@@ -159,6 +166,11 @@ pub(all) enum Principal {
 pub(all) struct QueryVariable {
   query_param_name : String
   variable_name : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ReadOnlyConfig {
+  cache_policy : CachePolicy
+  uses_principal : Bool
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RegisteredAgentType {
