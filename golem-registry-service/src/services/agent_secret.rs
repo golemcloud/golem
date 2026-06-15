@@ -84,7 +84,7 @@ fn authorize_agent_secret_permission(
 fn authorize_agent_secret_permission_for_owner(
     auth: &AuthCtx,
     owner: EnvironmentOwnerPattern,
-    key: Option<&[String]>,
+    key: Option<&CanonicalAgentSecretPath>,
     verb: EnvironmentAgentSecretVerb,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
@@ -384,7 +384,7 @@ impl AgentSecretService {
                 authorize_agent_secret_permission(
                     auth,
                     environment,
-                    Some(&agent_secret.path.0),
+                    Some(&agent_secret.path),
                     EnvironmentAgentSecretVerb::View,
                 )
                 .is_ok()
