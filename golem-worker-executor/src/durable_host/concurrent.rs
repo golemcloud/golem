@@ -65,11 +65,19 @@ pub enum Resolution {
     Completed {
         end_idx: OplogIndex,
         response: Option<OplogPayload<HostResponse>>,
+        #[expect(
+            dead_code,
+            reason = "preserved for the concurrent-durability replay model"
+        )]
         forced_commit: bool,
     },
     /// The call was cancelled (dropped before completion) via a `Cancelled` entry.
     Cancelled {
         cancelled_idx: OplogIndex,
+        #[expect(
+            dead_code,
+            reason = "p3 cancellation records need to carry partial results"
+        )]
         partial: Option<OplogPayload<HostResponse>>,
     },
 }
@@ -109,7 +117,7 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 #[derive(Debug, Default)]
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
-    pending: HashMap<OplogIndex, oneshot::Sender<Resolution>>,
+    pending: HashMap<OplogIndex, ReplayableOneshot<Resolution>>,
     /// Resolutions observed before their awaiter registered. While durable host calls are
     /// serialized this is always empty (the await-resolution guard guarantees a call's `Start` is
     /// claimed before its `End`/`Cancelled` is consumed); it exists for the resolver's own unit
@@ -121,7 +129,7 @@ impl ConcurrentReplayResolver {
     /// Registers an awaiter for the call started at `start_idx` and returns the receiver it should
     /// await on. If the resolution was already observed (buffered), the returned receiver is
     /// pre-resolved.
-    pub fn register(&mut self, start_idx: OplogIndex) -> oneshot::Receiver<Resolution> {
+    pub fn register(&mut self, start_idx: OplogIndex) -> ReplayableOneshotReceiver<Resolution> {
         let (tx, rx) = oneshot::channel();
         if let Some(resolution) = self.buffered.remove(&start_idx) {
             let _ = tx.send(resolution);
@@ -186,11 +194,11 @@ impl ConcurrentReplayResolver {
 #[derive(Debug)]
 pub struct ReplayCallHandle {
     start_idx: OplogIndex,
-    receiver: oneshot::Receiver<Resolution>,
+    receiver: ReplayableOneshotReceiver<Resolution>,
 }
 
 impl ReplayCallHandle {
-    pub fn new(start_idx: OplogIndex, receiver: oneshot::Receiver<Resolution>) -> Self {
+    pub fn new(start_idx: OplogIndex, receiver: ReplayableOneshotReceiver<Resolution>) -> Self {
         Self {
             start_idx,
             receiver,
@@ -202,7 +210,7 @@ impl ReplayCallHandle {
     }
 
     /// Consumes the handle into its parts (used by the replay-state driver).
-    pub fn into_parts(self) -> (OplogIndex, oneshot::Receiver<Resolution>) {
+    pub fn into_parts(self) -> (OplogIndex, ReplayableOneshotReceiver<Resolution>) {
         (self.start_idx, self.receiver)
     }
 }
@@ -226,6 +234,13 @@ pub trait DropPolicy {
 }
 
 /// Drop policy for calls that may legitimately be cancelled (dropped from a `select!`, etc.).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "p3 async host calls need cancellable durable handles"
+    )
+)]
 pub struct Cancellable;
 
 /// Drop policy for calls that must always be finished or explicitly cancelled. Dropping one

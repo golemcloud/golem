@@ -78,6 +78,7 @@ pub trait WorkerForkService: Send + Sync {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError>;
 }
@@ -740,6 +741,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
@@ -754,9 +756,11 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // The source worker's `fork` call writes a `Start`/`End` pair persisting
         // `ForkResult::Original`; here we write an alternative pair carrying `ForkResult::Forked`
         // into the new oplog so the forked worker replays it and returns `ForkResult::Forked`.
-        // This is a synthetic write into another worker's oplog, not an in-context host call, so it
-        // uses the atomic-pair primitive directly (no `CallHandle`); atomicity matters because a
-        // split `Start`/`End` would corrupt the forked worker's replay.
+        // If the copied cutoff is the source call's outer `WriteRemote` scope `Start`, complete
+        // that scope after the synthetic child call so the forked worker can replay the same shape
+        // as the source call. This is a synthetic write into another worker's oplog, not an
+        // in-context host call, so it uses the atomic-pair primitive directly (no `CallHandle`);
+        // atomicity matters because a split `Start`/`End` would corrupt the forked worker's replay.
         let request = HostRequest::NoInput(HostRequestNoInput {});
         let response = HostResponse::GolemApiFork(HostResponseGolemApiFork {
             forked_phantom_id,
@@ -777,7 +781,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             .add_pair(
                 OplogEntry::Start {
                     timestamp: now,
-                    parent_start_index: None,
+                    parent_start_index: copied_scope_start,
                     function_name: GolemApiFork::HOST_FUNCTION_NAME,
                     request: Some(request_payload),
                     durable_function_type: DurableFunctionType::WriteRemote,
@@ -790,6 +794,17 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                 }),
             )
             .await;
+
+        if let Some(scope_start) = copied_scope_start {
+            new_oplog
+                .add(OplogEntry::End {
+                    timestamp: now,
+                    start_index: scope_start,
+                    response: None,
+                    forced_commit: true,
+                })
+                .await;
+        }
 
         new_oplog.commit(CommitLevel::Always).await;
 

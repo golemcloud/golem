@@ -1010,15 +1010,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 component_id: self.owned_agent_id.component_id(),
                 agent_id: new_name.clone(),
             };
-            // The forked worker must inherit the source state from *before* the source-side fork
-            // call: it gets its own synthetic `Start`/`End` pair carrying `ForkResult::Forked` (see
-            // `fork_and_write_fork_result`), while this source call completes later with
-            // `ForkResult::Original`. The cut-off is therefore the pre-call `begin_index`, not the
-            // index of this call's eager `Start` (which `commit_oplog_and_update_state` returns):
-            // copying that lone `Start` into the target would leave it followed by the synthetic
-            // `Start`, which replay rejects as an unsupported interleaving. We still force a commit
-            // so the eager `Start` is durable for this (source) worker's own crash recovery.
+            // The forked worker must inherit the source state from the source-side fork call's
+            // durable replay point. In non-idempotent mode this is the outer `WriteRemote` scope
+            // `Start`; `fork_and_write_fork_result` completes that copied scope around a synthetic
+            // child call carrying `ForkResult::Forked`. The source call completes later with
+            // `ForkResult::Original`. We still force a commit so the eager `Start` is durable for
+            // this (source) worker's own crash recovery.
             let oplog_index_cut_off = handle.begin_index();
+            let copied_scope_start = self
+                .state
+                .opens_durable_scope(&DurableFunctionType::WriteRemote)
+                .then_some(oplog_index_cut_off);
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
@@ -1034,6 +1036,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &self.owned_agent_id,
                         &target_agent_id,
                         oplog_index_cut_off,
+                        copied_scope_start,
                         forked_phantom_id,
                     )
                     .await;
