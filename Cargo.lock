@@ -3782,6 +3782,7 @@ dependencies = [
  "glob-match",
  "goldenfile",
  "golem-api-grpc",
+ "golem-schema",
  "golem-schema-derive",
  "golem-wasm",
  "golem-wasm-derive",
@@ -3885,6 +3886,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm",
@@ -4010,6 +4012,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-schema"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "bigdecimal",
+ "bit-vec 0.6.3",
+ "chrono",
+ "combine",
+ "desert_rust",
+ "golem-api-grpc",
+ "golem-schema-derive",
+ "poem",
+ "poem-openapi",
+ "proptest",
+ "range-set-blaze",
+ "regex",
+ "serde",
+ "serde_json",
+ "test-r",
+ "thiserror 2.0.18",
+ "typed-path",
+ "url",
+ "uuid",
+ "wasip2",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wit-bindgen 0.57.1",
+]
+
+[[package]]
 name = "golem-schema-derive"
 version = "0.0.0"
 dependencies = [
@@ -4017,6 +4049,7 @@ dependencies = [
  "darling 0.20.11",
  "golem-common",
  "heck",
+ "proc-macro-crate",
  "proc-macro2",
  "proptest",
  "quote",
@@ -4269,6 +4302,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm",
@@ -4344,6 +4378,7 @@ dependencies = [
  "bytes",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm",

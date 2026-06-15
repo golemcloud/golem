@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::wire;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
@@ -20,7 +21,6 @@ use crate::schema::schema_type::{
     VariantCaseType,
 };
 use crate::schema::schema_value::{ResultValuePayload, SchemaValue};
-use golem_wasm::golem_core_2_0_x::types as wire;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -547,7 +547,7 @@ impl ValueCtx {
                 })
             }
             SchemaValue::QuotaToken(q) => {
-                let env_uuid = q.environment_id.as_u64_pair();
+                let env_uuid = q.environment_id.uuid.as_u64_pair();
                 wire::SchemaValueNode::QuotaTokenValue(wire::QuotaTokenValuePayload {
                     environment_id: wire::EnvironmentId {
                         uuid: wire::Uuid {

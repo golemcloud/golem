@@ -79,11 +79,7 @@ pub use wasip2 as wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "guest")]
-pub use bindings::golem::core1_5_0 as golem_core_1_5_x;
-
-#[cfg(not(feature = "host"))]
-#[cfg(feature = "guest")]
-pub use bindings::golem::core2_0_0 as golem_core_2_0_x;
+pub use bindings::golem::core as golem_core_1_5_x;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "guest")]
@@ -123,10 +119,7 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host")]
-pub use generated::golem::core1_5_0 as golem_core_1_5_x;
-
-#[cfg(feature = "host")]
-pub use generated::golem::core2_0_0 as golem_core_2_0_x;
+pub use generated::golem::core as golem_core_1_5_x;
 
 #[cfg(feature = "host")]
 pub use golem_core_1_5_x::types::{
@@ -146,24 +139,6 @@ impl From<uuid::Uuid> for Uuid {
     fn from(uuid: uuid::Uuid) -> Self {
         let (high_bits, low_bits) = uuid.as_u64_pair();
         Uuid {
-            high_bits,
-            low_bits,
-        }
-    }
-}
-
-#[cfg(any(feature = "host", feature = "guest"))]
-impl From<golem_core_2_0_x::types::Uuid> for uuid::Uuid {
-    fn from(value: golem_core_2_0_x::types::Uuid) -> Self {
-        uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
-    }
-}
-
-#[cfg(any(feature = "host", feature = "guest"))]
-impl From<uuid::Uuid> for golem_core_2_0_x::types::Uuid {
-    fn from(uuid: uuid::Uuid) -> Self {
-        let (high_bits, low_bits) = uuid.as_u64_pair();
-        golem_core_2_0_x::types::Uuid {
             high_bits,
             low_bits,
         }

@@ -132,10 +132,7 @@ impl AgentId {
         agent_id: S,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentId, String> {
-        Self::from_agent_id(
-            component_id,
-            &ParsedAgentId::parse(agent_id, resolver)?,
-        )
+        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
     }
 
     pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(

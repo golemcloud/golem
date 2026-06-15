@@ -1,0 +1,51 @@
+[package]
+name = "golem-schema"
+version = "0.0.0"
+edition = "2024"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem schema and value model"
+
+license-file = "../LICENSE"
+
+[lib]
+harness = false
+
+[features]
+default = []
+derive = []
+full = ["dep:desert_rust", "dep:golem-api-grpc", "dep:poem", "dep:poem-openapi"]
+guest = ["dep:wasip2", "dep:wit-bindgen"]
+host = ["dep:wasmtime", "dep:wasmtime-wasi"]
+proptest = ["dep:proptest"]
+
+[dependencies]
+golem-schema-derive = { workspace = true }
+
+base64 = { workspace = true }
+bigdecimal = { workspace = true }
+bit-vec = { workspace = true }
+chrono = { workspace = true }
+combine = { workspace = true }
+desert_rust = { workspace = true, optional = true }
+golem-api-grpc = { workspace = true, optional = true }
+poem = { workspace = true, optional = true }
+poem-openapi = { workspace = true, optional = true }
+proptest = { workspace = true, optional = true }
+range-set-blaze = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+typed-path = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+wasip2 = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+wit-bindgen = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+test-r = { workspace = true }

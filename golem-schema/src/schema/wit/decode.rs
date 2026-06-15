@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::wire;
+use crate::model::EnvironmentId;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
@@ -24,7 +26,6 @@ use crate::schema::schema_value::{
     SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use chrono::{DateTime, TimeZone, Utc};
-use golem_wasm::golem_core_2_0_x::types as wire;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
@@ -532,10 +533,10 @@ fn decode_value_node(
         }),
         wire::SchemaValueNode::QuotaTokenValue(q) => {
             SchemaValue::QuotaToken(QuotaTokenValuePayload {
-                environment_id: uuid::Uuid::from_u64_pair(
+                environment_id: EnvironmentId::new(uuid::Uuid::from_u64_pair(
                     q.environment_id.uuid.high_bits,
                     q.environment_id.uuid.low_bits,
-                ),
+                )),
                 resource_name: q.resource_name.clone(),
                 expected_use: q.expected_use,
                 last_credit: q.last_credit,

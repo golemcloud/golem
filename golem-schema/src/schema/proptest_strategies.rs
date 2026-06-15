@@ -24,6 +24,7 @@
 //! type-against-value validity (that is the job of the validator landing in
 //! a later step).
 
+use crate::model::EnvironmentId;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
@@ -402,7 +403,7 @@ fn quota_token_value_strategy() -> BoxedStrategy<SchemaValue> {
         .prop_map(
             |(hi, lo, resource_name, expected_use, last_credit, last_credit_at)| {
                 SchemaValue::QuotaToken(QuotaTokenValuePayload {
-                    environment_id: uuid::Uuid::from_u64_pair(hi, lo),
+                    environment_id: EnvironmentId::new(uuid::Uuid::from_u64_pair(hi, lo)),
                     resource_name,
                     expected_use,
                     last_credit,

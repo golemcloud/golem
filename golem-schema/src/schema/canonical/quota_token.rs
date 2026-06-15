@@ -34,13 +34,13 @@
 //!   range without precision loss). On input both a JSON number and a JSON
 //!   string are accepted for those two fields.
 
+use crate::model::EnvironmentId;
 use crate::schema::canonical::datetime;
 use crate::schema::canonical::error::ParseError;
 use crate::schema::schema_value::QuotaTokenValuePayload;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::{Map, Value};
-use uuid::Uuid;
 
 const TEXT_PREFIX: &str = "quota-token:";
 
@@ -78,7 +78,7 @@ pub fn to_json(payload: &QuotaTokenValuePayload) -> Result<Value, ParseError> {
     let mut obj = Map::new();
     obj.insert(
         FIELD_ENV_ID.to_string(),
-        Value::String(payload.environment_id.hyphenated().to_string()),
+        Value::String(payload.environment_id.uuid.hyphenated().to_string()),
     );
     obj.insert(
         FIELD_RESOURCE.to_string(),
@@ -159,8 +159,10 @@ pub fn from_json(value: &Value) -> Result<QuotaTokenValuePayload, ParseError> {
             expected: "string",
             field: Some("environment_id"),
         })?;
-    let environment_id = Uuid::parse_str(env_id_str)
-        .map_err(|e| ParseError::BadFormat(format!("invalid UUID: {e}")))?;
+    let environment_id = EnvironmentId::new(
+        uuid::Uuid::parse_str(env_id_str)
+            .map_err(|e| ParseError::BadFormat(format!("invalid UUID: {e}")))?,
+    );
     let resource_name = obj
         .get(FIELD_RESOURCE)
         .ok_or(ParseError::MissingField("resource_name"))?
@@ -222,7 +224,7 @@ mod tests {
             .prop_map(
                 |(hi, lo, resource_name, expected_use, last_credit, last_credit_at)| {
                     QuotaTokenValuePayload {
-                        environment_id: Uuid::from_u64_pair(hi, lo),
+                        environment_id: EnvironmentId::new(uuid::Uuid::from_u64_pair(hi, lo)),
                         resource_name,
                         expected_use,
                         last_credit,
@@ -347,7 +349,7 @@ mod tests {
     #[test]
     fn output_uses_string_for_numeric_fields() {
         let p = QuotaTokenValuePayload {
-            environment_id: Uuid::nil(),
+            environment_id: EnvironmentId::new(uuid::Uuid::nil()),
             resource_name: "r".into(),
             expected_use: u64::MAX,
             last_credit: i64::MIN,

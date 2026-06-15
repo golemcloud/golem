@@ -26,19 +26,19 @@ pub mod text_utils;
 
 use crate::model::component_metadata::ComponentMetadata;
 use crate::schema::AgentTypeSchema;
+use crate::schema::adapters::analysed_type::schema_type_to_analysed_type;
+use crate::schema::adapters::value::{
+    schema_value_to_value, typed_schema_value_to_value_and_type,
+    value_and_type_to_typed_schema_value,
+};
 use crate::schema::adapters::{
     input_schema_to_data_schema, legacy_data_value_to_typed_schema_value,
     untyped_data_value_to_input_value,
 };
-use crate::schema::adapters::analysed_type::schema_type_to_analysed_type;
-use crate::schema::adapters::value::{
-    schema_value_to_value,
-    typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
-};
 use crate::schema::graph::TypedSchemaValue;
+use crate::schema::render::cli_text::value_to_cli_text;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::{BinaryValuePayload, SchemaValue, TextValuePayload};
-use crate::schema::render::cli_text::value_to_cli_text;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
@@ -53,8 +53,8 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 pub use crate::base_model::agent::*;
-pub use crate::schema::agent::ParsedAgentId;
 use crate::model::AgentId;
+pub use crate::schema::agent::ParsedAgentId;
 
 impl TryFrom<i32> for AgentMode {
     type Error = String;
@@ -669,11 +669,9 @@ impl ParsedAgentId {
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
         let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
-        let data_schema = input_schema_to_data_schema(
-            &agent_type.schema,
-            &agent_type.constructor.input_schema,
-        )
-        .map_err(|e| e.to_string())?;
+        let data_schema =
+            input_schema_to_data_schema(&agent_type.schema, &agent_type.constructor.input_schema)
+                .map_err(|e| e.to_string())?;
         let data_value = parse_structural(&normalize_structural(param_list), &data_schema)
             .map_err(|e| e.to_string())?;
         let value = untyped_data_value_to_input_value(data_value.into(), &data_schema)
@@ -693,17 +691,14 @@ impl ParsedAgentId {
     }
 
     pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
-        Self::try_new(
-            self.agent_type.clone(),
-            self.parameters.clone(),
-            phantom_id,
-        )
+        Self::try_new(self.agent_type.clone(), self.parameters.clone(), phantom_id)
     }
 }
 
 impl Display for ParsedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let rendered = render_parsed_agent_id_parameters(&self.parameters).map_err(|_| std::fmt::Error)?;
+        let rendered =
+            render_parsed_agent_id_parameters(&self.parameters).map_err(|_| std::fmt::Error)?;
         write!(f, "{}({rendered})", self.agent_type)?;
         if let Some(phantom_id) = self.phantom_id {
             write!(f, "[{phantom_id}]")?;
@@ -739,8 +734,10 @@ pub fn typed_constructor_parameters(
 fn render_parsed_agent_id_parameters(parameters: &TypedSchemaValue) -> Result<String, String> {
     use crate::model::agent::structural_format::format_structural;
 
-    format_structural(&parsed_agent_id_parameters_to_legacy_data_value(parameters)?)
-        .map_err(|e| e.to_string())
+    format_structural(&parsed_agent_id_parameters_to_legacy_data_value(
+        parameters,
+    )?)
+    .map_err(|e| e.to_string())
 }
 
 pub fn parsed_agent_id_parameters_to_legacy_data_value(
@@ -778,8 +775,8 @@ fn schema_parameter_to_legacy_element(
 ) -> Result<ElementValue, String> {
     let resolved = crate::schema::adapters::resolve_ref(graph, ty).map_err(|e| e.to_string())?;
     match (resolved, value) {
-        (SchemaType::Text { .. }, SchemaValue::Text(TextValuePayload { text, language })) => {
-            Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue {
+        (SchemaType::Text { .. }, SchemaValue::Text(TextValuePayload { text, language })) => Ok(
+            ElementValue::UnstructuredText(UnstructuredTextElementValue {
                 value: TextReference::Inline(TextSource {
                     data: text.clone(),
                     text_type: language.as_ref().map(|language_code| TextType {
@@ -787,10 +784,13 @@ fn schema_parameter_to_legacy_element(
                     }),
                 }),
                 descriptor: TextDescriptor::default(),
-            }))
-        }
-        (SchemaType::Binary { .. }, SchemaValue::Binary(BinaryValuePayload { bytes, mime_type })) => {
-            Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            }),
+        ),
+        (
+            SchemaType::Binary { .. },
+            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }),
+        ) => Ok(ElementValue::UnstructuredBinary(
+            UnstructuredBinaryElementValue {
                 value: BinaryReference::Inline(BinarySource {
                     data: bytes.clone(),
                     binary_type: BinaryType {
@@ -798,8 +798,8 @@ fn schema_parameter_to_legacy_element(
                     },
                 }),
                 descriptor: BinaryDescriptor::default(),
-            }))
-        }
+            },
+        )),
         _ => {
             let value = schema_value_to_value(graph, ty, value).map_err(|e| e.to_string())?;
             let typ = schema_type_to_analysed_type(graph, ty).map_err(|e| e.to_string())?;

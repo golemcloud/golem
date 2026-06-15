@@ -41,7 +41,7 @@ use golem_common::model::oplog::{
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
 use golem_common::schema::TypedSchemaValue;
-use golem_common::schema::wit::{encode_typed, wire};
+use golem_schema::schema::wit::{encode_typed, wire};
 
 /// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT
 /// wire form used by the oplog-processor plugin interface. Public-oplog

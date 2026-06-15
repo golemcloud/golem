@@ -15,13 +15,30 @@
 //! Shared codegen primitives reused across struct / enum / union expansions.
 
 use crate::parse::{DeprecatedMarker, ItemAttrs, PathAttrSpec, RenameAll, RichSpec, TypeAttrs};
-use proc_macro2::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{GenericParam, Generics, Type};
 
 /// Path prefix used for everything the derive references.
 pub fn private() -> TokenStream {
-    quote! { ::golem_common::schema::derive::__private }
+    let schema_crate = schema_crate_path();
+    quote! { #schema_crate::schema::derive::__private }
+}
+
+fn schema_crate_path() -> TokenStream {
+    crate_path("golem-schema")
+        .unwrap_or_else(|| crate_path("golem-common").unwrap_or_else(|| quote! { ::golem_common }))
+}
+
+fn crate_path(name: &str) -> Option<TokenStream> {
+    match crate_name(name).ok()? {
+        FoundCrate::Itself => Some(quote! { crate }),
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, Span::call_site());
+            Some(quote! { ::#ident })
+        }
+    }
 }
 
 /// Emit the `TypeId` value for a derived type, applying `#[schema(named = ...)]`

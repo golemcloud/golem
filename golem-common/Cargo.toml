@@ -20,9 +20,11 @@ default = ["full"]
 client = ["golem-wasm/client"]
 # Exposes `schema::proptest_strategies` (proptest generators for SchemaType /
 # SchemaValue / SchemaGraph) to downstream crates' test code.
-proptest = ["dep:proptest"]
+proptest = ["dep:proptest", "golem-schema/proptest"]
 full = [
     "client",
+    "golem-schema/full",
+    "golem-schema/host",
     "golem-wasm/host",
     "dep:golem-api-grpc",
     "dep:applying",
@@ -66,6 +68,7 @@ full = [
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
+golem-schema = { workspace = true }
 golem-schema-derive = { workspace = true }
 golem-wasm = { workspace = true, default-features = false }
 golem-wasm-derive = { workspace = true }
@@ -164,6 +167,7 @@ anyhow = { workspace = true }
 assert2 = { workspace = true }
 criterion = { workspace = true }
 futures = { workspace = true }
+golem-schema = { workspace = true, features = ["proptest"] }
 golem-wasm = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }
 indoc = { workspace = true }

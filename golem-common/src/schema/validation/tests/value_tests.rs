@@ -143,7 +143,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                     resource_name: Some(resource.clone()),
                 }),
                 SchemaValue::QuotaToken(QuotaTokenValuePayload {
-                    environment_id: uuid::Uuid::nil(),
+                    environment_id: golem_schema::model::EnvironmentId::new(uuid::Uuid::nil()),
                     resource_name: resource,
                     expected_use: 1,
                     last_credit: 0,

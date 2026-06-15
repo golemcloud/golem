@@ -451,7 +451,7 @@ fn schema_value_to_value_rejects_rich_payloads() {
         (
             SchemaType::quota_token(QuotaTokenSpec::default()),
             SchemaValue::QuotaToken(QuotaTokenValuePayload {
-                environment_id: uuid::Uuid::nil(),
+                environment_id: golem_schema::model::EnvironmentId::new(uuid::Uuid::nil()),
                 resource_name: "rss".into(),
                 expected_use: 0,
                 last_credit: 0,

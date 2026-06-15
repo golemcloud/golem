@@ -43,7 +43,7 @@ wasmtime::component::bindgen!({
         "golem:api/oplog.search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability.lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
         "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-        "golem:core/types@2.0.0": golem_wasm::golem_core_2_0_x::types,
+        "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
         "golem:agent/host.wasm-rpc": golem_wasm::WasmRpcEntry,
         "golem:agent/host.future-invoke-result": golem_wasm::FutureInvokeResultEntry,
         "golem:agent/host.cancellation-token": golem_wasm::CancellationTokenEntry,
@@ -82,7 +82,7 @@ pub mod oplog_processor_plugin {
         wasmtime_crate: ::wasmtime,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "golem:core/types@2.0.0": golem_wasm::golem_core_2_0_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:api/host": crate::preview2::golem::api1_5_0::host,
             "golem:api/oplog": crate::preview2::golem::api1_5_0::oplog,
             "golem:api/context": crate::preview2::golem::api1_5_0::context,

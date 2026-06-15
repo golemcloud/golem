@@ -1694,8 +1694,8 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
-        phantom_id: Option<golem_wasm::golem_core_2_0_x::types::Uuid>,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
         config: Vec<
             golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
@@ -1709,10 +1709,9 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
-    ) -> anyhow::Result<
-        Result<Option<golem_wasm::golem_core_2_0_x::types::SchemaValueTree>, RpcError>,
-    > {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>
+    {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -1722,7 +1721,7 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<Result<(), RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
@@ -1731,7 +1730,7 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
@@ -1743,7 +1742,7 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
@@ -1755,7 +1754,7 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
@@ -1779,7 +1778,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<Option<golem_wasm::golem_core_2_0_x::types::SchemaValueTree>, RpcError>>,
+        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }

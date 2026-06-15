@@ -1,0 +1,12 @@
+package golem:schema;
+
+/// Minimal helper world used by `golem_schema::schema::wit` to generate the
+/// shared `golem:core/types@2.0.0` schema transport types.
+world golem-schema {
+  use golem:core/types@2.0.0.{schema-graph};
+
+  /// Dummy import that forces bindgen implementations to materialize the
+  /// otherwise type-only `golem:core/types@2.0.0` package. Runtime code never
+  /// calls this world; it only reuses the generated type module.
+  import schema-graph-probe: func(graph: schema-graph) -> schema-graph;
+}

@@ -30,10 +30,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     revert_worker_response, search_oplog_response, update_worker_response,
 };
 use golem_common::base_model::agent::DataValue;
-use golem_common::model::agent::ParsedAgentId;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,

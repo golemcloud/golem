@@ -46,8 +46,8 @@ use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::validation::subtyping::is_assignable;
 use golem_common::schema::validation::value::validate_value;
-use golem_common::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
-use golem_wasm::golem_core_2_0_x::types as core_wire;
+use golem_schema::schema::wit::wire as core_wire;
+use golem_schema::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
 
 /// Encode a canonical [`RegisteredAgentType`] into the schema-native
 /// `golem:agent/common@2.0.0` wire form returned across the WIT boundary.

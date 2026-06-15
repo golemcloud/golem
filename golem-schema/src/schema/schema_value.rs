@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::EnvironmentId;
 use crate::schema::schema_type::QuantityValue;
 use chrono::{DateTime, Utc};
 use golem_schema_derive::{FromSchema, IntoSchema};
@@ -177,7 +178,7 @@ pub struct SecretValuePayload {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct QuotaTokenValuePayload {
-    pub environment_id: uuid::Uuid,
+    pub environment_id: EnvironmentId,
     pub resource_name: String,
     pub expected_use: u64,
     pub last_credit: i64,

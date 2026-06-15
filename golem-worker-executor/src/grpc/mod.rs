@@ -1707,8 +1707,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
 
                 let agent_type =
-                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id)
-                        .ok();
+                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
                 let installation = agent_type
                     .as_ref()

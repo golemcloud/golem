@@ -13,27 +13,10 @@
 // limitations under the License.
 
 //! Validation utilities for the in-memory schema model.
-//!
-//! Four orthogonal validators, each with its own error type:
-//!
-//! - [`well_formedness::validate_graph`] — structural integrity of a
-//!   [`super::SchemaGraph`] (no duplicate type ids, no dangling refs,
-//!   non-empty discriminated sums, well-formed scalar constraints, etc.).
-//! - [`placement::validate_placement`] — per-node placement matrix:
-//!   capability nodes, multimodal-role lists, etc. depend on the surrounding
-//!   [`placement::SchemaScope`].
-//! - [`value::validate_value`] — a [`super::SchemaValue`] structurally
-//!   conforms to a given [`super::SchemaType`] inside a graph.
-//! - [`subtyping::is_assignable`] — width / depth / scalar-narrowing
-//!   subtyping with cycle detection over [`super::SchemaType::Ref`].
-//!
-//! These validators are pure in-memory checks. They do not depend on the
-//! generated WIT bindings under [`super::wit`].
 
 pub mod placement;
-pub mod subtyping;
-pub mod value;
-pub mod well_formedness;
+
+pub use golem_schema::schema::validation::{subtyping, value, well_formedness};
 
 #[cfg(test)]
 mod tests;

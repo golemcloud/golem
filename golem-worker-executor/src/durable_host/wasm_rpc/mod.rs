@@ -53,11 +53,11 @@ use golem_common::model::{
 use golem_common::schema::adapters::agent::schema_agent_type_to_legacy;
 use golem_common::schema::adapters::typed_schema_value_to_value_and_type;
 use golem_common::schema::schema_value::SchemaValue;
-use golem_common::schema::wit::{decode_typed, decode_value, encode_value};
 use golem_common::serialization::{deserialize, serialize};
+use golem_schema::schema::wit::{decode_typed, decode_value, encode_value};
 
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
-use golem_wasm::golem_core_2_0_x::types as core_wire;
+use golem_schema::schema::wit::wire as core_wire;
 use golem_wasm::{CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, WasmRpcEntry};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};

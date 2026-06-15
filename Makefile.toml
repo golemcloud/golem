@@ -92,9 +92,7 @@ rm -r golem-wasm/wit/deps
 mkdir golem-wasm/wit/deps
 cp wit/deps/io golem-wasm/wit/deps
 cp wit/deps/clocks golem-wasm/wit/deps
-cp wit/deps/golem-1.x golem-wasm/wit/deps
 cp wit/deps/golem-core golem-wasm/wit/deps
-cp wit/deps/golem-core-v2 golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]

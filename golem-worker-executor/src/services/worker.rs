@@ -674,8 +674,7 @@ impl WorkerService for DefaultWorkerService {
             )) => {
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 let agent_mode = persisted_agent_mode;
-                let agent_type_name =
-                    ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+                let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
                 let component_metadata = self
                     .component_service
                     .get_metadata(agent_id.component_id, Some(component_revision))

@@ -15,6 +15,7 @@ members = [
     "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
+    "golem-schema",
     "golem-schema-derive",
     "golem-wasm",
     "golem-wasm-derive",
@@ -39,6 +40,7 @@ golem-common = { version = "=0.0.0", path = "golem-common", default-features = f
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
+golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = false }
 golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
@@ -189,6 +191,7 @@ postgres = "0.19.10"
 pretty_assertions = "1.4.1"
 pretty_env_logger = "0.5.0"
 prettyplease = "0.2.25"
+proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.92"
 prometheus = { version = "0.14.0", features = ["process"] }
 proptest = "=1.5.0"

@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `poem_openapi` support for the schema-native value carriers.
-//!
-//! The public oplog and the worker-service REST surface expose
-//! [`TypedSchemaValue`] (and friends) as OpenAPI object fields. These types are
-//! serde-serializable, so the OpenAPI representation is an opaque JSON object
-//! backed by serde, mirroring the hand-written `ValueAndType` impls in
-//! `golem-wasm`. We deliberately do **not** render the full recursive schema
-//! into OpenAPI metadata.
+//! `poem_openapi` support for common's agent schema extensions.
 
-use crate::schema::{AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+use crate::schema::AgentTypeSchema;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
 use serde_json::Value;
@@ -75,8 +68,4 @@ macro_rules! impl_json_backed_poem_type {
     };
 }
 
-impl_json_backed_poem_type!(SchemaGraph, "SchemaGraph");
-impl_json_backed_poem_type!(SchemaType, "SchemaType");
-impl_json_backed_poem_type!(SchemaValue, "SchemaValue");
-impl_json_backed_poem_type!(TypedSchemaValue, "TypedSchemaValue");
 impl_json_backed_poem_type!(AgentTypeSchema, "AgentTypeSchema");

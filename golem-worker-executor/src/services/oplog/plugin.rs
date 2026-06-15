@@ -1101,10 +1101,9 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let agent_type = ParsedAgentId::parse_agent_type_name(
-            &self.initial_worker_metadata.agent_id.agent_id,
-        )
-        .ok();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
+                .ok();
         let plugin = match agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))

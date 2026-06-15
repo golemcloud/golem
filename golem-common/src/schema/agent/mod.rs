@@ -375,7 +375,7 @@ pub mod bindings {
           require_store_data_send: true,
           anyhow: true,
           with: {
-            "golem:core/types@2.0.0": golem_wasm::golem_core_2_0_x::types,
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
           },
           wasmtime_crate: ::wasmtime
     });
