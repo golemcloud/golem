@@ -205,7 +205,10 @@ impl CliOutput for PermissionShareDeleteResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionShareListView(pub Vec<PermissionShare>);
+#[serde(rename_all = "camelCase")]
+pub struct PermissionShareListView {
+    pub permission_shares: Vec<PermissionShare>,
+}
 
 impl TextView for PermissionShareListView {
     fn log(&self) {
@@ -217,7 +220,7 @@ impl TextView for PermissionShareListView {
             Column::new("Grants").fixed(),
         ]);
 
-        for share in &self.0 {
+        for share in &self.permission_shares {
             table.add_row(vec![
                 share.id.to_string(),
                 share.name.to_string(),

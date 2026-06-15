@@ -221,9 +221,9 @@ impl AccountCommandHandler {
                 .values
         };
 
-        self.ctx
-            .log_handler()
-            .log_view(&PermissionShareListView(shares))?;
+        self.ctx.log_handler().log_view(&PermissionShareListView {
+            permission_shares: shares,
+        })?;
 
         Ok(())
     }

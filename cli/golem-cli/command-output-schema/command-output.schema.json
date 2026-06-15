@@ -3,240 +3,3875 @@
   "title": "Golem CLI Command Output",
   "description": "Structured output documents emitted by golem-cli data output formats. Every document is identified by its top-level $type field.",
   "oneOf": [
-    { "$ref": "#/definitions/account.delete.result" },
-    { "$ref": "#/definitions/account.get.result" },
-    { "$ref": "#/definitions/account.new.result" },
-    { "$ref": "#/definitions/account.permission-share.delete.result" },
-    { "$ref": "#/definitions/account.permission-share.get.result" },
-    { "$ref": "#/definitions/account.permission-share.list.result" },
-    { "$ref": "#/definitions/account.permission-share.new.result" },
-    { "$ref": "#/definitions/account.permission-share.update.result" },
-    { "$ref": "#/definitions/account.update.result" },
-    { "$ref": "#/definitions/agent-type.get.result" },
-    { "$ref": "#/definitions/agent-type.list.result" },
-    { "$ref": "#/definitions/agent.cancel-invocation.result" },
-    { "$ref": "#/definitions/agent.delete.result" },
-    { "$ref": "#/definitions/agent.files.result" },
-    { "$ref": "#/definitions/agent.get.result" },
-    { "$ref": "#/definitions/agent.invoke.result" },
-    { "$ref": "#/definitions/agent.list.result" },
-    { "$ref": "#/definitions/agent.new.result" },
-    { "$ref": "#/definitions/agent.oplog.result" },
-    { "$ref": "#/definitions/agent.plugin-toggle.result" },
-    { "$ref": "#/definitions/agent.redeploy.result" },
-    { "$ref": "#/definitions/agent.revert.result" },
-    { "$ref": "#/definitions/agent.stream.event" },
-    { "$ref": "#/definitions/agent.update.result" },
-    { "$ref": "#/definitions/api-token.delete.result" },
-    { "$ref": "#/definitions/api-token.list.result" },
-    { "$ref": "#/definitions/api-token.new.result" },
-    { "$ref": "#/definitions/api.deployment.get.result" },
-    { "$ref": "#/definitions/api.deployment.list.result" },
-    { "$ref": "#/definitions/api.domain.delete.result" },
-    { "$ref": "#/definitions/api.domain.list.result" },
-    { "$ref": "#/definitions/api.domain.register.result" },
-    { "$ref": "#/definitions/api.security-scheme.create.result" },
-    { "$ref": "#/definitions/api.security-scheme.delete.result" },
-    { "$ref": "#/definitions/api.security-scheme.get.result" },
-    { "$ref": "#/definitions/api.security-scheme.list.result" },
-    { "$ref": "#/definitions/api.security-scheme.update.result" },
-    { "$ref": "#/definitions/app.build.result" },
-    { "$ref": "#/definitions/app.clean.result" },
-    { "$ref": "#/definitions/app.deploy-plan.result" },
-    { "$ref": "#/definitions/app.deploy.result" },
-    { "$ref": "#/definitions/app.generate-bridge.result" },
-    { "$ref": "#/definitions/app.new.result" },
-    { "$ref": "#/definitions/app.templates.result" },
-    { "$ref": "#/definitions/component.get.result" },
-    { "$ref": "#/definitions/component.list.result" },
-    { "$ref": "#/definitions/component.manifest-trace.result" },
-    { "$ref": "#/definitions/deployment.create.result" },
-    { "$ref": "#/definitions/deployment.diff.result" },
-    { "$ref": "#/definitions/deployment.list.result" },
-    { "$ref": "#/definitions/environment.list.result" },
-    { "$ref": "#/definitions/environment.setup-plan.result" },
-    { "$ref": "#/definitions/plugin.get.result" },
-    { "$ref": "#/definitions/plugin.list.result" },
-    { "$ref": "#/definitions/plugin.register.result" },
-    { "$ref": "#/definitions/plugin.unregister.result" },
-    { "$ref": "#/definitions/profile.config.set-format.result" },
-    { "$ref": "#/definitions/profile.delete.result" },
-    { "$ref": "#/definitions/profile.get.result" },
-    { "$ref": "#/definitions/profile.list.result" },
-    { "$ref": "#/definitions/profile.new.result" },
-    { "$ref": "#/definitions/profile.switch.result" },
-    { "$ref": "#/definitions/resource.create.result" },
-    { "$ref": "#/definitions/resource.delete.result" },
-    { "$ref": "#/definitions/resource.get.result" },
-    { "$ref": "#/definitions/resource.list.result" },
-    { "$ref": "#/definitions/resource.update.result" },
-    { "$ref": "#/definitions/retry-policy.create.result" },
-    { "$ref": "#/definitions/retry-policy.delete.result" },
-    { "$ref": "#/definitions/retry-policy.get.result" },
-    { "$ref": "#/definitions/retry-policy.list.result" },
-    { "$ref": "#/definitions/retry-policy.update.result" },
-    { "$ref": "#/definitions/secret.create.result" },
-    { "$ref": "#/definitions/secret.delete.result" },
-    { "$ref": "#/definitions/secret.get.result" },
-    { "$ref": "#/definitions/secret.list.result" },
-    { "$ref": "#/definitions/secret.update-value.result" }
+    {
+      "$ref": "#/definitions/account.delete.result"
+    },
+    {
+      "$ref": "#/definitions/account.get.result"
+    },
+    {
+      "$ref": "#/definitions/account.new.result"
+    },
+    {
+      "$ref": "#/definitions/account.permission-share.delete.result"
+    },
+    {
+      "$ref": "#/definitions/account.permission-share.get.result"
+    },
+    {
+      "$ref": "#/definitions/account.permission-share.list.result"
+    },
+    {
+      "$ref": "#/definitions/account.permission-share.new.result"
+    },
+    {
+      "$ref": "#/definitions/account.permission-share.update.result"
+    },
+    {
+      "$ref": "#/definitions/account.update.result"
+    },
+    {
+      "$ref": "#/definitions/agent-type.get.result"
+    },
+    {
+      "$ref": "#/definitions/agent-type.list.result"
+    },
+    {
+      "$ref": "#/definitions/agent.cancel-invocation.result"
+    },
+    {
+      "$ref": "#/definitions/agent.delete.result"
+    },
+    {
+      "$ref": "#/definitions/agent.files.result"
+    },
+    {
+      "$ref": "#/definitions/agent.get.result"
+    },
+    {
+      "$ref": "#/definitions/agent.invoke.result"
+    },
+    {
+      "$ref": "#/definitions/agent.list.result"
+    },
+    {
+      "$ref": "#/definitions/agent.new.result"
+    },
+    {
+      "$ref": "#/definitions/agent.oplog.result"
+    },
+    {
+      "$ref": "#/definitions/agent.plugin-toggle.result"
+    },
+    {
+      "$ref": "#/definitions/agent.redeploy.result"
+    },
+    {
+      "$ref": "#/definitions/agent.revert.result"
+    },
+    {
+      "$ref": "#/definitions/agent.stream.event"
+    },
+    {
+      "$ref": "#/definitions/agent.update.result"
+    },
+    {
+      "$ref": "#/definitions/api-token.delete.result"
+    },
+    {
+      "$ref": "#/definitions/api-token.list.result"
+    },
+    {
+      "$ref": "#/definitions/api-token.new.result"
+    },
+    {
+      "$ref": "#/definitions/api.deployment.get.result"
+    },
+    {
+      "$ref": "#/definitions/api.deployment.list.result"
+    },
+    {
+      "$ref": "#/definitions/api.domain.delete.result"
+    },
+    {
+      "$ref": "#/definitions/api.domain.list.result"
+    },
+    {
+      "$ref": "#/definitions/api.domain.register.result"
+    },
+    {
+      "$ref": "#/definitions/api.security-scheme.create.result"
+    },
+    {
+      "$ref": "#/definitions/api.security-scheme.delete.result"
+    },
+    {
+      "$ref": "#/definitions/api.security-scheme.get.result"
+    },
+    {
+      "$ref": "#/definitions/api.security-scheme.list.result"
+    },
+    {
+      "$ref": "#/definitions/api.security-scheme.update.result"
+    },
+    {
+      "$ref": "#/definitions/app.build.result"
+    },
+    {
+      "$ref": "#/definitions/app.clean.result"
+    },
+    {
+      "$ref": "#/definitions/app.deploy-plan.result"
+    },
+    {
+      "$ref": "#/definitions/app.deploy.result"
+    },
+    {
+      "$ref": "#/definitions/app.generate-bridge.result"
+    },
+    {
+      "$ref": "#/definitions/app.new.result"
+    },
+    {
+      "$ref": "#/definitions/app.templates.result"
+    },
+    {
+      "$ref": "#/definitions/component.get.result"
+    },
+    {
+      "$ref": "#/definitions/component.list.result"
+    },
+    {
+      "$ref": "#/definitions/component.manifest-trace.result"
+    },
+    {
+      "$ref": "#/definitions/deployment.create.result"
+    },
+    {
+      "$ref": "#/definitions/deployment.diff.result"
+    },
+    {
+      "$ref": "#/definitions/deployment.list.result"
+    },
+    {
+      "$ref": "#/definitions/environment.list.result"
+    },
+    {
+      "$ref": "#/definitions/environment.setup-plan.result"
+    },
+    {
+      "$ref": "#/definitions/plugin.get.result"
+    },
+    {
+      "$ref": "#/definitions/plugin.list.result"
+    },
+    {
+      "$ref": "#/definitions/plugin.register.result"
+    },
+    {
+      "$ref": "#/definitions/plugin.unregister.result"
+    },
+    {
+      "$ref": "#/definitions/profile.config.set-format.result"
+    },
+    {
+      "$ref": "#/definitions/profile.delete.result"
+    },
+    {
+      "$ref": "#/definitions/profile.get.result"
+    },
+    {
+      "$ref": "#/definitions/profile.list.result"
+    },
+    {
+      "$ref": "#/definitions/profile.new.result"
+    },
+    {
+      "$ref": "#/definitions/profile.switch.result"
+    },
+    {
+      "$ref": "#/definitions/resource.create.result"
+    },
+    {
+      "$ref": "#/definitions/resource.delete.result"
+    },
+    {
+      "$ref": "#/definitions/resource.get.result"
+    },
+    {
+      "$ref": "#/definitions/resource.list.result"
+    },
+    {
+      "$ref": "#/definitions/resource.update.result"
+    },
+    {
+      "$ref": "#/definitions/retry-policy.create.result"
+    },
+    {
+      "$ref": "#/definitions/retry-policy.delete.result"
+    },
+    {
+      "$ref": "#/definitions/retry-policy.get.result"
+    },
+    {
+      "$ref": "#/definitions/retry-policy.list.result"
+    },
+    {
+      "$ref": "#/definitions/retry-policy.update.result"
+    },
+    {
+      "$ref": "#/definitions/secret.create.result"
+    },
+    {
+      "$ref": "#/definitions/secret.delete.result"
+    },
+    {
+      "$ref": "#/definitions/secret.get.result"
+    },
+    {
+      "$ref": "#/definitions/secret.list.result"
+    },
+    {
+      "$ref": "#/definitions/secret.update-value.result"
+    }
   ],
   "definitions": {
-    "account.delete.result": { "type": "object", "required": ["$type", "deleted", "accountId"], "properties": { "$type": { "const": "account.delete.result" }, "deleted": { "type": "boolean" }, "accountId": { "type": "string" } }, "additionalProperties": false },
-    "account.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.get.result" } }, "additionalProperties": true },
-    "account.new.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.new.result" } }, "additionalProperties": true },
-    "account.permission-share.delete.result": { "type": "object", "required": ["$type", "deleted", "permissionShareId"], "properties": { "$type": { "const": "account.permission-share.delete.result" }, "deleted": { "type": "boolean" }, "permissionShareId": { "type": "string" } }, "additionalProperties": false },
-    "account.permission-share.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.permission-share.get.result" } }, "additionalProperties": true },
-    "account.permission-share.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.permission-share.list.result" } }, "additionalProperties": true },
-    "account.permission-share.new.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.permission-share.new.result" } }, "additionalProperties": true },
-    "account.permission-share.update.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.permission-share.update.result" } }, "additionalProperties": true },
-    "account.update.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "account.update.result" } }, "additionalProperties": true },
-    "agent-type.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent-type.get.result" } }, "additionalProperties": true },
-    "agent-type.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent-type.list.result" } }, "additionalProperties": true },
-    "agent.cancel-invocation.result": { "type": "object", "required": ["$type", "canceled", "agent", "idempotencyKey"], "properties": { "$type": { "const": "agent.cancel-invocation.result" }, "canceled": { "type": "boolean" }, "agent": { "type": "string" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
-    "agent.delete.result": { "type": "object", "required": ["$type", "deleted", "agent"], "properties": { "$type": { "const": "agent.delete.result" }, "deleted": { "type": "boolean" }, "agent": { "type": "string" } }, "additionalProperties": false },
-    "agent.files.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.files.result" } }, "additionalProperties": true },
-    "agent.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.get.result" } }, "additionalProperties": true },
-    "agent.invoke.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.invoke.result" } }, "additionalProperties": true },
-    "agent.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.list.result" } }, "additionalProperties": true },
-    "agent.new.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.new.result" } }, "additionalProperties": true },
-    "agent.oplog.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.oplog.result" } }, "additionalProperties": true },
-    "agent.plugin-toggle.result": { "type": "object", "required": ["$type", "activated", "agent", "plugin", "priority"], "properties": { "$type": { "const": "agent.plugin-toggle.result" }, "activated": { "type": "boolean" }, "agent": { "type": "string" }, "plugin": { "type": "string" }, "priority": { "type": "integer" } }, "additionalProperties": false },
-    "agent.redeploy.result": { "type": "object", "required": ["$type", "redeployed", "components"], "properties": { "$type": { "const": "agent.redeploy.result" }, "redeployed": { "type": "boolean" }, "components": { "type": "array", "items": { "type": "string" } } }, "additionalProperties": false },
-    "agent.revert.result": { "type": "object", "required": ["$type", "reverted", "agent"], "properties": { "$type": { "const": "agent.revert.result" }, "reverted": { "type": "boolean" }, "agent": { "type": "string" }, "lastOplogIndex": { "type": "integer", "minimum": 0 }, "numberOfInvocations": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
-    "agent.stream.event": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.stream.event" } }, "additionalProperties": true },
-    "agent.update.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "agent.update.result" } }, "additionalProperties": true },
-    "api-token.delete.result": { "type": "object", "required": ["$type", "deleted", "tokenId"], "properties": { "$type": { "const": "api-token.delete.result" }, "deleted": { "type": "boolean" }, "tokenId": { "type": "string" } }, "additionalProperties": false },
-    "api-token.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api-token.list.result" } }, "additionalProperties": true },
-    "api-token.new.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api-token.new.result" } }, "additionalProperties": true },
-    "api.deployment.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.deployment.get.result" } }, "additionalProperties": true },
-    "api.deployment.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.deployment.list.result" } }, "additionalProperties": true },
-    "api.domain.delete.result": { "type": "object", "required": ["$type", "deleted", "domain", "id"], "properties": { "$type": { "const": "api.domain.delete.result" }, "deleted": { "type": "boolean" }, "domain": { "type": "string" }, "id": { "type": "string" } }, "additionalProperties": false },
-    "api.domain.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.domain.list.result" } }, "additionalProperties": true },
-    "api.domain.register.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.domain.register.result" } }, "additionalProperties": true },
-    "api.security-scheme.create.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.security-scheme.create.result" } }, "additionalProperties": true },
-    "api.security-scheme.delete.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.security-scheme.delete.result" } }, "additionalProperties": true },
-    "api.security-scheme.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.security-scheme.get.result" } }, "additionalProperties": true },
-    "api.security-scheme.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.security-scheme.list.result" } }, "additionalProperties": true },
-    "api.security-scheme.update.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "api.security-scheme.update.result" } }, "additionalProperties": true },
-    "app.build.result": { "type": "object", "required": ["$type", "built"], "properties": { "$type": { "const": "app.build.result" }, "built": { "type": "boolean" } }, "additionalProperties": false },
-    "app.clean.result": { "type": "object", "required": ["$type", "cleaned"], "properties": { "$type": { "const": "app.clean.result" }, "cleaned": { "type": "boolean" } }, "additionalProperties": false },
-    "app.deploy-plan.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "app.deploy-plan.result" } }, "additionalProperties": true },
-    "app.deploy.result": { "type": "object", "required": ["$type", "deployed"], "properties": { "$type": { "const": "app.deploy.result" }, "deployed": { "type": "boolean" } }, "additionalProperties": false },
-    "app.generate-bridge.result": { "type": "object", "required": ["$type", "generated"], "properties": { "$type": { "const": "app.generate-bridge.result" }, "generated": { "type": "boolean" } }, "additionalProperties": false },
-    "app.new.result": { "type": "object", "required": ["$type", "created", "applicationName", "applicationDir"], "properties": { "$type": { "const": "app.new.result" }, "created": { "type": "boolean" }, "applicationName": { "type": "string" }, "applicationDir": { "type": "string" } }, "additionalProperties": false },
-    "app.templates.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "app.templates.result" } }, "additionalProperties": true },
-    "component.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "component.get.result" } }, "additionalProperties": true },
-    "component.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "component.list.result" } }, "additionalProperties": true },
-    "component.manifest-trace.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "component.manifest-trace.result" } }, "additionalProperties": true },
-    "deployment.create.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "deployment.create.result" } }, "additionalProperties": true },
-    "deployment.diff.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "deployment.diff.result" } }, "additionalProperties": true },
-    "deployment.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "deployment.list.result" } }, "additionalProperties": true },
-    "environment.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "environment.list.result" } }, "additionalProperties": true },
-    "environment.setup-plan.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "environment.setup-plan.result" } }, "additionalProperties": true },
-    "plugin.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "plugin.get.result" } }, "additionalProperties": true },
-    "plugin.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "plugin.list.result" } }, "additionalProperties": true },
-    "plugin.register.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "plugin.register.result" } }, "additionalProperties": true },
-    "plugin.unregister.result": { "type": "object", "required": ["$type", "unregistered", "pluginId", "name", "version"], "properties": { "$type": { "const": "plugin.unregister.result" }, "unregistered": { "type": "boolean" }, "pluginId": { "type": "string" }, "name": { "type": "string" }, "version": { "type": "string" } }, "additionalProperties": false },
-    "profile.config.set-format.result": { "type": "object", "required": ["$type", "updated", "profile", "format"], "properties": { "$type": { "const": "profile.config.set-format.result" }, "updated": { "type": "boolean" }, "profile": { "type": "string" }, "format": { "type": "string", "enum": ["json", "pretty-json", "yaml", "pretty-yaml", "toon", "text"] } }, "additionalProperties": false },
-    "profile.delete.result": { "type": "object", "required": ["$type", "deleted", "profile"], "properties": { "$type": { "const": "profile.delete.result" }, "deleted": { "type": "boolean" }, "profile": { "type": "string" } }, "additionalProperties": false },
-    "profile.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "profile.get.result" } }, "additionalProperties": true },
-    "profile.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "profile.list.result" } }, "additionalProperties": true },
-    "profile.new.result": { "type": "object", "required": ["$type", "created", "profile", "setActive"], "properties": { "$type": { "const": "profile.new.result" }, "created": { "type": "boolean" }, "profile": { "type": "string" }, "setActive": { "type": "boolean" } }, "additionalProperties": false },
-    "profile.switch.result": { "type": "object", "required": ["$type", "switched", "profile"], "properties": { "$type": { "const": "profile.switch.result" }, "switched": { "type": "boolean" }, "profile": { "type": "string" } }, "additionalProperties": false },
-    "resource.create.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "resource.create.result" } }, "additionalProperties": true },
-    "resource.delete.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "resource.delete.result" } }, "additionalProperties": true },
-    "resource.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "resource.get.result" } }, "additionalProperties": true },
-    "resource.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "resource.list.result" } }, "additionalProperties": true },
-    "resource.update.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "resource.update.result" } }, "additionalProperties": true },
-    "retry-policy.create.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "retry-policy.create.result" } }, "additionalProperties": true },
-    "retry-policy.delete.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "retry-policy.delete.result" } }, "additionalProperties": true },
-    "retry-policy.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "retry-policy.get.result" } }, "additionalProperties": true },
-    "retry-policy.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "retry-policy.list.result" } }, "additionalProperties": true },
-    "retry-policy.update.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "retry-policy.update.result" } }, "additionalProperties": true },
-    "secret.create.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "secret.create.result" } }, "additionalProperties": true },
-    "secret.delete.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "secret.delete.result" } }, "additionalProperties": true },
-    "secret.get.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "secret.get.result" } }, "additionalProperties": true },
-    "secret.list.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "secret.list.result" } }, "additionalProperties": true },
-    "secret.update-value.result": { "type": "object", "required": ["$type"], "properties": { "$type": { "const": "secret.update-value.result" } }, "additionalProperties": true }
+    "account.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deleted",
+        "accountId"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.delete.result"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "email",
+        "planId",
+        "roles",
+        "accountRootCardId"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.get.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "planId": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "accountRootCardId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.new.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "email",
+        "planId",
+        "roles",
+        "accountRootCardId"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.new.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "planId": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "accountRootCardId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.permission-share.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deleted",
+        "permissionShareId"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.permission-share.delete.result"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "permissionShareId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.permission-share.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "ownerAccountId",
+        "targetAccountId",
+        "name",
+        "data"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.permission-share.get.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ownerAccountId": {
+          "type": "string"
+        },
+        "targetAccountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "currentCardId": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/definitions/PermissionShareData"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.permission-share.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "permissionShares"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.permission-share.list.result"
+        },
+        "permissionShares": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionShare"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.permission-share.new.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "ownerAccountId",
+        "targetAccountId",
+        "name",
+        "data"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.permission-share.new.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ownerAccountId": {
+          "type": "string"
+        },
+        "targetAccountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "currentCardId": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/definitions/PermissionShareData"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.permission-share.update.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "ownerAccountId",
+        "targetAccountId",
+        "name",
+        "data"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.permission-share.update.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ownerAccountId": {
+          "type": "string"
+        },
+        "targetAccountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "currentCardId": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/definitions/PermissionShareData"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.update.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "email",
+        "planId",
+        "roles",
+        "accountRootCardId"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.update.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "planId": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "accountRootCardId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PermissionShare": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "ownerAccountId",
+        "targetAccountId",
+        "name",
+        "data"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ownerAccountId": {
+          "type": "string"
+        },
+        "targetAccountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "currentCardId": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/definitions/PermissionShareData"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PermissionShareData": {
+      "type": "object",
+      "required": [
+        "lowerPositive",
+        "lowerNegative",
+        "upperPositive",
+        "upperNegative"
+      ],
+      "properties": {
+        "lowerPositive": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lowerNegative": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "upperPositive": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "upperNegative": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent-type.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "agentType",
+        "constructor",
+        "description"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent-type.get.result"
+        },
+        "agentType": {
+          "type": "string"
+        },
+        "constructor": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent-type.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "agentTypes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent-type.list.result"
+        },
+        "agentTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DeployedRegisteredAgentType"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.cancel-invocation.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "canceled",
+        "agent",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.cancel-invocation.result"
+        },
+        "canceled": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deleted",
+        "agent"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.delete.result"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.files.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "nodes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.files.result"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FileNode"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "metadata",
+        "precise"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.get.result"
+        },
+        "metadata": {
+          "$ref": "#/definitions/AgentMetadataView"
+        },
+        "precise": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.invoke.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.invoke.result"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "resultJson": {
+          "$ref": "#/definitions/JsonValue"
+        },
+        "resultsJson": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonValue"
+          }
+        },
+        "result": {
+          "type": "string"
+        },
+        "resultFormat": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "agents",
+        "cursors"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.list.result"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentMetadataView"
+          }
+        },
+        "cursors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.new.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "componentName"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.new.result"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "agentName": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "entries"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog.result"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentOplogEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.plugin-toggle.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "activated",
+        "agent",
+        "plugin",
+        "priority"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.plugin-toggle.result"
+        },
+        "activated": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "plugin": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.redeploy.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "redeployed",
+        "components"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.redeploy.result"
+        },
+        "redeployed": {
+          "type": "boolean"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.revert.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "reverted",
+        "agent"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.revert.result"
+        },
+        "reverted": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "lastOplogIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "numberOfInvocations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.stream.event": {
+      "type": "object",
+      "required": [
+        "$type",
+        "timestamp",
+        "kind",
+        "level",
+        "context",
+        "message"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.stream.event"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/AgentStreamEventKind"
+        },
+        "level": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "functionName": {
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "numberOfMissedMessages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.update.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "triggered",
+        "failed"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.update.result"
+        },
+        "triggered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkerUpdateAttempt"
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkerUpdateAttempt"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api-token.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deleted",
+        "tokenId"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api-token.delete.result"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "tokenId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "api-token.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "tokens"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api-token.list.result"
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Token"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api-token.new.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "secret",
+        "accountId",
+        "createdAt",
+        "expiresAt"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api-token.new.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.deployment.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "environmentId",
+        "domain",
+        "hash",
+        "agents",
+        "webhooksPrefix",
+        "openapiEndpointPrefix",
+        "createdAt"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.deployment.get.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/HttpApiDeploymentAgentOptions"
+          }
+        },
+        "webhooksPrefix": {
+          "type": "string"
+        },
+        "openapiEndpointPrefix": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.deployment.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deployments"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.deployment.list.result"
+        },
+        "deployments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HttpApiDeployment"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.domain.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deleted",
+        "domain",
+        "id"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.domain.delete.result"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.domain.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "domains"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.domain.list.result"
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DomainRegistration"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.domain.register.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "environmentId",
+        "domain"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.domain.register.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DomainRegistration": {
+      "type": "object",
+      "required": [
+        "id",
+        "environmentId",
+        "domain"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HttpApiDeployment": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "environmentId",
+        "domain",
+        "hash",
+        "agents",
+        "webhooksPrefix",
+        "openapiEndpointPrefix",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/HttpApiDeploymentAgentOptions"
+          }
+        },
+        "webhooksPrefix": {
+          "type": "string"
+        },
+        "openapiEndpointPrefix": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HttpApiDeploymentAgentOptions": {
+      "type": "object",
+      "properties": {
+        "security": {
+          "$ref": "#/definitions/HttpApiDeploymentAgentSecurity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HttpApiDeploymentAgentSecurity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "headerName"
+          ],
+          "properties": {
+            "type": {
+              "const": "TestSessionHeader"
+            },
+            "headerName": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "securityScheme"
+          ],
+          "properties": {
+            "type": {
+              "const": "SecurityScheme"
+            },
+            "securityScheme": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "api.security-scheme.create.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "environmentId",
+        "providerType",
+        "clientId",
+        "redirectUrl",
+        "scopes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.security-scheme.create.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/SecuritySchemeProvider"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "redirectUrl": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.security-scheme.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "environmentId",
+        "providerType",
+        "clientId",
+        "redirectUrl",
+        "scopes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.security-scheme.delete.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/SecuritySchemeProvider"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "redirectUrl": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.security-scheme.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "environmentId",
+        "providerType",
+        "clientId",
+        "redirectUrl",
+        "scopes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.security-scheme.get.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/SecuritySchemeProvider"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "redirectUrl": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.security-scheme.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "securitySchemes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.security-scheme.list.result"
+        },
+        "securitySchemes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SecurityScheme"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "api.security-scheme.update.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "name",
+        "environmentId",
+        "providerType",
+        "clientId",
+        "redirectUrl",
+        "scopes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "api.security-scheme.update.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/SecuritySchemeProvider"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "redirectUrl": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityScheme": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "name",
+        "environmentId",
+        "providerType",
+        "clientId",
+        "redirectUrl",
+        "scopes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "providerType": {
+          "$ref": "#/definitions/SecuritySchemeProvider"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "redirectUrl": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecuritySchemeProvider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Google"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Facebook"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Microsoft"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Gitlab"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "name",
+            "issuerUrl"
+          ],
+          "properties": {
+            "type": {
+              "const": "Custom"
+            },
+            "name": {
+              "type": "string"
+            },
+            "issuerUrl": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "app.build.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "built"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.build.result"
+        },
+        "built": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "app.clean.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "cleaned"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.clean.result"
+        },
+        "cleaned": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "app.deploy-plan.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deploymentDiff",
+        "environmentSetup"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.deploy-plan.result"
+        },
+        "deploymentDiff": {
+          "$ref": "#/definitions/DeploymentDiffPayload"
+        },
+        "environmentSetup": {
+          "oneOf": [
+            { "$ref": "#/definitions/EnvironmentSetupPlan" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "app.deploy.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deployed"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.deploy.result"
+        },
+        "deployed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "app.generate-bridge.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "generated"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.generate-bridge.result"
+        },
+        "generated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "app.new.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "created",
+        "applicationName",
+        "applicationDir"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.new.result"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "applicationName": {
+          "type": "string"
+        },
+        "applicationDir": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "app.templates.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "templates"
+      ],
+      "properties": {
+        "$type": {
+          "const": "app.templates.result"
+        },
+        "templates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TemplateDescription"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "component.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "componentName",
+        "componentId",
+        "componentVersion",
+        "componentRevision",
+        "componentSize",
+        "createdAt",
+        "environmentId",
+        "exports",
+        "agentTypes",
+        "agentTypeProvisionConfigs"
+      ],
+      "properties": {
+        "$type": {
+          "const": "component.get.result"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "componentId": {
+          "type": "string"
+        },
+        "componentVersion": {
+          "type": ["string", "null"]
+        },
+        "componentRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "componentSize": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "exports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "agentTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/JsonValue"
+          }
+        },
+        "agentTypeProvisionConfigs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/JsonValue"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "component.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "components"
+      ],
+      "properties": {
+        "$type": {
+          "const": "component.list.result"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ComponentView"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "component.manifest-trace.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "componentName",
+        "properties"
+      ],
+      "properties": {
+        "$type": {
+          "const": "component.manifest-trace.result"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "properties": {
+          "$ref": "#/definitions/JsonValue"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TemplateDescription": {
+      "type": "object",
+      "required": ["name", "language", "description"],
+      "properties": {
+        "name": { "type": "string" },
+        "language": { "$ref": "#/definitions/GuestLanguage" },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "GuestLanguage": {
+      "type": "string",
+      "enum": ["TypeScript", "Rust", "Scala", "MoonBit"]
+    },
+    "ComponentView": {
+      "type": "object",
+      "required": [
+        "componentName",
+        "componentId",
+        "componentVersion",
+        "componentRevision",
+        "componentSize",
+        "createdAt",
+        "environmentId",
+        "exports",
+        "agentTypes",
+        "agentTypeProvisionConfigs"
+      ],
+      "properties": {
+        "componentName": { "type": "string" },
+        "componentId": { "type": "string" },
+        "componentVersion": { "type": ["string", "null"] },
+        "componentRevision": { "type": "integer", "minimum": 0 },
+        "componentSize": { "type": "integer", "minimum": 0 },
+        "createdAt": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "exports": { "type": "array", "items": { "type": "string" } },
+        "agentTypes": { "type": "array", "items": { "$ref": "#/definitions/JsonValue" } },
+        "agentTypeProvisionConfigs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfig" } }
+      },
+      "additionalProperties": false
+    },
+    "AgentTypeProvisionConfig": {
+      "type": "object",
+      "required": ["env", "config", "plugins", "files"],
+      "properties": {
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "config": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
+        "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
+      },
+      "additionalProperties": false
+    },
+    "TypedAgentConfigEntry": {
+      "type": "object",
+      "required": ["path", "value"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "value": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "InstalledPlugin": {
+      "type": "object",
+      "required": [
+        "environmentPluginGrantId",
+        "priority",
+        "parameters",
+        "pluginRegistrationId",
+        "pluginName",
+        "pluginVersion"
+      ],
+      "properties": {
+        "environmentPluginGrantId": { "type": "string" },
+        "priority": { "type": "integer", "minimum": 0 },
+        "parameters": { "type": "object", "additionalProperties": { "type": "string" } },
+        "pluginRegistrationId": { "type": "string" },
+        "pluginName": { "type": "string" },
+        "pluginVersion": { "type": "string" },
+        "oplogProcessorComponentId": { "type": "string" },
+        "oplogProcessorComponentRevision": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "InitialAgentFile": {
+      "type": "object",
+      "required": ["contentHash", "path", "permissions", "size"],
+      "properties": {
+        "contentHash": { "type": "string" },
+        "path": { "type": "string" },
+        "permissions": { "$ref": "#/definitions/AgentFilePermissions" },
+        "size": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "AgentFilePermissions": {
+      "type": "string",
+      "enum": ["ReadOnly", "ReadWrite"]
+    },
+    "EnvironmentWithDetails": {
+      "type": "object",
+      "required": ["environment", "application", "account"],
+      "properties": {
+        "environment": { "$ref": "#/definitions/EnvironmentSummary" },
+        "application": { "$ref": "#/definitions/ApplicationSummary" },
+        "account": { "$ref": "#/definitions/AccountSummary" }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSummary": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "name",
+        "diffModelVersion",
+        "compatibilityCheck",
+        "versionCheck",
+        "securityOverrides",
+        "currentDeployment"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string" },
+        "diffModelVersion": { "type": "integer", "minimum": 0 },
+        "compatibilityCheck": { "type": "boolean" },
+        "versionCheck": { "type": "boolean" },
+        "securityOverrides": { "type": "boolean" },
+        "currentDeployment": {
+          "oneOf": [
+            { "$ref": "#/definitions/EnvironmentCurrentDeployment" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentCurrentDeployment": {
+      "type": "object",
+      "required": ["revision", "deploymentRevision", "deploymentVersion", "deploymentHash"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "deploymentVersion": { "type": "string" },
+        "deploymentHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ApplicationSummary": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AccountSummary": {
+      "type": "object",
+      "required": ["id", "name", "email"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "Deployment": {
+      "type": "object",
+      "required": ["environmentId", "revision", "version", "deploymentHash"],
+      "properties": {
+        "environmentId": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "version": { "type": "string" },
+        "deploymentHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "CurrentDeployment": {
+      "type": "object",
+      "required": [
+        "environmentId",
+        "revision",
+        "version",
+        "deploymentHash",
+        "currentRevision",
+        "validationWarnings"
+      ],
+      "properties": {
+        "environmentId": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "version": { "type": "string" },
+        "deploymentHash": { "type": "string" },
+        "currentRevision": { "type": "integer", "minimum": 0 },
+        "validationWarnings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeployValidationWarning" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeployValidationWarning": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "componentId", "agentType", "methodName", "httpMethod", "path"],
+          "properties": {
+            "type": { "const": "HttpApiReadOnlyMethodBoundToNonGetVerb" },
+            "componentId": { "type": "string" },
+            "agentType": { "type": "string" },
+            "methodName": { "type": "string" },
+            "httpMethod": { "$ref": "#/definitions/DeployValidationHttpMethod" },
+            "path": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "componentId", "agentType", "methodName", "ttlNanos"],
+          "properties": {
+            "type": { "const": "HttpApiReadOnlyTtlBelowOneSecond" },
+            "componentId": { "type": "string" },
+            "agentType": { "type": "string" },
+            "methodName": { "type": "string" },
+            "ttlNanos": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "DeployValidationHttpMethod": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "Get",
+            "Head",
+            "Post",
+            "Put",
+            "Delete",
+            "Connect",
+            "Options",
+            "Trace",
+            "Patch",
+            "Custom"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "Custom" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["value"]
+          },
+          "else": {
+            "not": { "required": ["value"] }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "FileNode": {
+      "type": "object",
+      "required": ["name", "lastModified", "kind", "permissions", "size"],
+      "properties": {
+        "name": { "type": "string" },
+        "lastModified": { "type": "string" },
+        "kind": { "type": "string" },
+        "permissions": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "AgentMetadataView": {
+      "type": "object",
+      "required": [
+        "componentName",
+        "agentName",
+        "createdBy",
+        "environmentId",
+        "env",
+        "defaultEnv",
+        "config",
+        "defaultConfig",
+        "status",
+        "componentRevision",
+        "retryCount",
+        "pendingInvocationCount",
+        "updates",
+        "createdAt",
+        "componentSize",
+        "totalLinearMemorySize",
+        "exportedResourceInstances"
+      ],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentName": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "defaultEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+        "config": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigEntryDto" } },
+        "defaultConfig": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigEntryDto" } },
+        "status": { "type": "string" },
+        "componentRevision": { "type": "integer", "minimum": 0 },
+        "retryCount": { "type": "integer", "minimum": 0 },
+        "pendingInvocationCount": { "type": "integer", "minimum": 0 },
+        "updates": { "type": "array", "items": { "$ref": "#/definitions/UpdateRecord" } },
+        "createdAt": { "type": "string" },
+        "lastError": { "type": "string" },
+        "componentSize": { "type": "integer", "minimum": 0 },
+        "totalLinearMemorySize": { "type": "integer", "minimum": 0 },
+        "exportedResourceInstances": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentResourceDescription" } }
+      },
+      "additionalProperties": false
+    },
+    "AgentConfigEntryDto": {
+      "type": "object",
+      "required": ["path", "value"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "value": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "UpdateRecord": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "timestamp", "targetRevision"],
+          "properties": {
+            "type": { "const": "PendingUpdate" },
+            "timestamp": { "type": "string" },
+            "targetRevision": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "timestamp", "targetRevision"],
+          "properties": {
+            "type": { "const": "SuccessfulUpdate" },
+            "timestamp": { "type": "string" },
+            "targetRevision": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "timestamp", "targetRevision"],
+          "properties": {
+            "type": { "const": "FailedUpdate" },
+            "timestamp": { "type": "string" },
+            "targetRevision": { "type": "integer", "minimum": 0 },
+            "details": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AgentResourceDescription": {
+      "type": "object",
+      "required": ["createdAt", "resourceOwner", "resourceName"],
+      "properties": {
+        "createdAt": { "type": "string" },
+        "resourceOwner": { "type": "string" },
+        "resourceName": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentOplogEntry": {
+      "type": "array",
+      "items": [
+        { "type": "integer", "minimum": 0 },
+        { "$ref": "#/definitions/JsonValue" }
+      ],
+      "additionalItems": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "AgentStreamEventKind": {
+      "type": "string",
+      "enum": [
+        "log",
+        "stdout",
+        "stderr",
+        "stream-closed",
+        "stream-error",
+        "invocation-started",
+        "invocation-finished",
+        "missed-messages"
+      ]
+    },
+    "WorkerUpdateAttempt": {
+      "type": "object",
+      "required": ["componentName", "targetRevision", "agentName"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "targetRevision": { "type": "integer", "minimum": 0 },
+        "agentName": { "type": "string" },
+        "error": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "DeploymentDiffPayload": {
+      "type": "object",
+      "properties": {
+        "components": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" }
+      },
+      "additionalProperties": false
+    },
+    "DeploymentDiffSection": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/DeploymentDiffMapValue"
+      }
+    },
+    "DeploymentDiffMapValue": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["create", "delete"]
+        },
+        {
+          "$ref": "#/definitions/HashDiffPayload"
+        },
+        {
+          "$ref": "#/definitions/ComponentDiffPayload"
+        },
+        {
+          "$ref": "#/definitions/HttpApiDeploymentDiffPayload"
+        },
+        {
+          "$ref": "#/definitions/McpDeploymentDiffPayload"
+        }
+      ]
+    },
+    "HashDiffPayload": {
+      "type": "object",
+      "required": ["newHash", "currentHash"],
+      "properties": {
+        "newHash": { "type": "string" },
+        "currentHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentDiffPayload": {
+      "type": "object",
+      "required": ["wasmChanged"],
+      "properties": {
+        "wasmChanged": { "type": "boolean" },
+        "agentTypeProvisionConfigChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/DeploymentDiffMapValue" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HttpApiDeploymentDiffPayload": {
+      "type": "object",
+      "required": ["webhooksUrlChanged", "openapiEndpointChanged"],
+      "properties": {
+        "webhooksUrlChanged": { "type": "boolean" },
+        "openapiEndpointChanged": { "type": "boolean" },
+        "agentsChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/DeploymentDiffMapValue" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpDeploymentDiffPayload": {
+      "type": "object",
+      "properties": {
+        "agentsChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/DeploymentDiffMapValue" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupPlan": {
+      "type": "object",
+      "required": [
+        "display",
+        "agent_secret_defaults",
+        "skipped_existing_agent_secret_defaults",
+        "retry_policy_defaults",
+        "resource_defaults"
+      ],
+      "properties": {
+        "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
+        "agent_secret_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
+        },
+        "skipped_existing_agent_secret_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
+        },
+        "retry_policy_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentRetryPolicyDefault" }
+        },
+        "resource_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ResourceDefinitionCreation" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupDisplay": {
+      "type": "object",
+      "properties": {
+        "toBeApplied": { "$ref": "#/definitions/EnvironmentSetupDetailedSection" },
+        "skippedAlreadyExists": { "$ref": "#/definitions/EnvironmentSetupKeysOnlySection" }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupDetailedSection": {
+      "type": "object",
+      "properties": {
+        "secretValues": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/EnvironmentSetupSecretValueDisplay" }
+        },
+        "retryPolicies": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/EnvironmentSetupRetryPolicyDisplay" }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/EnvironmentSetupResourceDisplay" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupKeysOnlySection": {
+      "type": "object",
+      "properties": {
+        "secretValues": { "type": "array", "items": { "type": "string" } },
+        "retryPolicies": { "type": "array", "items": { "type": "string" } },
+        "resources": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupSecretValueDisplay": {
+      "type": "object",
+      "required": ["secretType", "value"],
+      "properties": {
+        "secretType": { "type": "string" },
+        "value": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupRetryPolicyDisplay": {
+      "type": "object",
+      "required": ["priority", "predicate", "policy"],
+      "properties": {
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentSetupResourceDisplay": {
+      "type": "object",
+      "required": ["limit", "enforcementAction", "unit", "units"],
+      "properties": {
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "type": "string" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "DeploymentAgentSecretDefault": {
+      "type": "object",
+      "required": ["path", "secretValue"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "secretValue": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "DeploymentRetryPolicyDefault": {
+      "type": "object",
+      "required": ["name", "priority", "predicate", "policy"],
+      "properties": {
+        "name": { "type": "string" },
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "ResourceDefinitionCreation": {
+      "type": "object",
+      "required": ["name", "limit", "enforcementAction", "unit", "units"],
+      "properties": {
+        "name": { "type": "string" },
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "RegisteredAgentTypeImplementer": {
+      "type": "object",
+      "required": ["componentId", "componentRevision", "componentName", "accountId", "accountEmail"],
+      "properties": {
+        "componentId": { "type": "string" },
+        "componentRevision": { "type": "integer", "minimum": 0 },
+        "componentName": { "type": "string" },
+        "accountId": { "type": "string" },
+        "accountEmail": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "DeployedRegisteredAgentType": {
+      "type": "object",
+      "required": ["agentType", "implementedBy"],
+      "properties": {
+        "agentType": { "$ref": "#/definitions/JsonValue" },
+        "implementedBy": { "$ref": "#/definitions/RegisteredAgentTypeImplementer" },
+        "webhookPrefixAuthorityAndPath": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ApiPredicateValue": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Text" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Integer" }, "value": { "type": "integer" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Boolean" }, "value": { "type": "boolean" } }, "additionalProperties": false }
+      ]
+    },
+    "ApiPredicate": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "property", "value"], "properties": { "type": { "const": "PropEq" }, "property": { "type": "string" }, "value": { "$ref": "#/definitions/ApiPredicateValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "value"], "properties": { "type": { "const": "PropNeq" }, "property": { "type": "string" }, "value": { "$ref": "#/definitions/ApiPredicateValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "value"], "properties": { "type": { "const": "PropGt" }, "property": { "type": "string" }, "value": { "$ref": "#/definitions/ApiPredicateValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "value"], "properties": { "type": { "const": "PropGte" }, "property": { "type": "string" }, "value": { "$ref": "#/definitions/ApiPredicateValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "value"], "properties": { "type": { "const": "PropLt" }, "property": { "type": "string" }, "value": { "$ref": "#/definitions/ApiPredicateValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "value"], "properties": { "type": { "const": "PropLte" }, "property": { "type": "string" }, "value": { "$ref": "#/definitions/ApiPredicateValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property"], "properties": { "type": { "const": "PropExists" }, "property": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "values"], "properties": { "type": { "const": "PropIn" }, "property": { "type": "string" }, "values": { "type": "array", "items": { "$ref": "#/definitions/ApiPredicateValue" } } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "pattern"], "properties": { "type": { "const": "PropMatches" }, "property": { "type": "string" }, "pattern": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "prefix"], "properties": { "type": { "const": "PropStartsWith" }, "property": { "type": "string" }, "prefix": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "property", "substring"], "properties": { "type": { "const": "PropContains" }, "property": { "type": "string" }, "substring": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "left", "right"], "properties": { "type": { "const": "And" }, "left": { "$ref": "#/definitions/ApiPredicate" }, "right": { "$ref": "#/definitions/ApiPredicate" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "left", "right"], "properties": { "type": { "const": "Or" }, "left": { "$ref": "#/definitions/ApiPredicate" }, "right": { "$ref": "#/definitions/ApiPredicate" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "predicate"], "properties": { "type": { "const": "Not" }, "predicate": { "$ref": "#/definitions/ApiPredicate" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "True" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "False" } }, "additionalProperties": false }
+      ]
+    },
+    "ApiRetryPolicy": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "delayMs"], "properties": { "type": { "const": "Periodic" }, "delayMs": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "baseDelayMs", "factor"], "properties": { "type": { "const": "Exponential" }, "baseDelayMs": { "type": "integer", "minimum": 0 }, "factor": { "type": "number" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "firstMs", "secondMs"], "properties": { "type": { "const": "Fibonacci" }, "firstMs": { "type": "integer", "minimum": 0 }, "secondMs": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Immediate" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Never" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "maxRetries", "inner"], "properties": { "type": { "const": "CountBox" }, "maxRetries": { "type": "integer", "minimum": 0 }, "inner": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "limitMs", "inner"], "properties": { "type": { "const": "TimeBox" }, "limitMs": { "type": "integer", "minimum": 0 }, "inner": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "minDelayMs", "maxDelayMs", "inner"], "properties": { "type": { "const": "Clamp" }, "minDelayMs": { "type": "integer", "minimum": 0 }, "maxDelayMs": { "type": "integer", "minimum": 0 }, "inner": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "delayMs", "inner"], "properties": { "type": { "const": "AddDelay" }, "delayMs": { "type": "integer", "minimum": 0 }, "inner": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "factor", "inner"], "properties": { "type": { "const": "Jitter" }, "factor": { "type": "number" }, "inner": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "predicate", "inner"], "properties": { "type": { "const": "FilteredOn" }, "predicate": { "$ref": "#/definitions/ApiPredicate" }, "inner": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "first", "second"], "properties": { "type": { "const": "AndThen" }, "first": { "$ref": "#/definitions/ApiRetryPolicy" }, "second": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "first", "second"], "properties": { "type": { "const": "Union" }, "first": { "$ref": "#/definitions/ApiRetryPolicy" }, "second": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "first", "second"], "properties": { "type": { "const": "Intersect" }, "first": { "$ref": "#/definitions/ApiRetryPolicy" }, "second": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false }
+      ]
+    },
+    "deployment.create.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "applicationName",
+        "environmentName",
+        "deployment"
+      ],
+      "properties": {
+        "$type": {
+          "const": "deployment.create.result"
+        },
+        "applicationName": {
+          "type": "string"
+        },
+        "environmentName": {
+          "type": "string"
+        },
+        "deployment": {
+          "$ref": "#/definitions/CurrentDeployment"
+        }
+      },
+      "additionalProperties": false
+    },
+    "deployment.diff.result": {
+      "type": "object",
+      "required": [
+        "$type"
+      ],
+      "properties": {
+        "$type": {
+          "const": "deployment.diff.result"
+        },
+        "components": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "httpApiDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "mcpDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        }
+      },
+      "additionalProperties": false
+    },
+    "deployment.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deployments"
+      ],
+      "properties": {
+        "$type": {
+          "const": "deployment.list.result"
+        },
+        "deployments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Deployment"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "environments"
+      ],
+      "properties": {
+        "$type": {
+          "const": "environment.list.result"
+        },
+        "environments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EnvironmentWithDetails"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment.setup-plan.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "display",
+        "agent_secret_defaults",
+        "skipped_existing_agent_secret_defaults",
+        "retry_policy_defaults",
+        "resource_defaults"
+      ],
+      "properties": {
+        "$type": {
+          "const": "environment.setup-plan.result"
+        },
+        "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
+        "agent_secret_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
+        },
+        "skipped_existing_agent_secret_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
+        },
+        "retry_policy_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentRetryPolicyDefault" }
+        },
+        "resource_defaults": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ResourceDefinitionCreation" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "plugin.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "accountId",
+        "name",
+        "version",
+        "description",
+        "icon",
+        "homepage",
+        "spec"
+      ],
+      "properties": {
+        "$type": {
+          "const": "plugin.get.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "homepage": {
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/definitions/PluginSpec"
+        }
+      },
+      "additionalProperties": false
+    },
+    "plugin.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "plugins"
+      ],
+      "properties": {
+        "$type": {
+          "const": "plugin.list.result"
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PluginListEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "plugin.register.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "accountId",
+        "name",
+        "version",
+        "description",
+        "icon",
+        "homepage",
+        "spec"
+      ],
+      "properties": {
+        "$type": {
+          "const": "plugin.register.result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "homepage": {
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/definitions/PluginSpec"
+        }
+      },
+      "additionalProperties": false
+    },
+    "plugin.unregister.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "unregistered",
+        "pluginId",
+        "name",
+        "version"
+      ],
+      "properties": {
+        "$type": {
+          "const": "plugin.unregister.result"
+        },
+        "unregistered": {
+          "type": "boolean"
+        },
+        "pluginId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Token": {
+      "type": "object",
+      "required": [
+        "id",
+        "accountId",
+        "createdAt",
+        "expiresAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PluginListEntry": {
+      "type": "object",
+      "required": [
+        "plugin",
+        "source"
+      ],
+      "properties": {
+        "plugin": {
+          "$ref": "#/definitions/PluginRegistration"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "Own",
+            "Builtin",
+            "Shared"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PluginRegistration": {
+      "type": "object",
+      "required": [
+        "id",
+        "accountId",
+        "name",
+        "version",
+        "description",
+        "icon",
+        "homepage",
+        "spec"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "homepage": {
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/definitions/PluginSpec"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PluginSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "componentId",
+            "componentRevision"
+          ],
+          "properties": {
+            "type": {
+              "const": "OplogProcessor"
+            },
+            "componentId": {
+              "type": "string"
+            },
+            "componentRevision": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ProfileConfig": {
+      "type": "object",
+      "required": [
+        "defaultFormat"
+      ],
+      "properties": {
+        "defaultFormat": {
+          "type": "string",
+          "enum": [
+            "json",
+            "pretty-json",
+            "yaml",
+            "pretty-yaml",
+            "toon",
+            "text"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProfileView": {
+      "type": "object",
+      "required": [
+        "isActive",
+        "name",
+        "config"
+      ],
+      "properties": {
+        "isActive": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "workerUrl": {
+          "type": "string"
+        },
+        "allowInsecure": {
+          "type": "boolean"
+        },
+        "authenticated": {
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/definitions/ProfileConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile.config.set-format.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "updated",
+        "profile",
+        "format"
+      ],
+      "properties": {
+        "$type": {
+          "const": "profile.config.set-format.result"
+        },
+        "updated": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "json",
+            "pretty-json",
+            "yaml",
+            "pretty-yaml",
+            "toon",
+            "text"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "deleted",
+        "profile"
+      ],
+      "properties": {
+        "$type": {
+          "const": "profile.delete.result"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "isActive",
+        "name",
+        "config"
+      ],
+      "properties": {
+        "$type": {
+          "const": "profile.get.result"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "workerUrl": {
+          "type": "string"
+        },
+        "allowInsecure": {
+          "type": "boolean"
+        },
+        "authenticated": {
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/definitions/ProfileConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "profiles"
+      ],
+      "properties": {
+        "$type": {
+          "const": "profile.list.result"
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProfileView"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile.new.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "created",
+        "profile",
+        "setActive"
+      ],
+      "properties": {
+        "$type": {
+          "const": "profile.new.result"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "setActive": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile.switch.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "switched",
+        "profile"
+      ],
+      "properties": {
+        "$type": {
+          "const": "profile.switch.result"
+        },
+        "switched": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource.create.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "environmentId",
+        "name",
+        "limit",
+        "enforcementAction",
+        "unit",
+        "units"
+      ],
+      "properties": {
+        "$type": {
+          "const": "resource.create.result"
+        },
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "resource.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "environmentId",
+        "name",
+        "limit",
+        "enforcementAction",
+        "unit",
+        "units"
+      ],
+      "properties": {
+        "$type": {
+          "const": "resource.delete.result"
+        },
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "resource.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "environmentId",
+        "name",
+        "limit",
+        "enforcementAction",
+        "unit",
+        "units"
+      ],
+      "properties": {
+        "$type": {
+          "const": "resource.get.result"
+        },
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "resource.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "resources"
+      ],
+      "properties": {
+        "$type": {
+          "const": "resource.list.result"
+        },
+        "resources": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ResourceDefinition" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource.update.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "revision",
+        "environmentId",
+        "name",
+        "limit",
+        "enforcementAction",
+        "unit",
+        "units"
+      ],
+      "properties": {
+        "$type": {
+          "const": "resource.update.result"
+        },
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ResourceDefinition": {
+      "type": "object",
+      "required": ["id", "revision", "environmentId", "name", "limit", "enforcementAction", "unit", "units"],
+      "properties": {
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "limit": { "$ref": "#/definitions/ResourceLimit" },
+        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
+        "unit": { "type": "string" },
+        "units": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ResourceLimit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "value", "period", "max"],
+          "properties": {
+            "type": { "const": "Rate" },
+            "value": { "type": "integer", "minimum": 0 },
+            "period": { "$ref": "#/definitions/TimePeriod" },
+            "max": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "Capacity" },
+            "value": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "Concurrency" },
+            "value": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "EnforcementAction": {
+      "type": "string",
+      "enum": ["reject", "throttle", "terminate"]
+    },
+    "TimePeriod": {
+      "type": "string",
+      "enum": ["second", "minute", "hour", "day", "month", "year"]
+    },
+    "retry-policy.create.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "environmentId",
+        "name",
+        "revision",
+        "priority",
+        "predicate",
+        "policy"
+      ],
+      "properties": {
+        "$type": {
+          "const": "retry-policy.create.result"
+        },
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "retry-policy.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "environmentId",
+        "name",
+        "revision",
+        "priority",
+        "predicate",
+        "policy"
+      ],
+      "properties": {
+        "$type": {
+          "const": "retry-policy.delete.result"
+        },
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "retry-policy.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "environmentId",
+        "name",
+        "revision",
+        "priority",
+        "predicate",
+        "policy"
+      ],
+      "properties": {
+        "$type": {
+          "const": "retry-policy.get.result"
+        },
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "retry-policy.list.result": {
+      "type": "object",
+      "required": ["$type", "retryPolicies"],
+      "properties": {
+        "$type": { "const": "retry-policy.list.result" },
+        "retryPolicies": { "type": "array", "items": { "$ref": "#/definitions/RetryPolicy" } }
+      },
+      "additionalProperties": false
+    },
+    "retry-policy.update.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "id",
+        "environmentId",
+        "name",
+        "revision",
+        "priority",
+        "predicate",
+        "policy"
+      ],
+      "properties": {
+        "$type": {
+          "const": "retry-policy.update.result"
+        },
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "RetryPolicy": {
+      "type": "object",
+      "required": ["id", "environmentId", "name", "revision", "priority", "predicate", "policy"],
+      "properties": {
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "name": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer", "minimum": 0 },
+        "predicate": { "$ref": "#/definitions/ApiPredicate" },
+        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "JsonValue": {
+      "description": "Arbitrary JSON value.",
+      "anyOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/definitions/JsonValue" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
+      ]
+    },
+    "secret.create.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "secret"
+      ],
+      "properties": {
+        "$type": {
+          "const": "secret.create.result"
+        },
+        "secret": {
+          "$ref": "#/definitions/AgentSecret"
+        }
+      },
+      "additionalProperties": false
+    },
+    "secret.delete.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "secret"
+      ],
+      "properties": {
+        "$type": {
+          "const": "secret.delete.result"
+        },
+        "secret": {
+          "$ref": "#/definitions/AgentSecret"
+        }
+      },
+      "additionalProperties": false
+    },
+    "secret.get.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "secret"
+      ],
+      "properties": {
+        "$type": {
+          "const": "secret.get.result"
+        },
+        "secret": {
+          "$ref": "#/definitions/AgentSecret"
+        }
+      },
+      "additionalProperties": false
+    },
+    "secret.list.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "secrets"
+      ],
+      "properties": {
+        "$type": {
+          "const": "secret.list.result"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentSecret"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "secret.update-value.result": {
+      "type": "object",
+      "required": [
+        "$type",
+        "secret"
+      ],
+      "properties": {
+        "$type": {
+          "const": "secret.update-value.result"
+        },
+        "secret": {
+          "$ref": "#/definitions/AgentSecret"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentSecret": {
+      "type": "object",
+      "required": [
+        "id",
+        "environmentId",
+        "path",
+        "revision",
+        "secretType"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "secretType": {
+          "$ref": "#/definitions/JsonValue"
+        },
+        "secretValue": {
+          "$ref": "#/definitions/JsonValue"
+        }
+      },
+      "additionalProperties": false
+    }
   },
   "x-golem-cli-output-types": [
-    { "type": "account.delete.result", "rustType": "AccountDeleteResult" },
-    { "type": "account.get.result", "rustType": "AccountGetView" },
-    { "type": "account.new.result", "rustType": "AccountNewView" },
-    { "type": "account.permission-share.delete.result", "rustType": "PermissionShareDeleteResult" },
-    { "type": "account.permission-share.get.result", "rustType": "PermissionShareGetView" },
-    { "type": "account.permission-share.list.result", "rustType": "PermissionShareListView" },
-    { "type": "account.permission-share.new.result", "rustType": "PermissionShareNewView" },
-    { "type": "account.permission-share.update.result", "rustType": "PermissionShareUpdateView" },
-    { "type": "account.update.result", "rustType": "AccountUpdateView" },
-    { "type": "agent-type.get.result", "rustType": "AgentTypeView" },
-    { "type": "agent-type.list.result", "rustType": "AgentTypeListView" },
-    { "type": "agent.cancel-invocation.result", "rustType": "AgentCancelInvocationResult" },
-    { "type": "agent.delete.result", "rustType": "AgentDeleteResult" },
-    { "type": "agent.files.result", "rustType": "WorkerFilesView" },
-    { "type": "agent.get.result", "rustType": "WorkerGetView" },
-    { "type": "agent.invoke.result", "rustType": "InvokeResultView" },
-    { "type": "agent.list.result", "rustType": "AgentsMetadataResponseView" },
-    { "type": "agent.new.result", "rustType": "WorkerCreateView" },
-    { "type": "agent.oplog.result", "rustType": "AgentOplogView" },
-    { "type": "agent.plugin-toggle.result", "rustType": "AgentPluginToggleResult" },
-    { "type": "agent.redeploy.result", "rustType": "AgentRedeployResult" },
-    { "type": "agent.revert.result", "rustType": "AgentRevertResult" },
-    { "type": "agent.stream.event", "rustType": "AgentStreamEvent" },
-    { "type": "agent.update.result", "rustType": "TryUpdateAllWorkersResult" },
-    { "type": "api-token.delete.result", "rustType": "TokenDeleteResult" },
-    { "type": "api-token.list.result", "rustType": "TokenListView" },
-    { "type": "api-token.new.result", "rustType": "TokenNewView" },
-    { "type": "api.deployment.get.result", "rustType": "HttpApiDeploymentGetView" },
-    { "type": "api.deployment.list.result", "rustType": "HttpApiDeploymentListView" },
-    { "type": "api.domain.delete.result", "rustType": "DomainRegistrationDeleteResult" },
-    { "type": "api.domain.list.result", "rustType": "HttpApiDomainListView" },
-    { "type": "api.domain.register.result", "rustType": "DomainRegistrationNewView" },
-    { "type": "api.security-scheme.create.result", "rustType": "HttpSecuritySchemeCreateView" },
-    { "type": "api.security-scheme.delete.result", "rustType": "HttpSecuritySchemeDeleteView" },
-    { "type": "api.security-scheme.get.result", "rustType": "HttpSecuritySchemeGetView" },
-    { "type": "api.security-scheme.list.result", "rustType": "HttpSecuritySchemeListView" },
-    { "type": "api.security-scheme.update.result", "rustType": "HttpSecuritySchemeUpdateView" },
-    { "type": "app.build.result", "rustType": "BuildResult" },
-    { "type": "app.clean.result", "rustType": "CleanResult" },
-    { "type": "app.deploy-plan.result", "rustType": "DeployPlanView" },
-    { "type": "app.deploy.result", "rustType": "DeployResultView" },
-    { "type": "app.generate-bridge.result", "rustType": "GenerateBridgeResult" },
-    { "type": "app.new.result", "rustType": "NewAppResult" },
-    { "type": "app.templates.result", "rustType": "TemplateListView" },
-    { "type": "component.get.result", "rustType": "ComponentGetView" },
-    { "type": "component.list.result", "rustType": "ComponentListView" },
-    { "type": "component.manifest-trace.result", "rustType": "ComponentManifestTraceView" },
-    { "type": "deployment.create.result", "rustType": "DeploymentNewView" },
-    { "type": "deployment.diff.result", "rustType": "DeploymentDiff" },
-    { "type": "deployment.list.result", "rustType": "DeploymentListView" },
-    { "type": "environment.list.result", "rustType": "EnvironmentListView" },
-    { "type": "environment.setup-plan.result", "rustType": "EnvironmentSetupPlanView" },
-    { "type": "plugin.get.result", "rustType": "PluginRegistrationGetView" },
-    { "type": "plugin.list.result", "rustType": "PluginListView" },
-    { "type": "plugin.register.result", "rustType": "PluginRegistrationRegisterView" },
-    { "type": "plugin.unregister.result", "rustType": "PluginUnregisterResult" },
-    { "type": "profile.config.set-format.result", "rustType": "ProfileConfigSetFormatResult" },
-    { "type": "profile.delete.result", "rustType": "ProfileDeleteResult" },
-    { "type": "profile.get.result", "rustType": "ProfileView" },
-    { "type": "profile.list.result", "rustType": "ProfileListView" },
-    { "type": "profile.new.result", "rustType": "ProfileCreateResult" },
-    { "type": "profile.switch.result", "rustType": "ProfileSwitchResult" },
-    { "type": "resource.create.result", "rustType": "ResourceDefinitionCreateView" },
-    { "type": "resource.delete.result", "rustType": "ResourceDefinitionDeleteView" },
-    { "type": "resource.get.result", "rustType": "ResourceDefinitionGetView" },
-    { "type": "resource.list.result", "rustType": "ResourceDefinitionListView" },
-    { "type": "resource.update.result", "rustType": "ResourceDefinitionUpdateView" },
-    { "type": "retry-policy.create.result", "rustType": "RetryPolicyCreateView" },
-    { "type": "retry-policy.delete.result", "rustType": "RetryPolicyDeleteView" },
-    { "type": "retry-policy.get.result", "rustType": "RetryPolicyGetView" },
-    { "type": "retry-policy.list.result", "rustType": "RetryPolicyListView" },
-    { "type": "retry-policy.update.result", "rustType": "RetryPolicyUpdateView" },
-    { "type": "secret.create.result", "rustType": "SecretCreateView" },
-    { "type": "secret.delete.result", "rustType": "SecretDeleteView" },
-    { "type": "secret.get.result", "rustType": "SecretGetView" },
-    { "type": "secret.list.result", "rustType": "SecretListView" },
-    { "type": "secret.update-value.result", "rustType": "SecretUpdateView" }
+    {
+      "type": "account.delete.result",
+      "rustType": "AccountDeleteResult"
+    },
+    {
+      "type": "account.get.result",
+      "rustType": "AccountGetView"
+    },
+    {
+      "type": "account.new.result",
+      "rustType": "AccountNewView"
+    },
+    {
+      "type": "account.permission-share.delete.result",
+      "rustType": "PermissionShareDeleteResult"
+    },
+    {
+      "type": "account.permission-share.get.result",
+      "rustType": "PermissionShareGetView"
+    },
+    {
+      "type": "account.permission-share.list.result",
+      "rustType": "PermissionShareListView"
+    },
+    {
+      "type": "account.permission-share.new.result",
+      "rustType": "PermissionShareNewView"
+    },
+    {
+      "type": "account.permission-share.update.result",
+      "rustType": "PermissionShareUpdateView"
+    },
+    {
+      "type": "account.update.result",
+      "rustType": "AccountUpdateView"
+    },
+    {
+      "type": "agent-type.get.result",
+      "rustType": "AgentTypeView"
+    },
+    {
+      "type": "agent-type.list.result",
+      "rustType": "AgentTypeListView"
+    },
+    {
+      "type": "agent.cancel-invocation.result",
+      "rustType": "AgentCancelInvocationResult"
+    },
+    {
+      "type": "agent.delete.result",
+      "rustType": "AgentDeleteResult"
+    },
+    {
+      "type": "agent.files.result",
+      "rustType": "WorkerFilesView"
+    },
+    {
+      "type": "agent.get.result",
+      "rustType": "WorkerGetView"
+    },
+    {
+      "type": "agent.invoke.result",
+      "rustType": "InvokeResultView"
+    },
+    {
+      "type": "agent.list.result",
+      "rustType": "AgentsMetadataResponseView"
+    },
+    {
+      "type": "agent.new.result",
+      "rustType": "WorkerCreateView"
+    },
+    {
+      "type": "agent.oplog.result",
+      "rustType": "AgentOplogView"
+    },
+    {
+      "type": "agent.plugin-toggle.result",
+      "rustType": "AgentPluginToggleResult"
+    },
+    {
+      "type": "agent.redeploy.result",
+      "rustType": "AgentRedeployResult"
+    },
+    {
+      "type": "agent.revert.result",
+      "rustType": "AgentRevertResult"
+    },
+    {
+      "type": "agent.stream.event",
+      "rustType": "AgentStreamEvent"
+    },
+    {
+      "type": "agent.update.result",
+      "rustType": "TryUpdateAllWorkersResult"
+    },
+    {
+      "type": "api-token.delete.result",
+      "rustType": "TokenDeleteResult"
+    },
+    {
+      "type": "api-token.list.result",
+      "rustType": "TokenListView"
+    },
+    {
+      "type": "api-token.new.result",
+      "rustType": "TokenNewView"
+    },
+    {
+      "type": "api.deployment.get.result",
+      "rustType": "HttpApiDeploymentGetView"
+    },
+    {
+      "type": "api.deployment.list.result",
+      "rustType": "HttpApiDeploymentListView"
+    },
+    {
+      "type": "api.domain.delete.result",
+      "rustType": "DomainRegistrationDeleteResult"
+    },
+    {
+      "type": "api.domain.list.result",
+      "rustType": "HttpApiDomainListView"
+    },
+    {
+      "type": "api.domain.register.result",
+      "rustType": "DomainRegistrationNewView"
+    },
+    {
+      "type": "api.security-scheme.create.result",
+      "rustType": "HttpSecuritySchemeCreateView"
+    },
+    {
+      "type": "api.security-scheme.delete.result",
+      "rustType": "HttpSecuritySchemeDeleteView"
+    },
+    {
+      "type": "api.security-scheme.get.result",
+      "rustType": "HttpSecuritySchemeGetView"
+    },
+    {
+      "type": "api.security-scheme.list.result",
+      "rustType": "HttpSecuritySchemeListView"
+    },
+    {
+      "type": "api.security-scheme.update.result",
+      "rustType": "HttpSecuritySchemeUpdateView"
+    },
+    {
+      "type": "app.build.result",
+      "rustType": "BuildResult"
+    },
+    {
+      "type": "app.clean.result",
+      "rustType": "CleanResult"
+    },
+    {
+      "type": "app.deploy-plan.result",
+      "rustType": "DeployPlanView"
+    },
+    {
+      "type": "app.deploy.result",
+      "rustType": "DeployResultView"
+    },
+    {
+      "type": "app.generate-bridge.result",
+      "rustType": "GenerateBridgeResult"
+    },
+    {
+      "type": "app.new.result",
+      "rustType": "NewAppResult"
+    },
+    {
+      "type": "app.templates.result",
+      "rustType": "TemplateListView"
+    },
+    {
+      "type": "component.get.result",
+      "rustType": "ComponentGetView"
+    },
+    {
+      "type": "component.list.result",
+      "rustType": "ComponentListView"
+    },
+    {
+      "type": "component.manifest-trace.result",
+      "rustType": "ComponentManifestTraceView"
+    },
+    {
+      "type": "deployment.create.result",
+      "rustType": "DeploymentNewView"
+    },
+    {
+      "type": "deployment.diff.result",
+      "rustType": "DeploymentDiff"
+    },
+    {
+      "type": "deployment.list.result",
+      "rustType": "DeploymentListView"
+    },
+    {
+      "type": "environment.list.result",
+      "rustType": "EnvironmentListView"
+    },
+    {
+      "type": "environment.setup-plan.result",
+      "rustType": "EnvironmentSetupPlanView"
+    },
+    {
+      "type": "plugin.get.result",
+      "rustType": "PluginRegistrationGetView"
+    },
+    {
+      "type": "plugin.list.result",
+      "rustType": "PluginListView"
+    },
+    {
+      "type": "plugin.register.result",
+      "rustType": "PluginRegistrationRegisterView"
+    },
+    {
+      "type": "plugin.unregister.result",
+      "rustType": "PluginUnregisterResult"
+    },
+    {
+      "type": "profile.config.set-format.result",
+      "rustType": "ProfileConfigSetFormatResult"
+    },
+    {
+      "type": "profile.delete.result",
+      "rustType": "ProfileDeleteResult"
+    },
+    {
+      "type": "profile.get.result",
+      "rustType": "ProfileView"
+    },
+    {
+      "type": "profile.list.result",
+      "rustType": "ProfileListView"
+    },
+    {
+      "type": "profile.new.result",
+      "rustType": "ProfileCreateResult"
+    },
+    {
+      "type": "profile.switch.result",
+      "rustType": "ProfileSwitchResult"
+    },
+    {
+      "type": "resource.create.result",
+      "rustType": "ResourceDefinitionCreateView"
+    },
+    {
+      "type": "resource.delete.result",
+      "rustType": "ResourceDefinitionDeleteView"
+    },
+    {
+      "type": "resource.get.result",
+      "rustType": "ResourceDefinitionGetView"
+    },
+    {
+      "type": "resource.list.result",
+      "rustType": "ResourceDefinitionListView"
+    },
+    {
+      "type": "resource.update.result",
+      "rustType": "ResourceDefinitionUpdateView"
+    },
+    {
+      "type": "retry-policy.create.result",
+      "rustType": "RetryPolicyCreateView"
+    },
+    {
+      "type": "retry-policy.delete.result",
+      "rustType": "RetryPolicyDeleteView"
+    },
+    {
+      "type": "retry-policy.get.result",
+      "rustType": "RetryPolicyGetView"
+    },
+    {
+      "type": "retry-policy.list.result",
+      "rustType": "RetryPolicyListView"
+    },
+    {
+      "type": "retry-policy.update.result",
+      "rustType": "RetryPolicyUpdateView"
+    },
+    {
+      "type": "secret.create.result",
+      "rustType": "SecretCreateView"
+    },
+    {
+      "type": "secret.delete.result",
+      "rustType": "SecretDeleteView"
+    },
+    {
+      "type": "secret.get.result",
+      "rustType": "SecretGetView"
+    },
+    {
+      "type": "secret.list.result",
+      "rustType": "SecretListView"
+    },
+    {
+      "type": "secret.update-value.result",
+      "rustType": "SecretUpdateView"
+    }
   ]
 }

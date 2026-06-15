@@ -59,7 +59,7 @@ impl ApiDomainCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&HttpApiDomainListView(domains))?;
+            .log_view(&HttpApiDomainListView { domains })?;
 
         Ok(())
     }

@@ -62,7 +62,10 @@ impl CliOutput for DomainRegistrationDeleteResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct HttpApiDomainListView(pub Vec<DomainRegistration>);
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDomainListView {
+    pub domains: Vec<DomainRegistration>,
+}
 
 impl TextView for HttpApiDomainListView {
     fn log(&self) {
@@ -71,7 +74,7 @@ impl TextView for HttpApiDomainListView {
             Column::new("ID").fixed(),
             Column::new("Environment ID").fixed(),
         ]);
-        for reg in &self.0 {
+        for reg in &self.domains {
             table.add_row(vec![
                 reg.domain.0.clone(),
                 reg.id.0.to_string(),

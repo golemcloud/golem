@@ -52,7 +52,10 @@ impl CliOutput for TokenNewView {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TokenListView(pub Vec<Token>);
+#[serde(rename_all = "camelCase")]
+pub struct TokenListView {
+    pub tokens: Vec<Token>,
+}
 
 impl TextView for TokenListView {
     fn log(&self) {
@@ -62,7 +65,7 @@ impl TextView for TokenListView {
             Column::new("Expires at").fixed(),
             Column::new("Account").fixed(),
         ]);
-        for token in &self.0 {
+        for token in &self.tokens {
             table.add_row(vec![
                 token.id.0.to_string(),
                 token.created_at.to_string(),
