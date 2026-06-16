@@ -2398,41 +2398,45 @@ impl WaitingWorker {
                 let agent_id = parent.owned_agent_id.agent_id();
                 let registered_concurrent_account = parent.registered_concurrent_account.clone();
                 let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
-                // Do not gate executor memory while waiting for a per-account
-                // concurrency slot. Otherwise one account could exhaust the
-                // memory headroom with workers that are not allowed to run yet.
-                //
-                // `memory_grant` owns the reservation from here on: it is held as
-                // a local until the worker becomes resident (when it moves into
-                // the RunningWorker) or this task ends/aborts (when dropping it
-                // returns the reservation to the gate). This is what makes a
-                // start cancelled mid-flight — e.g. the worker being deleted while
-                // still waiting for its remaining permits — release rather than
-                // leak its grant.
-                let memory_grant = parent.active_workers().acquire(memory_requirement).await;
-                // Reserve the component's compiled module size once per resident
-                // component (shared by all its workers). Held for as long as this
-                // worker is resident; the module faults into RAM when the first
-                // worker loads, so reserving it keeps later admissions honest.
-                let component_charge = match parent.component_charge_requirement().await {
-                    Ok((component_id, component_revision, component_module_bytes)) => {
-                        parent
-                            .active_workers()
-                            .acquire_component_charge(
-                                component_id,
-                                component_revision,
-                                component_module_bytes,
-                            )
-                            .await
-                    }
+                // Determine the component's compiled-module size before
+                // reserving any memory, so the worker's memory and its module are
+                // admitted together (the module is reserved first, then the
+                // memory admission accounts for it). The module is charged once
+                // per resident component and shared by all its workers.
+                let (component_id, component_revision, component_module_bytes) = match parent
+                    .component_charge_requirement()
+                    .await
+                {
+                    Ok(requirement) => requirement,
                     Err(err) => {
                         warn!(
                             "Failed to determine component charge requirement, not starting: {err}"
                         );
-                        // Dropping `memory_grant` here returns its reservation.
                         return;
                     }
                 };
+
+                // `memory_grant` and `component_charge` own their reservations
+                // from here on: held as locals until the worker becomes resident
+                // (when they move into the RunningWorker) or this task ends/aborts
+                // (when dropping them returns the reservations to the gate). This
+                // is what makes a start cancelled mid-flight — e.g. the worker
+                // being deleted while still waiting for its remaining permits —
+                // release rather than leak its grant and module charge.
+                //
+                // Admission is not gated while waiting for a per-account
+                // concurrency slot above; otherwise one account could exhaust the
+                // memory headroom with workers that are not allowed to run yet.
+                let (memory_grant, component_charge) = parent
+                    .active_workers()
+                    .acquire_with_component_charge(
+                        memory_requirement,
+                        component_id,
+                        component_revision,
+                        component_module_bytes,
+                    )
+                    .await;
+
                 // Pre-acquire storage permits for this restart.
                 //
                 // We need to acquire `filesystem_storage_requirement + desired_extra` total:

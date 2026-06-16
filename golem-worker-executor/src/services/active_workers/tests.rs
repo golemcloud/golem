@@ -733,10 +733,15 @@ async fn scheduler_accounts_are_independent() {
 // ── Component module charge against the admission gate ───────────────────────
 
 mod component_module_charge {
-    use super::super::admission::{AdmissionController, AdmissionPolicy};
+    use super::super::admission::{
+        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource,
+    };
     use super::super::component_charge::ComponentChargeRegistry;
     use super::super::memory_probe::{MemoryProbe, MemorySnapshot};
-    use super::super::{ComponentChargeKey, GateChargeSource, HeldComponentCharge};
+    use super::super::{
+        ComponentChargeKey, GateChargeSource, HeldComponentCharge,
+        acquire_memory_and_component_charge,
+    };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use std::sync::Arc;
     use test_r::test;
@@ -755,6 +760,17 @@ mod component_module_charge {
                 limit_bytes: self.limit,
                 current_bytes: 0,
             }
+        }
+    }
+
+    /// An eviction source with nothing to evict: a request that does not fit is
+    /// cleanly rejected rather than making room.
+    struct NoEvictionSource;
+
+    #[async_trait::async_trait]
+    impl EvictionSource for NoEvictionSource {
+        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            0
         }
     }
 
@@ -838,6 +854,255 @@ mod component_module_charge {
             limit,
             "dropping the boxed charge (as on worker unload) must release the reservation"
         );
+    }
+
+    /// Starting the first worker of a component must gate its linear memory and
+    /// its shared module *together*: if the pair does not fit under the ceiling,
+    /// the worker is refused and nothing is reserved.
+    ///
+    /// Reproduces the over-commit. The production start sequence acquired the
+    /// per-worker memory through the gate and then reserved the module as a
+    /// committed (ungated) consequence. With memory alone fitting but
+    /// memory + module exceeding the ceiling, that admitted the worker and then
+    /// pushed the granted total past the ceiling with nothing able to refuse it —
+    /// permanently starving later admissions. The combined acquire must instead
+    /// reject the first worker, leaving the gate uncorrupted.
+    #[test]
+    async fn first_worker_memory_and_module_are_gated_together() {
+        let limit = 1000u64;
+        let memory = 900u64;
+        let module = 200u64; // memory + module = 1100 > ceiling
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+        let component = key();
+
+        let outcome = acquire_memory_and_component_charge(
+            &controller,
+            &registry,
+            &NoEvictionSource,
+            memory,
+            component,
+            module,
+        )
+        .await;
+
+        assert!(
+            outcome.is_none(),
+            "first worker whose memory + module exceed the ceiling must be refused"
+        );
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "a refused first-worker start must reserve nothing: not its memory, not its module"
+        );
+    }
+
+    /// When memory + module fit, the combined acquire succeeds, reserves both,
+    /// and dropping the worker's grant releases only its memory while the module
+    /// charge persists until the last worker of the component unloads.
+    #[test]
+    async fn first_worker_combined_acquire_reserves_both_and_releases_correctly() {
+        let limit = 1000u64;
+        let memory = 600u64;
+        let module = 200u64;
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe { limit }),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let registry = ComponentChargeRegistry::new(GateChargeSource {
+            admission: Some(controller.clone()),
+        });
+        let component = key();
+
+        let (grant, charge) = acquire_memory_and_component_charge(
+            &controller,
+            &registry,
+            &NoEvictionSource,
+            memory,
+            component,
+            module,
+        )
+        .await
+        .expect("memory + module fit, so the combined acquire must succeed");
+
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - memory - module,
+            "the combined acquire must reserve both the worker memory and the module"
+        );
+
+        // A second worker of the same component: memory only, module already held.
+        let (grant2, charge2) = acquire_memory_and_component_charge(
+            &controller,
+            &registry,
+            &NoEvictionSource,
+            memory.min(limit - memory - module),
+            component,
+            module,
+        )
+        .await
+        .expect("the second worker only needs to fit its own memory");
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - memory - module - memory.min(limit - memory - module),
+            "the second worker must not reserve the module again"
+        );
+
+        drop(grant);
+        drop(grant2);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module,
+            "dropping the worker grants releases their memory but not the shared module"
+        );
+
+        drop(charge);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit - module,
+            "the module stays reserved while any worker of the component holds its charge"
+        );
+        drop(charge2);
+        assert_eq!(
+            controller.headroom_bytes(),
+            limit,
+            "the module reservation is released when the last worker's charge drops"
+        );
+    }
+}
+
+// ── Memory eviction planning credits last-of-component module release ────────
+//
+// `evict_at_most_memory` stops resident workers oldest-first until it has freed
+// `needed_bytes`. The bytes a stop frees are the worker's own linear memory
+// *plus*, when it removes the last resident worker of its component, that
+// component's shared compiled module (the module charge is released only when
+// the last worker of the component unloads). Counting only per-worker memory
+// under-counts what a last-of-component stop frees, so the loop keeps scanning
+// and over-evicts.
+//
+// The planner is purely advisory: it decides how many leading candidates the
+// eviction loop should *attempt* to stop. It never releases any bytes itself —
+// the module charge is released only by `ComponentChargeGuard::drop` when the
+// last worker actually unloads, which covers graceful stop, cancel and abort
+// uniformly. So an over- or under-prediction here can only make the loop stop
+// scanning a little early or late; it can never leak or double-release, and the
+// gate re-measures against the probe afterward.
+mod memory_eviction_planning {
+    use super::super::{EvictionCandidateCost, plan_memory_eviction_stops};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use std::collections::HashMap;
+    use test_r::test;
+    use uuid::Uuid;
+
+    type Key = (ComponentId, ComponentRevision);
+
+    fn component() -> Key {
+        (ComponentId(Uuid::new_v4()), ComponentRevision::INITIAL)
+    }
+
+    /// A candidate carrying its own memory and its component's module size; the
+    /// resident refcount per component is supplied separately (it counts *all*
+    /// resident workers of the component, not just the eviction candidates).
+    fn candidate(memory: u64, comp: Key, module_bytes: u64) -> EvictionCandidateCost<Key> {
+        EvictionCandidateCost {
+            memory,
+            component: comp,
+            module_bytes,
+        }
+    }
+
+    /// Stopping the sole worker of a component frees its memory *and* its module.
+    /// With several such single-worker components queued oldest-first, crediting
+    /// the module lets the target be met after fewer stops than counting memory
+    /// alone — the over-eviction this fixes.
+    #[test]
+    fn last_worker_stop_credits_the_module() {
+        // Three single-worker components, each memory 100, module 200.
+        let comps = [component(), component(), component()];
+        let refcounts: HashMap<Key, usize> = comps.iter().map(|c| (*c, 1usize)).collect();
+        let candidates: Vec<_> = comps.iter().map(|c| candidate(100, *c, 200)).collect();
+
+        // Need 250. Counting memory + module, the first stop frees 300 >= 250, so
+        // exactly ONE stop is planned. Counting memory alone would free only 100
+        // per stop and plan three stops — evicting two workers more than needed.
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 250);
+        assert_eq!(
+            stops, 1,
+            "stopping the last worker of a component frees memory + module; one stop must meet 250 of 300"
+        );
+    }
+
+    /// The module is credited only to the stop that empties the component. While
+    /// another worker of the same component remains, a stop frees memory only.
+    #[test]
+    fn module_credited_only_to_the_stop_that_empties_the_component() {
+        let shared = component();
+        let solo = component();
+        // Two workers of `shared`, one of `solo`. All three are candidates,
+        // oldest-first: the two shared workers, then the solo one.
+        let refcounts = HashMap::from([(shared, 2usize), (solo, 1usize)]);
+        let candidates = vec![
+            candidate(100, shared, 200),
+            candidate(100, shared, 200),
+            candidate(100, solo, 200),
+        ];
+
+        // Need 350.
+        //   stop 1 (shared): memory only (one shared worker remains) → 100. total 100
+        //   stop 2 (shared): empties shared → memory + module → 300. total 400 >= 350
+        // So TWO stops. Counting memory alone: 100, 200, 300 — never reaches 350
+        // until all three, planning three stops (one too many).
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 350);
+        assert_eq!(
+            stops, 2,
+            "the module is credited only when the component's last worker is stopped, meeting 350 in two stops"
+        );
+    }
+
+    /// A component with a still-resident non-candidate worker never has its
+    /// module credited: stopping every candidate of it leaves it non-empty, so
+    /// only per-worker memory is freed.
+    #[test]
+    fn module_not_credited_while_a_non_candidate_worker_remains() {
+        let comp = component();
+        // Three resident workers, only two are candidates; the third keeps the
+        // component resident, so the module is never released by these stops.
+        let refcounts = HashMap::from([(comp, 3usize)]);
+        let candidates = vec![candidate(100, comp, 200), candidate(100, comp, 200)];
+
+        // Need 250. Each stop frees only 100 of memory; two stops free 200 < 250,
+        // and the module is never credited, so all candidates are planned.
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 250);
+        assert_eq!(
+            stops, 2,
+            "with a non-candidate worker keeping the component resident, the module is not credited"
+        );
+    }
+
+    /// Stops never exceed the number of candidates, even if the target cannot be
+    /// met.
+    #[test]
+    fn stops_capped_at_candidate_count() {
+        let comp = component();
+        let refcounts = HashMap::from([(comp, 1usize)]);
+        let candidates = vec![candidate(10, comp, 5)];
+        let stops = plan_memory_eviction_stops(&candidates, &refcounts, 1_000_000);
+        assert_eq!(stops, 1);
+    }
+
+    /// A zero target needs no stops.
+    #[test]
+    fn zero_target_plans_no_stops() {
+        let comp = component();
+        let refcounts = HashMap::from([(comp, 1usize)]);
+        let candidates = vec![candidate(100, comp, 200)];
+        assert_eq!(plan_memory_eviction_stops(&candidates, &refcounts, 0), 0);
     }
 }
 

@@ -887,6 +887,15 @@ async fn usable_ratio_caps_admission_below_full_limit() {
     );
 }
 
+// ── First-worker module charge is gated, not blindly committed ───────────────
+//
+// The composition test that the first worker's memory and module are gated
+// together — so a worker whose memory alone fits but whose memory + module does
+// not is refused rather than admitted and then over-committed — lives in the
+// `active_workers::tests::component_module_charge` module, where the admission
+// controller and the component-charge registry are composed exactly as the
+// production start path composes them.
+
 /// Concurrent memory grows must not deadlock against the admission eviction
 /// scan.
 ///

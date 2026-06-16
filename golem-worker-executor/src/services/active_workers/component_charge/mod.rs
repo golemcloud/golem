@@ -149,6 +149,20 @@ where
             }
         }
     }
+
+    /// Snapshot of the resident-worker refcount per component. Used by the memory
+    /// eviction planner to credit a component's shared module to the stop that
+    /// removes its last resident worker. A snapshot can race with concurrent
+    /// acquires/releases, but the planner is only advisory (it never releases
+    /// bytes — the charge guard does that on drop), so a slightly stale count can
+    /// at worst make the eviction loop stop scanning a little early or late.
+    pub fn charge_refcounts(&self) -> HashMap<K, usize> {
+        let state = self.state.lock().unwrap();
+        state
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.refcount))
+            .collect()
+    }
 }
 
 impl<K, S> Drop for ComponentChargeGuard<K, S>

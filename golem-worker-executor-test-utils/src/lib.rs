@@ -682,9 +682,13 @@ pub async fn start_with_overrides(
 ) -> anyhow::Result<TestWorkerExecutor> {
     let mut config = make_base_test_config(deps);
     apply_sqlite_storage_config(&mut config, deps, context);
-    config.memory = MemoryConfig {
-        ..Default::default()
-    };
+    // Keep the measured-headroom admission gate disabled, as `make_base_test_config`
+    // sets it: the in-process harness shares its memory environment with the test
+    // framework and other services, so the probe cannot isolate this executor's
+    // footprint. (Resetting `config.memory` to its default here would silently
+    // re-enable the gate, since `enable_measured_admission` defaults to `true`.)
+    // A test that needs the gate can still turn it on via its `configure` override.
+    config.memory.enable_measured_admission = false;
 
     if let Some(configure) = &overrides.configure {
         configure(&mut config);
