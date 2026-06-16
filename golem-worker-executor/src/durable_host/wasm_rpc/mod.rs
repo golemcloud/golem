@@ -57,6 +57,7 @@ use golem_common::schema::adapters::{
 use golem_common::schema::agent::InputSchema;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 use golem_wasm::{
     CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
