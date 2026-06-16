@@ -1867,7 +1867,569 @@
           "type": "string"
         },
         "properties": {
-          "$ref": "#/definitions/JsonValue"
+          "$ref": "#/definitions/ComponentLayerProperties"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerProperties": {
+      "type": "object",
+      "required": [
+        "componentWasm",
+        "outputWasm",
+        "build",
+        "customCommands",
+        "clean",
+        "config",
+        "env",
+        "plugins",
+        "files"
+      ],
+      "properties": {
+        "appliedLayers": { "type": "array", "items": { "type": "string" } },
+        "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
+        "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
+        "buildMergeMode": { "$ref": "#/definitions/VecMergeMode" },
+        "build": { "$ref": "#/definitions/ComponentLayerBuildCommandVecProperty" },
+        "customCommands": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapProperty" },
+        "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
+        "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
+        "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
+        "env": { "$ref": "#/definitions/ComponentLayerStringMapProperty" },
+        "pluginsMergeMode": { "$ref": "#/definitions/VecMergeMode" },
+        "plugins": { "$ref": "#/definitions/ComponentLayerManifestPluginVecProperty" },
+        "filesMergeMode": { "$ref": "#/definitions/VecMergeMode" },
+        "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerId": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerIdTemplateCommon" },
+        { "$ref": "#/definitions/ComponentLayerIdTemplateEnvironmentPresets" },
+        { "$ref": "#/definitions/ComponentLayerIdTemplateCustomPresets" },
+        { "$ref": "#/definitions/ComponentLayerIdComponentCommon" },
+        { "$ref": "#/definitions/ComponentLayerIdComponentEnvironmentPresets" },
+        { "$ref": "#/definitions/ComponentLayerIdComponentCustomPresets" }
+      ]
+    },
+    "ComponentLayerIdTemplateCommon": {
+      "type": "object",
+      "required": ["templateCommon"],
+      "properties": { "templateCommon": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ComponentLayerIdTemplateEnvironmentPresets": {
+      "type": "object",
+      "required": ["templateEnvironmentPresets"],
+      "properties": { "templateEnvironmentPresets": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ComponentLayerIdTemplateCustomPresets": {
+      "type": "object",
+      "required": ["templateCustomPresets"],
+      "properties": { "templateCustomPresets": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ComponentLayerIdComponentCommon": {
+      "type": "object",
+      "required": ["componentCommon"],
+      "properties": { "componentCommon": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ComponentLayerIdComponentEnvironmentPresets": {
+      "type": "object",
+      "required": ["componentEnvironmentPresets"],
+      "properties": { "componentEnvironmentPresets": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ComponentLayerIdComponentCustomPresets": {
+      "type": "object",
+      "required": ["componentCustomPresets"],
+      "properties": { "componentCustomPresets": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalStringProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "type": ["string", "null"] },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerOptionalStringTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalStringTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerOptionalStringOverrideTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
+    },
+    "ComponentLayerOptionalStringOverrideTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "value"],
+      "properties": {
+        "type": { "const": "override" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalStringSkipTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "skip" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerBuildCommandVecProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/definitions/ManifestBuildCommand" } },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerBuildCommandVecTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerBuildCommandVecTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerBuildCommandAppendTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerBuildCommandPrependTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerBuildCommandReplaceTraceElem" }
+      ]
+    },
+    "ComponentLayerBuildCommandAppendTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "appendedElems"],
+      "properties": {
+        "type": { "const": "append" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "appendedElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestBuildCommand" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerBuildCommandPrependTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "prependedElems"],
+      "properties": {
+        "type": { "const": "prepend" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "prependedElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestBuildCommand" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerBuildCommandReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "newElems"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "newElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestBuildCommand" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringVecProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "type": "array", "items": { "type": "string" } },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerStringVecTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringVecTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerStringAppendTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerStringPrependTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerStringReplaceTraceElem" }
+      ]
+    },
+    "ComponentLayerStringAppendTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "appendedElems"],
+      "properties": {
+        "type": { "const": "append" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "appendedElems": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringPrependTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "prependedElems"],
+      "properties": {
+        "type": { "const": "prepend" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "prependedElems": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "newElems"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "newElems": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestPluginVecProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/definitions/ManifestPluginInstallation" } },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerManifestPluginVecTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestPluginVecTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerManifestPluginAppendTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerManifestPluginPrependTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerManifestPluginReplaceTraceElem" }
+      ]
+    },
+    "ComponentLayerManifestPluginAppendTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "appendedElems"],
+      "properties": {
+        "type": { "const": "append" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "appendedElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestPluginInstallation" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestPluginPrependTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "prependedElems"],
+      "properties": {
+        "type": { "const": "prepend" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "prependedElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestPluginInstallation" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestPluginReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "newElems"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "newElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestPluginInstallation" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestFileVecProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "type": "array", "items": { "$ref": "#/definitions/ManifestInitialComponentFile" } },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerManifestFileVecTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestFileVecTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerManifestFileAppendTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerManifestFilePrependTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerManifestFileReplaceTraceElem" }
+      ]
+    },
+    "ComponentLayerManifestFileAppendTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "appendedElems"],
+      "properties": {
+        "type": { "const": "append" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "appendedElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestInitialComponentFile" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestFilePrependTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "prependedElems"],
+      "properties": {
+        "type": { "const": "prepend" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "prependedElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestInitialComponentFile" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestFileReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "newElems"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "newElems": { "type": "array", "items": { "$ref": "#/definitions/ManifestInitialComponentFile" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerCustomCommandsMapProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/ManifestCustomCommandsMap" },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerCustomCommandsMapTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerCustomCommandsUpsertTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerCustomCommandsReplaceTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerCustomCommandsRemoveTraceElem" }
+      ]
+    },
+    "ComponentLayerCustomCommandsUpsertTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "upsert" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "insertedEntries": { "$ref": "#/definitions/ManifestCustomCommandsMap" },
+        "updatedEntries": { "$ref": "#/definitions/ManifestCustomCommandsMap" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerCustomCommandsReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "newEntries"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "newEntries": { "$ref": "#/definitions/ManifestCustomCommandsMap" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerCustomCommandsRemoveTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "remove" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "removedEntries": { "$ref": "#/definitions/ManifestCustomCommandsMap" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringMapProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/StringMap" },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerStringMapTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringMapTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerStringMapUpsertTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerStringMapReplaceTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerStringMapRemoveTraceElem" }
+      ]
+    },
+    "ComponentLayerStringMapUpsertTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "upsert" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "insertedEntries": { "$ref": "#/definitions/StringMap" },
+        "updatedEntries": { "$ref": "#/definitions/StringMap" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringMapReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "newEntries"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "newEntries": { "$ref": "#/definitions/StringMap" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerStringMapRemoveTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "remove" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "removedEntries": { "$ref": "#/definitions/StringMap" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerJsonProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/JsonValue" },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerJsonTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerJsonTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerJsonObjectMergeTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerJsonReplaceTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerJsonSkipTraceElem" }
+      ]
+    },
+    "ComponentLayerJsonObjectMergeTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "object-merge" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "insertedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } },
+        "updatedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerJsonReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "mode", "newValue"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "mode": { "$ref": "#/definitions/JsonMergeMode" },
+        "newValue": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerJsonSkipTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "skip" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "VecMergeMode": { "type": "string", "enum": ["append", "prepend", "replace"] },
+    "MapMergeMode": { "type": "string", "enum": ["upsert", "replace", "remove"] },
+    "JsonMergeMode": { "type": "string", "enum": ["merge-object-replace-other"] },
+    "StringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "ManifestCustomCommandsMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/ManifestExternalCommand" }
+      }
+    },
+    "ManifestBuildCommand": {
+      "oneOf": [
+        { "$ref": "#/definitions/ManifestExternalCommand" },
+        { "$ref": "#/definitions/GenerateQuickJSCrate" },
+        { "$ref": "#/definitions/GenerateQuickJSDTS" },
+        { "$ref": "#/definitions/InjectToPrebuiltQuickJs" },
+        { "$ref": "#/definitions/PreinitializeJs" }
+      ]
+    },
+    "ManifestExternalCommand": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string" },
+        "dir": { "type": "string" },
+        "env": { "$ref": "#/definitions/StringMap" },
+        "rmdirs": { "type": "array", "items": { "type": "string" } },
+        "mkdirs": { "type": "array", "items": { "type": "string" } },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "targets": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "GenerateQuickJSCrate": {
+      "type": "object",
+      "required": ["generateQuickjsCrate", "wit", "jsModules"],
+      "properties": {
+        "generateQuickjsCrate": { "type": "string" },
+        "wit": { "type": "string" },
+        "jsModules": { "$ref": "#/definitions/StringMap" },
+        "world": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "GenerateQuickJSDTS": {
+      "type": "object",
+      "required": ["generateQuickjsDts", "wit"],
+      "properties": {
+        "generateQuickjsDts": { "type": "string" },
+        "wit": { "type": "string" },
+        "world": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "InjectToPrebuiltQuickJs": {
+      "type": "object",
+      "required": ["injectToPrebuiltQuickjs", "module", "into"],
+      "properties": {
+        "injectToPrebuiltQuickjs": { "type": "string" },
+        "module": { "type": "string" },
+        "into": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PreinitializeJs": {
+      "type": "object",
+      "required": ["preinitializeJs", "into"],
+      "properties": {
+        "preinitializeJs": { "type": "string" },
+        "into": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestPluginInstallation": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "account": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "parameters": { "$ref": "#/definitions/StringMap" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestInitialComponentFile": {
+      "type": "object",
+      "required": ["sourcePath", "targetPath"],
+      "properties": {
+        "sourcePath": { "type": "string" },
+        "targetPath": { "type": "string" },
+        "permissions": {
+          "oneOf": [
+            { "$ref": "#/definitions/AgentFilePermissions" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
@@ -2336,8 +2898,50 @@
         "wasmChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/DeploymentDiffMapValue" }
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
         }
+      },
+      "additionalProperties": false
+    },
+    "AgentTypeProvisionConfigDiffPayload": {
+      "type": "object",
+      "properties": {
+        "envChanges": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "configChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/JsonValue" }
+        },
+        "fileChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffPayload" }
+        },
+        "pluginChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffPayload" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentFileDiffPayload": {
+      "type": "object",
+      "required": ["contentChanged", "permissionsChanged"],
+      "properties": {
+        "contentChanged": { "type": "boolean" },
+        "permissionsChanged": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "PluginInstallationDiffPayload": {
+      "type": "object",
+      "properties": {
+        "priorityChanged": { "type": "boolean" },
+        "parametersChanged": { "type": "boolean" },
+        "pluginRegistrationIdChanged": { "type": "boolean" },
+        "pluginNameChanged": { "type": "boolean" },
+        "pluginVersionChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -2349,8 +2953,17 @@
         "openapiEndpointChanged": { "type": "boolean" },
         "agentsChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/DeploymentDiffMapValue" }
+          "additionalProperties": { "$ref": "#/definitions/HttpApiDeploymentAgentOptionsDiffPayload" }
         }
+      },
+      "additionalProperties": false
+    },
+    "HttpApiDeploymentAgentOptionsDiffPayload": {
+      "type": "object",
+      "required": ["securitySchemeChanged", "testSessionHeaderChanged"],
+      "properties": {
+        "securitySchemeChanged": { "type": "boolean" },
+        "testSessionHeaderChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -2359,8 +2972,16 @@
       "properties": {
         "agentsChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/DeploymentDiffMapValue" }
+          "additionalProperties": { "$ref": "#/definitions/McpDeploymentAgentOptionsDiffPayload" }
         }
+      },
+      "additionalProperties": false
+    },
+    "McpDeploymentAgentOptionsDiffPayload": {
+      "type": "object",
+      "required": ["securitySchemeChanged"],
+      "properties": {
+        "securitySchemeChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -2620,14 +3241,9 @@
     "Snapshotting": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "Disabled" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "configType"], "properties": { "type": { "const": "Enabled" }, "configType": { "$ref": "#/definitions/SnapshottingConfig" } }, "additionalProperties": false }
-      ]
-    },
-    "SnapshottingConfig": {
-      "oneOf": [
-        { "type": "object", "required": ["configType"], "properties": { "configType": { "const": "Default" } }, "additionalProperties": false },
-        { "type": "object", "required": ["configType", "durationNanos"], "properties": { "configType": { "const": "Periodic" }, "durationNanos": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
-        { "type": "object", "required": ["configType", "count"], "properties": { "configType": { "const": "EveryNInvocation" }, "count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "configType"], "properties": { "type": { "const": "Enabled" }, "configType": { "const": "Default" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "configType", "durationNanos"], "properties": { "type": { "const": "Enabled" }, "configType": { "const": "Periodic" }, "durationNanos": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "configType", "count"], "properties": { "type": { "const": "Enabled" }, "configType": { "const": "EveryNInvocation" }, "count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
       ]
     },
     "AgentConfigDeclaration": {

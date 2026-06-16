@@ -1013,11 +1013,6 @@ mod tests {
             .boxed()
     }
 
-    fn render_generated_deployment_diff() -> Value {
-        to_cli_output_value(&empty_deployment_diff())
-            .expect("generated deployment diff should serialize")
-    }
-
     fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
         golem_common::model::diff::DeploymentDiff {
             components: BTreeMap::new(),
@@ -1041,26 +1036,55 @@ mod tests {
     }
 
     fn arb_timestamp_string() -> BoxedStrategy<String> {
-        Just("1970-01-01T00:00:00Z".to_string()).boxed()
+        arb_datetime().prop_map(|value| value.to_rfc3339()).boxed()
     }
 
     fn arb_timestamp() -> BoxedStrategy<golem_common::model::Timestamp> {
-        Just(
-            "1970-01-01T00:00:00Z"
-                .parse::<golem_common::model::Timestamp>()
-                .expect("fixed timestamp should parse"),
-        )
-        .boxed()
+        arb_timestamp_string()
+            .prop_map(|value| value.parse().expect("generated timestamp should parse"))
+            .boxed()
     }
 
     fn arb_url_string() -> BoxedStrategy<String> {
-        Just("https://example.com/callback".to_string()).boxed()
+        arb_small_string()
+            .prop_map(|path| format!("https://example.com/{path}"))
+            .boxed()
+    }
+
+    fn arb_datetime() -> BoxedStrategy<chrono::DateTime<chrono::Utc>> {
+        (0i64..4_102_444_800i64)
+            .prop_map(|seconds| {
+                chrono::DateTime::from_timestamp(seconds, 0)
+                    .expect("generated timestamp should be in range")
+            })
+            .boxed()
     }
 
     fn fixed_datetime() -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
             .expect("fixed timestamp should parse")
             .with_timezone(&chrono::Utc)
+    }
+
+    fn arb_hash() -> BoxedStrategy<golem_common::model::diff::Hash> {
+        any::<u128>()
+            .prop_map(|value| {
+                golem_common::model::diff::Hash::new(blake3::hash(&value.to_le_bytes()))
+            })
+            .boxed()
+    }
+
+    fn arb_agent_status() -> BoxedStrategy<golem_common::model::AgentStatus> {
+        prop_oneof![
+            Just(golem_common::model::AgentStatus::Running),
+            Just(golem_common::model::AgentStatus::Idle),
+            Just(golem_common::model::AgentStatus::Suspended),
+            Just(golem_common::model::AgentStatus::Interrupted),
+            Just(golem_common::model::AgentStatus::Retrying),
+            Just(golem_common::model::AgentStatus::Failed),
+            Just(golem_common::model::AgentStatus::Exited),
+        ]
+        .boxed()
     }
 
     fn render_empty_agent_oplog() -> Value {
@@ -1164,23 +1188,52 @@ mod tests {
             arb_small_string(),
             arb_small_string(),
             arb_agent_constructor(),
+            proptest::collection::vec(arb_agent_method(), 1..3),
+            proptest::collection::vec(arb_agent_dependency(), 1..2),
+            arb_agent_mode(),
+            proptest::option::of(arb_http_mount_details()),
+            arb_snapshotting(),
+            proptest::collection::vec(arb_agent_config_declaration(), 1..3),
         )
-            .prop_map(|(type_name, description, source_language, constructor)| {
-                golem_common::model::agent::AgentType {
+            .prop_map(
+                |(
                     type_name,
                     description,
                     source_language,
                     constructor,
-                    methods: Vec::new(),
-                    dependencies: Vec::new(),
-                    mode: golem_common::model::agent::AgentMode::Durable,
-                    http_mount: None,
-                    snapshotting: golem_common::model::agent::Snapshotting::Disabled(
-                        golem_common::model::Empty {},
-                    ),
-                    config: Vec::new(),
-                }
-            })
+                    methods,
+                    dependencies,
+                    mode,
+                    http_mount,
+                    snapshotting,
+                    config,
+                )| {
+                    let methods = if mode == golem_common::model::agent::AgentMode::Ephemeral {
+                        methods
+                            .into_iter()
+                            .map(|mut method| {
+                                method.read_only = None;
+                                method
+                            })
+                            .collect()
+                    } else {
+                        methods
+                    };
+
+                    golem_common::model::agent::AgentType {
+                        type_name,
+                        description,
+                        source_language,
+                        constructor,
+                        methods,
+                        dependencies,
+                        mode,
+                        http_mount,
+                        snapshotting,
+                        config,
+                    }
+                },
+            )
             .boxed()
     }
 
@@ -1189,20 +1242,368 @@ mod tests {
             proptest::option::of(arb_small_string()),
             arb_small_string(),
             proptest::option::of(arb_small_string()),
+            any::<u8>(),
         )
-            .prop_map(|(name, description, prompt_hint)| {
+            .prop_map(|(name, description, prompt_hint, schema_flavor)| {
                 golem_common::model::agent::AgentConstructor {
                     name,
                     description,
                     prompt_hint,
-                    input_schema: golem_common::model::agent::DataSchema::Tuple(
-                        golem_common::model::agent::NamedElementSchemas {
-                            elements: Vec::new(),
-                        },
-                    ),
+                    input_schema: data_schema_value(schema_flavor),
                 }
             })
             .boxed()
+    }
+
+    fn arb_agent_method() -> BoxedStrategy<golem_common::model::agent::AgentMethod> {
+        (
+            arb_small_string(),
+            arb_small_string(),
+            proptest::option::of(arb_small_string()),
+            any::<u8>(),
+            any::<u8>(),
+            proptest::collection::vec(arb_http_endpoint_details(), 1..3),
+            proptest::option::of(arb_read_only_config()),
+        )
+            .prop_map(
+                |(
+                    name,
+                    description,
+                    prompt_hint,
+                    input_schema_flavor,
+                    output_schema_flavor,
+                    http_endpoint,
+                    read_only,
+                )| {
+                    golem_common::model::agent::AgentMethod {
+                        name,
+                        description,
+                        prompt_hint,
+                        input_schema: data_schema_value(input_schema_flavor),
+                        output_schema: data_schema_value(output_schema_flavor),
+                        http_endpoint,
+                        read_only,
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_dependency() -> BoxedStrategy<golem_common::model::agent::AgentDependency> {
+        (
+            arb_small_string(),
+            proptest::option::of(arb_small_string()),
+            arb_agent_constructor(),
+            proptest::collection::vec(arb_agent_method(), 1..2),
+        )
+            .prop_map(|(type_name, description, constructor, methods)| {
+                golem_common::model::agent::AgentDependency {
+                    type_name,
+                    description,
+                    constructor,
+                    methods,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_agent_mode() -> BoxedStrategy<golem_common::model::agent::AgentMode> {
+        prop_oneof![
+            Just(golem_common::model::agent::AgentMode::Durable),
+            Just(golem_common::model::agent::AgentMode::Ephemeral),
+        ]
+        .boxed()
+    }
+
+    fn data_schema_value(flavor: u8) -> golem_common::model::agent::DataSchema {
+        use golem_common::model::agent::{
+            BinaryDescriptor, BinaryType, ComponentModelElementSchema, DataSchema, ElementSchema,
+            NamedElementSchema, TextDescriptor, TextType,
+        };
+
+        let elements = golem_common::model::agent::NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "component".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type_value(flavor),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "text".to_string(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor {
+                        restrictions: Some(vec![TextType {
+                            language_code: "en".to_string(),
+                        }]),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "binary".to_string(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: Some(vec![BinaryType {
+                            mime_type: "application/octet-stream".to_string(),
+                        }]),
+                    }),
+                },
+            ],
+        };
+
+        if flavor % 2 == 0 {
+            DataSchema::Tuple(elements)
+        } else {
+            DataSchema::Multimodal(elements)
+        }
+    }
+
+    fn analysed_type_value(flavor: u8) -> golem_wasm::analysis::AnalysedType {
+        match flavor % 5 {
+            0 => golem_wasm::analysis::analysed_type::str(),
+            1 => {
+                golem_wasm::analysis::analysed_type::list(golem_wasm::analysis::analysed_type::u64())
+            }
+            2 => golem_wasm::analysis::analysed_type::record(vec![
+                golem_wasm::analysis::analysed_type::field(
+                    "name",
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+                golem_wasm::analysis::analysed_type::field(
+                    "enabled",
+                    golem_wasm::analysis::analysed_type::bool(),
+                ),
+            ]),
+            3 => golem_wasm::analysis::analysed_type::option(
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+            _ => golem_wasm::analysis::analysed_type::variant(vec![
+                golem_wasm::analysis::analysed_type::case(
+                    "text",
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+                golem_wasm::analysis::analysed_type::unit_case("none"),
+            ]),
+        }
+    }
+
+    fn arb_read_only_config() -> BoxedStrategy<golem_common::model::agent::ReadOnlyConfig> {
+        (arb_cache_policy(), any::<bool>())
+            .prop_map(
+                |(cache_policy, uses_principal)| golem_common::model::agent::ReadOnlyConfig {
+                    cache_policy,
+                    uses_principal,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_cache_policy() -> BoxedStrategy<golem_common::model::agent::CachePolicy> {
+        prop_oneof![
+            Just(golem_common::model::agent::CachePolicy::NoCache(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::CachePolicy::UntilWrite(
+                golem_common::model::Empty {}
+            )),
+            arb_small_u64().prop_map(|duration_nanos| {
+                golem_common::model::agent::CachePolicy::Ttl(
+                    golem_common::model::agent::CachePolicyTtl { duration_nanos },
+                )
+            }),
+        ]
+        .boxed()
+    }
+
+    fn arb_snapshotting() -> BoxedStrategy<golem_common::model::agent::Snapshotting> {
+        prop_oneof![
+            Just(golem_common::model::agent::Snapshotting::Disabled(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::Snapshotting::Enabled(
+                golem_common::model::agent::SnapshottingConfig::Default(
+                    golem_common::model::Empty {},
+                )
+            )),
+            arb_small_u64().prop_map(|duration_nanos| {
+                golem_common::model::agent::Snapshotting::Enabled(
+                    golem_common::model::agent::SnapshottingConfig::Periodic(
+                        golem_common::model::agent::SnapshottingPeriodic { duration_nanos },
+                    ),
+                )
+            }),
+            any::<u16>().prop_map(|count| {
+                golem_common::model::agent::Snapshotting::Enabled(
+                    golem_common::model::agent::SnapshottingConfig::EveryNInvocation(
+                        golem_common::model::agent::SnapshottingEveryNInvocation { count },
+                    ),
+                )
+            }),
+        ]
+        .boxed()
+    }
+
+    fn arb_agent_config_declaration()
+    -> BoxedStrategy<golem_common::model::agent::AgentConfigDeclaration> {
+        (
+            prop_oneof![
+                Just(golem_common::model::agent::AgentConfigSource::Local),
+                Just(golem_common::model::agent::AgentConfigSource::Secret),
+            ],
+            proptest::collection::vec(arb_small_string(), 1..3),
+            prop_oneof![
+                Just(golem_wasm::analysis::analysed_type::str()),
+                Just(golem_wasm::analysis::analysed_type::bool()),
+                Just(golem_wasm::analysis::analysed_type::u64()),
+            ],
+        )
+            .prop_map(|(source, path, value_type)| {
+                golem_common::model::agent::AgentConfigDeclaration {
+                    source,
+                    path,
+                    value_type,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMountDetails> {
+        (
+            proptest::collection::vec(arb_path_segment(), 0..2),
+            proptest::option::of(any::<bool>().prop_map(|required| {
+                golem_common::model::agent::AgentHttpAuthDetails { required }
+            })),
+            any::<bool>(),
+            proptest::collection::vec(arb_small_string(), 0..2),
+            proptest::collection::vec(arb_path_segment(), 0..2),
+        )
+            .prop_map(
+                |(path_prefix, auth_details, phantom_agent, allowed_patterns, webhook_suffix)| {
+                    golem_common::model::agent::HttpMountDetails {
+                        path_prefix,
+                        auth_details,
+                        phantom_agent,
+                        cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
+                        webhook_suffix,
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::HttpEndpointDetails>
+    {
+        (
+            arb_http_method(),
+            proptest::collection::vec(arb_path_segment(), 0..2),
+            proptest::collection::vec(
+                (arb_small_string(), arb_small_string()).prop_map(
+                    |(header_name, variable_name)| golem_common::model::agent::HeaderVariable {
+                        header_name,
+                        variable_name,
+                    },
+                ),
+                0..2,
+            ),
+            proptest::collection::vec(
+                (arb_small_string(), arb_small_string()).prop_map(
+                    |(query_param_name, variable_name)| golem_common::model::agent::QueryVariable {
+                        query_param_name,
+                        variable_name,
+                    },
+                ),
+                0..2,
+            ),
+            proptest::option::of(any::<bool>().prop_map(|required| {
+                golem_common::model::agent::AgentHttpAuthDetails { required }
+            })),
+            proptest::collection::vec(arb_small_string(), 0..2),
+        )
+            .prop_map(
+                |(
+                    http_method,
+                    path_suffix,
+                    header_vars,
+                    query_vars,
+                    auth_details,
+                    allowed_patterns,
+                )| {
+                    golem_common::model::agent::HttpEndpointDetails {
+                        http_method,
+                        path_suffix,
+                        header_vars,
+                        query_vars,
+                        auth_details,
+                        cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
+        prop_oneof![
+            Just(golem_common::model::agent::HttpMethod::Get(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Head(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Post(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Put(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Delete(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Connect(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Options(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Trace(
+                golem_common::model::Empty {}
+            )),
+            Just(golem_common::model::agent::HttpMethod::Patch(
+                golem_common::model::Empty {}
+            )),
+            arb_small_string().prop_map(|value| {
+                golem_common::model::agent::HttpMethod::Custom(
+                    golem_common::model::agent::CustomHttpMethod { value },
+                )
+            }),
+        ]
+        .boxed()
+    }
+
+    fn arb_path_segment() -> BoxedStrategy<golem_common::model::agent::PathSegment> {
+        prop_oneof![
+            arb_small_string().prop_map(|value| {
+                golem_common::model::agent::PathSegment::Literal(
+                    golem_common::model::agent::LiteralSegment { value },
+                )
+            }),
+            arb_small_string().prop_map(|variable_name| {
+                golem_common::model::agent::PathSegment::PathVariable(
+                    golem_common::model::agent::PathVariable { variable_name },
+                )
+            }),
+            arb_small_string().prop_map(|variable_name| {
+                golem_common::model::agent::PathSegment::RemainingPathVariable(
+                    golem_common::model::agent::PathVariable { variable_name },
+                )
+            }),
+            prop_oneof![
+                Just(golem_common::model::agent::SystemVariable::AgentType),
+                Just(golem_common::model::agent::SystemVariable::AgentVersion),
+            ]
+            .prop_map(|value| {
+                golem_common::model::agent::PathSegment::SystemVariable(
+                    golem_common::model::agent::SystemVariableSegment { value },
+                )
+            }),
+        ]
+        .boxed()
     }
 
     fn arb_agent_files_result() -> OutputDocumentStrategy {
@@ -1239,19 +1640,85 @@ mod tests {
     }
 
     fn arb_agent_invoke_result() -> OutputDocumentStrategy {
-        arb_small_string()
-            .prop_map(|idempotency_key| {
+        (
+            arb_small_string(),
+            prop_oneof![Just(0u8), Just(1u8), Just(2u8)],
+            arb_value_and_type(),
+            arb_value_and_type(),
+            arb_format_string(),
+        )
+            .prop_map(|(idempotency_key, shape, first, second, result_format)| {
                 to_cli_output_value(&crate::model::invoke_result_view::InvokeResultView {
                     idempotency_key,
-                    result_json: None,
-                    results_json: None,
+                    result_json: (shape == 1).then_some(first.clone()),
+                    results_json: (shape == 2).then_some(vec![first, second]),
                     result: None,
-                    result_format: None,
-                    is_void_result: true,
+                    result_format: (shape != 0).then_some(result_format.to_string()),
+                    is_void_result: shape == 0,
                 })
                 .expect("generated invoke result should serialize")
             })
             .boxed()
+    }
+
+    fn arb_value_and_type() -> BoxedStrategy<golem_wasm::ValueAndType> {
+        prop_oneof![
+            arb_small_string().prop_map(golem_wasm::IntoValueAndType::into_value_and_type),
+            proptest::collection::vec(arb_small_u64(), 0..3).prop_map(|values| {
+                golem_wasm::ValueAndType {
+                    value: golem_wasm::Value::List(
+                        values.into_iter().map(golem_wasm::Value::U64).collect(),
+                    ),
+                    typ: golem_wasm::analysis::analysed_type::list(
+                        golem_wasm::analysis::analysed_type::u64(),
+                    ),
+                }
+            }),
+            (arb_small_string(), any::<bool>()).prop_map(|(name, enabled)| {
+                golem_wasm::ValueAndType {
+                    value: golem_wasm::Value::Record(vec![
+                        golem_wasm::Value::String(name),
+                        golem_wasm::Value::Bool(enabled),
+                    ]),
+                    typ: golem_wasm::analysis::analysed_type::record(vec![
+                        golem_wasm::analysis::analysed_type::field(
+                            "name",
+                            golem_wasm::analysis::analysed_type::str(),
+                        ),
+                        golem_wasm::analysis::analysed_type::field(
+                            "enabled",
+                            golem_wasm::analysis::analysed_type::bool(),
+                        ),
+                    ]),
+                }
+            }),
+            proptest::option::of(arb_small_string()).prop_map(|value| {
+                golem_wasm::ValueAndType {
+                    value: golem_wasm::Value::Option(
+                        value.map(|value| Box::new(golem_wasm::Value::String(value))),
+                    ),
+                    typ: golem_wasm::analysis::analysed_type::option(
+                        golem_wasm::analysis::analysed_type::str(),
+                    ),
+                }
+            }),
+            arb_small_string().prop_map(|value| {
+                golem_wasm::ValueAndType {
+                    value: golem_wasm::Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(golem_wasm::Value::String(value))),
+                    },
+                    typ: golem_wasm::analysis::analysed_type::variant(vec![
+                        golem_wasm::analysis::analysed_type::case(
+                            "text",
+                            golem_wasm::analysis::analysed_type::str(),
+                        ),
+                        golem_wasm::analysis::analysed_type::unit_case("none"),
+                    ]),
+                }
+            }),
+        ]
+        .boxed()
     }
 
     fn arb_agent_list_result() -> OutputDocumentStrategy {
@@ -1384,7 +1851,7 @@ mod tests {
                 proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
                 proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
                 proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
-                Just("Running".to_string()).boxed(),
+                arb_agent_status(),
             ),
             (
                 arb_small_u64(),
@@ -1412,7 +1879,7 @@ mod tests {
                     default_env,
                     config,
                     default_config,
-                    _status,
+                    status,
                 ) = left;
                 let (
                     component_revision,
@@ -1440,7 +1907,7 @@ mod tests {
                     default_env: default_env.into_iter().collect(),
                     config,
                     default_config,
-                    status: golem_common::model::AgentStatus::Running,
+                    status,
                     component_revision: golem_common::model::component::ComponentRevision::new(
                         component_revision,
                     )
@@ -1804,29 +2271,35 @@ mod tests {
     }
 
     fn arb_token() -> BoxedStrategy<golem_common::model::auth::Token> {
-        (arb_uuid(), arb_uuid())
-            .prop_map(|(id, account_id)| golem_common::model::auth::Token {
-                id: golem_common::model::auth::TokenId(id),
-                account_id: golem_common::model::account::AccountId(account_id),
-                created_at: fixed_datetime(),
-                expires_at: fixed_datetime(),
-            })
+        (arb_uuid(), arb_uuid(), arb_datetime(), arb_datetime())
+            .prop_map(
+                |(id, account_id, created_at, expires_at)| golem_common::model::auth::Token {
+                    id: golem_common::model::auth::TokenId(id),
+                    account_id: golem_common::model::account::AccountId(account_id),
+                    created_at,
+                    expires_at,
+                },
+            )
             .boxed()
     }
 
     fn arb_token_with_secret() -> BoxedStrategy<golem_common::model::auth::TokenWithSecret> {
-        (arb_uuid(), arb_uuid())
-            .prop_map(
-                |(id, account_id)| golem_common::model::auth::TokenWithSecret {
+        (
+            arb_uuid(),
+            arb_uuid(),
+            arb_small_string(),
+            arb_datetime(),
+            arb_datetime(),
+        )
+            .prop_map(|(id, account_id, secret, created_at, expires_at)| {
+                golem_common::model::auth::TokenWithSecret {
                     id: golem_common::model::auth::TokenId(id),
-                    secret: golem_common::model::auth::TokenSecret::trusted(
-                        "generated-token-secret".to_string(),
-                    ),
+                    secret: golem_common::model::auth::TokenSecret::trusted(secret),
                     account_id: golem_common::model::account::AccountId(account_id),
-                    created_at: fixed_datetime(),
-                    expires_at: fixed_datetime(),
-                },
-            )
+                    created_at,
+                    expires_at,
+                }
+            })
             .boxed()
     }
 
@@ -1902,7 +2375,7 @@ mod tests {
             ),
             arb_small_string(),
             arb_small_string(),
-            Just(fixed_datetime()),
+            arb_datetime(),
         )
             .prop_map(|(id, revision, environment_id, domain, agents, webhooks_prefix, openapi_endpoint_prefix, created_at)| {
                 golem_client::model::HttpApiDeployment {
@@ -1910,8 +2383,8 @@ mod tests {
                     revision: golem_common::model::http_api_deployment::HttpApiDeploymentRevision::new(revision)
                         .expect("generated revision should be valid"),
                     environment_id: golem_common::model::environment::EnvironmentId(environment_id),
-                    domain: golem_common::model::domain_registration::Domain(domain),
-                    hash: golem_common::model::diff::Hash::empty(),
+                    domain: golem_common::model::domain_registration::Domain(domain.clone()),
+                    hash: golem_common::model::diff::Hash::new(blake3::hash(domain.as_bytes())),
                     agents,
                     webhooks_prefix,
                     openapi_endpoint_prefix,
@@ -1993,7 +2466,7 @@ mod tests {
         (
             arb_uuid(),
             arb_small_u64(),
-            Just("generated-scheme".to_string()),
+            arb_small_string(),
             arb_uuid(),
             arb_security_scheme_provider(),
             arb_small_string(),
@@ -2114,12 +2587,345 @@ mod tests {
     }
 
     fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
-        serialized_output(arb_small_string().prop_map(|component_name| {
-            crate::model::text::component::ComponentManifestTraceView {
-                component_name: golem_common::model::component::ComponentName(component_name),
-                properties: crate::model::app::ComponentLayerProperties::default(),
-            }
-        }))
+        serialized_output(
+            (arb_small_string(), arb_component_layer_properties()).prop_map(
+                |(component_name, properties)| {
+                    crate::model::text::component::ComponentManifestTraceView {
+                        component_name: golem_common::model::component::ComponentName(
+                            component_name,
+                        ),
+                        properties,
+                    }
+                },
+            ),
+        )
+    }
+
+    fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::ComponentLayerProperties>
+    {
+        (
+            (
+                arb_component_layer_id(),
+                arb_component_layer_id(),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                arb_vec_merge_mode(),
+                proptest::collection::vec(arb_manifest_build_command(), 1..3),
+                arb_map_merge_mode(),
+                proptest::collection::hash_map(
+                    arb_small_string(),
+                    proptest::collection::vec(arb_manifest_external_command(), 1..3),
+                    1..3,
+                ),
+            ),
+            (
+                arb_vec_merge_mode(),
+                proptest::collection::vec(arb_small_string(), 1..3),
+                arb_json_value(1),
+                arb_json_value(1),
+                arb_map_merge_mode(),
+                proptest::collection::hash_map(arb_small_string(), arb_small_string(), 1..3),
+                arb_vec_merge_mode(),
+                proptest::collection::vec(arb_manifest_plugin_installation(), 1..3),
+                arb_vec_merge_mode(),
+                proptest::collection::vec(arb_manifest_initial_component_file(), 1..3),
+            ),
+        )
+            .prop_map(|(left, right)| {
+                use crate::model::cascade::property::Property;
+
+                let (
+                    layer_id,
+                    second_layer_id,
+                    selection,
+                    component_wasm,
+                    output_wasm,
+                    _build_mode,
+                    build,
+                    _custom_commands_mode,
+                    custom_commands,
+                ) = left;
+                let (
+                    _clean_mode,
+                    clean,
+                    config_first,
+                    config_second,
+                    _env_mode,
+                    env,
+                    _plugins_mode,
+                    plugins,
+                    _files_mode,
+                    files,
+                ) = right;
+
+                let mut properties = crate::model::app::ComponentLayerProperties::default();
+                let selection = selection.as_ref();
+
+                properties
+                    .component_wasm
+                    .apply_layer(&layer_id, selection, None);
+                properties
+                    .component_wasm
+                    .apply_layer(&second_layer_id, selection, component_wasm);
+                properties
+                    .output_wasm
+                    .apply_layer(&second_layer_id, selection, output_wasm);
+                properties.build.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Append,
+                        build,
+                    ),
+                );
+                properties.clean.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Prepend,
+                        clean,
+                    ),
+                );
+                properties.custom_commands.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Upsert,
+                        custom_commands.clone().into_iter().collect(),
+                    ),
+                );
+                properties.custom_commands.apply_layer(
+                    &second_layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Replace,
+                        custom_commands.clone().into_iter().collect(),
+                    ),
+                );
+                properties.custom_commands.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Remove,
+                        custom_commands.into_iter().collect(),
+                    ),
+                );
+                properties
+                    .config
+                    .apply_layer(&layer_id, selection, Some(config_first));
+                properties
+                    .config
+                    .apply_layer(&second_layer_id, selection, Some(config_second));
+                properties
+                    .config
+                    .apply_layer(&layer_id, selection, Some(json!("replacement")));
+                properties.env.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Upsert,
+                        env.clone().into_iter().collect(),
+                    ),
+                );
+                properties.env.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Remove,
+                        env.into_iter().collect(),
+                    ),
+                );
+                properties.plugins.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Replace,
+                        plugins,
+                    ),
+                );
+                properties.files.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Append,
+                        files.clone(),
+                    ),
+                );
+                properties.files.apply_layer(
+                    &second_layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Replace,
+                        files,
+                    ),
+                );
+
+                properties
+            })
+            .boxed()
+    }
+
+    fn arb_component_layer_id() -> BoxedStrategy<crate::model::app::ComponentLayerId> {
+        prop_oneof![
+            arb_small_string().prop_map(crate::model::app::ComponentLayerId::TemplateCommon),
+            arb_small_string()
+                .prop_map(crate::model::app::ComponentLayerId::TemplateEnvironmentPresets),
+            arb_small_string().prop_map(crate::model::app::ComponentLayerId::TemplateCustomPresets),
+            arb_small_string().prop_map(|name| {
+                crate::model::app::ComponentLayerId::ComponentCommon(
+                    golem_common::model::component::ComponentName(name),
+                )
+            }),
+            arb_small_string().prop_map(|name| {
+                crate::model::app::ComponentLayerId::ComponentEnvironmentPresets(
+                    golem_common::model::component::ComponentName(name),
+                )
+            }),
+            arb_small_string().prop_map(|name| {
+                crate::model::app::ComponentLayerId::ComponentCustomPresets(
+                    golem_common::model::component::ComponentName(name),
+                )
+            }),
+        ]
+        .boxed()
+    }
+
+    fn arb_vec_merge_mode() -> BoxedStrategy<crate::model::cascade::property::vec::VecMergeMode> {
+        prop_oneof![
+            Just(crate::model::cascade::property::vec::VecMergeMode::Append),
+            Just(crate::model::cascade::property::vec::VecMergeMode::Prepend),
+            Just(crate::model::cascade::property::vec::VecMergeMode::Replace),
+        ]
+        .boxed()
+    }
+
+    fn arb_map_merge_mode() -> BoxedStrategy<crate::model::cascade::property::map::MapMergeMode> {
+        prop_oneof![
+            Just(crate::model::cascade::property::map::MapMergeMode::Upsert),
+            Just(crate::model::cascade::property::map::MapMergeMode::Replace),
+            Just(crate::model::cascade::property::map::MapMergeMode::Remove),
+        ]
+        .boxed()
+    }
+
+    fn arb_manifest_build_command() -> BoxedStrategy<crate::model::app_raw::BuildCommand> {
+        prop_oneof![
+            arb_manifest_external_command().prop_map(crate::model::app_raw::BuildCommand::External),
+            (
+                arb_small_string(),
+                arb_small_string(),
+                proptest::collection::hash_map(arb_small_string(), arb_small_string(), 0..3),
+                proptest::option::of(arb_small_string()),
+            )
+                .prop_map(|(generate_quickjs_crate, wit, js_modules, world)| {
+                    crate::model::app_raw::BuildCommand::QuickJSCrate(
+                        crate::model::app_raw::GenerateQuickJSCrate {
+                            generate_quickjs_crate,
+                            wit,
+                            js_modules,
+                            world,
+                        },
+                    )
+                }),
+            (
+                arb_small_string(),
+                arb_small_string(),
+                proptest::option::of(arb_small_string())
+            )
+                .prop_map(|(generate_quickjs_dts, wit, world)| {
+                    crate::model::app_raw::BuildCommand::QuickJSDTS(
+                        crate::model::app_raw::GenerateQuickJSDTS {
+                            generate_quickjs_dts,
+                            wit,
+                            world,
+                        },
+                    )
+                }),
+            (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+                |(inject_to_prebuilt_quickjs, module, into)| {
+                    crate::model::app_raw::BuildCommand::InjectToPrebuiltQuickJs(
+                        crate::model::app_raw::InjectToPrebuiltQuickJs {
+                            inject_to_prebuilt_quickjs,
+                            module,
+                            into,
+                        },
+                    )
+                }
+            ),
+            (arb_small_string(), arb_small_string()).prop_map(|(preinitialize_js, into)| {
+                crate::model::app_raw::BuildCommand::PreinitializeJs(
+                    crate::model::app_raw::PreinitializeJs {
+                        preinitialize_js,
+                        into,
+                    },
+                )
+            }),
+        ]
+        .boxed()
+    }
+
+    fn arb_manifest_external_command() -> BoxedStrategy<crate::model::app_raw::ExternalCommand> {
+        (
+            arb_small_string(),
+            proptest::option::of(arb_small_string()),
+            proptest::collection::hash_map(arb_small_string(), arb_small_string(), 0..3),
+            proptest::collection::vec(arb_small_string(), 0..3),
+            proptest::collection::vec(arb_small_string(), 0..3),
+            proptest::collection::vec(arb_small_string(), 0..3),
+            proptest::collection::vec(arb_small_string(), 0..3),
+        )
+            .prop_map(|(command, dir, env, rmdirs, mkdirs, sources, targets)| {
+                crate::model::app_raw::ExternalCommand {
+                    command,
+                    dir,
+                    env: env.into_iter().collect(),
+                    rmdirs,
+                    mkdirs,
+                    sources,
+                    targets,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_manifest_plugin_installation() -> BoxedStrategy<crate::model::app_raw::PluginInstallation>
+    {
+        (
+            proptest::option::of(arb_small_string()),
+            arb_small_string(),
+            arb_small_string(),
+            proptest::collection::hash_map(arb_small_string(), arb_small_string(), 0..3),
+        )
+            .prop_map(|(account, name, version, parameters)| {
+                crate::model::app_raw::PluginInstallation {
+                    account,
+                    name,
+                    version,
+                    parameters,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_manifest_initial_component_file()
+    -> BoxedStrategy<crate::model::app_raw::InitialComponentFile> {
+        (
+            arb_small_string(),
+            arb_small_string(),
+            proptest::option::of(arb_agent_file_permissions()),
+        )
+            .prop_map(|(source_path, target_path, permissions)| {
+                crate::model::app_raw::InitialComponentFile {
+                    source_path,
+                    target_path: golem_common::model::component::CanonicalFilePath::from_abs_str(
+                        &format!("/{target_path}"),
+                    )
+                    .expect("generated path should be valid"),
+                    permissions,
+                }
+            })
+            .boxed()
     }
 
     fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView> {
@@ -2133,6 +2939,11 @@ mod tests {
             arb_uuid(),
             proptest::collection::vec(arb_small_string(), 0..5),
             proptest::collection::vec(arb_agent_type(), 0..3),
+            proptest::collection::btree_map(
+                arb_agent_type_name(),
+                arb_agent_type_provision_config(),
+                0..3,
+            ),
         )
             .prop_map(
                 |(
@@ -2145,6 +2956,7 @@ mod tests {
                     environment_id,
                     exports,
                     agent_types,
+                    agent_type_provision_configs,
                 )| {
                     crate::model::component::ComponentView {
                         show_sensitive: true,
@@ -2161,11 +2973,124 @@ mod tests {
                         ),
                         exports,
                         agent_types,
-                        agent_type_provision_configs: BTreeMap::new(),
+                        agent_type_provision_configs,
                     }
                 },
             )
             .boxed()
+    }
+
+    fn arb_agent_type_provision_config()
+    -> BoxedStrategy<golem_common::model::component_metadata::AgentTypeProvisionConfig> {
+        (
+            proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..3),
+            proptest::collection::vec(arb_typed_agent_config_entry(), 0..3),
+            proptest::collection::vec(arb_installed_plugin(), 0..2),
+            proptest::collection::vec(arb_initial_agent_file(), 0..2),
+        )
+            .prop_map(|(env, config, plugins, files)| {
+                golem_common::model::component_metadata::AgentTypeProvisionConfig {
+                    env,
+                    config,
+                    plugins,
+                    files,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_typed_agent_config_entry()
+    -> BoxedStrategy<golem_common::model::worker::TypedAgentConfigEntry> {
+        (
+            proptest::collection::vec(arb_small_string(), 1..3),
+            arb_small_string(),
+        )
+            .prop_map(
+                |(path, value)| golem_common::model::worker::TypedAgentConfigEntry {
+                    path,
+                    value: golem_wasm::IntoValueAndType::into_value_and_type(value),
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_installed_plugin() -> BoxedStrategy<golem_common::model::component::InstalledPlugin> {
+        (
+            arb_uuid(),
+            0i32..1000,
+            proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..3),
+            arb_uuid(),
+            arb_small_string(),
+            arb_small_string(),
+            proptest::option::of(arb_uuid()),
+            proptest::option::of(arb_small_u64()),
+        )
+            .prop_map(
+                |(
+                    environment_plugin_grant_id,
+                    priority,
+                    parameters,
+                    plugin_registration_id,
+                    plugin_name,
+                    plugin_version,
+                    oplog_processor_component_id,
+                    oplog_processor_component_revision,
+                )| {
+                    golem_common::model::component::InstalledPlugin {
+                        environment_plugin_grant_id:
+                            golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId(
+                                environment_plugin_grant_id,
+                            ),
+                        priority: golem_common::model::component::PluginPriority(priority),
+                        parameters,
+                        plugin_registration_id:
+                            golem_common::model::plugin_registration::PluginRegistrationId(
+                                plugin_registration_id,
+                            ),
+                        plugin_name,
+                        plugin_version,
+                        oplog_processor_component_id: oplog_processor_component_id
+                            .map(golem_common::model::component::ComponentId),
+                        oplog_processor_component_revision: oplog_processor_component_revision.map(
+                            |revision| {
+                                golem_common::model::component::ComponentRevision::new(revision)
+                                    .expect("generated revision should be valid")
+                            },
+                        ),
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_initial_agent_file() -> BoxedStrategy<golem_common::model::component::InitialAgentFile> {
+        (
+            arb_hash(),
+            arb_small_string(),
+            arb_agent_file_permissions(),
+            arb_small_u64(),
+        )
+            .prop_map(|(content_hash, path, permissions, size)| {
+                golem_common::model::component::InitialAgentFile {
+                    content_hash: golem_common::model::agent::AgentFileContentHash(content_hash),
+                    path: golem_common::model::component::AgentFilePath::from_abs_str(&format!(
+                        "/{path}"
+                    ))
+                    .expect("generated path should be valid"),
+                    permissions,
+                    size,
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_agent_file_permissions()
+    -> BoxedStrategy<golem_common::model::component::AgentFilePermissions> {
+        prop_oneof![
+            Just(golem_common::model::component::AgentFilePermissions::ReadOnly),
+            Just(golem_common::model::component::AgentFilePermissions::ReadWrite),
+        ]
+        .boxed()
     }
 
     fn arb_deploy_plan_result() -> OutputDocumentStrategy {
@@ -2184,16 +3109,251 @@ mod tests {
     }
 
     fn arb_deployment_diff_result() -> OutputDocumentStrategy {
-        Just(render_generated_deployment_diff()).boxed()
+        arb_deployment_diff()
+            .prop_map(|diff| {
+                to_cli_output_value(&diff).expect("generated deployment diff should serialize")
+            })
+            .boxed()
+    }
+
+    fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentDiff> {
+        (
+            arb_small_string(),
+            arb_small_string(),
+            arb_small_string(),
+            arb_hash(),
+            arb_hash(),
+            arb_hash(),
+            arb_hash(),
+            arb_hash(),
+            arb_hash(),
+        )
+            .prop_map(|(component_key, http_key, mcp_key, current_component_hash, new_component_hash, current_file_hash, new_file_hash, current_mcp_hash, new_mcp_hash)| {
+                use golem_common::model::diff::Diffable;
+
+                let mut current = golem_common::model::diff::Deployment::default();
+                let mut new = golem_common::model::diff::Deployment::default();
+
+                let current_component = golem_common::model::diff::Component {
+                    wasm_hash: current_component_hash,
+                    agent_type_provision_configs: BTreeMap::from_iter([(
+                        "agent".to_string(),
+                        golem_common::model::diff::HashOf::form_value(
+                            golem_common::model::diff::AgentTypeProvisionConfig {
+                                env: BTreeMap::from_iter([("A".to_string(), "old".to_string())]),
+                                config: BTreeMap::from_iter([(
+                                    "path".to_string(),
+                                    golem_common::base_model::json::NormalizedJsonValue(json!("old")),
+                                )]),
+                                files_by_path: BTreeMap::from_iter([(
+                                    "/config.json".to_string(),
+                                    golem_common::model::diff::HashOf::form_value(
+                                        golem_common::model::diff::AgentFile {
+                                            hash: current_file_hash,
+                                            permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+                                        },
+                                    ),
+                                )]),
+                                plugins_by_grant_id: BTreeMap::new(),
+                            },
+                        ),
+                    )]),
+                };
+
+                let new_component = golem_common::model::diff::Component {
+                    wasm_hash: new_component_hash,
+                    agent_type_provision_configs: BTreeMap::from_iter([(
+                        "agent".to_string(),
+                        golem_common::model::diff::HashOf::form_value(
+                            golem_common::model::diff::AgentTypeProvisionConfig {
+                                env: BTreeMap::from_iter([("A".to_string(), "new".to_string())]),
+                                config: BTreeMap::from_iter([(
+                                    "path".to_string(),
+                                    golem_common::base_model::json::NormalizedJsonValue(json!("new")),
+                                )]),
+                                files_by_path: BTreeMap::from_iter([(
+                                    "/config.json".to_string(),
+                                    golem_common::model::diff::HashOf::form_value(
+                                        golem_common::model::diff::AgentFile {
+                                            hash: new_file_hash,
+                                            permissions: golem_common::model::component::AgentFilePermissions::ReadWrite,
+                                        },
+                                    ),
+                                )]),
+                                plugins_by_grant_id: BTreeMap::new(),
+                            },
+                        ),
+                    )]),
+                };
+
+                current.components.insert(
+                    component_key.clone(),
+                    golem_common::model::diff::HashOf::form_value(current_component),
+                );
+                new.components.insert(
+                    component_key,
+                    golem_common::model::diff::HashOf::form_value(new_component),
+                );
+
+                new.http_api_deployments.insert(
+                    http_key.clone(),
+                    golem_common::model::diff::HashOf::form_value(
+                        golem_common::model::diff::HttpApiDeployment {
+                            webhooks_prefix: "new-webhooks".to_string(),
+                            openapi_endpoint_prefix: "new-openapi".to_string(),
+                            agents: BTreeMap::from_iter([(
+                                "agent".to_string(),
+                                golem_common::model::diff::HttpApiDeploymentAgentOptions {
+                                    security_scheme: Some("new-scheme".to_string()),
+                                    test_session_header: Some("x-test".to_string()),
+                                },
+                            )]),
+                        },
+                    ),
+                );
+                current.http_api_deployments.insert(
+                    http_key,
+                    golem_common::model::diff::HashOf::form_value(
+                        golem_common::model::diff::HttpApiDeployment {
+                            webhooks_prefix: "old-webhooks".to_string(),
+                            openapi_endpoint_prefix: "old-openapi".to_string(),
+                            agents: BTreeMap::from_iter([(
+                                "agent".to_string(),
+                                golem_common::model::diff::HttpApiDeploymentAgentOptions {
+                                    security_scheme: Some("old-scheme".to_string()),
+                                    test_session_header: None,
+                                },
+                            )]),
+                        },
+                    ),
+                );
+
+                current.mcp_deployments.insert(
+                    mcp_key.clone(),
+                    golem_common::model::diff::HashOf::form_value(
+                        golem_common::model::diff::McpDeployment {
+                            agents: BTreeMap::from_iter([(
+                                "agent".to_string(),
+                                golem_common::model::diff::McpDeploymentAgentOptions {
+                                    security_scheme: Some(current_mcp_hash.to_string()),
+                                },
+                            )]),
+                        },
+                    ),
+                );
+                new.mcp_deployments.insert(
+                    mcp_key,
+                    golem_common::model::diff::HashOf::form_value(
+                        golem_common::model::diff::McpDeployment {
+                            agents: BTreeMap::from_iter([(
+                                "agent".to_string(),
+                                golem_common::model::diff::McpDeploymentAgentOptions {
+                                    security_scheme: Some(new_mcp_hash.to_string()),
+                                },
+                            )]),
+                        },
+                    ),
+                );
+
+                golem_common::model::diff::Deployment::diff(&new, &current)
+                    .expect("generated deployments should diff")
+                    .expect("generated deployments should differ")
+            })
+            .boxed()
     }
 
     fn arb_environment_setup_plan_result() -> OutputDocumentStrategy {
-        let output = crate::model::deploy::EnvironmentSetupPlan::default();
-        Just(
-            to_cli_output_value(&crate::model::text::diff::EnvironmentSetupPlanView(&output))
-                .expect("generated environment setup plan should serialize"),
+        arb_environment_setup_plan()
+            .prop_map(|output| {
+                to_cli_output_value(&crate::model::text::diff::EnvironmentSetupPlanView(&output))
+                    .expect("generated environment setup plan should serialize")
+            })
+            .boxed()
+    }
+
+    fn arb_environment_setup_plan() -> BoxedStrategy<crate::model::deploy::EnvironmentSetupPlan> {
+        (
+            arb_small_string(),
+            arb_api_predicate(),
+            arb_api_retry_policy(),
+            arb_resource_limit(),
+            arb_enforcement_action(),
         )
-        .boxed()
+            .prop_map(|(name, predicate, policy, limit, enforcement_action)| {
+                let secret_path = golem_common::model::agent_secret::AgentSecretPath(vec![
+                    name.clone(),
+                    "token".to_string(),
+                ]);
+                let retry_policy_default =
+                    golem_common::model::deployment::DeploymentRetryPolicyDefault {
+                        name: name.clone(),
+                        priority: 1,
+                        predicate: predicate.clone(),
+                        policy: policy.clone(),
+                    };
+                let resource_default = golem_common::model::quota::ResourceDefinitionCreation {
+                    name: golem_common::model::quota::ResourceName(name.clone()),
+                    limit: limit.clone(),
+                    enforcement_action,
+                    unit: "request".to_string(),
+                    units: "requests".to_string(),
+                };
+
+                crate::model::deploy::EnvironmentSetupPlan {
+                    display: crate::model::deploy::EnvironmentSetupDisplay {
+                        to_be_applied: crate::model::deploy::EnvironmentSetupDetailedSection {
+                            secret_values: BTreeMap::from_iter([(
+                                name.clone(),
+                                crate::model::deploy::EnvironmentSetupSecretValueDisplay {
+                                    secret_type: "Str".to_string(),
+                                    value: json!("generated-secret"),
+                                },
+                            )]),
+                            retry_policies: BTreeMap::from_iter([(
+                                name.clone(),
+                                crate::model::deploy::EnvironmentSetupRetryPolicyDisplay {
+                                    priority: retry_policy_default.priority,
+                                    predicate: serde_json::to_value(&predicate)
+                                        .expect("generated predicate should serialize"),
+                                    policy: serde_json::to_value(&policy)
+                                        .expect("generated policy should serialize"),
+                                },
+                            )]),
+                            resources: BTreeMap::from_iter([(
+                                name.clone(),
+                                crate::model::deploy::EnvironmentSetupResourceDisplay {
+                                    limit: serde_json::to_value(&limit)
+                                        .expect("generated limit should serialize"),
+                                    enforcement_action: format!("{enforcement_action:?}"),
+                                    unit: "request".to_string(),
+                                    units: "requests".to_string(),
+                                },
+                            )]),
+                        },
+                        skipped_already_exists:
+                            crate::model::deploy::EnvironmentSetupKeysOnlySection {
+                                secret_values: BTreeSet::from_iter([format!("{name}-existing")]),
+                                retry_policies: BTreeSet::from_iter([format!("{name}-retry")]),
+                                resources: BTreeSet::from_iter([format!("{name}-resource")]),
+                            },
+                    },
+                    agent_secret_defaults: vec![
+                        golem_common::model::deployment::DeploymentAgentSecretDefault {
+                            path: secret_path.clone(),
+                            secret_value: json!("generated-secret"),
+                        },
+                    ],
+                    skipped_existing_agent_secret_defaults: vec![
+                        golem_common::model::deployment::DeploymentAgentSecretDefault {
+                            path: secret_path,
+                            secret_value: json!("existing-secret"),
+                        },
+                    ],
+                    retry_policy_defaults: vec![retry_policy_default],
+                    resource_defaults: vec![resource_default],
+                }
+            })
+            .boxed()
     }
 
     fn arb_deployment_create_result() -> OutputDocumentStrategy {
@@ -2297,7 +3457,7 @@ mod tests {
             arb_small_u64(),
             arb_small_u64(),
             arb_small_string(),
-            Just(golem_common::model::diff::Hash::empty()),
+            arb_hash(),
         )
             .prop_map(
                 |(revision, deployment_revision, deployment_version, deployment_hash)| {
@@ -2346,12 +3506,7 @@ mod tests {
     }
 
     fn arb_deployment() -> BoxedStrategy<golem_common::model::deployment::Deployment> {
-        (
-            arb_uuid(),
-            arb_small_u64(),
-            arb_small_string(),
-            Just(golem_common::model::diff::Hash::empty()),
-        )
+        (arb_uuid(), arb_small_u64(), arb_small_string(), arb_hash())
             .prop_map(|(environment_id, revision, version, deployment_hash)| {
                 golem_common::model::deployment::Deployment {
                     environment_id: golem_common::model::environment::EnvironmentId(environment_id),
@@ -2370,7 +3525,7 @@ mod tests {
             arb_uuid(),
             arb_small_u64(),
             arb_small_string(),
-            Just(golem_common::model::diff::Hash::empty()),
+            arb_hash(),
             arb_small_u64(),
         )
             .prop_map(
@@ -3053,51 +4208,65 @@ mod tests {
     }
 
     fn arb_secret_create_result() -> OutputDocumentStrategy {
-        serialized_output(arb_secret().prop_map(|secret| {
-            crate::model::text::secret::SecretCreateView {
-                secret,
-                show_sensitive: true,
-            }
-        }))
+        serialized_output(
+            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
+                crate::model::text::secret::SecretCreateView {
+                    secret,
+                    show_sensitive,
+                }
+            }),
+        )
     }
 
     fn arb_secret_delete_result() -> OutputDocumentStrategy {
-        serialized_output(arb_secret().prop_map(|secret| {
-            crate::model::text::secret::SecretDeleteView {
-                secret,
-                show_sensitive: true,
-            }
-        }))
+        serialized_output(
+            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
+                crate::model::text::secret::SecretDeleteView {
+                    secret,
+                    show_sensitive,
+                }
+            }),
+        )
     }
 
     fn arb_secret_get_result() -> OutputDocumentStrategy {
-        serialized_output(arb_secret().prop_map(|secret| {
-            crate::model::text::secret::SecretGetView {
-                secret,
-                show_sensitive: true,
-            }
-        }))
+        serialized_output(
+            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
+                crate::model::text::secret::SecretGetView {
+                    secret,
+                    show_sensitive,
+                }
+            }),
+        )
     }
 
     fn arb_secret_update_value_result() -> OutputDocumentStrategy {
-        serialized_output(arb_secret().prop_map(|secret| {
-            crate::model::text::secret::SecretUpdateView {
-                secret,
-                show_sensitive: true,
-            }
-        }))
+        serialized_output(
+            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
+                crate::model::text::secret::SecretUpdateView {
+                    secret,
+                    show_sensitive,
+                }
+            }),
+        )
     }
 
     fn arb_secret_list_result() -> OutputDocumentStrategy {
         serialized_output(
-            proptest::collection::vec(arb_secret(), 0..5).prop_map(|secrets| {
-                crate::model::text::secret::SecretListView {
-                    secrets,
-                    show_sensitive: true,
-                    environment_name: "generated".to_string(),
-                    show_ids: true,
-                }
-            }),
+            (
+                proptest::collection::vec(arb_secret(), 0..5),
+                any::<bool>(),
+                arb_small_string(),
+                any::<bool>(),
+            )
+                .prop_map(|(secrets, show_sensitive, environment_name, show_ids)| {
+                    crate::model::text::secret::SecretListView {
+                        secrets,
+                        show_sensitive,
+                        environment_name,
+                        show_ids,
+                    }
+                }),
         )
     }
 
@@ -3107,20 +4276,96 @@ mod tests {
             arb_uuid(),
             proptest::collection::vec(arb_small_string(), 1..4),
             arb_small_u64(),
-            proptest::option::of(arb_small_string().prop_map(Value::String)),
+            arb_secret_type_and_value(),
         )
-            .prop_map(|(id, environment_id, path, revision, secret_value)| {
-                golem_client::model::AgentSecretDto {
-                    id: golem_common::model::agent_secret::AgentSecretId(id),
-                    environment_id: golem_common::model::environment::EnvironmentId(environment_id),
-                    path: golem_common::model::agent_secret::CanonicalAgentSecretPath(path),
-                    revision: golem_common::model::agent_secret::AgentSecretRevision::new(revision)
+            .prop_map(
+                |(id, environment_id, path, revision, (secret_type, secret_value))| {
+                    golem_client::model::AgentSecretDto {
+                        id: golem_common::model::agent_secret::AgentSecretId(id),
+                        environment_id: golem_common::model::environment::EnvironmentId(
+                            environment_id,
+                        ),
+                        path: golem_common::model::agent_secret::CanonicalAgentSecretPath(path),
+                        revision: golem_common::model::agent_secret::AgentSecretRevision::new(
+                            revision,
+                        )
                         .expect("generated revision should be valid"),
-                    secret_type: golem_wasm::analysis::analysed_type::str(),
-                    secret_value,
-                }
-            })
+                        secret_type,
+                        secret_value,
+                    }
+                },
+            )
             .boxed()
+    }
+
+    fn arb_secret_type_and_value()
+    -> BoxedStrategy<(golem_wasm::analysis::AnalysedType, Option<Value>)> {
+        prop_oneof![
+            proptest::option::of(arb_small_string().prop_map(Value::String))
+                .prop_map(|value| (golem_wasm::analysis::analysed_type::str(), value)),
+            proptest::option::of(any::<bool>().prop_map(Value::Bool))
+                .prop_map(|value| (golem_wasm::analysis::analysed_type::bool(), value)),
+            proptest::option::of(arb_small_u64().prop_map(|value| json!(value)))
+                .prop_map(|value| (golem_wasm::analysis::analysed_type::u64(), value)),
+            proptest::option::of(proptest::collection::vec(arb_small_u64(), 0..3).prop_map(
+                |values| { Value::Array(values.into_iter().map(|value| json!(value)).collect()) }
+            ))
+            .prop_map(|value| {
+                (
+                    golem_wasm::analysis::analysed_type::list(
+                        golem_wasm::analysis::analysed_type::u64(),
+                    ),
+                    value,
+                )
+            }),
+            proptest::option::of(
+                (arb_small_string(), any::<bool>())
+                    .prop_map(|(name, enabled)| { json!({ "name": name, "enabled": enabled }) })
+            )
+            .prop_map(|value| {
+                (
+                    golem_wasm::analysis::analysed_type::record(vec![
+                        golem_wasm::analysis::analysed_type::field(
+                            "name",
+                            golem_wasm::analysis::analysed_type::str(),
+                        ),
+                        golem_wasm::analysis::analysed_type::field(
+                            "enabled",
+                            golem_wasm::analysis::analysed_type::bool(),
+                        ),
+                    ]),
+                    value,
+                )
+            }),
+            proptest::option::of(
+                proptest::option::of(arb_small_string())
+                    .prop_map(|value| { value.map_or(Value::Null, Value::String) })
+            )
+            .prop_map(|value| {
+                (
+                    golem_wasm::analysis::analysed_type::option(
+                        golem_wasm::analysis::analysed_type::str(),
+                    ),
+                    value,
+                )
+            }),
+            proptest::option::of(
+                arb_small_string().prop_map(|value| { json!({ "case": "text", "value": value }) })
+            )
+            .prop_map(|value| {
+                (
+                    golem_wasm::analysis::analysed_type::variant(vec![
+                        golem_wasm::analysis::analysed_type::case(
+                            "text",
+                            golem_wasm::analysis::analysed_type::str(),
+                        ),
+                        golem_wasm::analysis::analysed_type::unit_case("none"),
+                    ]),
+                    value,
+                )
+            }),
+        ]
+        .boxed()
     }
 
     fn arb_json_value(depth: u32) -> OutputDocumentStrategy {
