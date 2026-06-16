@@ -1063,13 +1063,6 @@ mod tests {
             .with_timezone(&chrono::Utc)
     }
 
-    fn render_empty_agent_type_list() -> Value {
-        to_cli_output_value(&crate::model::text::agent::AgentTypeListView {
-            agent_types: Vec::new(),
-        })
-        .expect("generated agent type list should serialize")
-    }
-
     fn render_empty_agent_oplog() -> Value {
         to_cli_output_value(&crate::model::text::worker::AgentOplogView {
             entries: Vec::new(),
@@ -1118,7 +1111,98 @@ mod tests {
     }
 
     fn arb_agent_type_list_result() -> OutputDocumentStrategy {
-        Just(render_empty_agent_type_list()).boxed()
+        serialized_output(
+            proptest::collection::vec(arb_deployed_registered_agent_type(), 0..5).prop_map(
+                |agent_types| crate::model::text::agent::AgentTypeListView { agent_types },
+            ),
+        )
+    }
+
+    fn arb_deployed_registered_agent_type()
+    -> BoxedStrategy<golem_common::model::agent::DeployedRegisteredAgentType> {
+        (
+            arb_agent_type(),
+            arb_uuid(),
+            arb_small_u64(),
+            arb_small_string(),
+            arb_uuid(),
+            arb_small_string(),
+            proptest::option::of(arb_small_string()),
+        )
+            .prop_map(
+                |(
+                    agent_type,
+                    component_id,
+                    component_revision,
+                    component_name,
+                    account_id,
+                    account_email,
+                    webhook_prefix_authority_and_path,
+                )| golem_common::model::agent::DeployedRegisteredAgentType {
+                    agent_type,
+                    implemented_by: golem_common::model::agent::RegisteredAgentTypeImplementer {
+                        component_id: golem_common::model::component::ComponentId(component_id),
+                        component_revision: golem_common::model::component::ComponentRevision::new(
+                            component_revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        component_name,
+                        account_id: golem_common::model::account::AccountId(account_id),
+                        account_email: golem_common::model::account::AccountEmail::new(
+                            account_email,
+                        ),
+                    },
+                    webhook_prefix_authority_and_path,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_type() -> BoxedStrategy<golem_common::model::agent::AgentType> {
+        (
+            arb_agent_type_name(),
+            arb_small_string(),
+            arb_small_string(),
+            arb_agent_constructor(),
+        )
+            .prop_map(|(type_name, description, source_language, constructor)| {
+                golem_common::model::agent::AgentType {
+                    type_name,
+                    description,
+                    source_language,
+                    constructor,
+                    methods: Vec::new(),
+                    dependencies: Vec::new(),
+                    mode: golem_common::model::agent::AgentMode::Durable,
+                    http_mount: None,
+                    snapshotting: golem_common::model::agent::Snapshotting::Disabled(
+                        golem_common::model::Empty {},
+                    ),
+                    config: Vec::new(),
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_agent_constructor() -> BoxedStrategy<golem_common::model::agent::AgentConstructor> {
+        (
+            proptest::option::of(arb_small_string()),
+            arb_small_string(),
+            proptest::option::of(arb_small_string()),
+        )
+            .prop_map(|(name, description, prompt_hint)| {
+                golem_common::model::agent::AgentConstructor {
+                    name,
+                    description,
+                    prompt_hint,
+                    input_schema: golem_common::model::agent::DataSchema::Tuple(
+                        golem_common::model::agent::NamedElementSchemas {
+                            elements: Vec::new(),
+                        },
+                    ),
+                }
+            })
+            .boxed()
     }
 
     fn arb_agent_files_result() -> OutputDocumentStrategy {
@@ -2048,6 +2132,7 @@ mod tests {
             Just(fixed_datetime()),
             arb_uuid(),
             proptest::collection::vec(arb_small_string(), 0..5),
+            proptest::collection::vec(arb_agent_type(), 0..3),
         )
             .prop_map(
                 |(
@@ -2059,6 +2144,7 @@ mod tests {
                     created_at,
                     environment_id,
                     exports,
+                    agent_types,
                 )| {
                     crate::model::component::ComponentView {
                         show_sensitive: true,
@@ -2074,7 +2160,7 @@ mod tests {
                             environment_id,
                         ),
                         exports,
-                        agent_types: Vec::new(),
+                        agent_types,
                         agent_type_provision_configs: BTreeMap::new(),
                     }
                 },

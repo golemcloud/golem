@@ -1822,14 +1822,12 @@
         },
         "agentTypes": {
           "type": "array",
-          "items": {
-            "$ref": "#/definitions/JsonValue"
-          }
+          "items": { "$ref": "#/definitions/AgentType" }
         },
         "agentTypeProvisionConfigs": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/JsonValue"
+            "$ref": "#/definitions/AgentTypeProvisionConfig"
           }
         }
       },
@@ -1911,7 +1909,7 @@
         "createdAt": { "type": "string" },
         "environmentId": { "type": "string" },
         "exports": { "type": "array", "items": { "type": "string" } },
-        "agentTypes": { "type": "array", "items": { "$ref": "#/definitions/JsonValue" } },
+        "agentTypes": { "type": "array", "items": { "$ref": "#/definitions/AgentType" } },
         "agentTypeProvisionConfigs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfig" } }
       },
       "additionalProperties": false
@@ -1932,7 +1930,7 @@
       "required": ["path", "value"],
       "properties": {
         "path": { "type": "array", "items": { "type": "string" } },
-        "value": { "$ref": "#/definitions/JsonValue" }
+        "value": { "$ref": "#/definitions/ValueAndTypeJson" }
       },
       "additionalProperties": false
     },
@@ -2509,11 +2507,202 @@
       "type": "object",
       "required": ["agentType", "implementedBy"],
       "properties": {
-        "agentType": { "$ref": "#/definitions/JsonValue" },
+        "agentType": { "$ref": "#/definitions/AgentType" },
         "implementedBy": { "$ref": "#/definitions/RegisteredAgentTypeImplementer" },
-        "webhookPrefixAuthorityAndPath": { "type": "string" }
+        "webhookPrefixAuthorityAndPath": { "type": ["string", "null"] }
       },
       "additionalProperties": false
+    },
+    "AgentType": {
+      "type": "object",
+      "required": ["typeName", "description", "sourceLanguage", "constructor", "methods", "dependencies", "mode", "httpMount", "snapshotting", "config"],
+      "properties": {
+        "typeName": { "type": "string" },
+        "description": { "type": "string" },
+        "sourceLanguage": { "type": "string" },
+        "constructor": { "$ref": "#/definitions/AgentConstructor" },
+        "methods": { "type": "array", "items": { "$ref": "#/definitions/AgentMethod" } },
+        "dependencies": { "type": "array", "items": { "$ref": "#/definitions/AgentDependency" } },
+        "mode": { "$ref": "#/definitions/AgentMode" },
+        "httpMount": { "oneOf": [{ "$ref": "#/definitions/HttpMountDetails" }, { "type": "null" }] },
+        "snapshotting": { "$ref": "#/definitions/Snapshotting" },
+        "config": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigDeclaration" } }
+      },
+      "additionalProperties": false
+    },
+    "AgentConstructor": {
+      "type": "object",
+      "required": ["name", "description", "promptHint", "inputSchema"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "description": { "type": "string" },
+        "promptHint": { "type": ["string", "null"] },
+        "inputSchema": { "$ref": "#/definitions/DataSchema" }
+      },
+      "additionalProperties": false
+    },
+    "AgentMethod": {
+      "type": "object",
+      "required": ["name", "description", "promptHint", "inputSchema", "outputSchema", "httpEndpoint", "readOnly"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "promptHint": { "type": ["string", "null"] },
+        "inputSchema": { "$ref": "#/definitions/DataSchema" },
+        "outputSchema": { "$ref": "#/definitions/DataSchema" },
+        "httpEndpoint": { "type": "array", "items": { "$ref": "#/definitions/HttpEndpointDetails" } },
+        "readOnly": { "oneOf": [{ "$ref": "#/definitions/ReadOnlyConfig" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "AgentDependency": {
+      "type": "object",
+      "required": ["typeName", "description", "constructor", "methods"],
+      "properties": {
+        "typeName": { "type": "string" },
+        "description": { "type": ["string", "null"] },
+        "constructor": { "$ref": "#/definitions/AgentConstructor" },
+        "methods": { "type": "array", "items": { "$ref": "#/definitions/AgentMethod" } }
+      },
+      "additionalProperties": false
+    },
+    "DataSchema": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "elements"], "properties": { "type": { "const": "Tuple" }, "elements": { "type": "array", "items": { "$ref": "#/definitions/NamedElementSchema" } } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "elements"], "properties": { "type": { "const": "Multimodal" }, "elements": { "type": "array", "items": { "$ref": "#/definitions/NamedElementSchema" } } }, "additionalProperties": false }
+      ]
+    },
+    "NamedElementSchema": {
+      "type": "object",
+      "required": ["name", "schema"],
+      "properties": {
+        "name": { "type": "string" },
+        "schema": { "$ref": "#/definitions/ElementSchema" }
+      },
+      "additionalProperties": false
+    },
+    "ElementSchema": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "elementType"], "properties": { "type": { "const": "ComponentModel" }, "elementType": { "$ref": "#/definitions/AnalysedType" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "restrictions"], "properties": { "type": { "const": "UnstructuredText" }, "restrictions": { "oneOf": [{ "type": "array", "items": { "$ref": "#/definitions/TextType" } }, { "type": "null" }] } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "restrictions"], "properties": { "type": { "const": "UnstructuredBinary" }, "restrictions": { "oneOf": [{ "type": "array", "items": { "$ref": "#/definitions/BinaryType" } }, { "type": "null" }] } }, "additionalProperties": false }
+      ]
+    },
+    "TextType": {
+      "type": "object",
+      "required": ["languageCode"],
+      "properties": { "languageCode": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "BinaryType": {
+      "type": "object",
+      "required": ["mimeType"],
+      "properties": { "mimeType": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ReadOnlyConfig": {
+      "type": "object",
+      "required": ["cachePolicy", "usesPrincipal"],
+      "properties": {
+        "cachePolicy": { "$ref": "#/definitions/CachePolicy" },
+        "usesPrincipal": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "CachePolicy": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "NoCache" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "UntilWrite" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "durationNanos"], "properties": { "type": { "const": "Ttl" }, "durationNanos": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
+      ]
+    },
+    "AgentMode": { "type": "string", "enum": ["Durable", "Ephemeral"] },
+    "Snapshotting": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Disabled" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "configType"], "properties": { "type": { "const": "Enabled" }, "configType": { "$ref": "#/definitions/SnapshottingConfig" } }, "additionalProperties": false }
+      ]
+    },
+    "SnapshottingConfig": {
+      "oneOf": [
+        { "type": "object", "required": ["configType"], "properties": { "configType": { "const": "Default" } }, "additionalProperties": false },
+        { "type": "object", "required": ["configType", "durationNanos"], "properties": { "configType": { "const": "Periodic" }, "durationNanos": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["configType", "count"], "properties": { "configType": { "const": "EveryNInvocation" }, "count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
+      ]
+    },
+    "AgentConfigDeclaration": {
+      "type": "object",
+      "required": ["source", "path", "valueType"],
+      "properties": {
+        "source": { "type": "string", "enum": ["Local", "Secret"] },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "valueType": { "$ref": "#/definitions/AnalysedType" }
+      },
+      "additionalProperties": false
+    },
+    "HttpMountDetails": {
+      "type": "object",
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix"],
+      "properties": {
+        "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
+        "phantomAgent": { "type": "boolean" },
+        "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+      },
+      "additionalProperties": false
+    },
+    "HttpEndpointDetails": {
+      "type": "object",
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions"],
+      "properties": {
+        "httpMethod": { "$ref": "#/definitions/HttpMethod" },
+        "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "headerVars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
+        "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
+        "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
+        "corsOptions": { "$ref": "#/definitions/CorsOptions" }
+      },
+      "additionalProperties": false
+    },
+    "PathSegment": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Literal" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "SystemVariable" }, "value": { "$ref": "#/definitions/SystemVariable" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "variableName"], "properties": { "type": { "const": "PathVariable" }, "variableName": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "variableName"], "properties": { "type": { "const": "RemainingPathVariable" }, "variableName": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "SystemVariable": { "type": "string", "enum": ["AgentType", "AgentVersion"] },
+    "AgentHttpAuthDetails": {
+      "type": "object",
+      "required": ["required"],
+      "properties": { "required": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "CorsOptions": {
+      "type": "object",
+      "required": ["allowedPatterns"],
+      "properties": { "allowedPatterns": { "type": "array", "items": { "type": "string" } } },
+      "additionalProperties": false
+    },
+    "HeaderVariable": {
+      "type": "object",
+      "required": ["headerName", "variableName"],
+      "properties": { "headerName": { "type": "string" }, "variableName": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "QueryVariable": {
+      "type": "object",
+      "required": ["queryParamName", "variableName"],
+      "properties": { "queryParamName": { "type": "string" }, "variableName": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "HttpMethod": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
+      ]
     },
     "ApiPredicateValue": {
       "oneOf": [
@@ -3437,6 +3626,191 @@
       },
       "additionalProperties": false
     },
+    "ValueAndTypeJson": {
+      "type": "object",
+      "required": ["typ", "value"],
+      "properties": {
+        "typ": { "$ref": "#/definitions/AnalysedType" },
+        "value": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "AnalysedType": {
+      "oneOf": [
+        { "$ref": "#/definitions/AnalysedTypeVariant" },
+        { "$ref": "#/definitions/AnalysedTypeResult" },
+        { "$ref": "#/definitions/AnalysedTypeOption" },
+        { "$ref": "#/definitions/AnalysedTypeEnum" },
+        { "$ref": "#/definitions/AnalysedTypeFlags" },
+        { "$ref": "#/definitions/AnalysedTypeRecord" },
+        { "$ref": "#/definitions/AnalysedTypeTuple" },
+        { "$ref": "#/definitions/AnalysedTypeList" },
+        { "$ref": "#/definitions/AnalysedTypeHandle" },
+        { "$ref": "#/definitions/AnalysedTypeScalar" }
+      ]
+    },
+    "AnalysedTypeMetadata": {
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "owner": { "type": ["string", "null"] }
+      }
+    },
+    "AnalysedTypeVariant": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "cases"],
+          "properties": {
+            "type": { "const": "Variant" },
+            "cases": { "type": "array", "items": { "$ref": "#/definitions/AnalysedTypeCase" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeCase": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "typ": { "oneOf": [{ "$ref": "#/definitions/AnalysedType" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "AnalysedTypeResult": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "Result" },
+            "ok": { "oneOf": [{ "$ref": "#/definitions/AnalysedType" }, { "type": "null" }] },
+            "err": { "oneOf": [{ "$ref": "#/definitions/AnalysedType" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeOption": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "inner"],
+          "properties": {
+            "type": { "const": "Option" },
+            "inner": { "$ref": "#/definitions/AnalysedType" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeEnum": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "cases"],
+          "properties": {
+            "type": { "const": "Enum" },
+            "cases": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeFlags": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "names"],
+          "properties": {
+            "type": { "const": "Flags" },
+            "names": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeRecord": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "fields"],
+          "properties": {
+            "type": { "const": "Record" },
+            "fields": { "type": "array", "items": { "$ref": "#/definitions/AnalysedTypeField" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeField": {
+      "type": "object",
+      "required": ["name", "typ"],
+      "properties": {
+        "name": { "type": "string" },
+        "typ": { "$ref": "#/definitions/AnalysedType" }
+      },
+      "additionalProperties": false
+    },
+    "AnalysedTypeTuple": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "items"],
+          "properties": {
+            "type": { "const": "Tuple" },
+            "items": { "type": "array", "items": { "$ref": "#/definitions/AnalysedType" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeList": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "inner"],
+          "properties": {
+            "type": { "const": "List" },
+            "inner": { "$ref": "#/definitions/AnalysedType" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeHandle": {
+      "allOf": [
+        { "$ref": "#/definitions/AnalysedTypeMetadata" },
+        {
+          "type": "object",
+          "required": ["type", "resourceId"],
+          "properties": {
+            "type": { "const": "Handle" },
+            "resourceId": { "type": "integer", "minimum": 0 },
+            "mode": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AnalysedTypeScalar": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["Str", "Chr", "F64", "F32", "U64", "S64", "U32", "S32", "U16", "S16", "U8", "S8", "Bool"]
+        }
+      },
+      "additionalProperties": false
+    },
     "JsonValue": {
       "description": "Arbitrary JSON value.",
       "anyOf": [
@@ -3557,9 +3931,7 @@
           "type": "integer",
           "minimum": 0
         },
-        "secretType": {
-          "$ref": "#/definitions/JsonValue"
-        },
+        "secretType": { "$ref": "#/definitions/AnalysedType" },
         "secretValue": {
           "$ref": "#/definitions/JsonValue"
         }
