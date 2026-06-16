@@ -25,6 +25,7 @@ export default {
   "golem-invoke-agent-ts": "Invoking a Golem Agent with `golem agent invoke`",
   "golem-logging-ts": "Logging from a TypeScript Agent",
   "golem-make-http-request-ts": "Making Outgoing HTTP Requests (TypeScript)",
+  "golem-mark-read-only-ts": "Marking Agent Methods as Read-Only (TypeScript)",
   "golem-parallel-workers-ts": "Parallel Workers — Fan-Out / Fan-In (TypeScript)",
   "golem-multi-instance-agent-ts": "Phantom Agents in TypeScript",
   "golem-recurring-task-ts": "Recurring Tasks via Self-Scheduling (TypeScript)",
