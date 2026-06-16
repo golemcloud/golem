@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::Resolution;
 use crate::metrics::wasm::{record_host_function_call, record_in_function_retry};
 // `TrapType` was used for the legacy retry-config fallback; no longer needed
 // here after the refactor that funnels every host-trap retry decision through
@@ -937,35 +938,23 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 "Trying to replay an durable invocation in a PersistNothing block",
             ))
         } else {
-            // A completed legacy durable function invocation is persisted as a
-            // matched `Start` + `End` pair. Read both and validate they pair up:
-            // the `End`'s `start_index` must reference the `Start`'s `OplogIndex`.
-            // `Cancelled` is unexpected on the legacy path.
-            let (start_idx, start_entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
-            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
-            match (start_entry, end_entry) {
-                (
-                    OplogEntry::Start {
-                        timestamp,
-                        function_name,
-                        durable_function_type,
-                        ..
-                    },
-                    OplogEntry::End {
-                        start_index: end_start_index,
-                        response,
-                        ..
-                    },
-                ) => {
-                    if end_start_index != start_idx {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "End { start_index matching Start }",
-                            format!(
-                                "End {{ start_index: {end_start_index} }} after Start at {start_idx}"
-                            ),
-                        ));
-                    }
+            // A completed durable function invocation is persisted as a `Start` + `End` pair.
+            // Unlike the typed host-call readers, the guest learns the call's identity (function
+            // name, type, timestamp) from the persisted `Start` itself, so claim the next `Start`
+            // without an expected identity and await its matching `End` through the concurrent
+            // resolver. `Cancelled` is unexpected: durable invocations are always persisted as a
+            // completed pair.
+            let claimed = self.state.replay_state.claim_any_concurrent_start().await?;
+            let timestamp = claimed.timestamp;
+            let function_name = claimed.function_name.to_string();
+            let function_type = claimed.durable_function_type.clone();
+            let resolution = self
+                .state
+                .replay_state
+                .await_resolution(claimed.handle)
+                .await?;
+            match resolution {
+                Resolution::Completed { response, .. } => {
                     let response_payload = response.ok_or_else(|| {
                         WorkerExecutorError::unexpected_oplog_entry(
                             "End { response: Some(..) }",
@@ -985,16 +974,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         })?;
                     Ok(PersistedDurableFunctionInvocation {
                         timestamp,
-                        function_name: function_name.to_string(),
+                        function_name,
                         response,
-                        function_type: durable_function_type,
+                        function_type,
                         oplog_entry_version: OplogEntryVersion::V2,
                     })
                 }
-                (other_start, other_end) => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "Start + End",
-                    format!("Start={other_start:?}, End={other_end:?}"),
-                )),
+                Resolution::Cancelled { cancelled_idx, .. } => {
+                    Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "End",
+                        format!("Cancelled at {cancelled_idx}"),
+                    ))
+                }
             }
         }
     }

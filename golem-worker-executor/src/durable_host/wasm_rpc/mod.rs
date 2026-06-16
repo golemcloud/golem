@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable, Resolution};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
-use crate::get_oplog_entry;
 use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
@@ -47,7 +46,7 @@ use golem_common::model::oplog::{
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
     HostResponse, HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
     HostResponseGolemRpcInvokeGet, HostResponseGolemRpcScheduledInvocation,
-    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
+    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, PersistenceLevel,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
@@ -1120,33 +1119,37 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             // survives the anyhow::Error chain — TrapType::from_error
             // classifies UnexpectedOplogEntry as non-retriable.
             //
-            // The legacy adapter persists a completed RPC durable call as a
-            // matched `Start` + `End` pair. Read both, validate that the
-            // `End`'s `start_index` references the `Start`, and extract the
-            // response from `End`.
-            let (start_idx, start_entry) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
-            let (_, end_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            // Each poll persists a completed RPC durable call as a `Start` + `End` pair (see the
+            // live branch's `append_completed_child_call`). Replay it through the concurrent
+            // resolver: claim the call's `Start` — validating the function identity the `End` does
+            // not carry — and await the matching `End` instead of reading the pair positionally.
+            let begin_index = {
+                let entry = self.table().get_mut(&this)?;
+                let entry = entry
+                    .payload
+                    .as_any_mut()
+                    .downcast_mut::<FutureInvokeResultState>()
+                    .unwrap();
+                entry.begin_index()
+            };
+            let claim = self
+                .state
+                .replay_state
+                .claim_concurrent_start(
+                    &GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
+                    &DurableFunctionType::WriteRemote,
+                )
+                .await
+                .map_err(anyhow::Error::from)?;
+            let resolution = self
+                .state
+                .replay_state
+                .await_resolution(claim)
+                .await
+                .map_err(anyhow::Error::from)?;
 
-            let serialized_invoke_result = match (start_entry, end_entry) {
-                (
-                    OplogEntry::Start { .. },
-                    OplogEntry::End {
-                        start_index: end_start_index,
-                        response,
-                        ..
-                    },
-                ) => {
-                    if end_start_index != start_idx {
-                        return Err(anyhow::Error::from(
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                "End { start_index matching Start }",
-                                format!(
-                                    "End {{ start_index: {end_start_index} }} after Start at {start_idx}"
-                                ),
-                            ),
-                        ));
-                    }
+            let serialized_invoke_result = match resolution {
+                Resolution::Completed { response, .. } => {
                     let response_payload = response.ok_or_else(|| {
                         anyhow::Error::from(WorkerExecutorError::unexpected_oplog_entry(
                             "End { response: Some(..) }",
@@ -1178,23 +1181,15 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                (other_start, other_end) => {
+                Resolution::Cancelled { cancelled_idx, .. } => {
                     return Err(anyhow::Error::from(
                         WorkerExecutorError::unexpected_oplog_entry(
-                            "OplogEntry::Start + End",
-                            format!("Start={other_start:?}, End={other_end:?}"),
+                            "End",
+                            format!("Cancelled at {cancelled_idx}"),
                         ),
                     ));
                 }
             };
-
-            let entry = self.table().get_mut(&this)?;
-            let entry = entry
-                .payload
-                .as_any_mut()
-                .downcast_mut::<FutureInvokeResultState>()
-                .unwrap();
-            let begin_index = entry.begin_index();
 
             if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
                 self.end_function(&DurableFunctionType::WriteRemote, begin_index)

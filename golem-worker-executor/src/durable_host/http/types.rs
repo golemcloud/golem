@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::HttpOutgoingBodyState;
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{CallHandle, NotCancellable, Resolution};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::inline_retry::{
     StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
-use crate::get_oplog_entry;
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
@@ -31,7 +30,7 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
-    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
+    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, PersistenceLevel,
 };
 use golem_common::model::{NamedRetryPolicy, ScheduleId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1215,33 +1214,38 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             // survives the wasmtime::Error chain — TrapType::from_error
             // classifies UnexpectedOplogEntry as non-retriable.
             //
-            // The legacy adapter persists a completed HTTP durable call as a
-            // matched `Start` + `End` pair. Read both, validate that the
-            // `End`'s `start_index` references the `Start`, and extract the
-            // response from `End`.
-            let (start_idx, start_entry) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
-            let (_, end_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            // Each poll persists a completed HTTP durable call as a `Start` + `End` pair (see
+            // `persist_http_response`). Replay it through the concurrent resolver: claim the call's
+            // `Start` — validating the function identity the `End` does not carry — and await the
+            // matching `End` instead of reading the pair positionally.
+            let begin_index = self
+                .state
+                .open_http_requests
+                .get(&handle)
+                .map(|state| state.begin_index)
+                .ok_or_else(|| {
+                    wasmtime::Error::from(WorkerExecutorError::runtime(format!(
+                        "no open HTTP request for handle {handle} while replaying future_incoming_response::get"
+                    )))
+                })?;
+            let claim = self
+                .state
+                .replay_state
+                .claim_concurrent_start(
+                    &HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
+                    &DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+                )
+                .await
+                .map_err(wasmtime::Error::from)?;
+            let resolution = self
+                .state
+                .replay_state
+                .await_resolution(claim)
+                .await
+                .map_err(wasmtime::Error::from)?;
 
-            let serialized_response = match (start_entry, end_entry) {
-                (
-                    OplogEntry::Start { .. },
-                    OplogEntry::End {
-                        start_index: end_start_index,
-                        response,
-                        ..
-                    },
-                ) => {
-                    if end_start_index != start_idx {
-                        return Err(wasmtime::Error::from(
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                "End { start_index matching Start }",
-                                format!(
-                                    "End {{ start_index: {end_start_index} }} after Start at {start_idx}"
-                                ),
-                            ),
-                        ));
-                    }
+            let serialized_response = match resolution {
+                Resolution::Completed { response, .. } => {
                     let response_payload = response.ok_or_else(|| {
                         wasmtime::Error::from(WorkerExecutorError::unexpected_oplog_entry(
                             "End { response: Some(..) }",
@@ -1270,11 +1274,11 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                (other_start, other_end) => {
+                Resolution::Cancelled { cancelled_idx, .. } => {
                     return Err(wasmtime::Error::from(
                         WorkerExecutorError::unexpected_oplog_entry(
-                            "OplogEntry::Start + End",
-                            format!("Start={other_start:?}, End={other_end:?}"),
+                            "End",
+                            format!("Cancelled at {cancelled_idx}"),
                         ),
                     ));
                 }

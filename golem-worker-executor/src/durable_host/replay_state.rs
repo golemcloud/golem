@@ -26,6 +26,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedAgentId,
+    Timestamp,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
@@ -50,6 +51,18 @@ pub struct AgentInvocationStartedEntry {
     pub idempotency_key: IdempotencyKey,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
+}
+
+/// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed
+/// call plus the identity (`function_name`, `durable_function_type`, `timestamp`) read from its
+/// `Start` entry. Callers that knew the identity up front use [`ReplayState::claim_concurrent_start`]
+/// and discard this; the dynamic guest-durability read uses these fields to reconstruct the
+/// persisted invocation it returns to the guest.
+pub struct ClaimedConcurrentStart {
+    pub handle: ReplayCallHandle,
+    pub function_name: HostFunctionName,
+    pub durable_function_type: DurableFunctionType,
+    pub timestamp: Timestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -743,6 +756,52 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
     ) -> Result<ReplayCallHandle, WorkerExecutorError> {
+        let claimed = self.claim_any_concurrent_start().await?;
+        let validation_error = if &claimed.function_name != expected_function_name {
+            Some(WorkerExecutorError::unexpected_oplog_entry(
+                format!("Start {{ function_name: {expected_function_name} }}"),
+                format!("Start {{ function_name: {} }}", claimed.function_name),
+            ))
+        } else if &claimed.durable_function_type != expected_function_type {
+            Some(WorkerExecutorError::unexpected_oplog_entry(
+                format!("Start {{ durable_function_type: {expected_function_type:?} }}"),
+                format!(
+                    "Start {{ durable_function_type: {:?} }}",
+                    claimed.durable_function_type
+                ),
+            ))
+        } else {
+            None
+        };
+        if let Some(err) = validation_error {
+            // `claim_any_concurrent_start` already registered a resolver receiver for this `Start`;
+            // drop it on validation failure so it cannot be matched by a later resolution.
+            self.internal
+                .write()
+                .await
+                .concurrent_resolver
+                .unregister(claimed.handle.start_idx());
+            return Err(err);
+        }
+        Ok(claimed.handle)
+    }
+
+    /// Positionally claims the next `Start` entry for a durable call **without** validating its
+    /// function name or durable function type, registering a resolver receiver keyed by the
+    /// `Start`'s index and returning the claimed entry's identity for the caller to inspect.
+    ///
+    /// This is the dynamic counterpart of [`Self::claim_concurrent_start`]: it is used by callers
+    /// that learn the call identity from the claimed entry itself rather than knowing it up front —
+    /// notably the guest-facing `golem::durability` read, which returns the persisted invocation's
+    /// function name to the guest and therefore has no expected name to validate against. Callers
+    /// that do know the expected identity should use [`Self::claim_concurrent_start`] so the
+    /// name/type mismatch is caught at claim time (an `End` carries no identity of its own).
+    ///
+    /// The positional claim is sound for the same reason explained on
+    /// [`Self::claim_concurrent_start`]: `Start` order is a deterministic output of replay.
+    pub async fn claim_any_concurrent_start(
+        &mut self,
+    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
         let read = self
             .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::Start { .. }))
             .await?;
@@ -754,23 +813,12 @@ impl ReplayState {
         })?;
         match entry {
             OplogEntry::Start {
+                timestamp,
                 function_name,
                 request,
                 durable_function_type,
                 ..
             } => {
-                if &function_name != expected_function_name {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("Start {{ function_name: {expected_function_name} }}"),
-                        format!("Start {{ function_name: {function_name} }}"),
-                    ));
-                }
-                if &durable_function_type != expected_function_type {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("Start {{ durable_function_type: {expected_function_type:?} }}"),
-                        format!("Start {{ durable_function_type: {durable_function_type:?} }}"),
-                    ));
-                }
                 if request.is_none() {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "Start { request: Some(..) }",
@@ -781,7 +829,12 @@ impl ReplayState {
                     let mut internal = self.internal.write().await;
                     internal.concurrent_resolver.register(start_idx)
                 };
-                Ok(ReplayCallHandle::new(start_idx, receiver))
+                Ok(ClaimedConcurrentStart {
+                    handle: ReplayCallHandle::new(start_idx, receiver),
+                    function_name,
+                    durable_function_type,
+                    timestamp,
+                })
             }
             _ => unreachable!("try_get_oplog_entry condition guarantees a Start entry"),
         }
@@ -1070,6 +1123,51 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    #[test]
+    async fn claim_any_returns_claimed_identity() {
+        // The dynamic claim does not validate name/type; it returns the claimed Start's identity.
+        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
+        let claimed = rs.claim_any_concurrent_start().await.unwrap();
+        assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
+        assert_eq!(claimed.function_name, HostFunctionName::MonotonicClockNow);
+        assert_eq!(
+            claimed.durable_function_type,
+            DurableFunctionType::ReadLocal
+        );
+
+        match rs.await_resolution(claimed.handle).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => {
+                assert_eq!(end_idx, OplogIndex::from_u64(3));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn typed_claim_mismatch_does_not_leak_pending() {
+        // A typed claim whose expected type does not match the recorded Start must fail AND drop the
+        // resolver receiver that `claim_any_concurrent_start` registered, so no stale awaiter leaks.
+        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
+        let err = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::WriteRemote, // recorded is ReadLocal
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("durable_function_type"),
+            "unexpected error: {err}"
+        );
+        let internal = rs.internal.read().await;
+        assert!(
+            !internal
+                .concurrent_resolver
+                .is_pending(OplogIndex::from_u64(2)),
+            "failed typed claim must not leave a pending awaiter"
+        );
     }
 
     #[test]
