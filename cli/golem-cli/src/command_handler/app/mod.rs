@@ -621,10 +621,7 @@ impl AppCommandHandler {
                 "Multiple deployment found with version {}, use deployment revision instead!",
                 version.log_color_error_highlight()
             ));
-            self.ctx
-                .log_handler()
-                .log_view(&DeploymentListView { deployments })
-                .map_err(DeployError::PrepareError)?;
+            log_text_view(&DeploymentListView { deployments });
             return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         }
 
@@ -2704,9 +2701,7 @@ impl AppCommandHandler {
             .await
             .map_service_error()?
             .values;
-        self.ctx
-            .log_handler()
-            .log_view(&DeploymentListView { deployments })?;
+        log_text_view(&DeploymentListView { deployments });
 
         Ok(())
     }

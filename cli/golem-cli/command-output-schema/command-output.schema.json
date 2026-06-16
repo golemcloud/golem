@@ -43,10 +43,16 @@
       "$ref": "#/definitions/agent.delete"
     },
     {
+      "$ref": "#/definitions/agent.file-contents"
+    },
+    {
       "$ref": "#/definitions/agent.files"
     },
     {
       "$ref": "#/definitions/agent.get"
+    },
+    {
+      "$ref": "#/definitions/agent.interrupt"
     },
     {
       "$ref": "#/definitions/agent.invoke"
@@ -67,7 +73,13 @@
       "$ref": "#/definitions/agent.redeploy"
     },
     {
+      "$ref": "#/definitions/agent.resume"
+    },
+    {
       "$ref": "#/definitions/agent.revert"
+    },
+    {
+      "$ref": "#/definitions/agent.simulate-crash"
     },
     {
       "$ref": "#/definitions/agent.stream"
@@ -155,6 +167,9 @@
     },
     {
       "$ref": "#/definitions/environment.list"
+    },
+    {
+      "$ref": "#/definitions/environment.sync-deployment-options"
     },
     {
       "$ref": "#/definitions/environment.setup-plan"
@@ -706,6 +721,39 @@
       },
       "additionalProperties": false
     },
+    "agent.file-contents": {
+      "type": "object",
+      "required": [
+        "$type",
+        "saved",
+        "agent",
+        "path",
+        "outputPath",
+        "bytes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.file-contents"
+        },
+        "saved": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "outputPath": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
     "agent.files": {
       "type": "object",
       "required": [
@@ -741,6 +789,26 @@
         },
         "precise": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.interrupt": {
+      "type": "object",
+      "required": [
+        "$type",
+        "interrupted",
+        "agent"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.interrupt"
+        },
+        "interrupted": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -891,6 +959,26 @@
       },
       "additionalProperties": false
     },
+    "agent.resume": {
+      "type": "object",
+      "required": [
+        "$type",
+        "resumed",
+        "agent"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.resume"
+        },
+        "resumed": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "agent.revert": {
       "type": "object",
       "required": [
@@ -915,6 +1003,26 @@
         "numberOfInvocations": {
           "type": "integer",
           "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.simulate-crash": {
+      "type": "object",
+      "required": [
+        "$type",
+        "simulated",
+        "agent"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.simulate-crash"
+        },
+        "simulated": {
+          "type": "boolean"
+        },
+        "agent": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -3917,6 +4025,22 @@
       },
       "additionalProperties": false
     },
+    "environment.sync-deployment-options": {
+      "type": "object",
+      "required": [
+        "$type",
+        "updated"
+      ],
+      "properties": {
+        "$type": {
+          "const": "environment.sync-deployment-options"
+        },
+        "updated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "environment.setup-plan": {
       "type": "object",
       "required": [
@@ -5078,12 +5202,20 @@
       "rustType": "AgentDeleteResult"
     },
     {
+      "type": "agent.file-contents",
+      "rustType": "AgentFileContentsResult"
+    },
+    {
       "type": "agent.files",
       "rustType": "WorkerFilesView"
     },
     {
       "type": "agent.get",
       "rustType": "WorkerGetView"
+    },
+    {
+      "type": "agent.interrupt",
+      "rustType": "AgentInterruptResult"
     },
     {
       "type": "agent.invoke",
@@ -5110,8 +5242,16 @@
       "rustType": "AgentRedeployResult"
     },
     {
+      "type": "agent.resume",
+      "rustType": "AgentResumeResult"
+    },
+    {
       "type": "agent.revert",
       "rustType": "AgentRevertResult"
+    },
+    {
+      "type": "agent.simulate-crash",
+      "rustType": "AgentSimulateCrashResult"
     },
     {
       "type": "agent.stream",
@@ -5228,6 +5368,10 @@
     {
       "type": "environment.list",
       "rustType": "EnvironmentListView"
+    },
+    {
+      "type": "environment.sync-deployment-options",
+      "rustType": "EnvironmentSyncDeploymentOptionsResult"
     },
     {
       "type": "environment.setup-plan",

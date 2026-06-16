@@ -163,8 +163,18 @@ mod tests {
             arb_agent_cancel_invocation_result
         ),
         registry_entry!("AgentDeleteResult", "agent.delete", arb_agent_delete_result),
+        registry_entry!(
+            "AgentFileContentsResult",
+            "agent.file-contents",
+            arb_agent_file_contents_result
+        ),
         registry_entry!("WorkerFilesView", "agent.files", arb_agent_files_result),
         registry_entry!("WorkerGetView", "agent.get", arb_agent_get_result),
+        registry_entry!(
+            "AgentInterruptResult",
+            "agent.interrupt",
+            arb_agent_interrupt_result
+        ),
         registry_entry!("InvokeResultView", "agent.invoke", arb_agent_invoke_result),
         registry_entry!(
             "AgentsMetadataResponseView",
@@ -183,7 +193,13 @@ mod tests {
             "agent.redeploy",
             arb_agent_redeploy_result
         ),
+        registry_entry!("AgentResumeResult", "agent.resume", arb_agent_resume_result),
         registry_entry!("AgentRevertResult", "agent.revert", arb_agent_revert_result),
+        registry_entry!(
+            "AgentSimulateCrashResult",
+            "agent.simulate-crash",
+            arb_agent_simulate_crash_result
+        ),
         registry_entry!("AgentStreamEvent", "agent.stream", arb_agent_stream_event),
         registry_entry!(
             "TryUpdateAllWorkersResult",
@@ -296,6 +312,11 @@ mod tests {
             "EnvironmentListView",
             "environment.list",
             arb_environment_list_result
+        ),
+        registry_entry!(
+            "EnvironmentSyncDeploymentOptionsResult",
+            "environment.sync-deployment-options",
+            arb_environment_sync_deployment_options_result
         ),
         registry_entry!(
             "EnvironmentSetupPlanView",
@@ -2393,6 +2414,51 @@ mod tests {
         )
     }
 
+    fn arb_agent_file_contents_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (
+                any::<bool>(),
+                arb_small_string(),
+                arb_small_string(),
+                arb_small_string(),
+                arb_small_u64(),
+            )
+                .prop_map(|(saved, agent, path, output_path, bytes)| {
+                    crate::model::text::action_result::AgentFileContentsResult {
+                        saved,
+                        agent,
+                        path,
+                        output_path: output_path.into(),
+                        bytes: bytes as usize,
+                    }
+                }),
+        )
+    }
+
+    fn arb_agent_interrupt_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(interrupted, agent)| {
+                crate::model::text::action_result::AgentInterruptResult { interrupted, agent }
+            }),
+        )
+    }
+
+    fn arb_agent_resume_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(resumed, agent)| {
+                crate::model::text::action_result::AgentResumeResult { resumed, agent }
+            }),
+        )
+    }
+
+    fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (any::<bool>(), arb_small_string()).prop_map(|(simulated, agent)| {
+                crate::model::text::action_result::AgentSimulateCrashResult { simulated, agent }
+            }),
+        )
+    }
+
     fn arb_account_delete_result() -> OutputDocumentStrategy {
         serialized_output(
             (any::<bool>(), arb_small_string()).prop_map(|(deleted, account_id)| {
@@ -3774,6 +3840,12 @@ mod tests {
                 },
             ),
         )
+    }
+
+    fn arb_environment_sync_deployment_options_result() -> OutputDocumentStrategy {
+        serialized_output(any::<bool>().prop_map(|updated| {
+            crate::model::text::environment::EnvironmentSyncDeploymentOptionsResult { updated }
+        }))
     }
 
     fn arb_environment_with_details()

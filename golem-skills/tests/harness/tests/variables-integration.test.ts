@@ -261,6 +261,7 @@ describe("Variable substitution integration", () => {
     (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
       success: true,
       stdout: JSON.stringify({
+        $type: "agent.invoke",
         idempotencyKey: "abc-123",
         resultJson: {
           typ: { type: "U64" },
@@ -272,6 +273,7 @@ describe("Variable substitution integration", () => {
       stderr: "Invoking agent test-app/local/CounterAgent.increment\n",
       output: [
         JSON.stringify({
+          $type: "agent.invoke",
           idempotencyKey: "abc-123",
           resultJson: {
             typ: { type: "U64" },
@@ -324,6 +326,7 @@ describe("Variable substitution integration", () => {
       return {
         success: true,
         stdout: JSON.stringify({
+          $type: "agent.invoke",
           idempotencyKey: "abc-123",
           resultJson: {
             typ: { type: "Bool" },
@@ -385,6 +388,7 @@ describe("Variable substitution integration", () => {
     (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
       success: true,
       stdout: JSON.stringify({
+        $type: "agent.invoke",
         idempotencyKey: "abc-123",
         resultsJson: [
           {
@@ -427,6 +431,64 @@ describe("Variable substitution integration", () => {
 
     const result = await executor.execute(spec);
     assert.equal(result.status, "pass", result.stepResults[0]?.error);
+  });
+
+  it("resolves deployment context from typed environment list output", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(workspace);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs);
+
+    (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
+    (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
+      success: true,
+      stdout: JSON.stringify({
+        $type: "environment.list",
+        environments: [
+          {
+            environment: {
+              id: "env-1",
+              currentDeployment: {
+                deploymentRevision: 7,
+              },
+            },
+          },
+        ],
+      }),
+      stderr: "",
+      output: "",
+      exitCode: 0,
+    });
+
+    const originalFetch = globalThis.fetch;
+    let requestedUrl: string | undefined;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify([{ typeName: "CounterAgent" }]), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const spec: ScenarioSpec = {
+        name: "typed-environment-list",
+        settings: { cleanup: false },
+        steps: [
+          {
+            id: "list-agent-types",
+            tag: "list_agent_types" as const,
+            list_agent_types: {},
+            expect: {
+              status: 200,
+              body_contains: "CounterAgent",
+            },
+          },
+        ],
+      };
+
+      const result = await executor.execute(spec);
+      assert.equal(result.status, "pass", result.stepResults[0]?.error);
+      assert.ok(requestedUrl?.includes("/v1/envs/env-1/deployments/7/agent-types"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("substitutes variables in create_agent name", async () => {

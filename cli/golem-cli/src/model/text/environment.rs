@@ -74,6 +74,20 @@ impl CliOutput for EnvironmentListView {
     const KIND: &'static str = "environment.list";
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSyncDeploymentOptionsResult {
+    pub updated: bool,
+}
+
+impl CliOutput for EnvironmentSyncDeploymentOptionsResult {
+    const KIND: &'static str = "environment.sync-deployment-options";
+}
+
+impl TextView for EnvironmentSyncDeploymentOptionsResult {
+    fn log(&self) {}
+}
+
 impl TextView for EnvironmentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![

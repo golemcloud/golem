@@ -45,6 +45,69 @@ impl CliOutput for AgentDeleteResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentFileContentsResult {
+    pub saved: bool,
+    pub agent: String,
+    pub path: String,
+    pub output_path: PathBuf,
+    pub bytes: usize,
+}
+
+impl TextView for AgentFileContentsResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AgentFileContentsResult {
+    const KIND: &'static str = "agent.file-contents";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInterruptResult {
+    pub interrupted: bool,
+    pub agent: String,
+}
+
+impl TextView for AgentInterruptResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AgentInterruptResult {
+    const KIND: &'static str = "agent.interrupt";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentResumeResult {
+    pub resumed: bool,
+    pub agent: String,
+}
+
+impl TextView for AgentResumeResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AgentResumeResult {
+    const KIND: &'static str = "agent.resume";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSimulateCrashResult {
+    pub simulated: bool,
+    pub agent: String,
+}
+
+impl TextView for AgentSimulateCrashResult {
+    fn log(&self) {}
+}
+
+impl CliOutput for AgentSimulateCrashResult {
+    const KIND: &'static str = "agent.simulate-crash";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentRevertResult {
     pub reverted: bool,
     pub agent: String,

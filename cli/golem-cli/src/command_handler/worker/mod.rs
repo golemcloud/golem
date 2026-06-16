@@ -33,7 +33,8 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::action_result::{
-    AgentCancelInvocationResult, AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
+    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
+    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
@@ -669,6 +670,11 @@ impl WorkerCommandHandler {
             format!("for agent {}", format_agent_name_match(&agent_name_match)),
         );
 
+        self.ctx.log_handler().log_view(&AgentSimulateCrashResult {
+            simulated: true,
+            agent: agent_name.0.clone(),
+        })?;
+
         Ok(())
     }
 
@@ -686,6 +692,7 @@ impl WorkerCommandHandler {
 
         let batch_size = self.ctx.http_batch_size();
         let mut cursor = Option::<OplogCursor>::None;
+        let mut all_entries = Vec::<(u64, PublicOplogEntry)>::new();
         let mut had_entries = false;
         loop {
             let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
@@ -716,9 +723,13 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                self.ctx
-                    .log_handler()
-                    .log_view(&AgentOplogView { entries })?;
+                if self.ctx.format().is_structured() {
+                    all_entries.extend(entries);
+                } else {
+                    self.ctx
+                        .log_handler()
+                        .log_view(&AgentOplogView { entries })?;
+                }
             }
 
             if cursor.is_none() {
@@ -726,7 +737,11 @@ impl WorkerCommandHandler {
             }
         }
 
-        if !had_entries {
+        if self.ctx.format().is_structured() {
+            self.ctx.log_handler().log_view(&AgentOplogView {
+                entries: all_entries,
+            })?;
+        } else if !had_entries {
             log_warn("No results.")
         }
 
@@ -1177,6 +1192,11 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
+        self.ctx.log_handler().log_view(&AgentInterruptResult {
+            interrupted: true,
+            agent: agent_name.0.clone(),
+        })?;
+
         Ok(())
     }
 
@@ -1198,6 +1218,11 @@ impl WorkerCommandHandler {
             "Resumed",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx.log_handler().log_view(&AgentResumeResult {
+            resumed: true,
+            agent: agent_name.0.clone(),
+        })?;
 
         Ok(())
     }
@@ -1250,16 +1275,38 @@ impl WorkerCommandHandler {
             }
         };
 
-        self.update_worker(
-            &component.component_name,
-            &component.id,
-            &agent_name.0,
-            mode,
-            target_revision,
-            await_update,
-            disable_wakeup,
-        )
-        .await?;
+        let mut update_results = TryUpdateAllWorkersResult::default();
+        match self
+            .update_worker(
+                &component.component_name,
+                &component.id,
+                &agent_name.0,
+                mode,
+                target_revision,
+                await_update,
+                disable_wakeup,
+            )
+            .await
+        {
+            Ok(()) => update_results.triggered.push(WorkerUpdateAttempt {
+                component_name: component.component_name.clone(),
+                target_revision,
+                agent_name: agent_name.0.as_str().into(),
+                error: None,
+            }),
+            Err(error) => {
+                update_results.failed.push(WorkerUpdateAttempt {
+                    component_name: component.component_name.clone(),
+                    target_revision,
+                    agent_name: agent_name.0.as_str().into(),
+                    error: Some(error.to_string()),
+                });
+                self.ctx.log_handler().log_view(&update_results)?;
+                return Err(error);
+            }
+        }
+
+        self.ctx.log_handler().log_view(&update_results)?;
 
         Ok(())
     }
@@ -1468,6 +1515,13 @@ impl WorkerCommandHandler {
                     "File download cancelled",
                     format!("by user for file {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_view(&AgentFileContentsResult {
+                    saved: false,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: 0,
+                })?;
                 return Ok(());
             }
         }
@@ -1478,6 +1532,13 @@ impl WorkerCommandHandler {
                     "File saved",
                     format!("to {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_view(&AgentFileContentsResult {
+                    saved: true,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: file_contents.len(),
+                })?;
                 Ok(())
             }
             Err(e) => {
