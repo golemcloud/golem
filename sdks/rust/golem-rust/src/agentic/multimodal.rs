@@ -163,7 +163,7 @@ impl<T: MultimodalSchema> MultimodalAdvanced<T> {
 
     pub fn convert_from_schema_value(
         value: SchemaValue,
-        schemas: Vec<(String, SchemaGraph)>,
+        case_names: Vec<String>,
     ) -> Result<Self, String> {
         match value {
             SchemaValue::List { elements } => {
@@ -172,7 +172,7 @@ impl<T: MultimodalSchema> MultimodalAdvanced<T> {
                     let SchemaValue::Variant(VariantValuePayload { case, payload }) = value else {
                         return Err(format!("Expected multimodal variant item, got {value:?}"));
                     };
-                    let (name, _) = schemas
+                    let name = case_names
                         .get(case as usize)
                         .ok_or_else(|| format!("Unknown multimodal case index: {case}"))?;
                     let payload = payload
@@ -205,7 +205,7 @@ impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
         match schema {
             StructuredSchema::Default(schema) => Self::convert_from_schema_value(
                 value,
-                multimodal_cases_from_schema_graph(&schema)
+                multimodal_case_names_from_schema_graph(&schema)
                     .ok_or_else(|| "Expected Multimodal schema".to_string())?,
             ),
             _ => Err("Expected Multimodal schema".to_string()),
@@ -213,8 +213,8 @@ impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
     }
 }
 
-fn multimodal_cases_from_schema_graph(schema: &SchemaGraph) -> Option<Vec<(String, SchemaGraph)>> {
-    if schema.root.metadata().role != Some(crate::schema::Role::Multimodal) {
+fn multimodal_case_names_from_schema_graph(schema: &SchemaGraph) -> Option<Vec<String>> {
+    if schema.root.metadata().role.as_ref() != Some(&crate::schema::Role::Multimodal) {
         return None;
     }
 
@@ -225,16 +225,7 @@ fn multimodal_cases_from_schema_graph(schema: &SchemaGraph) -> Option<Vec<(Strin
         return None;
     };
 
-    Some(
-        cases
-            .iter()
-            .filter_map(|case| {
-                case.payload
-                    .as_ref()
-                    .map(|payload| (case.name.clone(), SchemaGraph::anonymous(payload.clone())))
-            })
-            .collect(),
-    )
+    Some(cases.iter().map(|case| case.name.clone()).collect())
 }
 
 pub struct Multimodal {

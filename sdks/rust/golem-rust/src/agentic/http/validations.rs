@@ -61,6 +61,7 @@ pub fn validate_http_endpoint(
 
     let unstructured_binary_params = collect_unstructured_binary_params(&agent_method.input_schema);
     let unstructured_text_params = collect_unstructured_text_params(&agent_method.input_schema);
+    let multimodal_params = collect_multimodal_params(&agent_method.input_schema);
 
     for endpoint in &agent_method.http_endpoint {
         validate_endpoint_variables(
@@ -69,6 +70,7 @@ pub fn validate_http_endpoint(
             &principal_params,
             &unstructured_binary_params,
             &unstructured_text_params,
+            &multimodal_params,
         )?;
     }
 
@@ -125,6 +127,22 @@ fn collect_unstructured_text_params(
     unstructured_text_params
 }
 
+fn collect_multimodal_params(
+    input_schema: &[(String, EnrichedParameterSchema)],
+) -> HashSet<String> {
+    let mut multimodal_params = HashSet::new();
+
+    for (param_name, param_schema) in input_schema {
+        if let EnrichedParameterSchema::Value(schema) = param_schema
+            && is_multimodal_schema(schema)
+        {
+            multimodal_params.insert(param_name.clone());
+        }
+    }
+
+    multimodal_params
+}
+
 // Collects method input variable names, excluding auto-injected variables.
 fn collect_method_input_vars(
     input_schema: &[(String, EnrichedParameterSchema)],
@@ -173,6 +191,7 @@ fn validate_endpoint_variables(
     principal_params: &HashSet<String>,
     unstructured_binary_params: &HashSet<String>,
     unstructured_text_params: &HashSet<String>,
+    multimodal_params: &HashSet<String>,
 ) -> Result<(), String> {
     fn validate_variable(
         variable_name: &str,
@@ -180,9 +199,11 @@ fn validate_endpoint_variables(
         principal_params: &HashSet<String>,
         unstructured_binary_params: &HashSet<String>,
         unstructured_text_params: &HashSet<String>,
+        multimodal_params: &HashSet<String>,
         method_vars: &HashSet<String>,
         binary_error: &str,
         text_error: &str,
+        multimodal_error: &str,
     ) -> Result<(), String> {
         if principal_params.contains(variable_name) {
             return Err(format!(
@@ -197,6 +218,10 @@ fn validate_endpoint_variables(
 
         if unstructured_text_params.contains(variable_name) {
             return Err(text_error.to_string());
+        }
+
+        if multimodal_params.contains(variable_name) {
+            return Err(multimodal_error.to_string());
         }
 
         if !method_vars.contains(variable_name) {
@@ -216,6 +241,7 @@ fn validate_endpoint_variables(
             principal_params,
             unstructured_binary_params,
             unstructured_text_params,
+            multimodal_params,
             method_vars,
             &format!(
                 "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'UnstructuredBinary'",
@@ -223,6 +249,10 @@ fn validate_endpoint_variables(
             ),
             &format!(
                 "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'UnstructuredText'",
+                var.variable_name
+            ),
+            &format!(
+                "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'Multimodal'",
                 var.variable_name
             ),
         )?;
@@ -235,6 +265,7 @@ fn validate_endpoint_variables(
             principal_params,
             unstructured_binary_params,
             unstructured_text_params,
+            multimodal_params,
             method_vars,
             &format!(
                 "HTTP endpoint query variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
@@ -242,6 +273,10 @@ fn validate_endpoint_variables(
             ),
             &format!(
                 "HTTP endpoint query variable '{}' cannot be used when the method has a single 'UnstructuredText' parameter.",
+                var.variable_name
+            ),
+            &format!(
+                "HTTP endpoint query variable '{}' cannot be used when the method has a single 'Multimodal' parameter.",
                 var.variable_name
             ),
         )?;
@@ -258,6 +293,7 @@ fn validate_endpoint_variables(
                     principal_params,
                     unstructured_binary_params,
                     unstructured_text_params,
+                    multimodal_params,
                     method_vars,
                     &format!(
                         "HTTP endpoint path variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
@@ -265,6 +301,10 @@ fn validate_endpoint_variables(
                     ),
                     &format!(
                         "HTTP endpoint path variable '{}' cannot be used when the method has a single 'UnstructuredText' parameter.",
+                        name
+                    ),
+                    &format!(
+                        "HTTP endpoint path variable '{}' cannot be used when the method has a single 'Multimodal' parameter.",
                         name
                     ),
                 )?;
@@ -347,8 +387,10 @@ fn collect_constructor_input_parameter_names(
 ) -> HashSet<String> {
     let mut param_names = HashSet::new();
 
-    for (name, _) in &agent_constructor.input_schema {
-        param_names.insert(name.clone());
+    for (name, schema) in &agent_constructor.input_schema {
+        if let EnrichedParameterSchema::Value(_) = schema {
+            param_names.insert(name.clone());
+        }
     }
 
     param_names
