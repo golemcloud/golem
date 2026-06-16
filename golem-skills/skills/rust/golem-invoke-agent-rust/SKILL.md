@@ -21,6 +21,8 @@ Text output renders return values using Rust syntax. Multiple return values are 
 
 For machine-readable output, use `--format json` or `--format yaml`. A single return value includes `result` plus `resultJson`; multiple return values include `result` plus `resultsJson`; methods returning `()` or no value omit result fields.
 
+To inspect the full structured CLI output contract, run `golem output-schema`.
+
 ## Agent ID Format
 
 The agent ID identifies the agent type and its constructor parameters:

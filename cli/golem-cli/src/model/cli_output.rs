@@ -17,6 +17,10 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub const CLI_OUTPUT_TYPE_FIELD: &str = "$type";
+pub const COMMAND_OUTPUT_SCHEMA_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/command-output-schema/command-output.schema.json"
+));
 
 pub trait CliOutput: Serialize {
     const KIND: &'static str;
@@ -646,13 +650,8 @@ mod tests {
     }
 
     fn load_command_output_schema() -> Value {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("command-output-schema")
-            .join("command-output.schema.json");
-        let source = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        serde_json::from_str(&source)
-            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()))
+        serde_json::from_str(crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON)
+            .expect("embedded command output schema must parse")
     }
 
     fn schema_output_entries(schema: &Value) -> BTreeMap<String, String> {

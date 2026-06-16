@@ -50,6 +50,7 @@ use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
 use std::ffi::OsString;
+use std::marker::PhantomData;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{Level, debug};
@@ -95,35 +96,30 @@ pub trait CommandHandlerHooks: Sync + Send {
     fn override_pretty_mode() -> bool;
 }
 
-// CommandHandler is responsible for matching commands and producing CLI output using Context,
-// but NOT responsible for storing state (apart from Context and Hooks itself), those should be part of Context.
+// CommandHandler is responsible for matching commands and producing CLI output.
+// Context is initialized lazily only for command arms that need it.
 pub struct CommandHandler<Hooks: CommandHandlerHooks> {
-    ctx: Arc<Context>,
-    #[allow(unused)]
-    hooks: Arc<Hooks>,
+    _phantom: PhantomData<Hooks>,
 }
 
 impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     // NOTE: setting log_output_for_help also means that we are loading the context for showing
     //       help or messages with help, meaning validation warns and confirms should be silenced
     //       for the manifest
-    async fn new(
+    async fn new_context(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
-        hooks: Arc<Hooks>,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            ctx: Arc::new(Context::new(global_flags, log_output_for_help).await?),
-            hooks,
-        })
+    ) -> anyhow::Result<Arc<Context>> {
+        Ok(Arc::new(
+            Context::new(global_flags, log_output_for_help).await?,
+        ))
     }
 
-    async fn new_with_init_hint_error_handler(
+    async fn new_context_with_init_hint_error_handler(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
-        hooks: Arc<Hooks>,
-    ) -> anyhow::Result<Self> {
-        match Self::new(global_flags.clone(), log_output_for_help, hooks).await {
+    ) -> anyhow::Result<Arc<Context>> {
+        match Self::new_context(global_flags.clone(), log_output_for_help).await {
             Ok(ok) => Ok(ok),
             Err(error) => {
                 set_log_output(Output::Stderr);
@@ -164,36 +160,25 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
-                match Self::new_with_init_hint_error_handler(
-                    command.global_flags.clone(),
-                    None,
-                    hooks,
-                )
-                .await
-                {
-                    Ok(handler) => {
-                        let result = handler
-                            .handle_command(command)
-                            .await
-                            .map(|()| ExitCode::SUCCESS);
+                let mut lazy_context = LazyContext::new(command.global_flags.clone(), hooks);
+                let result = Self::handle_subcommand(&mut lazy_context, command.subcommand)
+                    .await
+                    .map(|()| ExitCode::SUCCESS);
 
-                        match result {
-                            Ok(result) => Ok(result),
-                            Err(error) => {
-                                set_log_output(Output::Stderr);
-                                if let Some(hint_error) = error.downcast_ref::<HintError>() {
-                                    handler
-                                        .ctx
-                                        .error_handler()
-                                        .handle_hint_errors(hint_error)
-                                        .map(|()| ExitCode::FAILURE)
-                                } else {
-                                    Err(error)
-                                }
-                            }
+                match result {
+                    Ok(result) => Ok(result),
+                    Err(error) => {
+                        set_log_output(Output::Stderr);
+                        if let Some(ctx) = lazy_context.initialized_context()
+                            && let Some(hint_error) = error.downcast_ref::<HintError>()
+                        {
+                            ctx.error_handler()
+                                .handle_hint_errors(hint_error)
+                                .map(|()| ExitCode::FAILURE)
+                        } else {
+                            Err(error)
                         }
                     }
-                    Err(error) => Err(error),
                 }
             }
             GolemCliCommandParseResult::ErrorWithPartialMatch {
@@ -206,22 +191,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error, &fallback_command);
 
-                let handler = Self::new_with_init_hint_error_handler(
+                let ctx = Self::new_context_with_init_hint_error_handler(
                     fallback_command.global_flags.clone(),
                     Some(Output::Stderr),
-                    hooks,
                 )
                 .await;
 
                 logln("");
                 error.print().unwrap();
 
-                match handler {
-                    Ok(handler) => {
+                match ctx {
+                    Ok(ctx) => {
                         let exit_code = clamp_exit_code(error.exit_code());
-                        handler
-                            .ctx
-                            .error_handler()
+                        ctx.error_handler()
                             .handle_partial_match(partial_match)
                             .await
                             .map(|_| exit_code)
@@ -251,12 +233,12 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         })
     }
 
-    fn handle_command(
-        &self,
-        command: GolemCliCommand,
+    fn handle_subcommand(
+        ctx: &mut LazyContext<Hooks>,
+        subcommand: GolemCliSubcommand,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
         Box::pin(async move {
-            match command.subcommand {
+            match subcommand {
                 // App scoped root commands
                 GolemCliSubcommand::New {
                     application_path,
@@ -264,19 +246,21 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     template,
                 } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .app_handler()
                         .cmd_new(application_path, application_name, component_name, template)
                         .await
                 }
                 GolemCliSubcommand::Templates { filter } => {
-                    self.ctx.app_handler().cmd_templates(filter)
+                    ctx.get_or_init().await?.app_handler().cmd_templates(filter)
                 }
                 GolemCliSubcommand::Build {
                     component_name,
                     build: build_args,
                 } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .app_handler()
                         .cmd_build(component_name, build_args)
                         .await
@@ -287,7 +271,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     agent_type_name,
                     output_dir,
                 } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .bridge_handler()
                         .cmd_generate_bridge(language, component_name, agent_type_name, output_dir)
                         .await
@@ -302,7 +287,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     disable_stream,
                     disable_auto_imports,
                 } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .repl_handler()
                         .cmd_repl(
                             language,
@@ -327,7 +313,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     post_deploy_args,
                     repl_bridge_sdk_target,
                 } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .app_handler()
                         .cmd_deploy(
                             plan,
@@ -343,7 +330,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Clean { component_name } => {
-                    self.ctx.app_handler().cmd_clean(component_name).await
+                    ctx.get_or_init()
+                        .await?
+                        .app_handler()
+                        .cmd_clean(component_name)
+                        .await
                 }
                 GolemCliSubcommand::UpdateAgents {
                     component_name,
@@ -351,7 +342,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     r#await,
                     disable_wakeup,
                 } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .app_handler()
                         .cmd_update_workers(
                             component_name.component_name,
@@ -362,92 +354,179 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::RedeployAgents { component_name } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .app_handler()
                         .cmd_redeploy_workers(component_name.component_name)
                         .await
                 }
                 GolemCliSubcommand::Exec { subcommand } => {
-                    self.ctx.app_handler().exec_custom_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .app_handler()
+                        .exec_custom_command(subcommand)
+                        .await
                 }
 
                 // Other entities
                 GolemCliSubcommand::Environment { subcommand } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .environment_handler()
                         .handle_command(subcommand)
                         .await
                 }
                 GolemCliSubcommand::Component { subcommand } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .component_handler()
                         .handle_command(subcommand)
                         .await
                 }
                 GolemCliSubcommand::Agent { subcommand } => {
-                    self.ctx.worker_handler().handle_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .worker_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 GolemCliSubcommand::AgentType { subcommand } => match subcommand {
                     AgentTypeSubcommand::List => {
-                        self.ctx.app_handler().cmd_list_agent_types().await
+                        ctx.get_or_init()
+                            .await?
+                            .app_handler()
+                            .cmd_list_agent_types()
+                            .await
                     }
                     AgentTypeSubcommand::Get { agent_type_name } => {
-                        self.ctx
+                        ctx.get_or_init()
+                            .await?
                             .app_handler()
                             .cmd_get_agent_type(agent_type_name)
                             .await
                     }
                 },
                 GolemCliSubcommand::Api { subcommand } => {
-                    self.ctx.api_handler().handle_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .api_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 GolemCliSubcommand::Plugin { subcommand } => {
-                    self.ctx.plugin_handler().handle_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .plugin_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 GolemCliSubcommand::Profile { subcommand } => {
-                    self.ctx.profile_handler().handle_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .profile_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 #[cfg(feature = "server-commands")]
                 GolemCliSubcommand::Server { subcommand } => {
-                    self.hooks
-                        .handler_server_commands(self.ctx.clone(), subcommand)
-                        .await
+                    let (context, hooks) = ctx.get_or_init_with_hooks().await?;
+                    hooks.handler_server_commands(context, subcommand).await
                 }
                 GolemCliSubcommand::Account { subcommand } => {
-                    self.ctx.account_handler().handle_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .account_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 GolemCliSubcommand::ApiToken { subcommand } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .api_token_handler()
                         .handle_command(subcommand)
                         .await
                 }
                 GolemCliSubcommand::Secret { subcommand } => {
-                    self.ctx.secret_handler().handle_command(subcommand).await
+                    ctx.get_or_init()
+                        .await?
+                        .secret_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 GolemCliSubcommand::RetryPolicy { subcommand } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .retry_policy_handler()
                         .handle_command(subcommand)
                         .await
                 }
                 GolemCliSubcommand::Resource { subcommand } => {
-                    self.ctx
+                    ctx.get_or_init()
+                        .await?
                         .resource_definition_handler()
                         .handle_command(subcommand)
                         .await
                 }
-                GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
+                GolemCliSubcommand::OutputSchema => Self::cmd_output_schema(),
+                GolemCliSubcommand::Completion { shell } => Self::cmd_completion(shell),
             }
         })
     }
 
-    fn cmd_completion(&self, shell: Shell) -> anyhow::Result<()> {
+    fn cmd_output_schema() -> anyhow::Result<()> {
+        print!("{}", crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON);
+        Ok(())
+    }
+
+    fn cmd_completion(shell: Shell) -> anyhow::Result<()> {
         let mut command = GolemCliCommand::command();
         let command_name = command_name();
         debug!(command_name, shell=%shell, "completion");
         clap_complete::generate(shell, &mut command, command_name, &mut std::io::stdout());
         Ok(())
+    }
+}
+
+struct LazyContext<Hooks: CommandHandlerHooks> {
+    global_flags: GolemCliGlobalFlags,
+    #[allow(unused)]
+    hooks: Arc<Hooks>,
+    ctx: Option<Arc<Context>>,
+}
+
+impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
+    fn new(global_flags: GolemCliGlobalFlags, hooks: Arc<Hooks>) -> Self {
+        Self {
+            global_flags,
+            hooks,
+            ctx: None,
+        }
+    }
+
+    // Context-free commands such as `output-schema` and `completion` must not
+    // call this; all contextual command arms initialize through this method.
+    async fn get_or_init(&mut self) -> anyhow::Result<Arc<Context>> {
+        if self.ctx.is_none() {
+            self.ctx = Some(
+                CommandHandler::<Hooks>::new_context_with_init_hint_error_handler(
+                    self.global_flags.clone(),
+                    None,
+                )
+                .await?,
+            );
+        }
+
+        Ok(self.ctx.as_ref().expect("context initialized").clone())
+    }
+
+    #[cfg(feature = "server-commands")]
+    async fn get_or_init_with_hooks(&mut self) -> anyhow::Result<(Arc<Context>, Arc<Hooks>)> {
+        let ctx = self.get_or_init().await?;
+        Ok((ctx, self.hooks.clone()))
+    }
+
+    fn initialized_context(&self) -> Option<Arc<Context>> {
+        self.ctx.clone()
     }
 }
 

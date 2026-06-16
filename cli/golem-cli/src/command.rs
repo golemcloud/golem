@@ -88,6 +88,7 @@ impl GolemCliCommand {
                     vec!["completion"],
                     vec!["generate-bridge"],
                     vec!["new"],
+                    vec!["output-schema"],
                     vec!["plugin"],
                     vec!["profile"],
                     vec!["repl"],
@@ -887,6 +888,8 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ResourceDefinitionSubcommand,
     },
+    /// Print the structured CLI output JSON schema to stdout
+    OutputSchema,
     /// Generate shell completion. The completion script is written to stdout
     /// as plain text; the global `--format` flag is ignored. Redirect the
     /// output into your shell's completions location (or `source` it from

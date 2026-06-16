@@ -42,6 +42,8 @@ This is different from the application manifest schema under
   schema tests, and DTO-backed arbitrary generators.
 - `cli/golem-cli/src/model/text/**` — many structured output view types.
 - `cli/golem-cli/src/model/**` — CLI DTO/view models used by structured output.
+- `golem output-schema` — top-level command that prints the raw schema document
+  for automated agents and tooling.
 - `Makefile.toml` — `check-cli-output-schema` and
   `update-cli-output-schema-summary` tasks.
 
@@ -111,7 +113,8 @@ Useful implementation notes for future oplog work:
    when CLI output field names, `$type` names, or examples change.
 7. Check whether `golem-skills/tests` needs updates when output field names,
    `$type` names, JSON formatting, or invoke JSON unwrapping changes.
-8. Regenerate the local output summary when the registry or output types change.
+8. Verify `golem output-schema` still prints the current raw schema document.
+9. Regenerate the local output summary when the registry or output types change.
 
 ## User-Facing Skill Impact
 
@@ -166,6 +169,12 @@ cargo make update-cli-output-schema-summary
 cargo check -p golem-cli
 ```
 
+Smoke-check schema exposure when the command or schema file changed:
+
+```shell
+cargo run -p golem-cli -- output-schema
+```
+
 If arbitrary generators changed, rerun the generated-example prop test a few
 times:
 
@@ -198,6 +207,7 @@ regression seed.
 7. `golem-skills/tests` impact has been checked when public output changed.
 8. Generated docs from user-facing skills were regenerated if `golem-skills/skills`
    changed.
-9. Remaining `JsonValue` leaves are documented and intentional.
-10. Focused schema tests, check task, summary update, and `cargo check -p
+9. `golem output-schema` prints the current raw schema document.
+10. Remaining `JsonValue` leaves are documented and intentional.
+11. Focused schema tests, check task, summary update, and `cargo check -p
    golem-cli` pass.
