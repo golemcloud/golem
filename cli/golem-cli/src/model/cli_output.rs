@@ -1026,11 +1026,460 @@ mod tests {
         .boxed()
     }
 
-    fn render_empty_agent_oplog() -> Value {
+    fn render_sample_agent_oplog() -> Value {
         to_cli_output_value(&crate::model::text::worker::AgentOplogView {
-            entries: Vec::new(),
+            entries: sample_public_oplog_entries()
+                .into_iter()
+                .enumerate()
+                .map(|(index, entry)| (index as u64, entry))
+                .collect(),
         })
         .expect("generated agent oplog should serialize")
+    }
+
+    fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogEntry> {
+        use golem_common::base_model::retry_policy::{
+            ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
+        };
+        use golem_common::model::agent::{
+            ComponentModelElementValue, DataValue, ElementValue, ElementValues,
+        };
+        use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+        use golem_common::model::invocation_context::{SpanId, TraceId};
+        use golem_common::model::oplog::public_oplog_entry::*;
+        use golem_common::model::oplog::*;
+        use golem_common::model::regions::OplogRegion;
+        use golem_common::model::{AgentId, Empty, IdempotencyKey, Timestamp};
+        use golem_wasm::IntoValueAndType;
+        use std::iter::FromIterator;
+        use uuid::Uuid;
+
+        fn timestamp() -> Timestamp {
+            Timestamp::from(0)
+        }
+
+        fn component_id() -> ComponentId {
+            ComponentId(Uuid::parse_str("13a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap())
+        }
+
+        fn agent_id(name: &str) -> AgentId {
+            AgentId {
+                component_id: component_id(),
+                agent_id: name.to_string(),
+            }
+        }
+
+        fn plugin(priority: i32) -> PluginInstallationDescription {
+            PluginInstallationDescription {
+                environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
+                plugin_priority: PluginPriority(priority),
+                plugin_name: "generated-plugin".to_string(),
+                plugin_version: "1.0.0".to_string(),
+                parameters: BTreeMap::from_iter([("key".to_string(), "value".to_string())]),
+            }
+        }
+
+        fn component_value(value: golem_wasm::ValueAndType) -> ElementValue {
+            ElementValue::ComponentModel(ComponentModelElementValue { value })
+        }
+
+        fn data_value(value: golem_wasm::ValueAndType) -> DataValue {
+            DataValue::Tuple(ElementValues {
+                elements: vec![component_value(value)],
+            })
+        }
+
+        fn string_data_value(value: &str) -> DataValue {
+            data_value(value.to_string().into_value_and_type())
+        }
+
+        fn span_context() -> Vec<Vec<PublicSpanData>> {
+            vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: timestamp(),
+                parent_id: None,
+                linked_context: Some(1),
+                attributes: vec![PublicAttribute {
+                    key: "component".to_string(),
+                    value: PublicAttributeValue::String(StringAttributeValue {
+                        value: "generated".to_string(),
+                    }),
+                }],
+                inherited: true,
+            })]]
+        }
+
+        fn method_invocation() -> PublicAgentInvocation {
+            PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+                idempotency_key: IdempotencyKey::new("method-key".to_string()),
+                method_name: "generated-method".to_string(),
+                function_input: string_data_value("input"),
+                trace_id: TraceId::generate(),
+                trace_states: vec!["trace-state".to_string()],
+                invocation_context: span_context(),
+            })
+        }
+
+        fn raw_snapshot() -> PublicSnapshotData {
+            PublicSnapshotData::Raw(RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            })
+        }
+
+        fn json_snapshot() -> PublicSnapshotData {
+            PublicSnapshotData::Json(JsonSnapshotData {
+                data: json!({ "counter": 42 }),
+            })
+        }
+
+        fn multipart_snapshot() -> PublicSnapshotData {
+            PublicSnapshotData::Multipart(MultipartSnapshotData {
+                mime_type: "multipart/mixed; boundary=generated".to_string(),
+                parts: vec![
+                    MultipartSnapshotPart {
+                        name: "state".to_string(),
+                        content_type: "application/json".to_string(),
+                        data: MultipartPartData::Json(JsonSnapshotData {
+                            data: json!({ "state": "ok" }),
+                        }),
+                    },
+                    MultipartSnapshotPart {
+                        name: "bytes".to_string(),
+                        content_type: "application/octet-stream".to_string(),
+                        data: MultipartPartData::Raw(RawSnapshotData {
+                            data: vec![4, 5, 6],
+                            mime_type: "application/octet-stream".to_string(),
+                        }),
+                    },
+                ],
+            })
+        }
+
+        let retry_policy_state = PublicRetryPolicyState::AndThen(PublicRetryPolicyStateAndThen {
+            left: Box::new(PublicRetryPolicyState::Counter(
+                PublicRetryPolicyStateCounter { count: 2 },
+            )),
+            right: Box::new(PublicRetryPolicyState::Terminal(Empty {})),
+            on_right: true,
+        });
+
+        let retry_policy = PublicNamedRetryPolicy {
+            name: "generated-retry".to_string(),
+            priority: 10,
+            predicate: ApiPredicate::True(ApiPredicateTrue {}),
+            policy: ApiRetryPolicy::Immediate(ApiImmediatePolicy {}),
+        };
+
+        vec![
+            PublicOplogEntry::Create(CreateParams {
+                timestamp: timestamp(),
+                agent_id: agent_id("generated-agent"),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
+                component_revision: ComponentRevision::new(1).unwrap(),
+                env: BTreeMap::from_iter([("ENV".to_string(), "value".to_string())]),
+                created_by: golem_common::model::account::AccountId::new(),
+                local_agent_config: vec![golem_common::model::worker::TypedAgentConfigEntry {
+                    path: vec!["config".to_string()],
+                    value: "configured".to_string().into_value_and_type(),
+                }],
+                environment_id: EnvironmentId::new(),
+                parent: Some(agent_id("parent-agent")),
+                component_size: 10,
+                initial_total_linear_memory_size: 20,
+                initial_active_plugins: BTreeSet::from_iter([plugin(0)]),
+                original_phantom_id: Some(
+                    Uuid::parse_str("23a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+                ),
+                instance_id: Uuid::parse_str("33a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+            }),
+            PublicOplogEntry::HostCall(HostCallParams {
+                timestamp: timestamp(),
+                function_name: "wasi:keyvalue/store.{get}".to_string(),
+                request: "request".to_string().into_value_and_type(),
+                response: golem_wasm::ValueAndType {
+                    value: golem_wasm::Value::List(vec![golem_wasm::Value::U64(1)]),
+                    typ: golem_wasm::analysis::analysed_type::list(
+                        golem_wasm::analysis::analysed_type::u64(),
+                    ),
+                },
+                durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
+                    WriteRemoteBatchedParameters {
+                        index: Some(OplogIndex::from_u64(1)),
+                    },
+                ),
+            }),
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                timestamp: timestamp(),
+                invocation: method_invocation(),
+            }),
+            PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+                timestamp: timestamp(),
+                result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
+                    output: string_data_value("output"),
+                }),
+                consumed_fuel: 100,
+                component_revision: ComponentRevision::new(1).unwrap(),
+            }),
+            PublicOplogEntry::Suspend(SuspendParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::Error(ErrorParams {
+                timestamp: timestamp(),
+                error: "generated error".to_string(),
+                retry_from: OplogIndex::INITIAL,
+                inside_atomic_region: false,
+                retry_policy_state: Some(retry_policy_state),
+            }),
+            PublicOplogEntry::NoOp(NoOpParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::Jump(JumpParams {
+                timestamp: timestamp(),
+                jump: OplogRegion {
+                    start: OplogIndex::from_u64(1),
+                    end: OplogIndex::from_u64(2),
+                },
+            }),
+            PublicOplogEntry::Interrupted(InterruptedParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::Exited(ExitedParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
+                timestamp: timestamp(),
+                begin_index: OplogIndex::from_u64(1),
+            }),
+            PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
+                timestamp: timestamp(),
+                begin_index: OplogIndex::from_u64(1),
+            }),
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                timestamp: timestamp(),
+                invocation: PublicAgentInvocation::AgentInitialization(
+                    AgentInitializationParameters {
+                        idempotency_key: IdempotencyKey::new("init-key".to_string()),
+                        constructor_parameters: string_data_value("constructor"),
+                        trace_id: TraceId::generate(),
+                        trace_states: vec![],
+                        invocation_context: span_context(),
+                    },
+                ),
+            }),
+            PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+                timestamp: timestamp(),
+                target_revision: ComponentRevision::new(2).unwrap(),
+                description: PublicUpdateDescription::SnapshotBased(
+                    SnapshotBasedUpdateParameters {
+                        payload: vec![7, 8, 9],
+                        mime_type: "application/octet-stream".to_string(),
+                    },
+                ),
+            }),
+            PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
+                timestamp: timestamp(),
+                target_revision: ComponentRevision::new(2).unwrap(),
+                new_component_size: 30,
+                new_active_plugins: BTreeSet::from_iter([plugin(1)]),
+            }),
+            PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+                timestamp: timestamp(),
+                target_revision: ComponentRevision::new(3).unwrap(),
+                details: None,
+            }),
+            PublicOplogEntry::GrowMemory(GrowMemoryParams {
+                timestamp: timestamp(),
+                delta: 64,
+            }),
+            PublicOplogEntry::FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParams {
+                timestamp: timestamp(),
+                delta: -5,
+            }),
+            PublicOplogEntry::CreateResource(CreateResourceParams {
+                timestamp: timestamp(),
+                id: AgentResourceId(1),
+                name: "resource".to_string(),
+                owner: "owner".to_string(),
+            }),
+            PublicOplogEntry::DropResource(DropResourceParams {
+                timestamp: timestamp(),
+                id: AgentResourceId(1),
+                name: "resource".to_string(),
+                owner: "owner".to_string(),
+            }),
+            PublicOplogEntry::Log(LogParams {
+                timestamp: timestamp(),
+                level: LogLevel::Info,
+                context: "generated".to_string(),
+                message: "message".to_string(),
+            }),
+            PublicOplogEntry::Restart(RestartParams {
+                timestamp: timestamp(),
+            }),
+            PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
+                timestamp: timestamp(),
+                plugin: plugin(2),
+            }),
+            PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
+                timestamp: timestamp(),
+                plugin: plugin(3),
+            }),
+            PublicOplogEntry::Revert(RevertParams {
+                timestamp: timestamp(),
+                dropped_region: OplogRegion {
+                    start: OplogIndex::from_u64(5),
+                    end: OplogIndex::from_u64(10),
+                },
+            }),
+            PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
+                timestamp: timestamp(),
+                idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
+            }),
+            PublicOplogEntry::StartSpan(StartSpanParams {
+                timestamp: timestamp(),
+                span_id: SpanId::generate(),
+                parent_id: Some(SpanId::generate()),
+                linked_context: Some(SpanId::generate()),
+                attributes: vec![PublicAttribute {
+                    key: "http.method".to_string(),
+                    value: PublicAttributeValue::String(StringAttributeValue {
+                        value: "GET".to_string(),
+                    }),
+                }],
+            }),
+            PublicOplogEntry::FinishSpan(FinishSpanParams {
+                timestamp: timestamp(),
+                span_id: SpanId::generate(),
+            }),
+            PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
+                timestamp: timestamp(),
+                span_id: SpanId::generate(),
+                key: "http.status_code".to_string(),
+                value: PublicAttributeValue::String(StringAttributeValue {
+                    value: "200".to_string(),
+                }),
+            }),
+            PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
+                timestamp: timestamp(),
+                persistence_level: PersistenceLevel::Smart,
+            }),
+            PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
+                timestamp: timestamp(),
+                transaction_id: golem_common::model::TransactionId::new("txn-1".to_string()),
+            }),
+            PublicOplogEntry::PreCommitRemoteTransaction(PreCommitRemoteTransactionParams {
+                timestamp: timestamp(),
+                begin_index: OplogIndex::from_u64(11),
+            }),
+            PublicOplogEntry::PreRollbackRemoteTransaction(PreRollbackRemoteTransactionParams {
+                timestamp: timestamp(),
+                begin_index: OplogIndex::from_u64(11),
+            }),
+            PublicOplogEntry::CommittedRemoteTransaction(CommittedRemoteTransactionParams {
+                timestamp: timestamp(),
+                begin_index: OplogIndex::from_u64(11),
+            }),
+            PublicOplogEntry::RolledBackRemoteTransaction(RolledBackRemoteTransactionParams {
+                timestamp: timestamp(),
+                begin_index: OplogIndex::from_u64(11),
+            }),
+            PublicOplogEntry::Snapshot(SnapshotParams {
+                timestamp: timestamp(),
+                data: raw_snapshot(),
+            }),
+            PublicOplogEntry::Snapshot(SnapshotParams {
+                timestamp: timestamp(),
+                data: json_snapshot(),
+            }),
+            PublicOplogEntry::Snapshot(SnapshotParams {
+                timestamp: timestamp(),
+                data: multipart_snapshot(),
+            }),
+            PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
+                timestamp: timestamp(),
+                plugin: plugin(4),
+                target_agent_id: agent_id("target-agent"),
+                confirmed_up_to: OplogIndex::from_u64(20),
+                sending_up_to: OplogIndex::from_u64(21),
+                last_batch_start: OplogIndex::from_u64(19),
+            }),
+            PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+                timestamp: timestamp(),
+                policy: retry_policy,
+            }),
+            PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
+                timestamp: timestamp(),
+                name: "generated-retry".to_string(),
+            }),
+            PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+                timestamp: timestamp(),
+                result: PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
+                    snapshot: json_snapshot(),
+                }),
+                consumed_fuel: 101,
+                component_revision: ComponentRevision::new(4).unwrap(),
+            }),
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                timestamp: timestamp(),
+                invocation: PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
+                    snapshot: multipart_snapshot(),
+                }),
+            }),
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                timestamp: timestamp(),
+                invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            }),
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                timestamp: timestamp(),
+                invocation: PublicAgentInvocation::ProcessOplogEntries(
+                    ProcessOplogEntriesParameters {
+                        idempotency_key: IdempotencyKey::new("process-key".to_string()),
+                    },
+                ),
+            }),
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                timestamp: timestamp(),
+                invocation: PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+                    target_revision: ComponentRevision::new(5).unwrap(),
+                }),
+            }),
+            PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+                timestamp: timestamp(),
+                result: PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters {
+                    error: Some("load failed".to_string()),
+                }),
+                consumed_fuel: 102,
+                component_revision: ComponentRevision::new(5).unwrap(),
+            }),
+            PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+                timestamp: timestamp(),
+                result: PublicAgentInvocationResult::ProcessOplogEntries(
+                    ProcessOplogEntriesResultParameters { error: None },
+                ),
+                consumed_fuel: 103,
+                component_revision: ComponentRevision::new(6).unwrap(),
+            }),
+            PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+                timestamp: timestamp(),
+                result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
+                consumed_fuel: 104,
+                component_revision: ComponentRevision::new(7).unwrap(),
+            }),
+            PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+                timestamp: timestamp(),
+                target_revision: ComponentRevision::new(8).unwrap(),
+                description: PublicUpdateDescription::Automatic(Empty {}),
+            }),
+        ]
     }
 
     fn arb_build_result() -> OutputDocumentStrategy {
@@ -1689,7 +2138,7 @@ mod tests {
     }
 
     fn arb_agent_oplog_result() -> OutputDocumentStrategy {
-        Just(render_empty_agent_oplog()).boxed()
+        Just(render_sample_agent_oplog()).boxed()
     }
 
     fn arb_agent_stream_event() -> OutputDocumentStrategy {

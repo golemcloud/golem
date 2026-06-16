@@ -2817,11 +2817,480 @@
       "type": "array",
       "items": [
         { "type": "integer", "minimum": 0 },
-        { "$ref": "#/definitions/JsonValue" }
+        { "$ref": "#/definitions/PublicOplogEntry" }
       ],
       "additionalItems": false,
       "minItems": 2,
       "maxItems": 2
+    },
+    "PublicOplogEntry": {
+      "oneOf": [
+        { "$ref": "#/definitions/PublicOplogEntryCreate" },
+        { "$ref": "#/definitions/PublicOplogEntryHostCall" },
+        { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
+        { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
+        { "$ref": "#/definitions/PublicOplogEntrySuspend" },
+        { "$ref": "#/definitions/PublicOplogEntryError" },
+        { "$ref": "#/definitions/PublicOplogEntryNoOp" },
+        { "$ref": "#/definitions/PublicOplogEntryJump" },
+        { "$ref": "#/definitions/PublicOplogEntryInterrupted" },
+        { "$ref": "#/definitions/PublicOplogEntryExited" },
+        { "$ref": "#/definitions/PublicOplogEntryBeginAtomicRegion" },
+        { "$ref": "#/definitions/PublicOplogEntryEndAtomicRegion" },
+        { "$ref": "#/definitions/PublicOplogEntryBeginRemoteWrite" },
+        { "$ref": "#/definitions/PublicOplogEntryEndRemoteWrite" },
+        { "$ref": "#/definitions/PublicOplogEntryPendingAgentInvocation" },
+        { "$ref": "#/definitions/PublicOplogEntryPendingUpdate" },
+        { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
+        { "$ref": "#/definitions/PublicOplogEntryFailedUpdate" },
+        { "$ref": "#/definitions/PublicOplogEntryGrowMemory" },
+        { "$ref": "#/definitions/PublicOplogEntryFilesystemStorageUsageUpdate" },
+        { "$ref": "#/definitions/PublicOplogEntryCreateResource" },
+        { "$ref": "#/definitions/PublicOplogEntryDropResource" },
+        { "$ref": "#/definitions/PublicOplogEntryLog" },
+        { "$ref": "#/definitions/PublicOplogEntryRestart" },
+        { "$ref": "#/definitions/PublicOplogEntryActivatePlugin" },
+        { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
+        { "$ref": "#/definitions/PublicOplogEntryRevert" },
+        { "$ref": "#/definitions/PublicOplogEntryCancelPendingInvocation" },
+        { "$ref": "#/definitions/PublicOplogEntryStartSpan" },
+        { "$ref": "#/definitions/PublicOplogEntryFinishSpan" },
+        { "$ref": "#/definitions/PublicOplogEntrySetSpanAttribute" },
+        { "$ref": "#/definitions/PublicOplogEntryChangePersistenceLevel" },
+        { "$ref": "#/definitions/PublicOplogEntryBeginRemoteTransaction" },
+        { "$ref": "#/definitions/PublicOplogEntryPreCommitRemoteTransaction" },
+        { "$ref": "#/definitions/PublicOplogEntryPreRollbackRemoteTransaction" },
+        { "$ref": "#/definitions/PublicOplogEntryCommittedRemoteTransaction" },
+        { "$ref": "#/definitions/PublicOplogEntryRolledBackRemoteTransaction" },
+        { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
+        { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
+        { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
+        { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" }
+      ]
+    },
+    "AgentId": {
+      "type": "object",
+      "required": ["componentId", "agentId"],
+      "properties": {
+        "componentId": { "type": "string" },
+        "agentId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PluginInstallationDescription": {
+      "type": "object",
+      "required": ["environmentPluginGrantId", "pluginPriority", "pluginName", "pluginVersion", "parameters"],
+      "properties": {
+        "environmentPluginGrantId": { "type": "string" },
+        "pluginPriority": { "type": "integer" },
+        "pluginName": { "type": "string" },
+        "pluginVersion": { "type": "string" },
+        "parameters": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "OplogRegion": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCreate": {
+      "type": "object",
+      "required": ["type", "timestamp", "agentId", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
+      "properties": {
+        "type": { "const": "Create" },
+        "timestamp": { "type": "string" },
+        "agentId": { "$ref": "#/definitions/AgentId" },
+        "agentMode": { "$ref": "#/definitions/AgentMode" },
+        "componentRevision": { "type": "integer", "minimum": 0 },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "createdBy": { "type": "string" },
+        "localAgentConfig": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
+        "environmentId": { "type": "string" },
+        "parent": { "oneOf": [{ "$ref": "#/definitions/AgentId" }, { "type": "null" }] },
+        "componentSize": { "type": "integer", "minimum": 0 },
+        "initialTotalLinearMemorySize": { "type": "integer", "minimum": 0 },
+        "initialActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } },
+        "originalPhantomId": { "type": ["string", "null"] },
+        "instanceId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryHostCall": {
+      "type": "object",
+      "required": ["type", "timestamp", "functionName", "request", "response", "durableFunctionType"],
+      "properties": {
+        "type": { "const": "HostCall" },
+        "timestamp": { "type": "string" },
+        "functionName": { "type": "string" },
+        "request": { "$ref": "#/definitions/ValueAndTypeJson" },
+        "response": { "$ref": "#/definitions/ValueAndTypeJson" },
+        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryAgentInvocationStarted": {
+      "type": "object",
+      "required": ["type", "timestamp", "invocation"],
+      "properties": {
+        "type": { "const": "AgentInvocationStarted" },
+        "timestamp": { "type": "string" },
+        "invocation": { "$ref": "#/definitions/PublicAgentInvocation" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryAgentInvocationFinished": {
+      "type": "object",
+      "required": ["type", "timestamp", "result", "consumedFuel", "componentRevision"],
+      "properties": {
+        "type": { "const": "AgentInvocationFinished" },
+        "timestamp": { "type": "string" },
+        "result": { "$ref": "#/definitions/PublicAgentInvocationResult" },
+        "consumedFuel": { "type": "integer" },
+        "componentRevision": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogTimestampOnlyEntry": {
+      "type": "object",
+      "required": ["type", "timestamp"],
+      "properties": {
+        "type": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySuspend": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Suspend" } } }] },
+    "PublicOplogEntryNoOp": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "NoOp" } } }] },
+    "PublicOplogEntryInterrupted": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Interrupted" } } }] },
+    "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
+    "PublicOplogEntryBeginAtomicRegion": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginAtomicRegion" } } }] },
+    "PublicOplogEntryBeginRemoteWrite": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginRemoteWrite" } } }] },
+    "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
+    "PublicOplogEntryError": {
+      "type": "object",
+      "required": ["type", "timestamp", "error", "retryFrom", "insideAtomicRegion"],
+      "properties": {
+        "type": { "const": "Error" },
+        "timestamp": { "type": "string" },
+        "error": { "type": "string" },
+        "retryFrom": { "type": "integer", "minimum": 0 },
+        "insideAtomicRegion": { "type": "boolean" },
+        "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryJump": {
+      "type": "object",
+      "required": ["type", "timestamp", "jump"],
+      "properties": { "type": { "const": "Jump" }, "timestamp": { "type": "string" }, "jump": { "$ref": "#/definitions/OplogRegion" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryEndAtomicRegion": {
+      "type": "object",
+      "required": ["type", "timestamp", "beginIndex"],
+      "properties": { "type": { "const": "EndAtomicRegion" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryEndRemoteWrite": {
+      "type": "object",
+      "required": ["type", "timestamp", "beginIndex"],
+      "properties": { "type": { "const": "EndRemoteWrite" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryPendingAgentInvocation": {
+      "type": "object",
+      "required": ["type", "timestamp", "invocation"],
+      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryPendingUpdate": {
+      "type": "object",
+      "required": ["type", "timestamp", "targetRevision", "description"],
+      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySuccessfulUpdate": {
+      "type": "object",
+      "required": ["type", "timestamp", "targetRevision", "newComponentSize", "newActivePlugins"],
+      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryFailedUpdate": {
+      "type": "object",
+      "required": ["type", "timestamp", "targetRevision"],
+      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryGrowMemory": {
+      "type": "object",
+      "required": ["type", "timestamp", "delta"],
+      "properties": { "type": { "const": "GrowMemory" }, "timestamp": { "type": "string" }, "delta": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryFilesystemStorageUsageUpdate": {
+      "type": "object",
+      "required": ["type", "timestamp", "delta"],
+      "properties": { "type": { "const": "FilesystemStorageUsageUpdate" }, "timestamp": { "type": "string" }, "delta": { "type": "integer" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCreateResource": {
+      "type": "object",
+      "required": ["type", "timestamp", "id", "name", "owner"],
+      "properties": { "type": { "const": "CreateResource" }, "timestamp": { "type": "string" }, "id": { "type": "integer", "minimum": 0 }, "name": { "type": "string" }, "owner": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryDropResource": {
+      "type": "object",
+      "required": ["type", "timestamp", "id", "name", "owner"],
+      "properties": { "type": { "const": "DropResource" }, "timestamp": { "type": "string" }, "id": { "type": "integer", "minimum": 0 }, "name": { "type": "string" }, "owner": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryLog": {
+      "type": "object",
+      "required": ["type", "timestamp", "level", "context", "message"],
+      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryActivatePlugin": {
+      "type": "object",
+      "required": ["type", "timestamp", "plugin"],
+      "properties": { "type": { "const": "ActivatePlugin" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryDeactivatePlugin": {
+      "type": "object",
+      "required": ["type", "timestamp", "plugin"],
+      "properties": { "type": { "const": "DeactivatePlugin" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryRevert": {
+      "type": "object",
+      "required": ["type", "timestamp", "droppedRegion"],
+      "properties": { "type": { "const": "Revert" }, "timestamp": { "type": "string" }, "droppedRegion": { "$ref": "#/definitions/OplogRegion" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCancelPendingInvocation": {
+      "type": "object",
+      "required": ["type", "timestamp", "idempotencyKey"],
+      "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "idempotencyKey": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryStartSpan": {
+      "type": "object",
+      "required": ["type", "timestamp", "spanId", "attributes"],
+      "properties": { "type": { "const": "StartSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "parentId": { "type": ["string", "null"] }, "linkedContext": { "type": ["string", "null"] }, "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryFinishSpan": {
+      "type": "object",
+      "required": ["type", "timestamp", "spanId"],
+      "properties": { "type": { "const": "FinishSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySetSpanAttribute": {
+      "type": "object",
+      "required": ["type", "timestamp", "spanId", "key", "value"],
+      "properties": { "type": { "const": "SetSpanAttribute" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "key": { "type": "string" }, "value": { "$ref": "#/definitions/PublicAttributeValue" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryChangePersistenceLevel": {
+      "type": "object",
+      "required": ["type", "timestamp", "persistenceLevel"],
+      "properties": { "type": { "const": "ChangePersistenceLevel" }, "timestamp": { "type": "string" }, "persistenceLevel": { "$ref": "#/definitions/PersistenceLevel" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryBeginRemoteTransaction": {
+      "type": "object",
+      "required": ["type", "timestamp", "transactionId"],
+      "properties": { "type": { "const": "BeginRemoteTransaction" }, "timestamp": { "type": "string" }, "transactionId": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryPreCommitRemoteTransaction": {
+      "type": "object",
+      "required": ["type", "timestamp", "beginIndex"],
+      "properties": { "type": { "const": "PreCommitRemoteTransaction" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryPreRollbackRemoteTransaction": {
+      "type": "object",
+      "required": ["type", "timestamp", "beginIndex"],
+      "properties": { "type": { "const": "PreRollbackRemoteTransaction" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCommittedRemoteTransaction": {
+      "type": "object",
+      "required": ["type", "timestamp", "beginIndex"],
+      "properties": { "type": { "const": "CommittedRemoteTransaction" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryRolledBackRemoteTransaction": {
+      "type": "object",
+      "required": ["type", "timestamp", "beginIndex"],
+      "properties": { "type": { "const": "RolledBackRemoteTransaction" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySnapshot": {
+      "type": "object",
+      "required": ["type", "timestamp", "data"],
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryOplogProcessorCheckpoint": {
+      "type": "object",
+      "required": ["type", "timestamp", "plugin", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
+      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySetRetryPolicy": {
+      "type": "object",
+      "required": ["type", "timestamp", "policy"],
+      "properties": { "type": { "const": "SetRetryPolicy" }, "timestamp": { "type": "string" }, "policy": { "$ref": "#/definitions/PublicNamedRetryPolicy" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryRemoveRetryPolicy": {
+      "type": "object",
+      "required": ["type", "timestamp", "name"],
+      "properties": { "type": { "const": "RemoveRetryPolicy" }, "timestamp": { "type": "string" }, "name": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicDurableFunctionType": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadLocal" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteLocal" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadRemote" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemote" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemoteBatched" }, "index": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemoteTransaction" }, "index": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false }
+      ]
+    },
+    "PublicAgentInvocation": {
+      "oneOf": [
+        { "$ref": "#/definitions/PublicAgentInvocationAgentInitialization" },
+        { "$ref": "#/definitions/PublicAgentInvocationAgentMethodInvocation" },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "idempotencyKey"], "properties": { "type": { "const": "ProcessOplogEntries" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "targetRevision"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
+      ]
+    },
+    "PublicAgentInvocationAgentInitialization": {
+      "type": "object",
+      "required": ["type", "idempotencyKey", "constructorParameters", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "AgentInitialization" }, "idempotencyKey": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/DataValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "additionalProperties": false
+    },
+    "PublicAgentInvocationAgentMethodInvocation": {
+      "type": "object",
+      "required": ["type", "idempotencyKey", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "AgentMethodInvocation" }, "idempotencyKey": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/DataValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "additionalProperties": false
+    },
+    "PublicAgentInvocationResult": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentInitialization" }, "output": { "$ref": "#/definitions/DataValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentMethod" }, "output": { "$ref": "#/definitions/DataValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "ManualUpdate" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "LoadSnapshot" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "SaveSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "ProcessOplogEntries" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false }
+      ]
+    },
+    "DataValue": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "elements"], "properties": { "type": { "const": "Tuple" }, "elements": { "type": "array", "items": { "$ref": "#/definitions/ElementValue" } } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "elements"], "properties": { "type": { "const": "Multimodal" }, "elements": { "type": "array", "items": { "$ref": "#/definitions/NamedElementValue" } } }, "additionalProperties": false }
+      ]
+    },
+    "NamedElementValue": {
+      "type": "object",
+      "required": ["name", "value", "schemaIndex"],
+      "properties": { "name": { "type": "string" }, "value": { "$ref": "#/definitions/ElementValue" }, "schemaIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "ElementValue": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "ComponentModel" }, "value": { "$ref": "#/definitions/ValueAndTypeJson" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value", "descriptor"], "properties": { "type": { "const": "UnstructuredText" }, "value": { "$ref": "#/definitions/TextReference" }, "descriptor": { "type": "object" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value", "descriptor"], "properties": { "type": { "const": "UnstructuredBinary" }, "value": { "$ref": "#/definitions/BinaryReference" }, "descriptor": { "type": "object" } }, "additionalProperties": false }
+      ]
+    },
+    "TextReference": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Url" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "data"], "properties": { "type": { "const": "Inline" }, "data": { "type": "string" }, "textType": { "oneOf": [{ "$ref": "#/definitions/TextType" }, { "type": "null" }] } }, "additionalProperties": false }
+      ]
+    },
+    "BinaryReference": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Url" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "data", "binaryType"], "properties": { "type": { "const": "Inline" }, "data": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "binaryType": { "$ref": "#/definitions/BinaryType" } }, "additionalProperties": false }
+      ]
+    },
+    "PublicInvocationContext": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanData" } } },
+    "PublicSpanData": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "spanId", "start", "attributes", "inherited"], "properties": { "type": { "const": "LocalSpan" }, "spanId": { "type": "string" }, "start": { "type": "string" }, "parentId": { "type": ["string", "null"] }, "linkedContext": { "type": ["integer", "null"], "minimum": 0 }, "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } }, "inherited": { "type": "boolean" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "spanId"], "properties": { "type": { "const": "ExternalSpan" }, "spanId": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "PublicAttribute": {
+      "type": "object",
+      "required": ["key", "value"],
+      "properties": { "key": { "type": "string" }, "value": { "$ref": "#/definitions/PublicAttributeValue" } },
+      "additionalProperties": false
+    },
+    "PublicAttributeValue": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "String" }, "value": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "PublicUpdateDescription": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Automatic" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },
+    "PersistenceLevel": { "type": "string", "enum": ["PersistNothing", "PersistRemoteSideEffects", "Smart"] },
+    "PublicSnapshotData": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "data", "mimeType"], "properties": { "type": { "const": "Raw" }, "data": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "data"], "properties": { "type": { "const": "Json" }, "data": { "$ref": "#/definitions/JsonValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "mimeType", "parts"], "properties": { "type": { "const": "Multipart" }, "mimeType": { "type": "string" }, "parts": { "type": "array", "items": { "$ref": "#/definitions/MultipartSnapshotPart" } } }, "additionalProperties": false }
+      ]
+    },
+    "MultipartSnapshotPart": {
+      "type": "object",
+      "required": ["name", "contentType", "data"],
+      "properties": { "name": { "type": "string" }, "contentType": { "type": "string" }, "data": { "$ref": "#/definitions/MultipartPartData" } },
+      "additionalProperties": false
+    },
+    "MultipartPartData": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "data"], "properties": { "type": { "const": "Json" }, "data": { "$ref": "#/definitions/JsonValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "data", "mimeType"], "properties": { "type": { "const": "Raw" }, "data": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "PublicNamedRetryPolicy": {
+      "type": "object",
+      "required": ["name", "priority", "predicate", "policy"],
+      "properties": { "name": { "type": "string" }, "priority": { "type": "integer", "minimum": 0 }, "predicate": { "$ref": "#/definitions/ApiPredicate" }, "policy": { "$ref": "#/definitions/ApiRetryPolicy" } },
+      "additionalProperties": false
+    },
+    "PublicRetryPolicyState": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "count"], "properties": { "type": { "const": "Counter" }, "count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Terminal" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "inner"], "properties": { "type": { "const": "Wrapper" }, "inner": { "$ref": "#/definitions/PublicRetryPolicyState" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "attempts", "inner"], "properties": { "type": { "const": "CountBox" }, "attempts": { "type": "integer", "minimum": 0 }, "inner": { "$ref": "#/definitions/PublicRetryPolicyState" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "left", "right", "onRight"], "properties": { "type": { "const": "AndThen" }, "left": { "$ref": "#/definitions/PublicRetryPolicyState" }, "right": { "$ref": "#/definitions/PublicRetryPolicyState" }, "onRight": { "type": "boolean" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "first", "second"], "properties": { "type": { "const": "Pair" }, "first": { "$ref": "#/definitions/PublicRetryPolicyState" }, "second": { "$ref": "#/definitions/PublicRetryPolicyState" } }, "additionalProperties": false }
+      ]
     },
     "AgentStreamEventKind": {
       "type": "string",

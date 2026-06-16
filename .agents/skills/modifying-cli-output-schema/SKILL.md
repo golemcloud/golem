@@ -73,34 +73,22 @@ These generic areas are intentional unless the task explicitly says otherwise:
 - `AgentConfigEntryDto.value`: this is `NormalizedJsonValue` and is semantically
   arbitrary JSON.
 - Manifest config JSON leaves inside typed manifest trace output.
+- Snapshot JSON payload leaves inside typed `agent.oplog` entries.
 - Raw/default/display secret values: valid shape depends on secret type and
   display context.
 
-## Oplog Status
+## Oplog Coverage
 
-`agent.oplog` is the known remaining major gap.
+`agent.oplog` uses the public oplog DTOs (`PublicOplogEntry` and nested public
+types) from `golem-common`. The CLI output schema models the public oplog entry
+union explicitly, and the output generator builds a single `AgentOplogView`
+sample containing all public oplog variants plus nested invocation, snapshot,
+retry policy, span, plugin, and update shapes.
 
-Currently:
-
-- `AgentOplogEntry` still keeps the public oplog payload generic in the CLI
-  output schema.
-- The output generator still uses an empty oplog wrapper rather than generating
-  `PublicOplogEntry` variants.
-
-Do not claim oplog payload typing is complete unless this has been implemented.
-If oplog support is added later, update this skill in the same change to remove
-this warning and document the new schema/generator workflow for public oplog
-entries.
-
-Useful implementation notes for future oplog work:
-
-- Source types are the public oplog DTOs (`PublicOplogEntry` and nested public
-  types) from `golem-common`.
-- The generated OpenAPI in `openapi/golem-worker-service.yaml` already contains
-  public oplog schema definitions that can be adapted carefully to the CLI
-  draft-07 schema.
-- Keep `ValueAndTypeJson.value` and JSON snapshot payload leaves generic unless
-  custom relational validation is introduced.
+When changing public oplog entries, update both the `PublicOplogEntry` schema
+family and the deterministic oplog sample in `cli_output.rs`. Keep
+`ValueAndTypeJson.value` and JSON snapshot payload leaves generic unless custom
+relational validation is introduced.
 
 ## Workflow
 
