@@ -32,6 +32,7 @@ Choose tests based on what you changed. **Do not run `cargo make test`** — it 
 | Rust SDK (`sdks/rust/`) | `cargo test -p golem-rust` + `cargo make worker-executor-tests` |
 | TypeScript SDK (`sdks/ts/`) | `npx pnpm run test` (in `sdks/ts/`) + `cargo make cli-integration-tests` |
 | MoonBit SDK (`sdks/moonbit/`) | `moon test` (in `sdks/moonbit/golem_sdk/`) |
+| CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
 
 If your change spans multiple areas, run multiple test suites.
 
@@ -54,6 +55,7 @@ cargo make worker-executor-tests-misc
 | WIT interfaces | `cargo make wit` |
 | TS SDK runtime code | `npx pnpm run build-agent-template` (in `sdks/ts/`) |
 | Skill catalog (`golem-skills/skills/**`) | `cargo make generate-docs-skills` (refreshes `docs/src/content/how-to-guides/*.mdx`) |
+| CLI output schema summary | `cargo make update-cli-output-schema-summary` |
 
 ## Step 4: Verify Build
 

@@ -76,6 +76,7 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
+| `modifying-cli-output-schema` | Adding or changing structured `golem-cli` output, `CliOutput` types, or the command output JSON schema |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
