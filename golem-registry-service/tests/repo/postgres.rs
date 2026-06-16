@@ -283,6 +283,14 @@ async fn test_environment_create(#[dimension(postgres_variant)] deps: &Deps) {
 }
 
 #[test]
+async fn test_environment_list_visible_to_account_uses_visibility_filter(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_list_visible_to_account_uses_visibility_filter(deps)
+        .await;
+}
+
+#[test]
 async fn test_environment_create_concurrently(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_environment_create_concurrently(deps).await;
 }

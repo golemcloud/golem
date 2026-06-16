@@ -14,6 +14,7 @@ export default {
   http: "HTTP client",
   websocket: "WebSocket client",
   durability: "Durability",
+  "read-only-methods": "Read-only Methods",
   snapshotting: "Snapshotting",
   retries: "Retries",
   transactions: "Transactions",

@@ -25,6 +25,7 @@ export default {
   "golem-invoke-agent-rust": "Invoking a Golem Agent with `golem agent invoke`",
   "golem-logging-rust": "Logging from a Rust Agent",
   "golem-make-http-request-rust": "Making Outgoing HTTP Requests (Rust)",
+  "golem-mark-read-only-rust": "Marking Agent Methods as Read-Only (Rust)",
   "golem-parallel-workers-rust": "Parallel Workers — Fan-Out / Fan-In (Rust)",
   "golem-multi-instance-agent-rust": "Phantom Agents in Rust",
   "golem-recurring-task-rust": "Recurring Tasks via Self-Scheduling (Rust)",
