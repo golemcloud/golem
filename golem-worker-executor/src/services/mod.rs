@@ -16,6 +16,7 @@ pub mod active_workers;
 pub mod agent_types;
 pub mod agent_webhooks;
 pub mod blob_store;
+pub mod compilation_limiter;
 pub mod component;
 pub mod direct_invocation_auth;
 pub mod environment_state;

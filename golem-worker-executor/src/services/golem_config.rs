@@ -1149,6 +1149,11 @@ pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
     pub max_resolved_component_capacity: usize,
+    /// Maximum number of component compilations allowed to run concurrently on
+    /// this executor. Bounds the transient memory of a cold-start storm (each
+    /// compilation holds the downloaded bytes plus the JIT working set). `0`
+    /// means unlimited.
+    pub max_concurrent_compilations: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
@@ -1166,6 +1171,11 @@ impl SafeDisplay for ComponentCacheConfig {
             &mut result,
             "max resolved component capacity: {}",
             self.max_resolved_component_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent compilations: {}",
+            self.max_concurrent_compilations
         );
         let _ = writeln!(&mut result, "time to idle: {:?}", self.time_to_idle);
         result
@@ -1684,6 +1694,7 @@ impl Default for ComponentCacheConfig {
             max_capacity: 32,
             max_metadata_capacity: 16384,
             max_resolved_component_capacity: 1024,
+            max_concurrent_compilations: 16,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }
