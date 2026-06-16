@@ -323,7 +323,10 @@ impl DeploymentService {
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.0.clone(),
             ))?
-            .try_into()?;
+            .try_into_deployed(
+                environment.owner_account_id,
+                environment.owner_account_email,
+            )?;
 
         Ok(agent_types)
     }
@@ -345,7 +348,12 @@ impl DeploymentService {
             .list_deployment_agent_types(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into())
+            .map(|r| {
+                r.try_into_deployed(
+                    environment.owner_account_id,
+                    environment.owner_account_email.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(agent_types)
@@ -368,6 +376,8 @@ impl DeploymentService {
             .environment_service
             .get_in_application(application.id, environment_name, auth)
             .await?;
+
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         self.get_deployed_agent_type(environment.id, agent_type_name)
             .await
@@ -455,6 +465,8 @@ impl DeploymentService {
             .get_in_application(application.id, environment_name, auth)
             .await?;
 
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
+
         // Validate that the deployment revision exists in this environment
         self.deployment_repo
             .get_deployment_revision(environment.id.0, deployment_revision.into())
@@ -472,7 +484,10 @@ impl DeploymentService {
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.0.clone(),
             ))?
-            .try_into()?;
+            .try_into_deployed(
+                environment.owner_account_id,
+                environment.owner_account_email,
+            )?;
 
         Ok(agent_type)
     }

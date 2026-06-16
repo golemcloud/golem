@@ -14,8 +14,9 @@
 
 use crate::repo::model::BindFields;
 use crate::repo::model::http_api_deployment::{
-    HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRecord, HttpApiDeploymentRepoError,
-    HttpApiDeploymentRevisionIdentityRecord, HttpApiDeploymentRevisionRecord,
+    HttpApiDeploymentAuthExtRevisionRecord, HttpApiDeploymentExtRevisionRecord,
+    HttpApiDeploymentRecord, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionIdentityRecord,
+    HttpApiDeploymentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -55,7 +56,7 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
     async fn get_staged_by_id(
         &self,
         http_api_deployment_id: Uuid,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentAuthExtRevisionRecord>>;
 
     async fn get_staged_by_domain(
         &self,
@@ -67,7 +68,7 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         &self,
         http_api_deployment_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<HttpApiDeploymentAuthExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
@@ -157,7 +158,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
     async fn get_staged_by_id(
         &self,
         http_api_deployment_id: Uuid,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentAuthExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(http_api_deployment_id)
             .instrument(Self::span_id(http_api_deployment_id))
@@ -179,7 +180,7 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
         &self,
         http_api_deployment_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentAuthExtRevisionRecord>> {
         self.repo
             .get_by_id_and_revision(http_api_deployment_id, revision_id)
             .instrument(Self::span_id_and_revision(
@@ -416,18 +417,34 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn get_staged_by_id(
         &self,
         http_api_deployment_id: Uuid,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentAuthExtRevisionRecord>> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
                         dr.revision_id, dr.hash, dr.data,
                         dr.created_at, dr.created_by, dr.deleted,
-                        d.created_at as entity_created_at
+                        d.created_at as entity_created_at,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM http_api_deployments d
+                    JOIN environments e
+                        ON e.environment_id = d.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                    JOIN applications ap
+                        ON ap.application_id = e.application_id
+                    JOIN accounts a
+                        ON a.account_id = ap.account_id
                     JOIN http_api_deployment_revisions dr
                         ON d.http_api_deployment_id = dr.http_api_deployment_id AND d.current_revision_id = dr.revision_id
-                    WHERE d.http_api_deployment_id = $1 AND d.deleted_at IS NULL
+                    WHERE d.http_api_deployment_id = $1
+                        AND d.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(http_api_deployment_id),
             )
@@ -461,21 +478,38 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         &self,
         http_api_deployment_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<HttpApiDeploymentAuthExtRevisionRecord>> {
         self.with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
                         dr.revision_id, dr.hash, dr.data,
                         dr.created_at, dr.created_by, dr.deleted,
-                        d.created_at as entity_created_at
+                        d.created_at as entity_created_at,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM http_api_deployments d
+                    JOIN environments e
+                        ON e.environment_id = d.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                    JOIN applications ap
+                        ON ap.application_id = e.application_id
+                    JOIN accounts a
+                        ON a.account_id = ap.account_id
                     JOIN http_api_deployment_revisions dr
                         ON d.http_api_deployment_id = dr.http_api_deployment_id
-                    WHERE d.http_api_deployment_id = $1 AND dr.revision_id = $2 AND d.deleted_at IS NULL
+                    WHERE d.http_api_deployment_id = $1
+                        AND dr.revision_id = $2
+                        AND d.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
-                    .bind(http_api_deployment_id)
-                    .bind(revision_id),
+                .bind(http_api_deployment_id)
+                .bind(revision_id),
             )
             .await
     }

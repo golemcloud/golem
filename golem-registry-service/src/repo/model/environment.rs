@@ -63,6 +63,21 @@ pub struct EnvironmentExtRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct EnvironmentScopedRecord {
+    pub environment_id: Uuid,
+    pub name: String,
+    pub application_id: Uuid,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
+    pub current_revision_id: i64,
+
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentRevisionRecord {
     pub environment_id: Uuid,
     pub revision_id: i64,
@@ -141,6 +156,41 @@ pub struct EnvironmentExtRevisionRecord {
     pub current_deployment_deployment_revision: Option<i64>,
     pub current_deployment_deployment_version: Option<String>,
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct EnvironmentScopedExtRevisionRecord {
+    pub application_id: Uuid,
+
+    #[sqlx(flatten)]
+    pub revision: EnvironmentRevisionRecord,
+
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
+}
+
+impl EnvironmentScopedExtRevisionRecord {
+    pub fn try_into_model(
+        self,
+        application_name: ApplicationName,
+        owner_account_id: AccountId,
+        owner_account_email: AccountEmail,
+    ) -> Result<Environment, EnvironmentRepoError> {
+        EnvironmentExtRevisionRecord {
+            application_id: self.application_id,
+            application_name: application_name.0,
+            revision: self.revision,
+            owner_account_id: owner_account_id.0,
+            owner_account_email: owner_account_email.into_inner(),
+            current_deployment_revision: self.current_deployment_revision,
+            current_deployment_deployment_revision: self.current_deployment_deployment_revision,
+            current_deployment_deployment_version: self.current_deployment_deployment_version,
+            current_deployment_deployment_hash: self.current_deployment_deployment_hash,
+        }
+        .try_into()
+    }
 }
 
 impl TryFrom<EnvironmentExtRevisionRecord> for Environment {

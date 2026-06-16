@@ -681,6 +681,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "account_view_plan",
+            "account(acme) @ acme : view-plan :",
+            PermissionPattern::Account(ClassPermissionPattern::<AccountClass> {
+                verb: Some(AccountVerb::ViewPlan),
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountResourcePattern,
+            }),
+        ),
+        (
             "account_usage",
             "account.usage(acme) @ acme : view :",
             PermissionPattern::AccountUsage(ClassPermissionPattern::<AccountUsageClass> {
@@ -874,7 +884,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "environment_mcp_deployment",
-            "environment.mcp-deployment(acme/shop/prod) @ acme/shop/prod : view : mcp-a",
+            "environment.mcp-deployment(acme/shop/prod) @ acme/shop/prod : view : mcp.example.com",
             PermissionPattern::EnvironmentMcpDeployment(ClassPermissionPattern::<
                 EnvironmentMcpDeploymentClass,
             > {
@@ -882,7 +892,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
                 resource: EnvironmentMcpDeploymentResourcePattern::Name(
-                    EnvironmentMcpDeploymentName("mcp-a".to_string()),
+                    EnvironmentMcpDeploymentName("mcp.example.com".to_string()),
                 ),
             }),
         ),

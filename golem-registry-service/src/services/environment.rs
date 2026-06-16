@@ -146,8 +146,7 @@ impl EnvironmentService {
             &application.name,
             EnvironmentVerb::Create,
             EnvironmentResourcePattern::Environment(CardEnvironmentName(data.name.0.clone())),
-        )
-        .map_err(|_| EnvironmentError::ParentApplicationNotFound(application_id))?;
+        )?;
 
         self.account_usage_service
             .ensure_environment_within_limits(application.account_id)
@@ -181,7 +180,11 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(
+                application.name,
+                application.account_id,
+                application.account_email,
+            )?;
 
         Ok(result)
     }
@@ -194,8 +197,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        authorize_environment_model(auth, &environment, EnvironmentVerb::Update)
-            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Update)?;
 
         if update.current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -215,6 +217,9 @@ impl EnvironmentService {
             environment.security_overrides = security_overrides;
         }
 
+        let application_name = environment.application_name.clone();
+        let owner_account_id = environment.owner_account_id;
+        let owner_account_email = environment.owner_account_email.clone();
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
@@ -231,7 +236,7 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(application_name, owner_account_id, owner_account_email)?;
 
         Ok(result)
     }
@@ -244,8 +249,7 @@ impl EnvironmentService {
     ) -> Result<(), EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        authorize_environment_model(auth, &environment, EnvironmentVerb::Delete)
-            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Delete)?;
 
         if current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -278,11 +282,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let environment: Environment = self
             .environment_repo
-            .get_by_id(
-                environment_id.0,
-                auth.access_account_id().0,
-                include_deleted,
-            )
+            .get_by_id(environment_id.0, include_deleted)
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
             .try_into()?;
@@ -299,15 +299,36 @@ impl EnvironmentService {
         name: &EnvironmentName,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let result: Environment = self
+        let application = self
+            .application_service
+            .get(application_id, auth)
+            .await
+            .map_err(|err| match err {
+                ApplicationError::ApplicationNotFound(application_id) => {
+                    EnvironmentError::ParentApplicationNotFound(application_id)
+                }
+                other => other.into(),
+            })?;
+
+        authorize_environment_permission(
+            auth,
+            &application.account_email,
+            &application.name,
+            EnvironmentVerb::View,
+            EnvironmentResourcePattern::Environment(CardEnvironmentName(name.0.clone())),
+        )
+        .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+
+        let result = self
             .environment_repo
-            .get_by_name(application_id.0, &name.0, auth.access_account_id().0)
+            .get_by_name(application_id.0, &name.0)
             .await?
             .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
-            .try_into()?;
-
-        authorize_environment_model(auth, &result, EnvironmentVerb::View)
-            .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+            .try_into_model(
+                application.name,
+                application.account_id,
+                application.account_email,
+            )?;
 
         Ok(result)
     }
@@ -328,21 +349,26 @@ impl EnvironmentService {
                 other => other.into(),
             })?;
 
-        authorize_environment_permission(
-            auth,
-            &application.account_email,
-            &application.name,
-            EnvironmentVerb::View,
-            EnvironmentResourcePattern::Any,
-        )?;
-
-        Ok(self
+        let environments = self
             .environment_repo
-            .list_by_app(application_id.0, auth.access_account_id().0)
+            .list_by_app(application_id.0)
             .await?
             .into_iter()
-            .map(Environment::try_from)
-            .collect::<Result<Vec<_>, _>>()?)
+            .map(|record| {
+                record.try_into_model(
+                    application.name.clone(),
+                    application.account_id,
+                    application.account_email.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(environments
+            .into_iter()
+            .filter(|environment| {
+                authorize_environment_model(auth, environment, EnvironmentVerb::View).is_ok()
+            })
+            .collect())
     }
 
     pub async fn list_visible_environments(

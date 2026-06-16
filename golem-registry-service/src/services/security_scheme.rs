@@ -15,17 +15,21 @@
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
-use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchemeRevisionRecord};
+use crate::repo::model::security_scheme::{
+    SecuritySchemeAuthExtRevisionRecord, SecuritySchemeRepoError, SecuritySchemeRevisionRecord,
+};
 use crate::repo::security_scheme::SecuritySchemeRepo;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
+use golem_common::model::account::AccountEmail;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, EnvironmentSecuritySchemeName, EnvironmentSecuritySchemeResourcePattern,
     EnvironmentSecuritySchemeVerb, PermissionTarget,
 };
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::security_scheme::{
     SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
     SecuritySchemeUpdate,
@@ -64,14 +68,28 @@ fn authorize_security_scheme_permission(
     name: Option<&SecuritySchemeName>,
     verb: EnvironmentSecuritySchemeVerb,
 ) -> Result<(), AuthorizationError> {
+    authorize_security_scheme_permission_for_owner(
+        auth,
+        EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        name,
+        verb,
+    )
+}
+
+fn authorize_security_scheme_permission_for_owner(
+    auth: &AuthCtx,
+    owner: EnvironmentOwnerPattern,
+    name: Option<&SecuritySchemeName>,
+    verb: EnvironmentSecuritySchemeVerb,
+) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::EnvironmentSecurityScheme(
         ClassPermissionTarget {
             verb: Some(verb),
-            owner: EnvironmentOwnerPattern::Environment {
-                account: environment.owner_account_email.clone(),
-                application: environment.application_name.clone(),
-                environment: environment.name.clone(),
-            },
+            owner,
             resource: name
                 .map(|name| {
                     EnvironmentSecuritySchemeResourcePattern::Name(EnvironmentSecuritySchemeName(
@@ -81,6 +99,16 @@ fn authorize_security_scheme_permission(
                 .unwrap_or(EnvironmentSecuritySchemeResourcePattern::Any),
         },
     ))
+}
+
+fn environment_owner_from_security_scheme(
+    security_scheme: &SecuritySchemeAuthExtRevisionRecord,
+) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: AccountEmail::new(security_scheme.owner_account_email.clone()),
+        application: ApplicationName(security_scheme.application_name.clone()),
+        environment: EnvironmentName(security_scheme.environment_name.clone()),
+    }
 }
 
 impl SafeDisplay for SecuritySchemeError {
@@ -195,12 +223,12 @@ impl SecuritySchemeService {
         update: SecuritySchemeUpdate,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        let (mut security_scheme, environment) =
+        let (mut security_scheme, owner) =
             self.get_with_environment(security_scheme_id, auth).await?;
 
-        authorize_security_scheme_permission(
+        authorize_security_scheme_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(&security_scheme.name),
             EnvironmentSecuritySchemeVerb::Update,
         )?;
@@ -265,12 +293,12 @@ impl SecuritySchemeService {
         current_revision: SecuritySchemeRevision,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        let (mut security_scheme, environment) =
+        let (mut security_scheme, owner) =
             self.get_with_environment(security_scheme_id, auth).await?;
 
-        authorize_security_scheme_permission(
+        authorize_security_scheme_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(&security_scheme.name),
             EnvironmentSecuritySchemeVerb::Delete,
         )?;
@@ -329,14 +357,7 @@ impl SecuritySchemeService {
                 other => other.into(),
             })?;
 
-        authorize_security_scheme_permission(
-            auth,
-            &environment,
-            None,
-            EnvironmentSecuritySchemeVerb::View,
-        )?;
-
-        let result = self
+        let security_schemes: Vec<SecurityScheme> = self
             .security_scheme_repo
             .get_for_environment(environment_id.0)
             .await?
@@ -344,7 +365,18 @@ impl SecuritySchemeService {
             .map(|r| r.try_into())
             .collect::<Result<_, _>>()?;
 
-        Ok(result)
+        Ok(security_schemes
+            .into_iter()
+            .filter(|security_scheme: &SecurityScheme| {
+                authorize_security_scheme_permission(
+                    auth,
+                    &environment,
+                    Some(&security_scheme.name),
+                    EnvironmentSecuritySchemeVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_security_scheme_for_environment_and_name(
@@ -358,7 +390,8 @@ impl SecuritySchemeService {
             environment,
             Some(name),
             EnvironmentSecuritySchemeVerb::View,
-        )?;
+        )
+        .map_err(|_| SecuritySchemeError::SecuritySchemeForNameNotFound(name.clone()))?;
 
         let result = self
             .security_scheme_repo
@@ -376,35 +409,26 @@ impl SecuritySchemeService {
         &self,
         security_scheme_id: SecuritySchemeId,
         auth: &AuthCtx,
-    ) -> Result<(SecurityScheme, Environment), SecuritySchemeError> {
-        let security_scheme: SecurityScheme = self
+    ) -> Result<(SecurityScheme, EnvironmentOwnerPattern), SecuritySchemeError> {
+        let record = self
             .security_scheme_repo
             .get_by_id(security_scheme_id.0)
             .await?
             .ok_or(SecuritySchemeError::SecuritySchemeNotFound(
                 security_scheme_id,
-            ))?
-            .try_into()?;
+            ))?;
 
-        let environment = self
-            .environment_service
-            .get(security_scheme.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id)
-                }
-                other => other.into(),
-            })?;
+        let owner = environment_owner_from_security_scheme(&record);
+        let security_scheme: SecurityScheme = record.security_scheme.try_into()?;
 
-        authorize_security_scheme_permission(
+        authorize_security_scheme_permission_for_owner(
             auth,
-            &environment,
+            owner.clone(),
             Some(&security_scheme.name),
             EnvironmentSecuritySchemeVerb::View,
         )
         .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id))?;
 
-        Ok((security_scheme, environment))
+        Ok((security_scheme, owner))
     }
 }

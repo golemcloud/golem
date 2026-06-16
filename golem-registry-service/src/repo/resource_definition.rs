@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::model::resource_definition::{
-    ResourceDefinitionCreationArgs, ResourceDefinitionExtRevisionRecord,
-    ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
+    ResourceDefinitionAuthExtRevisionRecord, ResourceDefinitionCreationArgs,
+    ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError,
+    ResourceDefinitionRevisionRecord,
 };
 use crate::repo::model::BindFields;
 use crate::repo::model::resource_definition::ResourceDefinitionRecord;
@@ -59,7 +60,7 @@ pub trait ResourceDefinitionRepo: Send + Sync {
     async fn get(
         &self,
         resource_definition_id: Uuid,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>>;
+    ) -> RepoResult<Option<ResourceDefinitionAuthExtRevisionRecord>>;
 
     async fn get_by_environment_and_name(
         &self,
@@ -71,7 +72,7 @@ pub trait ResourceDefinitionRepo: Send + Sync {
         &self,
         resource_definition_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>>;
+    ) -> RepoResult<Option<ResourceDefinitionAuthExtRevisionRecord>>;
 
     async fn list_in_environment(
         &self,
@@ -139,7 +140,7 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
     async fn get(
         &self,
         resource_definition_id: Uuid,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
+    ) -> RepoResult<Option<ResourceDefinitionAuthExtRevisionRecord>> {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %resource_definition_id,
@@ -169,7 +170,7 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
         &self,
         resource_definition_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
+    ) -> RepoResult<Option<ResourceDefinitionAuthExtRevisionRecord>> {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %resource_definition_id,
@@ -445,7 +446,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
     async fn get(
         &self,
         resource_definition_id: Uuid,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
+    ) -> RepoResult<Option<ResourceDefinitionAuthExtRevisionRecord>> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -465,11 +466,27 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         rr.limit_max,
                         rr.enforcement_action,
                         rr.unit,
-                        rr.units
+                        rr.units,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM resource_definitions r
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                    JOIN applications ap
+                        ON ap.application_id = e.application_id
+                    JOIN accounts a
+                        ON a.account_id = ap.account_id
                     JOIN resource_definition_revisions rr
                         ON rr.resource_definition_id = r.resource_definition_id AND r.current_revision_id = rr.revision_id
-                    WHERE r.resource_definition_id = $1 AND r.deleted_at IS NULL
+                    WHERE r.resource_definition_id = $1
+                        AND r.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(resource_definition_id),
             )
@@ -516,7 +533,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         &self,
         resource_definition_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
+    ) -> RepoResult<Option<ResourceDefinitionAuthExtRevisionRecord>> {
         self.with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -536,14 +553,31 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         rr.limit_max,
                         rr.enforcement_action,
                         rr.unit,
-                        rr.units
+                        rr.units,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM resource_definitions r
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                    JOIN applications ap
+                        ON ap.application_id = e.application_id
+                    JOIN accounts a
+                        ON a.account_id = ap.account_id
                     JOIN resource_definition_revisions rr
-                        ON rr.resource_definition_id = r.resource_definition_id AND r.current_revision_id = rr.revision_id
-                    WHERE r.resource_definition_id = $1 AND rr.revision_id = $2 AND r.deleted_at IS NULL
+                        ON rr.resource_definition_id = r.resource_definition_id
+                    WHERE r.resource_definition_id = $1
+                        AND rr.revision_id = $2
+                        AND r.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
-                    .bind(resource_definition_id)
-                    .bind(revision_id),
+                .bind(resource_definition_id)
+                .bind(revision_id),
             )
             .await
     }

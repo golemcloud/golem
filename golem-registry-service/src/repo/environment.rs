@@ -16,6 +16,7 @@ use super::model::environment::{EnvironmentRepoError, EnvironmentWithDetailsReco
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
     EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
+    EnvironmentScopedExtRevisionRecord, EnvironmentScopedRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
 use crate::repo::registry_change::{
@@ -128,44 +129,41 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: Uuid,
         name: &str,
-        actor: Uuid,
-    ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
+    ) -> Result<Option<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        actor: Uuid,
-    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
+    ) -> Result<Vec<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError>;
 
     async fn create_with_plugin_grants(
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
         plugin_grants: Vec<EnvironmentPluginGrantRecord>,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError>;
 
     async fn update(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError>;
 
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
+    ) -> Result<RequiresNotificationSignal<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_visible_to_account(
         &self,
@@ -207,10 +205,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         name: &str,
-        actor: Uuid,
-    ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Option<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_name(application_id, name, actor)
+            .get_by_name(application_id, name)
             .instrument(Self::span_name(application_id, name))
             .await
     }
@@ -218,11 +215,10 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_id(environment_id, actor, include_deleted)
+            .get_by_id(environment_id, include_deleted)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -230,10 +226,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        actor: Uuid,
-    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Vec<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .list_by_app(application_id, actor)
+            .list_by_app(application_id)
             .instrument(Self::span_env(application_id))
             .await
     }
@@ -242,7 +237,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.repo
             .create(application_id, revision)
             .instrument(Self::span_app_id(application_id))
@@ -254,7 +249,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
         plugin_grants: Vec<EnvironmentPluginGrantRecord>,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         let span = Self::span_app_id(application_id);
         self.repo
             .create_with_plugin_grants(application_id, revision, plugin_grants)
@@ -265,7 +260,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn update(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         let span = Self::span_env(revision.environment_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -273,7 +268,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>
+    ) -> Result<RequiresNotificationSignal<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>
     {
         let span = Self::span_env(revision.environment_id);
         self.repo.delete(revision).instrument(span).await
@@ -351,30 +346,22 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         name: &str,
-        _actor: Uuid,
-    ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Option<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id, ap.name AS application_name,
-                        r.environment_id, r.revision_id, r.hash,
+                        e.application_id,
+                        r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
-
-                        a.account_id as owner_account_id,
-                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
                         dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                    JOIN environments e
-                        ON e.application_id = ap.application_id
+                    FROM environments e
                     JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
@@ -389,10 +376,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
-                        ap.application_id = $1
+                        e.application_id = $1
                         AND e.name = $2
-                        AND a.deleted_at IS NULL
-                        AND ap.deleted_at IS NULL
                         AND e.deleted_at IS NULL
                 "# })
                 .bind(application_id)
@@ -406,7 +391,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        _actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -461,33 +445,22 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        _actor: Uuid,
-    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Vec<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id, ap.name AS application_name,
-                        r.environment_id, r.revision_id, r.hash,
+                        e.application_id,
+                        r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
-
-                        a.account_id as owner_account_id,
-                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
                         dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                        AND ap.deleted_at IS NULL
-
-                    JOIN environments e
-                        ON e.application_id = ap.application_id
-                        AND e.deleted_at IS NULL
+                    FROM environments e
                     JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
@@ -502,8 +475,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
-                        ap.application_id = $1
-                        AND a.deleted_at IS NULL
+                        e.application_id = $1
+                        AND e.deleted_at IS NULL
                     ORDER BY e.name
                 "#})
                 .bind(application_id),
@@ -517,10 +490,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
         self.with_tx_err("create", |tx| async move {
-            let environment_record: EnvironmentExtRecord = tx.fetch_one_as(
+            let environment_record: EnvironmentScopedRecord = tx.fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO environments
                       (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
@@ -530,25 +503,11 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       environment_id,
                       name,
                       application_id,
-                      (SELECT ap.name
-                       FROM applications ap
-                       WHERE ap.application_id = environments.application_id) AS application_name,
                       created_at,
                       updated_at,
                       deleted_at,
                       modified_by,
                       current_revision_id,
-
-                      -- Owner account id via scalar subquery
-                      (SELECT a.account_id
-                       FROM applications ap
-                       JOIN accounts a ON a.account_id = ap.account_id
-                       WHERE ap.application_id = environments.application_id) AS owner_account_id,
-                      (SELECT a.email
-                       FROM applications ap
-                       JOIN accounts a ON a.account_id = ap.account_id
-                       WHERE ap.application_id = environments.application_id) AS owner_account_email,
-
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
                       NULL AS current_deployment_deployment_version,
@@ -564,14 +523,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
             let revision = Self::insert_revision(tx, revision).await?;
 
-            Ok(EnvironmentExtRevisionRecord {
+            Ok(EnvironmentScopedExtRevisionRecord {
                 application_id,
-                application_name: environment_record.application_name,
                 revision,
-
-                owner_account_id: environment_record.owner_account_id,
-                owner_account_email: environment_record.owner_account_email,
-
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
                 current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
@@ -585,9 +539,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
         plugin_grants: Vec<EnvironmentPluginGrantRecord>,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("create_with_plugin_grants", |tx| async move {
-            let environment_record: EnvironmentExtRecord = tx.fetch_one_as(
+            let environment_record: EnvironmentScopedRecord = tx.fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO environments
                       (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
@@ -597,25 +551,11 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       environment_id,
                       name,
                       application_id,
-                      (SELECT ap.name
-                       FROM applications ap
-                       WHERE ap.application_id = environments.application_id) AS application_name,
                       created_at,
                       updated_at,
                       deleted_at,
                       modified_by,
                       current_revision_id,
-
-                      -- Owner account id via scalar subquery
-                      (SELECT a.account_id
-                       FROM applications ap
-                       JOIN accounts a ON a.account_id = ap.account_id
-                       WHERE ap.application_id = environments.application_id) AS owner_account_id,
-                      (SELECT a.email
-                       FROM applications ap
-                       JOIN accounts a ON a.account_id = ap.account_id
-                       WHERE ap.application_id = environments.application_id) AS owner_account_email,
-
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
                       NULL AS current_deployment_deployment_version,
@@ -649,14 +589,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 .map_err(|e| EnvironmentRepoError::InternalError(e.into()))?;
             }
 
-            Ok(EnvironmentExtRevisionRecord {
+            Ok(EnvironmentScopedExtRevisionRecord {
                 application_id,
-                application_name: environment_record.application_name,
                 revision,
-
-                owner_account_id: environment_record.owner_account_id,
-                owner_account_email: environment_record.owner_account_email,
-
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
                 current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
@@ -668,7 +603,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn update(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord =
@@ -684,8 +619,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 //       so we avoid selecting the same tables multiple times, same goes for logical DELETE
 
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
-                let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
-                    sqlx::query_as(indoc! { r#"
+                let environment_record: EnvironmentScopedRecord = tx
+                    .fetch_optional_as(
+                        sqlx::query_as(indoc! { r#"
                         UPDATE environments
                         SET name = $1,
                             updated_at = $2,
@@ -696,24 +632,11 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             environment_id,
                             name,
                             application_id,
-                            (SELECT ap.name
-                             FROM applications ap
-                             WHERE ap.application_id = environments.application_id) AS application_name,
                             created_at,
                             updated_at,
                             deleted_at,
                             modified_by,
                             current_revision_id,
-
-                            -- Owner account id
-                            (SELECT a.account_id
-                             FROM applications ap
-                             JOIN accounts a ON a.account_id = ap.account_id
-                             WHERE ap.application_id = environments.application_id) AS owner_account_id,
-                            (SELECT a.email
-                             FROM applications ap
-                             JOIN accounts a ON a.account_id = ap.account_id
-                             WHERE ap.application_id = environments.application_id) AS owner_account_email,
 
                             -- Current deployment info
                             (
@@ -755,24 +678,21 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                                 WHERE cd.environment_id = environments.environment_id
                             ) AS current_deployment_deployment_hash;
                     "#})
-                    .bind(&revision.name)
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id)
-                    .bind(revision.environment_id),
-                )
-                .await
-                .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?
-                .ok_or(EnvironmentRepoError::ConcurrentModification)?;
+                        .bind(&revision.name)
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.environment_id),
+                    )
+                    .await
+                    .to_error_on_unique_violation(
+                        EnvironmentRepoError::EnvironmentViolatesUniqueness,
+                    )?
+                    .ok_or(EnvironmentRepoError::ConcurrentModification)?;
 
-                Ok(EnvironmentExtRevisionRecord {
+                Ok(EnvironmentScopedExtRevisionRecord {
                     application_id: environment_record.application_id,
-                    application_name: environment_record.application_name,
                     revision,
-
-                    owner_account_id: environment_record.owner_account_id,
-                    owner_account_email: environment_record.owner_account_email,
-
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record
                         .current_deployment_deployment_revision,
@@ -790,15 +710,16 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>
+    ) -> Result<RequiresNotificationSignal<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>
     {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord =
                     Self::insert_revision(tx, revision).await?;
 
-                let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
-                    sqlx::query_as(indoc! { r#"
+                let environment_record: EnvironmentScopedRecord = tx
+                    .fetch_optional_as(
+                        sqlx::query_as(indoc! { r#"
                         UPDATE environments
                         SET name = $1,
                             updated_at = $2,
@@ -810,24 +731,11 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             environment_id,
                             name,
                             application_id,
-                            (SELECT ap.name
-                             FROM applications ap
-                             WHERE ap.application_id = environments.application_id) AS application_name,
                             created_at,
                             updated_at,
                             deleted_at,
                             modified_by,
                             current_revision_id,
-
-                            -- Owner account id
-                            (SELECT a.account_id
-                             FROM applications ap
-                             JOIN accounts a ON a.account_id = ap.account_id
-                             WHERE ap.application_id = environments.application_id) AS owner_account_id,
-                            (SELECT a.email
-                             FROM applications ap
-                             JOIN accounts a ON a.account_id = ap.account_id
-                             WHERE ap.application_id = environments.application_id) AS owner_account_email,
 
                             -- Current deployment info
                             (
@@ -870,14 +778,14 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             ) AS current_deployment_deployment_hash;
 
                     "#})
-                    .bind(&revision.name)
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id)
-                    .bind(revision.environment_id),
-                )
-                .await?
-                .ok_or(EnvironmentRepoError::ConcurrentModification)?;
+                        .bind(&revision.name)
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.environment_id),
+                    )
+                    .await?
+                    .ok_or(EnvironmentRepoError::ConcurrentModification)?;
 
                 // Emit an EnvironmentDeleted invalidation event carrying the
                 // human-readable app_name and env_name so subscribers can perform
@@ -903,14 +811,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
                     .await?;
 
-                Ok(EnvironmentExtRevisionRecord {
+                Ok(EnvironmentScopedExtRevisionRecord {
                     application_id: environment_record.application_id,
-                    application_name: environment_record.application_name,
                     revision,
-
-                    owner_account_id: environment_record.owner_account_id,
-                    owner_account_email: environment_record.owner_account_email,
-
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record
                         .current_deployment_deployment_revision,

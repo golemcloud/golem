@@ -16,16 +16,19 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::resource_definition::{
-    ResourceDefinitionCreationArgs, ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
+    ResourceDefinitionAuthExtRevisionRecord, ResourceDefinitionCreationArgs,
+    ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
 };
 use crate::repo::resource_definition::ResourceDefinitionRepo;
+use golem_common::model::account::AccountEmail;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, EnvironmentResourceDefinitionName,
     EnvironmentResourceDefinitionResourcePattern, EnvironmentResourceDefinitionVerb,
     PermissionTarget,
 };
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::quota::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceDefinitionId,
     ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceLimit, ResourceName,
@@ -61,14 +64,28 @@ fn authorize_resource_definition_permission(
     name: Option<&ResourceName>,
     verb: EnvironmentResourceDefinitionVerb,
 ) -> Result<(), AuthorizationError> {
+    authorize_resource_definition_permission_for_owner(
+        auth,
+        EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        name,
+        verb,
+    )
+}
+
+fn authorize_resource_definition_permission_for_owner(
+    auth: &AuthCtx,
+    owner: EnvironmentOwnerPattern,
+    name: Option<&ResourceName>,
+    verb: EnvironmentResourceDefinitionVerb,
+) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::EnvironmentResourceDefinition(
         ClassPermissionTarget {
             verb: Some(verb),
-            owner: EnvironmentOwnerPattern::Environment {
-                account: environment.owner_account_email.clone(),
-                application: environment.application_name.clone(),
-                environment: environment.name.clone(),
-            },
+            owner,
             resource: name
                 .map(|name| {
                     EnvironmentResourceDefinitionResourcePattern::Name(
@@ -78,6 +95,16 @@ fn authorize_resource_definition_permission(
                 .unwrap_or(EnvironmentResourceDefinitionResourcePattern::Any),
         },
     ))
+}
+
+fn environment_owner_from_resource_definition(
+    resource_definition: &ResourceDefinitionAuthExtRevisionRecord,
+) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: AccountEmail::new(resource_definition.owner_account_email.clone()),
+        application: ApplicationName(resource_definition.application_name.clone()),
+        environment: EnvironmentName(resource_definition.environment_name.clone()),
+    }
 }
 
 impl SafeDisplay for ResourceDefinitionError {
@@ -182,13 +209,13 @@ impl ResourceDefinitionService {
         update: ResourceDefinitionUpdate,
         auth: &AuthCtx,
     ) -> Result<ResourceDefinition, ResourceDefinitionError> {
-        let (mut resource_definition, environment) = self
+        let (mut resource_definition, owner) = self
             .get_with_environment(resource_definition_id, auth)
             .await?;
 
-        authorize_resource_definition_permission(
+        authorize_resource_definition_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(&resource_definition.name),
             EnvironmentResourceDefinitionVerb::Update,
         )?;
@@ -250,13 +277,13 @@ impl ResourceDefinitionService {
         current_revision: ResourceDefinitionRevision,
         auth: &AuthCtx,
     ) -> Result<(), ResourceDefinitionError> {
-        let (mut resource_definition, environment) = self
+        let (mut resource_definition, owner) = self
             .get_with_environment(resource_definition_id, auth)
             .await?;
 
-        authorize_resource_definition_permission(
+        authorize_resource_definition_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(&resource_definition.name),
             EnvironmentResourceDefinitionVerb::Delete,
         )?;
@@ -303,29 +330,20 @@ impl ResourceDefinitionService {
         revision: ResourceDefinitionRevision,
         auth: &AuthCtx,
     ) -> Result<ResourceDefinition, ResourceDefinitionError> {
-        let resource_definition: ResourceDefinition = self
+        let record = self
             .resource_definition_repo
             .get_revision(resource_definition_id.0, revision.into())
             .await?
             .ok_or_else(|| {
                 ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)
-            })?
-            .try_into()?;
-
-        let environment = self
-            .environment_service
-            .get(resource_definition.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)
-                }
-                other => other.into(),
             })?;
 
-        authorize_resource_definition_permission(
+        let owner = environment_owner_from_resource_definition(&record);
+        let resource_definition: ResourceDefinition = record.resource_definition.try_into()?;
+
+        authorize_resource_definition_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(&resource_definition.name),
             EnvironmentResourceDefinitionVerb::View,
         )
@@ -356,7 +374,10 @@ impl ResourceDefinitionService {
             &environment,
             Some(resource_name),
             EnvironmentResourceDefinitionVerb::View,
-        )?;
+        )
+        .map_err(|_| {
+            ResourceDefinitionError::ResourceDefinitionByNameNotFound(resource_name.clone())
+        })?;
 
         let resource_definition: ResourceDefinition = self
             .resource_definition_repo
@@ -394,13 +415,6 @@ impl ResourceDefinitionService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<ResourceDefinition>, ResourceDefinitionError> {
-        authorize_resource_definition_permission(
-            auth,
-            environment,
-            None,
-            EnvironmentResourceDefinitionVerb::View,
-        )?;
-
         let resource_definitions: Vec<ResourceDefinition> = self
             .resource_definition_repo
             .list_in_environment(environment.id.0)
@@ -409,42 +423,44 @@ impl ResourceDefinitionService {
             .map(TryInto::try_into)
             .collect::<Result<_, _>>()?;
 
-        Ok(resource_definitions)
+        Ok(resource_definitions
+            .into_iter()
+            .filter(|resource_definition| {
+                authorize_resource_definition_permission(
+                    auth,
+                    environment,
+                    Some(&resource_definition.name),
+                    EnvironmentResourceDefinitionVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     async fn get_with_environment(
         &self,
         resource_definition_id: ResourceDefinitionId,
         auth: &AuthCtx,
-    ) -> Result<(ResourceDefinition, Environment), ResourceDefinitionError> {
-        let resource_definition: ResourceDefinition = self
+    ) -> Result<(ResourceDefinition, EnvironmentOwnerPattern), ResourceDefinitionError> {
+        let record = self
             .resource_definition_repo
             .get(resource_definition_id.0)
             .await?
             .ok_or_else(|| {
                 ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)
-            })?
-            .try_into()?;
-
-        let environment = self
-            .environment_service
-            .get(resource_definition.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)
-                }
-                other => other.into(),
             })?;
 
-        authorize_resource_definition_permission(
+        let owner = environment_owner_from_resource_definition(&record);
+        let resource_definition: ResourceDefinition = record.resource_definition.try_into()?;
+
+        authorize_resource_definition_permission_for_owner(
             auth,
-            &environment,
+            owner.clone(),
             Some(&resource_definition.name),
             EnvironmentResourceDefinitionVerb::View,
         )
         .map_err(|_| ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id))?;
 
-        Ok((resource_definition, environment))
+        Ok((resource_definition, owner))
     }
 }
