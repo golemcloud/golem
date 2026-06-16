@@ -13,9 +13,9 @@
 // limitations under the License.
 #![allow(dead_code)]
 
-use golem_common::schema::IntoSchema;
 use golem_common::schema::SchemaBuilder;
-use golem_common::schema::{NamedFieldType, SchemaType, VariantCaseType};
+use golem_common::schema::{FromSchema, IntoSchema};
+use golem_common::schema::{NamedFieldType, SchemaType, SchemaValue, VariantCaseType};
 use test_r::test;
 
 test_r::enable!();
@@ -61,6 +61,58 @@ fn enum_into_schema_emits_variant() {
         }
         other => panic!("expected variant body, got {other:?}"),
     }
+}
+
+#[derive(Debug, PartialEq, IntoSchema, FromSchema)]
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+#[test]
+fn all_unit_enum_into_schema_emits_enum() {
+    let mut builder = SchemaBuilder::new();
+    let root = Color::register_in(&mut builder);
+    let graph = builder.into_graph(root);
+
+    assert_eq!(graph.defs.len(), 1);
+    match &graph.defs[0].body {
+        SchemaType::Enum { cases, .. } => {
+            assert_eq!(
+                cases.as_slice(),
+                &["red".to_string(), "green".to_string(), "blue".to_string(),]
+            );
+        }
+        other => panic!("expected enum body, got {other:?}"),
+    }
+}
+
+#[test]
+fn all_unit_enum_to_value_emits_enum() {
+    assert_eq!(Color::Red.to_value(), SchemaValue::Enum { case: 0 });
+    assert_eq!(Color::Green.to_value(), SchemaValue::Enum { case: 1 });
+    assert_eq!(Color::Blue.to_value(), SchemaValue::Enum { case: 2 });
+}
+
+#[test]
+fn all_unit_enum_round_trip() {
+    for color in [Color::Red, Color::Green, Color::Blue] {
+        let value = color.to_value();
+        let decoded = Color::from_value(&value).expect("decode succeeds");
+        assert_eq!(decoded, color);
+    }
+}
+
+#[test]
+fn all_unit_enum_from_value_rejects_variant() {
+    let result = Color::from_value(&SchemaValue::Variant(
+        golem_common::schema::schema_value::VariantValuePayload {
+            case: 0,
+            payload: None,
+        },
+    ));
+    assert!(result.is_err());
 }
 
 #[derive(IntoSchema)]

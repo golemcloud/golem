@@ -919,24 +919,45 @@ impl FromSchema for () {
 // Result<T, E>
 // =====================================================================
 
+/// `true` if `T` is the unit type `()`, whose ok/err branch carries no payload
+/// (`result<_, _>`) and is represented by `None` in the schema and value model.
+fn is_unit_type<T: IntoSchema>() -> bool {
+    T::type_id() == <() as IntoSchema>::type_id()
+}
+
 impl<T: IntoSchema, E: IntoSchema> IntoSchema for Result<T, E> {
     fn type_id() -> TypeId {
         type_id_with_args("core.result.Result", &[T::type_id(), E::type_id()])
     }
     fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::result(crate::schema::schema_type::ResultSpec {
-            ok: Some(Box::new(T::register_in(b))),
-            err: Some(Box::new(E::register_in(b))),
-        })
+        let ok = if is_unit_type::<T>() {
+            None
+        } else {
+            Some(Box::new(T::register_in(b)))
+        };
+        let err = if is_unit_type::<E>() {
+            None
+        } else {
+            Some(Box::new(E::register_in(b)))
+        };
+        SchemaType::result(crate::schema::schema_type::ResultSpec { ok, err })
     }
     fn to_value(&self) -> SchemaValue {
         use crate::schema::schema_value::ResultValuePayload;
         match self {
             Ok(x) => SchemaValue::Result(ResultValuePayload::Ok {
-                value: Some(Box::new(x.to_value())),
+                value: if is_unit_type::<T>() {
+                    None
+                } else {
+                    Some(Box::new(x.to_value()))
+                },
             }),
             Err(e) => SchemaValue::Result(ResultValuePayload::Err {
-                value: Some(Box::new(e.to_value())),
+                value: if is_unit_type::<E>() {
+                    None
+                } else {
+                    Some(Box::new(e.to_value()))
+                },
             }),
         }
     }
@@ -945,16 +966,16 @@ impl<T: IntoSchema, E: IntoSchema> IntoSchema for Result<T, E> {
 impl<T: FromSchema, E: FromSchema> FromSchema for Result<T, E> {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         use crate::schema::schema_value::ResultValuePayload;
+        let unit = SchemaValue::Tuple { elements: vec![] };
         match v {
-            SchemaValue::Result(ResultValuePayload::Ok { value: Some(x) }) => {
-                Ok(Ok(T::from_value(x)?))
+            SchemaValue::Result(ResultValuePayload::Ok { value }) => {
+                let inner = value.as_deref().unwrap_or(&unit);
+                Ok(Ok(T::from_value(inner)?))
             }
-            SchemaValue::Result(ResultValuePayload::Err { value: Some(x) }) => {
-                Ok(Err(E::from_value(x)?))
+            SchemaValue::Result(ResultValuePayload::Err { value }) => {
+                let inner = value.as_deref().unwrap_or(&unit);
+                Ok(Err(E::from_value(inner)?))
             }
-            SchemaValue::Result(_) => Err(FromSchemaError::custom(
-                "Result<T, E> requires non-unit ok/err payloads",
-            )),
             other => Err(FromSchemaError::shape_mismatch(
                 "result",
                 value_kind(other),
@@ -1213,6 +1234,76 @@ impl<T: FromSchema> FromSchema for std::ops::Bound<T> {
 // =====================================================================
 // Tests for merge_agent_graphs
 // =====================================================================
+
+#[cfg(test)]
+mod result_unit_tests {
+    use super::*;
+    use crate::schema::schema_value::ResultValuePayload;
+    use test_r::test;
+
+    #[test]
+    fn ok_unit_encodes_as_none() {
+        let v: Result<(), String> = Ok(());
+        assert_eq!(
+            v.to_value(),
+            SchemaValue::Result(ResultValuePayload::Ok { value: None })
+        );
+    }
+
+    #[test]
+    fn err_unit_encodes_as_none() {
+        let v: Result<u32, ()> = Err(());
+        assert_eq!(
+            v.to_value(),
+            SchemaValue::Result(ResultValuePayload::Err { value: None })
+        );
+    }
+
+    #[test]
+    fn non_unit_branches_still_carry_payload() {
+        let ok: Result<u32, String> = Ok(7);
+        assert_eq!(
+            ok.to_value(),
+            SchemaValue::Result(ResultValuePayload::Ok {
+                value: Some(Box::new(7u32.to_value()))
+            })
+        );
+        let err: Result<u32, String> = Err("boom".to_string());
+        assert_eq!(
+            err.to_value(),
+            SchemaValue::Result(ResultValuePayload::Err {
+                value: Some(Box::new("boom".to_string().to_value()))
+            })
+        );
+    }
+
+    #[test]
+    fn unit_branch_schema_is_none() {
+        let mut b = SchemaBuilder::new();
+        let ty = <Result<(), String> as IntoSchema>::register_in(&mut b);
+        match ty {
+            SchemaType::Result { spec, .. } => {
+                assert!(spec.ok.is_none(), "ok branch should be None for unit");
+                assert!(spec.err.is_some(), "err branch should carry string");
+            }
+            other => panic!("expected result schema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ok_unit_roundtrips() {
+        let v: Result<(), String> = Ok(());
+        let decoded = <Result<(), String> as FromSchema>::from_value(&v.to_value()).unwrap();
+        assert_eq!(decoded, Ok(()));
+    }
+
+    #[test]
+    fn err_unit_roundtrips() {
+        let v: Result<u32, ()> = Err(());
+        let decoded = <Result<u32, ()> as FromSchema>::from_value(&v.to_value()).unwrap();
+        assert_eq!(decoded, Err(()));
+    }
+}
 
 #[cfg(test)]
 mod merge_tests {
