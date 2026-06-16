@@ -20,15 +20,18 @@ This is different from the application manifest schema under
 
 1. Keep the public `$type` discriminator model. Every structured output document
    must have the right stable `$type` value.
-2. Keep machine-readable structured output on stdout and human logs, prompts,
+2. `$type` values use suffixless command/action paths such as `agent.invoke`,
+   `component.manifest-trace`, or `deployment.diff`. Do not add redundant
+   `.result` or `.event` suffixes.
+3. Keep machine-readable structured output on stdout and human logs, prompts,
    progress, and diagnostics on stderr.
-3. Prefer typed schema definitions over `JsonValue`. Use generic JSON only when
+4. Prefer typed schema definitions over `JsonValue`. Use generic JSON only when
    the payload is semantically arbitrary or cannot be related in JSON Schema
    draft-07.
-4. Match serde's actual serialized shape, not the Rust type shape you expect.
+5. Match serde's actual serialized shape, not the Rust type shape you expect.
    Tagged enums, flattened enum payloads, skipped fields, and custom serializers
    are common drift sources.
-5. For exact object schemas, set `additionalProperties: false` and keep
+6. For exact object schemas, set `additionalProperties: false` and keep
    `required` entries aligned with `properties`.
 
 ## Important Files
@@ -73,7 +76,7 @@ These generic areas are intentional unless the task explicitly says otherwise:
 
 ## Oplog Status
 
-`agent.oplog.result` is the known remaining major gap.
+`agent.oplog` is the known remaining major gap.
 
 Currently:
 
@@ -104,7 +107,52 @@ Useful implementation notes for future oplog work:
 3. Update `command-output.schema.json` to match actual serde output.
 4. Add or improve the generator in `cli_output.rs` using real DTO/view values.
 5. Run focused schema tests and inspect failures as DTO/schema drift.
-6. Regenerate the local output summary when the registry or output types change.
+6. Check whether user-facing skills under `golem-skills/skills` need updates
+   when CLI output field names, `$type` names, or examples change.
+7. Check whether `golem-skills/tests` needs updates when output field names,
+   `$type` names, JSON formatting, or invoke JSON unwrapping changes.
+8. Regenerate the local output summary when the registry or output types change.
+
+## User-Facing Skill Impact
+
+CLI structured output changes can make embedded user-facing skills stale. Always
+search `golem-skills/skills` when changing:
+
+- machine-readable CLI field names, such as `resultJson` / `resultsJson`;
+- `$type` naming conventions;
+- examples showing `--format json`, `--format yaml`, or structured output;
+- command names or flags used in skill instructions.
+
+If any files under `golem-skills/skills` change, regenerate the generated How-To
+Guide docs before finishing:
+
+```shell
+cargo make generate-docs-skills
+```
+
+CI rejects drift via `cargo make check-docs-skills`.
+
+## Golem Skill Harness Impact
+
+CLI structured output changes can break generated-application skill tests under
+`golem-skills/tests`, especially the harness code that invokes `golem-cli` and
+unwraps JSON output.
+
+When public CLI output changes, inspect and update affected files under:
+
+- `golem-skills/tests/harness/src/`;
+- `golem-skills/tests/harness/tests/`;
+- `golem-skills/tests/harness/scenarios/`.
+
+The full scenario suite can require credentials, services, and significant time,
+and is normally run later in PR/CI. Locally, run focused harness unit/build
+checks only when harness TypeScript code or fixtures changed:
+
+```shell
+cd golem-skills/tests/harness
+npm run build
+npm test
+```
 
 ## Validation
 
@@ -141,9 +189,15 @@ regression seed.
 ## Checklist
 
 1. `$type` is stable and registered in both source and schema.
-2. Schema matches actual `serde_json::to_value` output.
-3. Output generator constructs real DTO/view values.
-4. Important enum and nested variants are covered by examples or generators.
-5. Remaining `JsonValue` leaves are documented and intentional.
-6. Focused schema tests, check task, summary update, and `cargo check -p
+2. `$type` follows suffixless command/action path naming.
+3. Schema matches actual `serde_json::to_value` output.
+4. Output generator constructs real DTO/view values.
+5. Important enum and nested variants are covered by examples or generators.
+6. User-facing skills under `golem-skills/skills` have been checked when public
+   output changed.
+7. `golem-skills/tests` impact has been checked when public output changed.
+8. Generated docs from user-facing skills were regenerated if `golem-skills/skills`
+   changed.
+9. Remaining `JsonValue` leaves are documented and intentional.
+10. Focused schema tests, check task, summary update, and `cargo check -p
    golem-cli` pass.

@@ -261,24 +261,24 @@ describe("Variable substitution integration", () => {
     (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
       success: true,
       stdout: JSON.stringify({
-        idempotency_key: "abc-123",
-        result_json: {
+        idempotencyKey: "abc-123",
+        resultJson: {
           typ: { type: "U64" },
           value: 1,
         },
         result: "1",
-        result_format: "TypeScript syntax",
+        resultFormat: "TypeScript syntax",
       }),
       stderr: "Invoking agent test-app/local/CounterAgent.increment\n",
       output: [
         JSON.stringify({
-          idempotency_key: "abc-123",
-          result_json: {
+          idempotencyKey: "abc-123",
+          resultJson: {
             typ: { type: "U64" },
             value: 1,
           },
           result: "1",
-          result_format: "TypeScript syntax",
+          resultFormat: "TypeScript syntax",
         }),
         "Invoking agent test-app/local/CounterAgent.increment\n",
       ].join(""),
@@ -324,13 +324,13 @@ describe("Variable substitution integration", () => {
       return {
         success: true,
         stdout: JSON.stringify({
-          idempotency_key: "abc-123",
-          result_json: {
+          idempotencyKey: "abc-123",
+          resultJson: {
             typ: { type: "Bool" },
             value: true,
           },
           result: "true",
-          result_format: "Rust syntax",
+          resultFormat: "Rust syntax",
         }),
         stderr: "",
         output: "",
@@ -385,8 +385,8 @@ describe("Variable substitution integration", () => {
     (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
       success: true,
       stdout: JSON.stringify({
-        idempotency_key: "abc-123",
-        results_json: [
+        idempotencyKey: "abc-123",
+        resultsJson: [
           {
             typ: { type: "U64" },
             value: 1,
@@ -397,7 +397,7 @@ describe("Variable substitution integration", () => {
           },
         ],
         result: '[1, "lol"]',
-        result_format: "TypeScript syntax",
+        resultFormat: "TypeScript syntax",
       }),
       stderr: "",
       output: "",

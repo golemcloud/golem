@@ -96,12 +96,12 @@ function extractInvokeJsonResult(output: string): unknown {
     return "value" in valueAndType ? (valueAndType as Record<string, unknown>).value : undefined;
   };
 
-  const resultJson = parsed.result_json;
+  const resultJson = parsed.resultJson;
   if (resultJson && typeof resultJson === "object") {
     return unwrapValueAndType(resultJson);
   }
 
-  const resultsJson = parsed.results_json;
+  const resultsJson = parsed.resultsJson;
   if (Array.isArray(resultsJson)) {
     return resultsJson.map(unwrapValueAndType);
   }

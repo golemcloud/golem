@@ -33,6 +33,7 @@ Choose tests based on what you changed. **Do not run `cargo make test`** — it 
 | TypeScript SDK (`sdks/ts/`) | `npx pnpm run test` (in `sdks/ts/`) + `cargo make cli-integration-tests` |
 | MoonBit SDK (`sdks/moonbit/`) | `moon test` (in `sdks/moonbit/golem_sdk/`) |
 | CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
+| CLI JSON output affecting skill tests | Update affected `golem-skills/tests/harness` code, tests, or scenarios. Run `npm run build && npm test` in `golem-skills/tests/harness` only if harness TypeScript code/tests changed. |
 
 If your change spans multiple areas, run multiple test suites.
 

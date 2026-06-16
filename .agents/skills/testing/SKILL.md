@@ -43,6 +43,9 @@ rerun this prop test a few times to catch generator/schema drift:
 cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples --lib
 ```
 
+If CLI JSON output field names, `$type` names, or invoke JSON unwrapping changed,
+also keep `golem-skill/skills` and tests under `golem-skills/tests` up to date.
+
 ## Test Filtering Rules (test-r)
 
 This project uses `test-r` which supports **multiple filter arguments after `--`**. Filters are OR-matched (a test runs if it matches any filter). Each filter is a **substring match**, not a regex.
