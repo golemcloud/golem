@@ -472,13 +472,13 @@ mod tests {
                 ));
             }
 
-            if let Some(tuple_field_type) = &output.tuple_field_type {
-                if is_known_non_object_type(tuple_field_type) {
-                    errors.push(format!(
+            if let Some(tuple_field_type) = &output.tuple_field_type
+                && is_known_non_object_type(tuple_field_type)
+            {
+                errors.push(format!(
                         "{} is a CliOutput tuple wrapper around non-object type `{}`; use a named output struct instead",
                         output.rust_type, tuple_field_type,
                     ));
-                }
             }
         }
 
@@ -781,18 +781,16 @@ mod tests {
     }
 
     fn collect_struct(item: &syn::ItemStruct, file: &Path, summary: &mut SourceSummary) {
-        if let syn::Fields::Unnamed(fields) = &item.fields {
-            if fields.unnamed.len() == 1 {
-                if let Some(ty) = fields
-                    .unnamed
-                    .first()
-                    .map(|field| field.ty.to_token_stream().to_string())
-                {
-                    summary
-                        .tuple_field_types_by_struct
-                        .insert(item.ident.to_string(), ty);
-                }
-            }
+        if let syn::Fields::Unnamed(fields) = &item.fields
+            && fields.unnamed.len() == 1
+            && let Some(ty) = fields
+                .unnamed
+                .first()
+                .map(|field| field.ty.to_token_stream().to_string())
+        {
+            summary
+                .tuple_field_types_by_struct
+                .insert(item.ident.to_string(), ty);
         }
 
         let _ = file;
@@ -812,26 +810,23 @@ mod tests {
             return;
         };
 
-        match trait_name.as_str() {
-            "CliOutput" => {
-                let mut kind = None;
+        if trait_name.as_str() == "CliOutput" {
+            let mut kind = None;
 
-                for impl_item in &item.items {
-                    if let ImplItem::Const(constant) = impl_item {
-                        if constant.ident == "KIND" {
-                            kind = string_literal(&constant.expr);
-                        }
-                    }
+            for impl_item in &item.items {
+                if let ImplItem::Const(constant) = impl_item
+                    && constant.ident == "KIND"
+                {
+                    kind = string_literal(&constant.expr);
                 }
-
-                summary.outputs.push(OutputImpl {
-                    rust_type,
-                    kind: kind.unwrap_or_else(|| "<missing-kind>".to_string()),
-                    file: file.to_path_buf(),
-                    tuple_field_type: None,
-                });
             }
-            _ => {}
+
+            summary.outputs.push(OutputImpl {
+                rust_type,
+                kind: kind.unwrap_or_else(|| "<missing-kind>".to_string()),
+                file: file.to_path_buf(),
+                tuple_field_type: None,
+            });
         }
     }
 
@@ -1736,7 +1731,7 @@ mod tests {
             ],
         };
 
-        if flavor % 2 == 0 {
+        if flavor.is_multiple_of(2) {
             DataSchema::Tuple(elements)
         } else {
             DataSchema::Multimodal(elements)
