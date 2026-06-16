@@ -424,7 +424,13 @@ fn calculate_latest_worker_status(
             OplogEntry::Create { .. } => {
                 current_status = AgentStatus::Idle;
             }
-            OplogEntry::HostCall { .. } => {
+            OplogEntry::Start { .. } => {
+                current_status = AgentStatus::Running;
+            }
+            OplogEntry::End { .. } => {
+                current_status = AgentStatus::Running;
+            }
+            OplogEntry::Cancelled { .. } => {
                 current_status = AgentStatus::Running;
             }
             OplogEntry::AgentInvocationStarted { .. } => {
@@ -460,12 +466,6 @@ fn calculate_latest_worker_status(
                 current_status = AgentStatus::Running;
             }
             OplogEntry::EndAtomicRegion { .. } => {
-                current_status = AgentStatus::Running;
-            }
-            OplogEntry::BeginRemoteWrite { .. } => {
-                current_status = AgentStatus::Running;
-            }
-            OplogEntry::EndRemoteWrite { .. } => {
                 current_status = AgentStatus::Running;
             }
             OplogEntry::PendingAgentInvocation { .. } => {}
@@ -2100,13 +2100,23 @@ mod test {
             o: HostResponse,
             func_type: DurableFunctionType,
         ) -> Self {
+            let start_index = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             self.add(
-                OplogEntry::HostCall {
+                OplogEntry::Start {
                     timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
                     function_name: HostFunctionName::Custom(name.to_string()),
-                    request: OplogPayload::Inline(Box::new(i)),
-                    response: OplogPayload::Inline(Box::new(o)),
+                    request: Some(OplogPayload::Inline(Box::new(i))),
                     durable_function_type: func_type,
+                },
+                |status| status,
+            )
+            .add(
+                OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index,
+                    response: Some(OplogPayload::Inline(Box::new(o))),
+                    forced_commit: false,
                 },
                 |status| status,
             )

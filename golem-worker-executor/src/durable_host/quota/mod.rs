@@ -14,8 +14,9 @@
 
 pub mod types;
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::quota::types::{
     FailedReservation, Host, HostQuotaToken, HostReservation,
 };
@@ -95,40 +96,47 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
         let env_id = self.owned_agent_id.environment_id;
         let rn = ResourceName(resource_name.clone());
 
-        let durability = Durability::<host_functions::GolemQuotaTokenNew>::new(
+        // `WriteLocal` (no external side effect): re-executable on an incomplete `Start`, so the
+        // live acquire runs from one shared block for both the live and incomplete-replay paths.
+        let mut handle = CallHandle::<host_functions::GolemQuotaTokenNew, NotCancellable>::start(
             self,
+            HostRequestQuotaTokenRequest {
+                resource_name,
+                expected_use,
+            },
             DurableFunctionType::WriteLocal,
         )
         .await?;
 
-        let token_entry = if durability.is_live() {
+        let token_entry = 'token: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => {
+                        let credit_at = Utc
+                            .timestamp_millis_opt(replayed.credit_at_ms)
+                            .single()
+                            .unwrap_or_else(Utc::now);
+
+                        // Credit is always 0 on a fresh acquire; timestamp is restored from oplog.
+                        break 'token QuotaTokenEntry::pending(
+                            env_id,
+                            rn,
+                            expected_use,
+                            0,
+                            credit_at,
+                        );
+                    }
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let svc = self.state.quota_service.clone();
             let interest = svc.acquire(env_id, rn, expected_use, 0, None).await;
-
             let credit_at_ms = interest.last_credit_value_at.timestamp_millis();
-
-            durability
-                .persist(
-                    self,
-                    HostRequestQuotaTokenRequest {
-                        resource_name: resource_name.clone(),
-                        expected_use,
-                    },
-                    HostResponseQuotaTokenAcquired { credit_at_ms },
-                )
+            handle
+                .complete(self, HostResponseQuotaTokenAcquired { credit_at_ms })
                 .await?;
-
             QuotaTokenEntry::live(interest)
-        } else {
-            let replayed = durability.replay(self).await?;
-
-            let credit_at = Utc
-                .timestamp_millis_opt(replayed.credit_at_ms)
-                .single()
-                .unwrap_or_else(Utc::now);
-
-            // Credit is always 0 on a fresh acquire; timestamp is restored from oplog.
-            QuotaTokenEntry::pending(env_id, rn, expected_use, 0, credit_at)
         };
 
         let resource = self.table().push(token_entry)?;
@@ -140,24 +148,49 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
         self_: Resource<QuotaTokenEntry>,
         amount: u64,
     ) -> anyhow::Result<Result<Resource<ReservationEntry>, FailedReservation>> {
-        let durability = Durability::<host_functions::GolemQuotaTokenReserve>::new(
-            self,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            CallHandle::<host_functions::GolemQuotaTokenReserve, NotCancellable>::start(
+                self,
+                HostRequestQuotaReserveRequest { amount },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
-        let reserve_result = if durability.is_live() {
+        let reserve_result = 'reserve: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => {
+                        let credit_at = Utc
+                            .timestamp_millis_opt(replayed.credit_after_at_ms)
+                            .single()
+                            .unwrap_or_else(Utc::now);
+
+                        self.table()
+                            .get_mut(&self_)?
+                            .update_replayed_credit(replayed.credit_after, credit_at)?;
+
+                        break 'reserve replayed.result;
+                    }
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let svc = self.state.quota_service.clone();
-            let interest = get_live_lease_interest(self, &self_).await?;
+            let interest = match get_live_lease_interest(self, &self_).await {
+                Ok(interest) => interest,
+                Err(err) => {
+                    handle.abandon_for_trap();
+                    return Err(err);
+                }
+            };
             let result = svc.try_reserve(interest, amount).await;
 
             let credit_after = interest.last_credit_value;
             let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
 
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestQuotaReserveRequest { amount },
                     HostResponseQuotaReserveResult {
                         result: result.clone(),
                         credit_after,
@@ -167,19 +200,6 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                 .await?;
 
             result
-        } else {
-            let replayed = durability.replay(self).await?;
-
-            let credit_at = Utc
-                .timestamp_millis_opt(replayed.credit_after_at_ms)
-                .single()
-                .unwrap_or_else(Utc::now);
-
-            self.table()
-                .get_mut(&self_)?
-                .update_replayed_credit(replayed.credit_after, credit_at)?;
-
-            replayed.result
         };
 
         match reserve_result {
@@ -414,45 +434,58 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
     async fn commit(&mut self, self_: Resource<ReservationEntry>, used: u64) -> anyhow::Result<()> {
         let entry = self.table().delete(self_)?;
 
-        let durability = Durability::<host_functions::GolemQuotaReservationCommit>::new(
-            self,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            CallHandle::<host_functions::GolemQuotaReservationCommit, NotCancellable>::start(
+                self,
+                HostRequestQuotaCommitRequest { used },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
-        if durability.is_live() {
-            let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(entry.token.rep());
-            let svc = self.state.quota_service.clone();
+        if !handle.is_live() {
+            match handle.replay(self).await? {
+                CallReplayOutcome::Replayed(replayed) => {
+                    let token_resource: Resource<QuotaTokenEntry> =
+                        Resource::new_own(entry.token.rep());
 
-            let interest = get_live_lease_interest(self, &token_resource).await?;
-            svc.commit(interest, entry.reservation, used).await;
-            let credit_after = interest.last_credit_value;
-            let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
+                    let credit_at = Utc
+                        .timestamp_millis_opt(replayed.credit_after_at_ms)
+                        .single()
+                        .unwrap_or_else(Utc::now);
 
-            durability
-                .persist(
-                    self,
-                    HostRequestQuotaCommitRequest { used },
-                    HostResponseQuotaCommitResult {
-                        credit_after,
-                        credit_after_at_ms,
-                    },
-                )
-                .await?;
-        } else {
-            let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(entry.token.rep());
+                    self.table()
+                        .get_mut(&token_resource)?
+                        .update_replayed_credit(replayed.credit_after, credit_at)?;
 
-            let replayed = durability.replay(self).await?;
-
-            let credit_at = Utc
-                .timestamp_millis_opt(replayed.credit_after_at_ms)
-                .single()
-                .unwrap_or_else(Utc::now);
-
-            self.table()
-                .get_mut(&token_resource)?
-                .update_replayed_credit(replayed.credit_after, credit_at)?;
+                    return Ok(());
+                }
+                CallReplayOutcome::Incomplete(live) => handle = live,
+            }
         }
+
+        let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(entry.token.rep());
+        let svc = self.state.quota_service.clone();
+
+        let interest = match get_live_lease_interest(self, &token_resource).await {
+            Ok(interest) => interest,
+            Err(err) => {
+                handle.abandon_for_trap();
+                return Err(err);
+            }
+        };
+        svc.commit(interest, entry.reservation, used).await;
+        let credit_after = interest.last_credit_value;
+        let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
+
+        handle
+            .complete(
+                self,
+                HostResponseQuotaCommitResult {
+                    credit_after,
+                    credit_after_at_ms,
+                },
+            )
+            .await?;
 
         Ok(())
     }

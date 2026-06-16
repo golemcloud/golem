@@ -56,19 +56,46 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 log_plugin_description(&mut result, &inner_pad, plugin);
             }
         }
-        PublicOplogEntry::HostCall(params) => {
-            let _ = writeln!(result, "CALL {}", &params.function_name,);
+        PublicOplogEntry::Start(params) => {
+            let _ = writeln!(result, "START {}", &params.function_name,);
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}input:             {}",
-                value_to_string(&params.request)
-            );
-            let _ = writeln!(
-                result,
-                "{pad}result:            {}",
-                value_to_string(&params.response)
-            );
+            if let Some(parent) = params.parent_start_index {
+                let _ = writeln!(result, "{pad}parent start index: {parent}");
+            }
+            if let Some(request) = &params.request {
+                let _ = writeln!(
+                    result,
+                    "{pad}input:             {}",
+                    value_to_string(request)
+                );
+            }
+        }
+        PublicOplogEntry::End(params) => {
+            let _ = writeln!(result, "END");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", &params.start_index);
+            if let Some(response) = &params.response {
+                let _ = writeln!(
+                    result,
+                    "{pad}result:            {}",
+                    value_to_string(response)
+                );
+            }
+            if params.forced_commit {
+                let _ = writeln!(result, "{pad}forced commit:     true");
+            }
+        }
+        PublicOplogEntry::Cancelled(params) => {
+            let _ = writeln!(result, "CANCELLED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", &params.start_index);
+            if let Some(partial) = &params.partial {
+                let _ = writeln!(
+                    result,
+                    "{pad}partial result:    {}",
+                    value_to_string(partial)
+                );
+            }
         }
         PublicOplogEntry::AgentInvocationStarted(params) => {
             let _ = writeln!(result, "AGENT INVOCATION STARTED");
@@ -138,15 +165,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         }
         PublicOplogEntry::EndAtomicRegion(params) => {
             let _ = writeln!(result, "END ATOMIC REGION");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
-        }
-        PublicOplogEntry::BeginRemoteWrite(params) => {
-            let _ = writeln!(result, "BEGIN REMOTE WRITE");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-        }
-        PublicOplogEntry::EndRemoteWrite(params) => {
-            let _ = writeln!(result, "END REMOTE WRITE");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }

@@ -25,16 +25,16 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
+    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -300,39 +300,83 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     instance_id,
                 }))
             }
-            OplogEntry::HostCall {
+            OplogEntry::Start {
                 timestamp,
+                parent_start_index,
                 function_name,
                 request,
-                response,
                 durable_function_type,
             } => {
-                let host_request: HostRequest = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, request)
-                    .await?;
-                let host_response: HostResponse = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, response)
-                    .await?;
+                let request_value = if let Some(request_payload) = request {
+                    let host_request: HostRequest = oplog_service
+                        .download_payload(owned_agent_id, agent_mode, request_payload)
+                        .await?;
 
-                // Enriching data
-                let host_request = match host_request {
-                    HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
-                        enrich_golem_rpc_invoke(components, inner).await,
-                    ),
-                    HostRequest::GolemRpcScheduledInvocation(inner) => {
-                        HostRequest::GolemRpcScheduledInvocation(
-                            enrich_golem_rpc_scheduled_invocation(components, inner).await,
-                        )
-                    }
-                    other => other,
+                    // Enriching data
+                    let host_request = match host_request {
+                        HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
+                            enrich_golem_rpc_invoke(components, inner).await,
+                        ),
+                        HostRequest::GolemRpcScheduledInvocation(inner) => {
+                            HostRequest::GolemRpcScheduledInvocation(
+                                enrich_golem_rpc_scheduled_invocation(components, inner).await,
+                            )
+                        }
+                        other => other,
+                    };
+                    Some(host_request.into_value_and_type())
+                } else {
+                    None
                 };
 
-                Ok(PublicOplogEntry::HostCall(HostCallParams {
+                Ok(PublicOplogEntry::Start(StartParams {
                     timestamp,
+                    parent_start_index,
                     function_name: function_name.to_string(),
-                    request: host_request.into_value_and_type(),
-                    response: host_response.into_value_and_type(),
+                    request: request_value,
                     durable_function_type: durable_function_type.into(),
+                }))
+            }
+            OplogEntry::End {
+                timestamp,
+                start_index,
+                response,
+                forced_commit,
+            } => {
+                let response_value = if let Some(response_payload) = response {
+                    let host_response: HostResponse = oplog_service
+                        .download_payload(owned_agent_id, agent_mode, response_payload)
+                        .await?;
+                    Some(host_response.into_value_and_type())
+                } else {
+                    None
+                };
+
+                Ok(PublicOplogEntry::End(EndParams {
+                    timestamp,
+                    start_index,
+                    response: response_value,
+                    forced_commit,
+                }))
+            }
+            OplogEntry::Cancelled {
+                timestamp,
+                start_index,
+                partial,
+            } => {
+                let partial_value = if let Some(partial_payload) = partial {
+                    let host_response: HostResponse = oplog_service
+                        .download_payload(owned_agent_id, agent_mode, partial_payload)
+                        .await?;
+                    Some(host_response.into_value_and_type())
+                } else {
+                    None
+                };
+
+                Ok(PublicOplogEntry::Cancelled(CancelledParams {
+                    timestamp,
+                    start_index,
+                    partial: partial_value,
                 }))
             }
             OplogEntry::AgentInvocationStarted {
@@ -434,18 +478,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 begin_index,
             } => Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp,
-                begin_index,
-            })),
-            OplogEntry::BeginRemoteWrite { timestamp } => {
-                Ok(PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
-                    timestamp,
-                }))
-            }
-            OplogEntry::EndRemoteWrite {
-                timestamp,
-                begin_index,
-            } => Ok(PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
                 timestamp,
                 begin_index,
             })),

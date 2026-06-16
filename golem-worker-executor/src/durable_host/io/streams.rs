@@ -15,11 +15,12 @@
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{
-    Durability, DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, HttpRequestCloseOwner,
+    DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, HttpRequestCloseOwner,
     PendingFilesystemReservation,
 };
 use crate::model::event::InternalWorkerEvent;
@@ -58,14 +59,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self, &self_) {
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<HttpTypesIncomingBodyStreamRead>::new(
+            let request = get_http_stream_request(self, handle)?;
+            let mut call = CallHandle::<HttpTypesIncomingBodyStreamRead, NotCancellable>::start(
                 self,
+                request,
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
 
-            let result = if durability.is_live() {
-                let request = get_http_stream_request(self, handle)?;
+            let result = if call.is_live() {
                 let first_try = HostInputStream::read(self.table(), self_, len).await;
 
                 // Attempt response-body resumption inline retry if the read
@@ -94,24 +96,21 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     first_try
                 };
 
-                durability
-                    .try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
-                        HostFailureKind::Transient
-                    })
-                    .await
-                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+                call.try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
+                    HostFailureKind::Transient
+                })
+                .await
+                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        request,
-                        HostResponseStreamChunk {
-                            result: read_result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamChunk {
+                        result: read_result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -131,13 +130,15 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<HttpTypesIncomingBodyStreamBlockingRead>::new(
-                self,
-                DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-            )
-            .await?;
-            let result = if durability.is_live() {
-                let request = get_http_stream_request(self, handle)?;
+            let request = get_http_stream_request(self, handle)?;
+            let mut call =
+                CallHandle::<HttpTypesIncomingBodyStreamBlockingRead, NotCancellable>::start(
+                    self,
+                    request,
+                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
+                )
+                .await?;
+            let result = if call.is_live() {
                 let first_try = HostInputStream::blocking_read(self.table(), self_, len).await;
 
                 // Attempt response-body resumption inline retry if the read
@@ -166,23 +167,20 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     first_try
                 };
 
-                durability
-                    .try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
-                        HostFailureKind::Transient
-                    })
-                    .await
-                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-                durability
-                    .persist(
-                        self,
-                        request,
-                        HostResponseStreamChunk {
-                            result: read_result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
+                    HostFailureKind::Transient
+                })
+                .await
+                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+                call.complete(
+                    self,
+                    HostResponseStreamChunk {
+                        result: read_result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -203,31 +201,29 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<HttpTypesIncomingBodyStreamSkip>::new(
+            let request = get_http_stream_request(self, handle)?;
+            let mut call = CallHandle::<HttpTypesIncomingBodyStreamSkip, NotCancellable>::start(
                 self,
+                request,
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
-            let result = if durability.is_live() {
-                let request = get_http_stream_request(self, handle)?;
+            let result = if call.is_live() {
                 let result = HostInputStream::skip(self.table(), self_, len).await;
-                durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
-                        HostFailureKind::Transient
-                    })
-                    .await
-                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-                durability
-                    .persist(
-                        self,
-                        request,
-                        HostResponseStreamSkip {
-                            result: result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                    HostFailureKind::Transient
+                })
+                .await
+                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+                call.complete(
+                    self,
+                    HostResponseStreamSkip {
+                        result: result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -252,32 +248,31 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<HttpTypesIncomingBodyStreamBlockingSkip>::new(
-                self,
-                DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-            )
-            .await?;
+            let request = get_http_stream_request(self, handle)?;
+            let mut call =
+                CallHandle::<HttpTypesIncomingBodyStreamBlockingSkip, NotCancellable>::start(
+                    self,
+                    request,
+                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
+                )
+                .await?;
 
-            let result = if durability.is_live() {
-                let request = get_http_stream_request(self, handle)?;
+            let result = if call.is_live() {
                 let result = HostInputStream::blocking_skip(self.table(), self_, len).await;
-                durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
-                        HostFailureKind::Transient
-                    })
-                    .await
-                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-                durability
-                    .persist(
-                        self,
-                        request,
-                        HostResponseStreamSkip {
-                            result: result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                    HostFailureKind::Transient
+                })
+                .await
+                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+                call.complete(
+                    self,
+                    HostResponseStreamSkip {
+                        result: result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }?;
             end_http_request_if_closed(self, handle, &result.result).await?;
 
@@ -314,14 +309,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamCheckWrite>::new(
+            let call = CallHandle::<HttpTypesOutgoingBodyStreamCheckWrite, NotCancellable>::start(
                 self,
+                state.request,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
             )
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 // If the peer already closed the request body stream after an
                 // early response, rebuild the streaming request before recording
                 // the failed check-write result.
@@ -339,17 +335,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamCheckWrite {
-                            result: result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamCheckWrite {
+                        result: result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -378,14 +372,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
+            let mut call = CallHandle::<HttpTypesOutgoingBodyStreamWrite, NotCancellable>::start(
                 self,
+                state.request,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
             )
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
                 let write_result = try_with_inline_retry_and_pending_status_aware(
                     self,
@@ -402,24 +397,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-                durability
-                    .try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
+                call.try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamWriteWithBytes {
-                            result: write_result
-                                .map(|()| contents)
-                                .map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamWriteWithBytes {
+                        result: write_result
+                            .map(|()| contents)
+                            .map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                let replayed = durability.replay(self).await;
+                let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
                 replayed
             }
@@ -478,14 +470,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             // handles backpressure via write_ready() loops, and persist a single
             // combined oplog entry.
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
+            let mut call = CallHandle::<HttpTypesOutgoingBodyStreamWrite, NotCancellable>::start(
                 self,
+                state.request,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
             )
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 let first_try =
                     blocking_write_and_flush_chunked(self.table(), self_, &contents).await;
 
@@ -528,24 +521,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     write_result = Ok(());
                 }
 
-                durability
-                    .try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
+                call.try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamWriteWithBytes {
-                            result: write_result
-                                .map(|()| contents)
-                                .map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamWriteWithBytes {
+                        result: write_result
+                            .map(|()| contents)
+                            .map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                let replayed = durability.replay(self).await;
+                let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
                 replayed
             }
@@ -566,14 +556,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamFlush>::new(
+            let mut call = CallHandle::<HttpTypesOutgoingBodyStreamFlush, NotCancellable>::start(
                 self,
+                state.request,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
             )
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
                 let flush_result = try_with_inline_retry_and_pending_status_aware(
                     self,
@@ -589,22 +580,19 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-                durability
-                    .try_trigger_retry(self, &flush_result, |_| HostFailureKind::Transient)
+                call.try_trigger_retry(self, &flush_result, |_| HostFailureKind::Transient)
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamWriteResult {
-                            result: flush_result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamWriteResult {
+                        result: flush_result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -619,14 +607,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingFlush>::new(
-                self,
-                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
-            )
-            .await
-            .map_err(StreamError::from)?;
+            let mut call =
+                CallHandle::<HttpTypesOutgoingBodyStreamBlockingFlush, NotCancellable>::start(
+                    self,
+                    state.request,
+                    DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+                )
+                .await
+                .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
                 let flush_result = try_with_inline_retry_and_pending_status_aware(
                     self,
@@ -642,22 +632,19 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-                durability
-                    .try_trigger_retry(self, &flush_result, |_| HostFailureKind::Transient)
+                call.try_trigger_retry(self, &flush_result, |_| HostFailureKind::Transient)
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamWriteResult {
-                            result: flush_result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamWriteResult {
+                        result: flush_result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -696,14 +683,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamWriteZeroes>::new(
-                self,
-                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
-            )
-            .await
-            .map_err(StreamError::from)?;
+            let mut call =
+                CallHandle::<HttpTypesOutgoingBodyStreamWriteZeroes, NotCancellable>::start(
+                    self,
+                    state.request,
+                    DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+                )
+                .await
+                .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
                 let write_result = try_with_inline_retry_and_pending_status_aware(
                     self,
@@ -719,24 +708,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-                durability
-                    .try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
+                call.try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamWriteZeroes {
-                            result: write_result
-                                .map(|()| len)
-                                .map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamWriteZeroes {
+                        result: write_result
+                            .map(|()| len)
+                            .map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                let replayed = durability.replay(self).await;
+                let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
                 replayed
             }
@@ -786,14 +772,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             // Instead, call the underlying blocking_write_zeroes_and_flush which properly
             // handles backpressure, and persist a single combined oplog entry.
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamWriteZeroes>::new(
-                self,
-                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
-            )
-            .await
-            .map_err(StreamError::from)?;
+            let mut call =
+                CallHandle::<HttpTypesOutgoingBodyStreamWriteZeroes, NotCancellable>::start(
+                    self,
+                    state.request,
+                    DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+                )
+                .await
+                .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 // For HTTP body streams, Closed is also retryable (hyper consumer
                 // died due to connection reset).
                 let write_result = try_with_inline_retry_and_pending_status_aware(
@@ -810,24 +798,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-                durability
-                    .try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
+                call.try_trigger_retry(self, &write_result, |_| HostFailureKind::Transient)
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamWriteZeroes {
-                            result: write_result
-                                .map(|()| len)
-                                .map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamWriteZeroes {
+                        result: write_result
+                            .map(|()| len)
+                            .map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                let replayed = durability.replay(self).await;
+                let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
                 replayed
             }
@@ -867,26 +852,25 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     .has_unreconstructable_body = true;
             }
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamSplice>::new(
+            let call = CallHandle::<HttpTypesOutgoingBodyStreamSplice, NotCancellable>::start(
                 self,
+                state.request,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
             )
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 let result = HostOutputStream::splice(self.table(), self_, src, len).await;
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamSkip {
-                            result: result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamSkip {
+                        result: result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -934,26 +918,26 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     .has_unreconstructable_body = true;
             }
             let state = get_http_output_stream_state(self, rep)?;
-            let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingSplice>::new(
-                self,
-                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
-            )
-            .await
-            .map_err(StreamError::from)?;
+            let call =
+                CallHandle::<HttpTypesOutgoingBodyStreamBlockingSplice, NotCancellable>::start(
+                    self,
+                    state.request,
+                    DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+                )
+                .await
+                .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let result = if call.is_live() {
                 let result = HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
-                durability
-                    .persist(
-                        self,
-                        state.request,
-                        HostResponseStreamSkip {
-                            result: result.map_err(SerializableStreamError::from),
-                        },
-                    )
-                    .await
+                call.complete(
+                    self,
+                    HostResponseStreamSkip {
+                        result: result.map_err(SerializableStreamError::from),
+                    },
+                )
+                .await
             } else {
-                durability.replay(self).await
+                call.replay_expecting_completion(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -1040,7 +1024,7 @@ fn is_incoming_http_body_stream<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     stream: &Resource<InputStream>,
 ) -> bool {
-    // incoming-body is used for both incoming http bodies (which don't need durability),
+    // incoming-body is used for both incoming http bodies (which don't need call),
     // and response bodies. Only in the second case will there be an associated open http request.
     if !ctx.state.open_http_requests.contains_key(&stream.rep()) {
         return false;

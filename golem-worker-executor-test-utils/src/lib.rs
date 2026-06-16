@@ -2470,8 +2470,9 @@ impl TestOplog {
             OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
             OplogEntry::CommittedRemoteTransaction { .. } => "CommittedRemoteTransaction",
             OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
-            OplogEntry::BeginRemoteWrite { .. } => "BeginRemoteWrite",
-            OplogEntry::EndRemoteWrite { .. } => "EndRemoteWrite",
+            OplogEntry::Start { .. } => "Start",
+            OplogEntry::End { .. } => "End",
+            OplogEntry::Cancelled { .. } => "Cancelled",
             _ => "Other",
         };
 
@@ -2528,6 +2529,16 @@ impl Oplog for TestOplog {
         self.oplog.fallible_add(entry).await
     }
 
+    async fn fallible_add_pair(
+        &self,
+        first: OplogEntry,
+        second: OplogEntry,
+    ) -> Result<(OplogIndex, OplogIndex), String> {
+        self.check_oplog_add(&first).await?;
+        self.check_oplog_add(&second).await?;
+        self.oplog.fallible_add_pair(first, second).await
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.oplog.drop_prefix(last_dropped_id).await
     }
@@ -2574,6 +2585,14 @@ impl Oplog for TestOplog {
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.oplog.switch_persistence_level(mode).await;
+    }
+
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        self.oplog.add_pair(start, make_second).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

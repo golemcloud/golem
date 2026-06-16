@@ -80,6 +80,7 @@ pub trait WorkerForkService: Send + Sync {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError>;
 }
@@ -745,6 +746,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
@@ -756,26 +758,58 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        // durability.persist will write an HostCall entry persisting ForkResult::Original
-        // we write an alternative version of that entry to the new oplog, so it is going to return with
-        // ForkResult::Forked in the other worker
-
-        let _ = new_oplog
-            .add_host_call(
-                GolemApiFork::HOST_FUNCTION_NAME,
-                &HostRequest::NoInput(HostRequestNoInput {}),
-                &HostResponse::GolemApiFork(HostResponseGolemApiFork {
-                    forked_phantom_id,
-                    result: Ok(golem_common::model::ForkResult::Forked),
+        // The source worker's `fork` call writes a `Start`/`End` pair persisting
+        // `ForkResult::Original`; here we write an alternative pair carrying `ForkResult::Forked`
+        // into the new oplog so the forked worker replays it and returns `ForkResult::Forked`.
+        // If the copied cutoff is the source call's outer `WriteRemote` scope `Start`, complete
+        // that scope after the synthetic child call so the forked worker can replay the same shape
+        // as the source call. This is a synthetic write into another worker's oplog, not an
+        // in-context host call, so it uses the atomic-pair primitive directly (no `CallHandle`);
+        // atomicity matters because a split `Start`/`End` would corrupt the forked worker's replay.
+        let request = HostRequest::NoInput(HostRequestNoInput {});
+        let response = HostResponse::GolemApiFork(HostResponseGolemApiFork {
+            forked_phantom_id,
+            result: Ok(golem_common::model::ForkResult::Forked),
+        });
+        let request_payload = new_oplog.upload_payload(&request).await.map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to serialize and store durable function invocation: {err}"
+            ))
+        })?;
+        let response_payload = new_oplog.upload_payload(&response).await.map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to serialize and store durable function invocation: {err}"
+            ))
+        })?;
+        let now = Timestamp::now_utc();
+        new_oplog
+            .add_pair(
+                OplogEntry::Start {
+                    timestamp: now,
+                    parent_start_index: copied_scope_start,
+                    function_name: GolemApiFork::HOST_FUNCTION_NAME,
+                    request: Some(request_payload),
+                    durable_function_type: DurableFunctionType::WriteRemote,
+                },
+                Box::new(move |start_index| OplogEntry::End {
+                    timestamp: now,
+                    start_index,
+                    response: Some(response_payload),
+                    forced_commit: false,
                 }),
-                DurableFunctionType::WriteRemote,
             )
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to serialize and store durable function invocation: {err}"
-                ))
-            });
+            .await;
+
+        if let Some(scope_start) = copied_scope_start {
+            new_oplog
+                .add(OplogEntry::End {
+                    timestamp: now,
+                    start_index: scope_start,
+                    response: None,
+                    forced_commit: true,
+                })
+                .await;
+        }
 
         new_oplog.commit(CommitLevel::Always).await;
 

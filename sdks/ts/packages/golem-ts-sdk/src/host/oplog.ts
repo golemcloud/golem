@@ -24,14 +24,15 @@ import type {
   OplogIndex,
   ComponentRevision,
   Datetime,
-  HostCallParameters,
+  StartParameters,
+  EndParameters,
+  CancelledParameters,
   AgentInvocationStartedParameters,
   AgentInvocationFinishedParameters,
   ErrorParameters,
   JumpParameters,
   SetRetryPolicyParameters,
   EndAtomicRegionParameters,
-  EndRemoteWriteParameters,
   PendingAgentInvocationParameters,
   PendingUpdateParameters,
   SuccessfulUpdateParameters,
@@ -85,7 +86,9 @@ export type {
   PluginInstallationDescription,
   RawLocalAgentConfigEntry,
   LocalAgentConfigEntry,
-  HostCallParameters,
+  StartParameters,
+  EndParameters,
+  CancelledParameters,
   SpanData,
   LocalSpanData,
   ExternalSpanData,
@@ -94,7 +97,6 @@ export type {
   JumpParameters,
   SetRetryPolicyParameters,
   EndAtomicRegionParameters,
-  EndRemoteWriteParameters,
   TypedDataValue,
   AgentInitializationParameters,
   AgentMethodInvocationParameters,
@@ -140,7 +142,9 @@ export type {
   OplogExternalPayload,
   WorkerError,
   RawCreateParameters,
-  RawHostCallParameters,
+  RawStartParameters,
+  RawEndParameters,
+  RawCancelledParameters,
   RawAgentInvocationStartedParameters,
   RawAgentInvocationFinishedParameters,
   RawErrorParameters,
@@ -191,7 +195,9 @@ export type OplogProcessorCheckpointParameters = {
 
 export type PublicOplogEntry =
   | { tag: 'create'; val: CreateParameters }
-  | { tag: 'host-call'; val: HostCallParameters }
+  | { tag: 'start'; val: StartParameters }
+  | { tag: 'end'; val: EndParameters }
+  | { tag: 'cancelled'; val: CancelledParameters }
   | { tag: 'agent-invocation-started'; val: AgentInvocationStartedParameters }
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
   | { tag: 'suspend'; val: Timestamp }
@@ -203,8 +209,6 @@ export type PublicOplogEntry =
   | { tag: 'set-retry-policy'; val: SetRetryPolicyParameters }
   | { tag: 'begin-atomic-region'; val: Timestamp }
   | { tag: 'end-atomic-region'; val: EndAtomicRegionParameters }
-  | { tag: 'begin-remote-write'; val: Timestamp }
-  | { tag: 'end-remote-write'; val: EndRemoteWriteParameters }
   | { tag: 'pending-agent-invocation'; val: PendingAgentInvocationParameters }
   | { tag: 'pending-update'; val: PendingUpdateParameters }
   | { tag: 'successful-update'; val: SuccessfulUpdateParameters }
