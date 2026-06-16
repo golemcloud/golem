@@ -1364,6 +1364,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
         let future_rep = this.rep();
 
+        // This only releases resource-table bookkeeping for the future and its child pollables (or
+        // defers the delete while children are still live). It deliberately does not close the
+        // invocation's durable scope: the `WriteRemote` scope opened at `begin_index` is ended by
+        // `get()` once it observes a terminal (non-pending) result — including the cancelled result
+        // produced after `future-invoke-result.cancel`. A future dropped before `get()` observes a
+        // terminal result leaves its scope `Start` open.
         match self.table().delete(this) {
             Ok(entry) => {
                 for child_rep in &entry.child_pollables {

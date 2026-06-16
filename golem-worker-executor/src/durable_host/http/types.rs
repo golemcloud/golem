@@ -625,11 +625,13 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::future_trailers", "drop");
 
         let handle = rep.rep();
-        // Remove tracking if still present (guest dropped without calling get()).
-        // Note: we cannot call async end_http_request here because the trait
-        // requires a sync drop. The durable function boundary and span will be
-        // cleaned up when the worker is suspended/interrupted. Log so the leak
-        // is observable.
+        // The durable boundary of an HTTP request is closed by `end_http_request`, called from the
+        // normal `get()` completion paths and from the *async* drops of the response, body and
+        // future-incoming-response resources. This `drop` is synchronous (trailers `drop` is not an
+        // async host call), so it cannot await that oplog write — it can only release the in-memory
+        // request tracking. If the trailers future is the request's close-owner and is dropped
+        // without `get()`, the request's durable scope is therefore left open; the warning makes
+        // that observable.
         if let Some(state) = self.state.open_http_requests.remove(&handle)
             && state.close_owner == HttpRequestCloseOwner::FutureTrailersDrop
         {
