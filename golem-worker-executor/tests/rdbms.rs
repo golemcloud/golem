@@ -14,16 +14,15 @@
 
 use crate::Tracing;
 use golem_common::base_model::AgentId;
-use golem_common::model::agent::DataValue;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::{Value, ValueAndType};
+use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -1662,9 +1661,9 @@ async fn rdbms_workers_test<T: RdbmsType>(
     workers: Vec<(AgentId, ParsedAgentId)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<AgentId, DataValue> = HashMap::new();
+    let mut workers_results: HashMap<AgentId, AgentResult> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(AgentId, DataValue)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(AgentId, AgentResult)>>::new();
 
     for (worker_id, agent_id) in workers {
         let worker_id_clone = worker_id.clone();
@@ -1709,45 +1708,41 @@ async fn execute_worker_test<T: RdbmsType>(
     agent_id: &ParsedAgentId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
-) -> anyhow::Result<DataValue> {
+) -> anyhow::Result<AgentResult> {
     let db_type = T::default().to_string();
 
     let fn_name = test.fn_name();
     let method_name = format!("{db_type}_{fn_name}");
 
-    let mut statements: Vec<Value> = Vec::with_capacity(test.statements.len());
+    let mut statements: Vec<SchemaValue> = Vec::with_capacity(test.statements.len());
 
     for s in test.statements {
-        let params = Value::List(s.params.into_iter().map(Value::String).collect());
-        statements.push(Value::Record(vec![
-            Value::String(s.statement),
-            params,
-            Value::Enum(s.action as u32),
-            Value::Option(s.sleep.map(|v| Box::new(Value::U64(v)))),
-        ]));
+        let params = SchemaValue::List {
+            elements: s.params.into_iter().map(SchemaValue::String).collect(),
+        };
+        statements.push(SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(s.statement),
+                params,
+                SchemaValue::Enum {
+                    case: s.action as u32,
+                },
+                SchemaValue::Option {
+                    inner: s.sleep.map(|v| Box::new(SchemaValue::U64(v))),
+                },
+            ],
+        });
     }
 
-    let statements = ValueAndType::new(
-        Value::List(statements),
-        analysed_type::list(analysed_type::record(vec![
-            analysed_type::field("statement", analysed_type::str()),
-            analysed_type::field("params", analysed_type::list(analysed_type::str())),
-            analysed_type::field(
-                "action",
-                analysed_type::r#enum(&["execute", "query", "query-stream"]),
-            ),
-            analysed_type::field("sleep", analysed_type::option(analysed_type::u64())),
-        ])),
-    );
+    let statements = SchemaValue::List {
+        elements: statements,
+    };
 
     let params = if let Some(te) = test.transaction_end {
-        let transaction_end = ValueAndType::new(
-            Value::Enum(te as u32),
-            analysed_type::r#enum(&["commit", "rollback", "none"]),
-        );
-        data_value!(statements, transaction_end)
+        let transaction_end = SchemaValue::Enum { case: te as u32 };
+        crate::raw_params(vec![statements, transaction_end])
     } else {
-        data_value!(statements)
+        crate::raw_params(vec![statements])
     };
 
     executor
@@ -1755,7 +1750,7 @@ async fn execute_worker_test<T: RdbmsType>(
         .await
 }
 
-fn check_test_result(worker_id: &AgentId, result: DataValue, test: RdbmsTest) {
+fn check_test_result(worker_id: &AgentId, result: AgentResult, test: RdbmsTest) {
     let fn_name = test.fn_name();
 
     let return_value = result
@@ -1763,10 +1758,12 @@ fn check_test_result(worker_id: &AgentId, result: DataValue, test: RdbmsTest) {
         .expect("expected a single return value");
 
     match &return_value {
-        Value::Result(Ok(Some(ok_value))) => {
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(ok_value),
+        }) => {
             if test.has_expected() {
                 let result_str = match ok_value.as_ref() {
-                    Value::String(s) => s.clone(),
+                    SchemaValue::String(s) => s.clone(),
                     other => panic!(
                         "result {fn_name} for worker {worker_id}: expected String, got {other:?}"
                     ),
@@ -1777,12 +1774,12 @@ fn check_test_result(worker_id: &AgentId, result: DataValue, test: RdbmsTest) {
                 );
             }
         }
-        Value::Result(Ok(None)) => {
+        SchemaValue::Result(ResultValuePayload::Ok { value: None }) => {
             if test.has_expected() {
                 panic!("result {fn_name} for worker {worker_id} is Ok(None) but expected a value");
             }
         }
-        Value::Result(Err(err)) => {
+        SchemaValue::Result(ResultValuePayload::Err { value: err }) => {
             panic!("result {fn_name} for worker {worker_id} is Err: {err:?}");
         }
         other => {
@@ -1791,14 +1788,16 @@ fn check_test_result(worker_id: &AgentId, result: DataValue, test: RdbmsTest) {
     }
 }
 
-fn get_test_result_error(result: DataValue) -> String {
+fn get_test_result_error(result: AgentResult) -> String {
     let return_value = result
         .into_return_value()
         .expect("expected a single return value");
 
     match return_value {
-        Value::Result(Err(Some(err_value))) => match *err_value {
-            Value::String(s) => s,
+        SchemaValue::Result(ResultValuePayload::Err {
+            value: Some(err_value),
+        }) => match *err_value {
+            SchemaValue::String(s) => s,
             other => panic!("expected error String, got {other:?}"),
         },
         other => panic!("expected Result(Err(...)), got {other:?}"),

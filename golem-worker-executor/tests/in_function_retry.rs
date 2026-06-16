@@ -15,9 +15,9 @@
 use crate::Tracing;
 use golem_common::model::RetryConfig;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     FailingBlobStoreService, FailingKeyValueService, FailingRpc, LastUniqueId,
     PrecompiledComponent, TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies,
@@ -136,11 +136,11 @@ async fn keyvalue_get_retries_inline_on_transient_failure(
 
     assert_eq!(
         result,
-        Value::Option(Some(Box::new(Value::List(vec![
-            Value::U8(1),
-            Value::U8(2),
-            Value::U8(3),
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::List {
+                elements: vec![SchemaValue::U8(1), SchemaValue::U8(2), SchemaValue::U8(3),]
+            }))
+        }
     );
 
     // Verify oplog contains 2 in-function retry error entries
@@ -223,11 +223,15 @@ async fn keyvalue_set_retries_inline_when_idempotent(
 
     assert_eq!(
         result,
-        Value::Option(Some(Box::new(Value::List(vec![
-            Value::U8(10),
-            Value::U8(20),
-            Value::U8(30),
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::U8(10),
+                    SchemaValue::U8(20),
+                    SchemaValue::U8(30),
+                ]
+            }))
+        }
     );
 
     // Verify oplog contains 2 in-function retry error entries from the set call
@@ -319,7 +323,13 @@ async fn blobstore_get_data_retries_inline_on_transient_failure(
 
     assert_eq!(
         result,
-        Value::List(vec![Value::U8(10), Value::U8(20), Value::U8(30),])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U8(10),
+                SchemaValue::U8(20),
+                SchemaValue::U8(30)
+            ]
+        }
     );
 
     // Verify oplog contains 2 in-function retry error entries
@@ -402,11 +412,11 @@ async fn in_function_retry_falls_back_to_trap_when_delay_exceeds_threshold(
 
     assert_eq!(
         result,
-        Value::Option(Some(Box::new(Value::List(vec![
-            Value::U8(7),
-            Value::U8(8),
-            Value::U8(9),
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::List {
+                elements: vec![SchemaValue::U8(7), SchemaValue::U8(8), SchemaValue::U8(9),]
+            }))
+        }
     );
 
     // Verify NO in-function retry error entries in oplog
@@ -506,11 +516,11 @@ async fn in_function_retry_transitions_from_inline_to_trap_based(
 
     assert_eq!(
         result,
-        Value::Option(Some(Box::new(Value::List(vec![
-            Value::U8(4),
-            Value::U8(5),
-            Value::U8(6),
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::List {
+                elements: vec![SchemaValue::U8(4), SchemaValue::U8(5), SchemaValue::U8(6),]
+            }))
+        }
     );
 
     // Verify oplog has exactly 1 in-function retry error entry (the first inline retry).
@@ -732,10 +742,7 @@ async fn http_status_retry_policy_retries_matching_status(
         )
         .await?;
 
-    assert_eq!(
-        result.into_return_value(),
-        Some(Value::String("200 status-retry-ok".to_string()))
-    );
+    assert_eq!(result.into_typed::<String>()?, "200 status-retry-ok");
     assert_eq!(counter.load(Ordering::SeqCst), 4);
     {
         let idempotency_keys = idempotency_keys.lock().unwrap();
@@ -800,7 +807,10 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
         .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
-    assert_eq!(result, data_value!("200 response is test-header test-body"));
+    assert_eq!(
+        result.into_typed::<String>()?,
+        "200 response is test-header test-body"
+    );
 
     // Server received 2 failed + 1 successful = 3 total connections
     let total_connections = connection_counter.load(Ordering::SeqCst);
@@ -865,7 +875,10 @@ async fn http_zone1_falls_back_to_trap_when_delay_exceeds_threshold(
         .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
-    assert_eq!(result, data_value!("200 response is test-header test-body"));
+    assert_eq!(
+        result.into_typed::<String>()?,
+        "200 response is test-header test-body"
+    );
 
     // Verify NO in-function retry error entries in oplog
     let retry_count =
@@ -930,7 +943,7 @@ async fn async_rpc_inline_retry_on_transient_remote_error(
     // The exact values depend on how many RPC calls succeed. The important
     // thing is the call completed successfully despite transient failures.
     assert!(
-        matches!(result_value, Value::List(ref items) if !items.is_empty()),
+        matches!(result_value, SchemaValue::List { ref elements } if !elements.is_empty()),
         "Expected a non-empty list result from test1, got: {result_value:?}"
     );
 
@@ -1317,11 +1330,11 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
         .invoke_and_await_agent(&component, &agent_id, "post_large_body", data_value!())
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     // The response should be "200 received <N> bytes" — verify it succeeded
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        result_value.starts_with("200 "),
         "Expected a successful 200 response, got: {result_value:?}"
     );
 
@@ -1387,12 +1400,12 @@ async fn http_awaiting_response_retry_resends_full_body_after_output_stream_retr
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "post_large_body", data_value!())
         .await?;
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     const FULL_BODY_LEN: usize = 4 * 64 * 1024;
     assert_eq!(
         result_value,
-        Value::String(format!("200 received {FULL_BODY_LEN} body bytes"))
+        format!("200 received {FULL_BODY_LEN} body bytes")
     );
 
     {
@@ -1535,10 +1548,10 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
         .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        result_value.starts_with("200 "),
         "Expected a successful 200 response, got: {result_value:?}"
     );
 
@@ -1911,11 +1924,11 @@ async fn http_resuming_response_body_inline_retry_on_body_read_failure(
         )
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     // Verify the response contains the full body (1024 bytes of sequential pattern)
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        result_value.starts_with("200 "),
         "Expected a successful 200 response, got: {result_value:?}"
     );
 
@@ -1996,10 +2009,10 @@ async fn http_resuming_response_body_inline_retry_accepts_matching_non_partial_s
         )
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("201 ")),
+        result_value.starts_with("201 "),
         "Expected a successful 201 response, got: {result_value:?}"
     );
 
@@ -2076,12 +2089,11 @@ async fn http_write_zeroes_body_reconstruction(
         )
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     // Server should validate the body and return "200 body-ok len=2052"
     assert_eq!(
-        result_value,
-        Value::String("200 body-ok len=2052".to_string()),
+        result_value, "200 body-ok len=2052",
         "Expected server to validate reconstructed body (HEAD + 1024 zeroes + 1024 * 0xAB)"
     );
 
@@ -2150,10 +2162,10 @@ async fn http_no_output_stream_retry_when_subscribe_used(
         .invoke_and_await_agent(&component, &agent_id, "post_with_subscribe", data_value!())
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        result_value.starts_with("200 "),
         "Expected eventual success via trap+replay, got: {result_value:?}"
     );
 
@@ -2223,10 +2235,10 @@ async fn http_no_retry_when_trailers_present(
         .invoke_and_await_agent(&component, &agent_id, "post_with_trailers", data_value!())
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        result_value.starts_with("200 "),
         "Expected eventual success via trap+replay, got: {result_value:?}"
     );
 
@@ -2299,12 +2311,12 @@ async fn http_no_resuming_response_body_retry_when_body_skip_used(
         .invoke_and_await_agent(&component, &agent_id, "get_with_body_skip", data_value!())
         .await?;
 
-    let result_value = result.into_return_value().expect("Expected a return value");
+    let result_value = result.into_typed::<String>()?;
 
     // Should eventually succeed (via trap+replay, not response-body-resumption
     // inline retry)
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        result_value.starts_with("200 "),
         "Expected eventual success, got: {result_value:?}"
     );
 

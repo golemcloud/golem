@@ -15,7 +15,8 @@
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
-    EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream, build_ifs_archive,
+    AgentResult, EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream,
+    build_ifs_archive,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -29,7 +30,6 @@ use golem_client::api::{
     WorkerError,
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
-use golem_common::base_model::agent::DataValue;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
@@ -55,9 +55,8 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use golem_common::schema::adapters::{
-    legacy_data_value_to_json, output_json_to_legacy_data_value, output_schema_to_data_schema,
-};
+use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::adapters::legacy_data_value_to_json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,7 +67,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
-use tracing::{debug, trace};
+use tracing::trace;
 use uuid::Uuid;
 
 pub struct NameResolutionCache {
@@ -363,7 +362,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
         let registry_client = self.registry_service_client().await;
         let app_name = self
@@ -374,6 +373,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .name_cache
             .resolve_env_name(&component.environment_id, &registry_client)
             .await?;
+
+        let method_parameters = serde_json::to_value(params.value())
+            .map_err(|err| anyhow!("Failed to serialize method parameters: {err}"))?;
 
         let client = self
             .deps
@@ -393,7 +395,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     ),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
-                    method_parameters: legacy_data_value_to_json(params),
+                    method_parameters,
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
@@ -414,15 +416,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         if principal.is_some() {
             // The HTTP `AgentInvocationRequest` has no per-request `principal`
             // field — principal is derived from the request's auth headers.
-            // Tests that need to override the principal (e.g. the per-principal
-            // read-only cache test from issue #3393 T6) must use the
-            // worker-executor gRPC DSL (`golem-worker-executor-test-utils`)
-            // instead of this HTTP-based config DSL.
+            // Tests that need to override the principal must use the
+            // worker-executor gRPC DSL instead of this HTTP-based config DSL.
             anyhow::bail!(
                 "HTTP agent invocation DSL does not support overriding `principal`; \
                  use the worker-executor gRPC test DSL for principal-aware invocation"
@@ -442,6 +442,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
+        let method_parameters = serde_json::to_value(params.value())
+            .map_err(|err| anyhow!("Failed to serialize method parameters: {err}"))?;
+
         let client = self
             .deps
             .worker_service()
@@ -460,7 +463,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     ),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
-                    method_parameters: legacy_data_value_to_json(params),
+                    method_parameters,
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
@@ -472,40 +475,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(typed_output) => {
-                let revision = ComponentRevision::new(
-                    result
-                        .component_revision
-                        .ok_or_else(|| anyhow!("Missing component_revision in response"))?,
-                )
-                .context("Invalid component_revision in response")?;
-                let component_at_rev = self
-                    .name_cache
-                    .resolve_component_at_revision(&component.id, revision, &registry_client)
-                    .await?;
-                let agent_type = component_at_rev
-                    .metadata
-                    .find_agent_type_by_name(&agent_id.agent_type)
-                    .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
-                let agent_method = agent_type
-                    .methods
-                    .iter()
-                    .find(|method| method.name == method_name)
-                    .ok_or_else(|| {
-                        debug!("Agent method not found: {}", method_name);
-                        debug!("In agent type: {:#?}", agent_type);
-                        anyhow!("Agent method not found: {}", method_name)
+                let typed: TypedSchemaValue =
+                    serde_json::from_value(typed_output.0).map_err(|err| {
+                        anyhow!("Failed to decode typed schema value from response: {err}")
                     })?;
-
-                let output_schema =
-                    output_schema_to_data_schema(&agent_type.schema, &agent_method.output_schema)
-                        .map_err(|err| anyhow!("Output schema conversion error: {err}"))?;
-
-                output_json_to_legacy_data_value(typed_output.0, &output_schema)
-                    .map_err(|err| anyhow!("DataValue conversion error: {err}"))
+                let (_graph, value) = typed.into_parts();
+                Ok(AgentResult::new(Some(value)))
             }
-            None => Ok(DataValue::Tuple(
-                golem_common::base_model::agent::ElementValues { elements: vec![] },
-            )),
+            None => Ok(AgentResult::new(None)),
         }
     }
 

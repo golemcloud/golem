@@ -595,7 +595,32 @@ fn data_schema_multimodal_input_round_trip() {
 }
 
 #[test]
-fn data_schema_auto_injected_field_does_not_round_trip() {
+fn data_schema_drops_auto_injected_fields() {
+    // Auto-injected fields (e.g. the host-provided principal) are out-of-band:
+    // they are omitted from the legacy `DataSchema`, leaving only the
+    // user-supplied fields.
+    let input = InputSchema::Parameters(vec![
+        NamedField::user_supplied("query", SchemaType::string()),
+        NamedField {
+            name: "principal".into(),
+            source: FieldSource::AutoInjected(crate::schema::agent::AutoInjectedKind::Principal),
+            schema: SchemaType::string(),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let ds = input_schema_to_data_schema(&graph, &input).unwrap();
+    match ds {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => {
+            let names: Vec<&str> = elements.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, vec!["query"]);
+        }
+        other => panic!("expected Tuple DataSchema, got {other:?}"),
+    }
+}
+
+#[test]
+fn data_schema_only_auto_injected_fields_becomes_empty_tuple() {
     let input = InputSchema::Parameters(vec![NamedField {
         name: "principal".into(),
         source: FieldSource::AutoInjected(crate::schema::agent::AutoInjectedKind::Principal),
@@ -603,8 +628,11 @@ fn data_schema_auto_injected_field_does_not_round_trip() {
         metadata: Default::default(),
     }]);
     let graph = SchemaGraph::anonymous(SchemaType::bool());
-    let err = input_schema_to_data_schema(&graph, &input).unwrap_err();
-    assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+    let ds = input_schema_to_data_schema(&graph, &input).unwrap();
+    assert_eq!(
+        ds,
+        DataSchema::Tuple(NamedElementSchemas { elements: vec![] })
+    );
 }
 
 #[test]

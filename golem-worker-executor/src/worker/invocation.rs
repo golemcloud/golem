@@ -27,7 +27,7 @@ use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::wit::decode_agent_error;
-use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
+use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
@@ -716,17 +716,24 @@ fn validate_schema_input_against_method_schema(
         )));
     };
 
-    let fields_schema = input_schema.fields();
-    if fields.len() != fields_schema.len() {
+    // Auto-injected fields (e.g. the principal) are supplied by the host to the
+    // guest export separately from the caller-provided input record, so they
+    // are excluded from both the parameter count and the value validation here.
+    let user_fields: Vec<_> = input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect();
+    if fields.len() != user_fields.len() {
         return Err(WorkerExecutorError::invalid_request(format!(
             "Method '{method_name}': expected {} parameters, got {}",
-            fields_schema.len(),
+            user_fields.len(),
             fields.len()
         )));
     }
 
     let record_type = SchemaType::record(
-        fields_schema
+        user_fields
             .iter()
             .map(|field| NamedFieldType {
                 name: field.name.clone(),

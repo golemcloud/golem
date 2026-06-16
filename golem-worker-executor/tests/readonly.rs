@@ -22,9 +22,9 @@
 use crate::Tracing;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, OwnedAgentId};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
-use golem_wasm::Value;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -50,17 +50,10 @@ const CALLER_TYPE: &str = "ReadonlyCaller";
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn as_u64(value: &Value) -> u64 {
+fn as_u64(value: &SchemaValue) -> u64 {
     match value {
-        Value::U64(v) => *v,
+        SchemaValue::U64(v) => *v,
         other => panic!("expected u64, got {other:?}"),
-    }
-}
-
-fn as_u32(value: &Value) -> u32 {
-    match value {
-        Value::U32(v) => *v,
-        other => panic!("expected u32, got {other:?}"),
     }
 }
 
@@ -133,10 +126,9 @@ async fn t1_read_only_returns_value_on_fresh_agent(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
 
-    assert_eq!(as_u64(&result), 0);
+    assert_eq!(result, 0);
 
     Ok(())
 }
@@ -172,9 +164,8 @@ async fn t2_read_only_caches_until_write(
     let first = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&first), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(first, 0);
 
     // Give the observer task a moment to populate the cache; the observer
     // runs in a detached `tokio::spawn` after invocation completion.
@@ -197,9 +188,7 @@ async fn wait_for_cache_hit<E: TestDsl + Sync>(
         let before = executor.oplog_max_index(worker_id).await?;
         let _ = executor
             .invoke_and_await_agent(component, agent_id, "get_count", data_value!())
-            .await?
-            .into_return_value()
-            .expect("expected return value");
+            .await?;
         let entries = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
         let (started, _) = count_agent_invocation_pair_since(&entries, before);
         if started == 0 {
@@ -252,9 +241,8 @@ async fn t3_read_only_invalidates_after_write(
     let after_increment = executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&after_increment), 1);
+        .into_typed::<u64>()?;
+    assert_eq!(after_increment, 1);
 
     // Snapshot the oplog and read again; the post-write read must miss the
     // cache and produce exactly one Started/Finished pair on the oplog.
@@ -262,9 +250,8 @@ async fn t3_read_only_invalidates_after_write(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&result), 1);
+        .into_typed::<u64>()?;
+    assert_eq!(result, 1);
 
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let (started, finished) = count_agent_invocation_pair_since(&entries, before);
@@ -346,15 +333,14 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
     )
     .await
     .expect("read-only call must return within 50ms even while slow_increment holds the queue")?
-    .into_return_value()
-    .expect("expected return value");
+    .into_typed::<u64>()?;
 
     assert!(
         started.elapsed() < Duration::from_millis(50),
         "read-only call took {:?}",
         started.elapsed()
     );
-    assert_eq!(as_u64(&result), 0, "must return pre-write value");
+    assert_eq!(result, 0, "must return pre-write value");
 
     let _ = mutator.await;
 
@@ -396,13 +382,13 @@ async fn t5_read_only_bypasses_agent_loading(
     // Tight memory budget: enough for one agent_sdk_rust worker, not two.
     // - `worker_memory_ratio = 1.0` makes the worker pool == system_memory_override
     //   so the math is easy to reason about.
-    // - 6 MiB has been chosen experimentally so that one Rust agent_sdk
-    //   worker (whose `Worker::memory_requirement()` is ~4 MiB) fits while
+    // - 9 MiB has been chosen experimentally so that one Rust agent_sdk
+    //   worker (whose `Worker::memory_requirement()` is ~6.9 MiB) fits while
     //   two do not. The assertions below verify the calibration is still
     //   valid — if the component's linear memory grows or shrinks materially,
     //   the test will fail with a clear diagnostic instead of silently
     //   passing or hanging.
-    const SYSTEM_MEMORY: u64 = 6 * 1024 * 1024;
+    const SYSTEM_MEMORY: u64 = 9 * 1024 * 1024;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
             config.memory.system_memory_override = Some(SYSTEM_MEMORY);
@@ -477,9 +463,8 @@ async fn t5_read_only_bypasses_agent_loading(
              exceeds budget {SYSTEM_MEMORY}, and that R reached `LoadedIdle` before Q started."
         )
     })??
-    .into_return_value()
-    .expect("expected return value");
-    assert_eq!(as_u64(&q_result), 0);
+    .into_typed::<u64>()?;
+    assert_eq!(q_result, 0);
 
     // The production eviction path should have unloaded R while keeping its
     // `Worker` shell (and read-only cache) resident. Poll briefly because
@@ -504,9 +489,8 @@ async fn t5_read_only_bypasses_agent_loading(
     let result = executor
         .invoke_and_await_agent(&component, &r_agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&result), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(result, 0);
 
     let entries = executor
         .get_oplog(&r_worker_id, OplogIndex::INITIAL)
@@ -641,9 +625,7 @@ async fn t6_principal_aware_caches_per_principal(
             "get_count_for",
             data_value!(),
         )
-        .await?
-        .into_return_value()
-        .expect("expected return value");
+        .await?;
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let (started_a, finished_a) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
@@ -667,9 +649,7 @@ async fn t6_principal_aware_caches_per_principal(
             "get_count_for",
             data_value!(),
         )
-        .await?
-        .into_return_value()
-        .expect("expected return value");
+        .await?;
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let (started_b, finished_b) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
@@ -901,9 +881,8 @@ async fn t8_no_cache_runs_every_time(
                 data_value!(2u32, 3u32),
             )
             .await?
-            .into_return_value()
-            .expect("expected return value");
-        assert_eq!(as_u32(&r), (2u32.wrapping_add(3)).wrapping_mul(3));
+            .into_typed::<u32>()?;
+        assert_eq!(r, (2u32.wrapping_add(3)).wrapping_mul(3));
     }
 
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -1106,11 +1085,8 @@ async fn t11_concurrent_misses_coalesce(
     }
     let mut results = Vec::with_capacity(N);
     for h in handles {
-        let dv = h
-            .await??
-            .into_return_value()
-            .expect("expected return value");
-        results.push(as_u64(&dv));
+        let dv = h.await??.into_typed::<u64>()?;
+        results.push(dv);
     }
 
     for r in &results {
@@ -1229,10 +1205,9 @@ async fn t11b_coalesced_owner_survives_caller_cancellation(
     )
     .await?
     .expect("second Await must not hang on an abandoned pending cache entry")
-    .into_return_value()
-    .expect("expected return value");
+    .into_typed::<u64>()?;
     // The agent's counter hasn't been touched, so `slow_read` returns 0.
-    assert_eq!(as_u64(&result), 0);
+    assert_eq!(result, 0);
 
     // After both calls settle, the oplog must show exactly one Started /
     // Finished pair — the second call must have joined the pending cache
@@ -1308,9 +1283,8 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r1 = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r1), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r1, 0);
 
     // 2. Mutation bumps the read-only cache epoch.
     let _ = executor
@@ -1323,11 +1297,9 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r2 = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
     assert_eq!(
-        as_u64(&r2),
-        0,
+        r2, 0,
         "replay of the original idempotency key must return the originally \
          recorded read-only value"
     );
@@ -1338,11 +1310,9 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r3 = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
     assert_eq!(
-        as_u64(&r3),
-        1,
+        r3, 1,
         "post-mutation read must reflect the new state (1); a poisoned \
          cache entry would have returned the stale replayed value (0)"
     );
@@ -1358,11 +1328,9 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r4 = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
     assert_eq!(
-        as_u64(&r4),
-        0,
+        r4, 0,
         "idempotency replay must bypass the read-only cache fast path even \
          when the current epoch cache is warm"
     );
@@ -1412,9 +1380,8 @@ async fn r1_rpc_read_only_uses_cache_fast_path(
             data_value!(target_str.clone()),
         )
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r1), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r1, 0);
 
     // Wait for cache to populate on the target.
     wait_for_cache_hit(&executor, &component, &target_agent_id, &target_worker_id).await?;
@@ -1429,9 +1396,8 @@ async fn r1_rpc_read_only_uses_cache_fast_path(
             data_value!(target_str.clone()),
         )
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r2), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r2, 0);
     let entries = executor
         .get_oplog(&target_worker_id, OplogIndex::INITIAL)
         .await?;
@@ -1500,15 +1466,14 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
         ),
     )
     .await??
-    .into_return_value()
-    .expect("expected return value");
+    .into_typed::<u64>()?;
 
     assert!(
         started_at.elapsed() < Duration::from_millis(500),
         "slow_then_read took {:?} (cache bypass expected)",
         started_at.elapsed()
     );
-    assert_eq!(as_u64(&result), 0, "must return pre-write value");
+    assert_eq!(result, 0, "must return pre-write value");
 
     Ok(())
 }
@@ -1571,7 +1536,7 @@ async fn r3_rpc_parallel_reads_coalesce(
         .expect("expected return value");
 
     let values = match &result {
-        Value::List(items) => items.iter().map(as_u64).collect::<Vec<_>>(),
+        SchemaValue::List { elements } => elements.iter().map(as_u64).collect::<Vec<_>>(),
         other => panic!("expected a list, got {other:?}"),
     };
     assert!(!values.is_empty());
@@ -1603,9 +1568,8 @@ async fn r3_rpc_parallel_reads_coalesce(
             data_value!(target_str.clone()),
         )
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r, 0);
     let entries = executor
         .get_oplog(&target_worker_id, OplogIndex::INITIAL)
         .await?;

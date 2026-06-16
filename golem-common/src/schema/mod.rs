@@ -44,7 +44,7 @@ mod tests;
 pub use agent::{
     AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
     AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema, ParsedAgentId,
-    RegisteredAgentTypeSchema,
+    RegisteredAgentTypeSchema, build_input_record,
 };
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,

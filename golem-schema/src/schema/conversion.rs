@@ -621,6 +621,36 @@ impl FromSchema for String {
     }
 }
 
+/// `str` schema is identical to [`String`], so a `&str` produces the same
+/// schema graph and value as an owned `String`. This makes string literals
+/// usable directly as agent parameters without an explicit `.to_string()`.
+impl IntoSchema for str {
+    fn type_id() -> TypeId {
+        TypeId::new("alloc.string.String")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(self.to_string())
+    }
+}
+
+/// Forward [`IntoSchema`] through shared references so that `&T` values (most
+/// commonly `&str` string literals) can be used wherever an `IntoSchema` value
+/// is expected.
+impl<T: IntoSchema + ?Sized> IntoSchema for &T {
+    fn type_id() -> TypeId {
+        T::type_id()
+    }
+    fn register_in(b: &mut SchemaBuilder) -> SchemaType {
+        T::register_in(b)
+    }
+    fn to_value(&self) -> SchemaValue {
+        (**self).to_value()
+    }
+}
+
 // =====================================================================
 // Option / Vec / Map / Result / Box / Rc / Arc / tuples
 // =====================================================================

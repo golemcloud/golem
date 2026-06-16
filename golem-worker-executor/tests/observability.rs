@@ -276,7 +276,7 @@ async fn get_oplog_with_api_changing_updates(
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
         .collect::<Vec<_>>();
 
-    assert_eq!(result, data_value!(11u64));
+    assert_eq!(result.into_typed::<u64>()?, 11);
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
@@ -326,7 +326,7 @@ async fn get_oplog_starting_with_updated_component(
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
         .collect::<Vec<_>>();
 
-    assert_eq!(result, data_value!(11u64));
+    assert_eq!(result.into_typed::<u64>()?, 11);
     assert_eq!(oplog.len(), 9);
 
     Ok(())

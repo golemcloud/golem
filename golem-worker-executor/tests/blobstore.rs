@@ -13,10 +13,8 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::anyhow;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL,
     STORAGE_TYPE_BLOB_STORE,
@@ -74,14 +72,13 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
             data_value!(container_name),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
 
-    assert_eq!(result, Value::Bool(true));
+    assert!(result);
 
     Ok(())
 }
@@ -114,14 +111,13 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
             data_value!(format!("{}-blob-store-service-1-container", component.id)),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
 
-    assert_eq!(result, Value::Bool(false));
+    assert!(!result);
     Ok(())
 }
 

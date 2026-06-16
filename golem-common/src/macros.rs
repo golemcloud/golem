@@ -453,39 +453,37 @@ macro_rules! error_forwarding {
     };
 }
 
-/// Create a DataValue::Tuple from component model values.
+/// Create a schema-native agent invocation input (a parameter record
+/// [`TypedSchemaValue`](crate::schema::TypedSchemaValue)) from values whose
+/// types implement [`IntoSchema`](crate::schema::IntoSchema).
 ///
-/// Each argument is converted to ValueAndType via `.convert_to_value_and_type()` and
-/// wrapped in ElementValue::ComponentModel. This is useful for creating
-/// agent parameter tuples.
-///
-/// Values that are already `ValueAndType` are passed through unchanged (via the
-/// inherent method), while other types are converted using `IntoValueAndType`.
+/// Each argument is converted to a `TypedSchemaValue` via
+/// `into_typed_schema_value()` and combined into a single positional record
+/// carrier with [`build_input_record`](crate::schema::build_input_record).
+/// This is the schema-native carrier accepted by the invocation DSL and by
+/// [`agent_id!`] / [`phantom_agent_id!`] for constructor parameters.
 ///
 /// # Example
 /// ```ignore
-/// let value = data_value!(42_i32, "hello", 3.14_f64);
-/// // Creates DataValue::Tuple with three ElementValue::ComponentModel elements
+/// let value = data_value!(42_u32, "hello".to_string(), 3.14_f64);
 /// ```
 #[macro_export]
 macro_rules! data_value {
-    ($($element:expr),* $(,)?) => {
-        {
-            #[allow(unused_imports)]
-            use golem_wasm::ConvertToValueAndType as _;
-            $crate::model::agent::DataValue::Tuple(
-                $crate::model::agent::ElementValues {
-                    elements: vec![
-                        $($crate::model::agent::ElementValue::ComponentModel(
-                            $crate::model::agent::ComponentModelElementValue {
-                                value: $element.convert_to_value_and_type()
-                            }
-                        )),*
-                    ],
-                }
-            )
-        }
+    () => {
+        $crate::schema::build_input_record(::std::vec::Vec::new())
+            .expect("data_value: build_input_record failed")
     };
+    ($($element:expr),+ $(,)?) => {{
+        #[allow(unused_imports)]
+        use $crate::schema::IntoTypedSchemaValue as _;
+        $crate::schema::build_input_record(::std::vec![
+            $(
+                $crate::schema::IntoTypedSchemaValue::into_typed_schema_value(&$element)
+                    .expect("data_value: into_typed_schema_value failed")
+            ),+
+        ])
+        .expect("data_value: build_input_record failed")
+    }};
 }
 
 /// Create a ParsedAgentId with the given agent type name and parameters.
@@ -502,14 +500,14 @@ macro_rules! data_value {
 #[macro_export]
 macro_rules! agent_id {
     ($name:expr) => {
-        $crate::model::agent::ParsedAgentId::from_legacy_parameters(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             None
         ).unwrap()
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
-        $crate::model::agent::ParsedAgentId::from_legacy_parameters(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             None
@@ -532,14 +530,14 @@ macro_rules! agent_id {
 #[macro_export]
 macro_rules! phantom_agent_id {
     ($name:expr, $phantom_id:expr) => {
-        $crate::model::agent::ParsedAgentId::from_legacy_parameters(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             Some($phantom_id)
         ).unwrap()
     };
     ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
-        $crate::model::agent::ParsedAgentId::from_legacy_parameters(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             Some($phantom_id)

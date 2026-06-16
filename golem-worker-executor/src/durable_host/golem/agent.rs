@@ -19,8 +19,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentTypeName, ParsedAgentId, RegisteredAgentType,
-    typed_constructor_parameters,
+    AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
@@ -33,7 +32,6 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
-use golem_common::schema::adapters::agent::{agent_type_to_schema, schema_agent_type_to_legacy};
 use golem_common::schema::adapters::analysed_type::{
     analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
 };
@@ -49,53 +47,11 @@ use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
 
-/// Encode a canonical [`RegisteredAgentType`] into the schema-native
-/// `golem:agent/common@2.0.0` wire form returned across the WIT boundary.
-/// The service/oplog layers stay on the canonical model type; only the
-/// host-import return value is schema-native.
-fn encode_registered_agent_type_wire(
-    registered: RegisteredAgentType,
-) -> anyhow::Result<wire::RegisteredAgentType> {
-    let agent_type = agent_type_to_schema(&registered.agent_type)
-        .map_err(|e| anyhow!("Failed to convert agent type to schema form: {e}"))?;
-    let schema = RegisteredAgentTypeSchema {
-        agent_type,
-        implemented_by: registered.implemented_by,
-    };
-    encode_registered_agent_type(&schema)
-        .map_err(|e| anyhow!("Failed to encode agent type to wire form: {e}"))
-}
-
 fn encode_registered_agent_type_schema_wire(
     schema: RegisteredAgentTypeSchema,
 ) -> anyhow::Result<wire::RegisteredAgentType> {
     encode_registered_agent_type(&schema)
         .map_err(|e| anyhow!("Failed to encode agent type to wire form: {e}"))
-}
-
-/// Project the canonical [`RegisteredAgentType`] model into its schema-native
-/// counterpart for schema-native oplog persistence.
-fn registered_agent_type_to_schema(
-    registered: RegisteredAgentType,
-) -> Result<RegisteredAgentTypeSchema, String> {
-    let agent_type = agent_type_to_schema(&registered.agent_type).map_err(|e| e.to_string())?;
-    Ok(RegisteredAgentTypeSchema {
-        agent_type,
-        implemented_by: registered.implemented_by,
-    })
-}
-
-/// Recover the canonical [`RegisteredAgentType`] model from the schema-native
-/// form read back from the oplog (live persist round-trip or replay).
-fn registered_agent_type_from_schema(
-    registered: RegisteredAgentTypeSchema,
-) -> Result<RegisteredAgentType, String> {
-    let agent_type =
-        schema_agent_type_to_legacy(&registered.agent_type).map_err(|e| e.to_string())?;
-    Ok(RegisteredAgentType {
-        agent_type,
-        implemented_by: registered.implemented_by,
-    })
 }
 
 /// Convert a guest-supplied `golem:core/types@2.0.0` `schema-value-tree`
@@ -293,12 +249,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Durable lookup of all registered agent types, returning the canonical
-    /// [`RegisteredAgentType`] model. The schema-native WIT wire form is
-    /// produced only at the host-import boundary in [`Host::get_all_agent_types`].
+    /// Durable lookup of all registered agent types, returning the schema-native
+    /// [`RegisteredAgentTypeSchema`] model directly. The WIT wire form is
+    /// produced at the host-import boundary in [`Host::get_all_agent_types`].
     pub(crate) async fn get_all_agent_types_model(
         &mut self,
-    ) -> anyhow::Result<Vec<RegisteredAgentType>> {
+    ) -> anyhow::Result<Vec<RegisteredAgentTypeSchema>> {
         let mut durability =
             Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -321,12 +277,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            let result = result.and_then(|types| {
-                types
-                    .into_iter()
-                    .map(registered_agent_type_to_schema)
-                    .collect::<Result<Vec<_>, String>>()
-            });
             durability
                 .persist(
                     self,
@@ -339,11 +289,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => result
-                .into_iter()
-                .map(registered_agent_type_from_schema)
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|err| anyhow!(err)),
+            Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err)),
         }
     }
@@ -378,8 +324,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            let result = result
-                .and_then(|maybe_type| maybe_type.map(registered_agent_type_to_schema).transpose());
             durability
                 .persist(
                     self,
@@ -411,7 +355,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.get_all_agent_types_model()
             .await?
             .into_iter()
-            .map(encode_registered_agent_type_wire)
+            .map(encode_registered_agent_type_schema_wire)
             .collect()
     }
 

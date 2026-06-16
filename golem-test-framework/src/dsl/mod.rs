@@ -29,13 +29,14 @@ use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::{DataValue, ParsedAgentId};
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     CanonicalFilePath, ComponentDto, ComponentId, ComponentRevision, PluginInstallation,
     PluginPriority,
 };
+use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -102,6 +103,53 @@ impl Drop for LogOutputGuard {
         if let Some(abort_tx) = self.abort_tx.take() {
             let _ = abort_tx.send(());
         }
+    }
+}
+
+/// Schema-native result of an agent invocation.
+///
+/// Wraps the decoded output [`SchemaValue`], which is absent for
+/// [`OutputSchema::Unit`](golem_common::schema::OutputSchema::Unit) methods.
+/// Prefer the typed [`into_typed`](AgentResult::into_typed) accessor; fall back
+/// to the raw [`into_return_value`](AgentResult::into_return_value) /
+/// [`value`](AgentResult::value) only where a value cannot be decoded into a
+/// Rust type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentResult {
+    value: Option<SchemaValue>,
+}
+
+impl AgentResult {
+    pub fn new(value: Option<SchemaValue>) -> Self {
+        Self { value }
+    }
+
+    /// The raw decoded output value, if the method returned one.
+    pub fn value(&self) -> Option<&SchemaValue> {
+        self.value.as_ref()
+    }
+
+    /// `true` when the method returned no value (unit-returning method).
+    pub fn is_empty(&self) -> bool {
+        self.value.is_none()
+    }
+
+    /// Consume the result, returning the raw output [`SchemaValue`] if present.
+    ///
+    /// Schema-native replacement for the legacy `DataValue::into_return_value`
+    /// (which returned a `golem_wasm::Value`).
+    pub fn into_return_value(self) -> Option<SchemaValue> {
+        self.value
+    }
+
+    /// Decode the output value into a Rust type via [`FromSchema`].
+    ///
+    /// Errors if the method returned no value or the value does not match `T`.
+    pub fn into_typed<T: FromSchema>(self) -> anyhow::Result<T> {
+        let value = self
+            .value
+            .ok_or_else(|| anyhow!("agent method returned no value to decode"))?;
+        T::from_value(&value).map_err(|err| anyhow!("failed to decode agent result: {err}"))
     }
 }
 
@@ -304,7 +352,7 @@ pub trait TestDsl {
         component: &ComponentDto,
         agent_id: &ParsedAgentId,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
         self.invoke_agent_with_key(
             component,
@@ -322,7 +370,7 @@ pub trait TestDsl {
         agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()>;
 
     async fn invoke_and_await_agent(
@@ -330,8 +378,8 @@ pub trait TestDsl {
         component: &ComponentDto,
         agent_id: &ParsedAgentId,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(component, agent_id, None, None, None, method_name, params)
             .await
     }
@@ -342,8 +390,8 @@ pub trait TestDsl {
         agent_id: &ParsedAgentId,
         deployment_revision: DeploymentRevision,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(
             component,
             agent_id,
@@ -362,8 +410,8 @@ pub trait TestDsl {
         agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(
             component,
             agent_id,
@@ -388,8 +436,8 @@ pub trait TestDsl {
         agent_id: &ParsedAgentId,
         principal: golem_common::model::agent::Principal,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(
             component,
             agent_id,
@@ -410,8 +458,8 @@ pub trait TestDsl {
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue>;
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult>;
 
     async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 

@@ -183,15 +183,18 @@ fn agent_config_declaration_to_schema(
 
 /// Reverse: [`AgentConfigDeclarationSchema`] → legacy [`AgentConfigDeclaration`].
 ///
-/// The schema `value_type` is inline (no refs), so it lifts back to an
-/// `AnalysedType` against an empty graph.
+/// Refs in the `value_type` body are resolved against `graph` — the enclosing
+/// agent's [`SchemaGraph`]. Config value types lowered from the legacy
+/// representation are inline (no refs) and resolve trivially, but config roots
+/// decoded from the WIT wire form are `Ref`s into the shared graph.
 fn schema_agent_config_declaration_to_legacy(
+    graph: &SchemaGraph,
     c: &AgentConfigDeclarationSchema,
 ) -> Result<AgentConfigDeclaration, SchemaAdapterError> {
     Ok(AgentConfigDeclaration {
         source: c.source,
         path: c.path.clone(),
-        value_type: schema_type_to_analysed_type(&SchemaGraph::empty(), &c.value_type)?,
+        value_type: schema_type_to_analysed_type(graph, &c.value_type)?,
     })
 }
 
@@ -254,7 +257,7 @@ pub fn schema_agent_type_to_legacy(ty: &AgentTypeSchema) -> Result<AgentType, Sc
         config: ty
             .config
             .iter()
-            .map(schema_agent_config_declaration_to_legacy)
+            .map(|c| schema_agent_config_declaration_to_legacy(&ty.schema, c))
             .collect::<Result<_, _>>()?,
     })
 }

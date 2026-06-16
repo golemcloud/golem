@@ -231,8 +231,11 @@ pub fn data_schema_to_output_schema(
 
 /// Reverse: project an [`InputSchema`] back into a legacy [`DataSchema`].
 ///
-/// All fields must use [`FieldSource::UserSupplied`]; the legacy data model
-/// has no representation for auto-injected fields.
+/// Only [`FieldSource::UserSupplied`] fields are projected; auto-injected
+/// fields (e.g. the host-provided [`Principal`](crate::schema::agent::AutoInjectedKind::Principal))
+/// are out-of-band and are **omitted** from the legacy `DataSchema`, since the
+/// legacy data model has no representation for them and they are filled in by
+/// the host at invocation time rather than supplied by the caller.
 pub fn input_schema_to_data_schema(
     graph: &SchemaGraph,
     input: &InputSchema,
@@ -251,14 +254,8 @@ pub fn input_schema_to_data_schema(
             }
             let elements = fields
                 .iter()
+                .filter(|f| matches!(f.source, FieldSource::UserSupplied))
                 .map(|f| {
-                    if !matches!(f.source, FieldSource::UserSupplied) {
-                        return Err(SchemaAdapterError::LossySchemaType(format!(
-                            "InputSchema field `{}` is auto-injected; legacy DataSchema cannot \
-                             encode auto-injected fields",
-                            f.name
-                        )));
-                    }
                     let element_schema = schema_type_to_element_schema(graph, &f.schema)?;
                     Ok(NamedElementSchema {
                         name: f.name.clone(),

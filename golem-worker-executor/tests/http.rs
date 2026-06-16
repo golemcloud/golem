@@ -17,6 +17,7 @@ use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
 use golem_common::model::IdempotencyKey;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -93,7 +94,10 @@ async fn http_client(
     drop(rx);
     http_server.abort();
 
-    assert_eq!(result, data_value!("200 response is test-header test-body"));
+    assert_eq!(
+        result.into_typed::<String>()?,
+        "200 response is test-header test-body"
+    );
     Ok(())
 }
 
@@ -163,10 +167,8 @@ async fn http_client_using_reqwest(
     http_server.abort();
 
     assert_eq!(
-        result,
-        data_value!(
-            "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
-        )
+        result.into_typed::<String>()?,
+        "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
     );
     assert_eq!(
         captured_body,
@@ -240,10 +242,8 @@ async fn http_client_using_reqwest_async(
     http_server.abort();
 
     assert_eq!(
-        result,
-        data_value!(
-            "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
-        )
+        result.into_typed::<String>()?,
+        "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
     );
     assert_eq!(
         captured_body,
@@ -318,7 +318,7 @@ async fn http_client_using_reqwest_async_parallel(
     http_server.abort();
 
     let return_value = result.into_return_value().expect("Expected a return value");
-    let golem_wasm::Value::List(lst) = &return_value else {
+    let SchemaValue::List { elements: lst } = &return_value else {
         panic!("Expected List, got {:?}", &return_value)
     };
     assert_eq!(lst.len(), 32);
@@ -422,10 +422,8 @@ async fn outgoing_http_contains_idempotency_key(
     http_server.abort();
 
     assert_eq!(
-        result,
-        data_value!(
-            "200 ExampleResponse { percentage: 0.0, message: Some(\"8c25adee-7935-5315-a99b-457f41180bc1\") }"
-        )
+        result.into_typed::<String>()?,
+        "200 ExampleResponse { percentage: 0.0, message: Some(\"8c25adee-7935-5315-a99b-457f41180bc1\") }"
     );
     Ok(())
 }

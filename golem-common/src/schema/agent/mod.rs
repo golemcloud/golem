@@ -202,6 +202,51 @@ impl ParsedAgentId {
     }
 }
 
+/// Combine ordered, independently-typed argument values into a single record
+/// [`TypedSchemaValue`] representing an agent method's (or constructor's)
+/// parameter list.
+///
+/// Each argument carries its own [`SchemaGraph`]; their named definitions are
+/// merged (deduplicated by `TypeId`) and each argument's root type becomes a
+/// positional field (`p0`, `p1`, …) of the resulting record. The value is a
+/// [`SchemaValue::Record`](crate::schema::schema_value::SchemaValue::Record)
+/// of the argument values in declaration order.
+///
+/// This is the schema-native replacement for the test DSL's legacy
+/// `data_value!` builder: callers pass values whose types implement
+/// [`IntoSchema`](crate::schema::IntoSchema) and obtain a self-contained typed
+/// carrier ready to hand to the invocation DSL.
+pub fn build_input_record(
+    args: Vec<TypedSchemaValue>,
+) -> Result<TypedSchemaValue, crate::schema::MergeError> {
+    use crate::schema::conversion::merge_agent_graphs;
+    use crate::schema::schema_type::NamedFieldType;
+    use crate::schema::schema_value::SchemaValue;
+
+    let merged = merge_agent_graphs(args.iter().map(|arg| arg.graph().clone()))?;
+
+    let mut fields = Vec::with_capacity(args.len());
+    let mut values = Vec::with_capacity(args.len());
+    for (idx, arg) in args.into_iter().enumerate() {
+        let (graph, value) = arg.into_parts();
+        fields.push(NamedFieldType {
+            name: format!("p{idx}"),
+            body: graph.root,
+            metadata: MetadataEnvelope::default(),
+        });
+        values.push(value);
+    }
+
+    let graph = SchemaGraph {
+        defs: merged.defs,
+        root: SchemaType::record(fields),
+    };
+    Ok(TypedSchemaValue::new(
+        graph,
+        SchemaValue::Record { fields: values },
+    ))
+}
+
 /// Constructor signature for an agent type, schema-layer form.
 ///
 /// Mirrors the legacy `AgentConstructor`, with `input_schema` replaced by the
@@ -355,6 +400,25 @@ impl AgentTypeSchema {
             .collect();
         self.config.sort_by(|a, b| a.path.cmp(&b.path));
         self
+    }
+
+    /// Validates the semantic constraints of the agent type. Mirrors the legacy
+    /// `AgentType::validate`: ephemeral agents must not declare read-only
+    /// methods (there is no shared state to read from).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.mode == AgentMode::Ephemeral {
+            for method in &self.methods {
+                if method.read_only.is_some() {
+                    return Err(format!(
+                        "Agent type '{}' is ephemeral but method '{}' is marked as read-only. \
+                         Read-only methods have no benefit on ephemeral agents (no shared state to read from). \
+                         Remove the read-only marker or make the agent durable.",
+                        self.type_name, method.name
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -1135,19 +1135,20 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
 #[test]
 fn data_value_macro_empty() {
     let value = data_value!();
-    assert_eq!(value, DataValue::Tuple(ElementValues { elements: vec![] }));
+    assert_eq!(
+        value.value(),
+        &crate::schema::SchemaValue::Record { fields: vec![] }
+    );
 }
 
 #[test]
 fn data_value_macro_single_u32() {
     let value = data_value!(42u32);
     assert_eq!(
-        value,
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 42u32.into_value_and_type()
-            })]
-        })
+        value.value(),
+        &crate::schema::SchemaValue::Record {
+            fields: vec![crate::schema::SchemaValue::U32(42)]
+        }
     );
 }
 
@@ -1155,65 +1156,42 @@ fn data_value_macro_single_u32() {
 fn data_value_macro_multiple_primitives() {
     let value = data_value!(42u32, 100u64, 3u8);
     assert_eq!(
-        value,
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type()
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type()
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 3u8.into_value_and_type()
-                }),
+        value.value(),
+        &crate::schema::SchemaValue::Record {
+            fields: vec![
+                crate::schema::SchemaValue::U32(42),
+                crate::schema::SchemaValue::U64(100),
+                crate::schema::SchemaValue::U8(3),
             ]
-        })
+        }
     );
 }
 
 #[test]
 fn data_value_macro_mixed_types() {
     let value = data_value!(42u32, 3u8);
-    let elements = match value {
-        DataValue::Tuple(ElementValues { elements }) => elements,
-        _ => panic!("Expected DataValue::Tuple"),
-    };
-
-    assert_eq!(elements.len(), 2);
-
-    // Verify first element is a ComponentModel
-    match &elements[0] {
-        ElementValue::ComponentModel(ComponentModelElementValue { value: vat }) => {
-            assert_eq!(vat.value, Value::U32(42));
+    assert_eq!(
+        value.value(),
+        &crate::schema::SchemaValue::Record {
+            fields: vec![
+                crate::schema::SchemaValue::U32(42),
+                crate::schema::SchemaValue::U8(3),
+            ]
         }
-        _ => panic!("Expected ComponentModel"),
-    }
-
-    // Verify second element is a ComponentModel
-    match &elements[1] {
-        ElementValue::ComponentModel(ComponentModelElementValue { value: vat }) => {
-            assert_eq!(vat.value, Value::U8(3));
-        }
-        _ => panic!("Expected ComponentModel"),
-    }
+    );
 }
 
 #[test]
 fn data_value_macro_trailing_comma() {
     let value = data_value!(42u32, 100u64,);
     assert_eq!(
-        value,
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type()
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type()
-                }),
+        value.value(),
+        &crate::schema::SchemaValue::Record {
+            fields: vec![
+                crate::schema::SchemaValue::U32(42),
+                crate::schema::SchemaValue::U64(100),
             ]
-        })
+        }
     );
 }
 

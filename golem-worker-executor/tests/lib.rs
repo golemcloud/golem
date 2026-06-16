@@ -56,6 +56,32 @@ pub mod websocket;
 
 test_r::enable!();
 
+/// Build the schema-native invocation input carrier from already-encoded
+/// parameter [`SchemaValue`](golem_common::schema::SchemaValue)s.
+///
+/// Used by the few tests that construct parameter values by hand (rather than
+/// from `IntoSchema` Rust values via the `data_value!` macro). The invocation
+/// DSL transmits only the encoded value tree — not the accompanying schema
+/// graph — so a placeholder graph is attached to each element here.
+pub fn raw_params(
+    values: impl IntoIterator<Item = golem_common::schema::SchemaValue>,
+) -> golem_common::schema::TypedSchemaValue {
+    use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue, build_input_record};
+    let elements = values
+        .into_iter()
+        .map(|value| {
+            TypedSchemaValue::new(
+                SchemaGraph {
+                    defs: vec![],
+                    root: SchemaType::bool(),
+                },
+                value,
+            )
+        })
+        .collect();
+    build_input_record(elements).expect("raw_params: build_input_record failed")
+}
+
 tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);

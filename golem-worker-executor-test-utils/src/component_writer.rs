@@ -16,9 +16,8 @@ use anyhow::{Context, anyhow};
 use golem_common::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentType;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{
@@ -26,7 +25,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::schema::adapters::agent::agent_type_to_schema;
+use golem_common::schema::agent::AgentTypeSchema;
 use golem_service_base::model::component::Component;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -41,7 +40,7 @@ const WASMS_DIRNAME: &str = "wasms";
 pub(crate) struct CachedAnalysis {
     pub(crate) memories: Vec<LinearMemory>,
     pub(crate) known_exports: KnownExports,
-    pub(crate) agent_types: Vec<AgentType>,
+    pub(crate) agent_types: Vec<AgentTypeSchema>,
     pub(crate) root_package_name: Option<String>,
     pub(crate) root_package_version: Option<String>,
     pub(crate) wasm_hash: Hash,
@@ -280,7 +279,7 @@ impl FileSystemComponentWriter {
                         .await
                         .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
 
-                let agent_types = extract_agent_types(source_path, false, true)
+                let agent_types = extract_agent_type_schemas(source_path, false, true)
                     .await
                     .map_err(|err| format!("Failed analyzing component: {err}"))?;
 
@@ -453,7 +452,7 @@ impl FileSystemComponentWriter {
                         .await
                         .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
 
-                let agent_types = extract_agent_types(source_path, false, true)
+                let agent_types = extract_agent_type_schemas(source_path, false, true)
                     .await
                     .map_err(|err| format!("Failed analyzing component: {err}"))?;
 
@@ -590,7 +589,7 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub component_name: String,
     pub wasm_filename: String,
     pub wasm_hash: golem_common::model::diff::Hash,
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
     pub target_path: PathBuf,
 
     pub root_package_name: Option<String>,
@@ -627,12 +626,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.memories,
                 value.root_package_name,
                 value.root_package_version,
-                value
-                    .agent_types
-                    .iter()
-                    .map(agent_type_to_schema)
-                    .collect::<Result<Vec<_>, _>>()
-                    .expect("cached analysis agent types must be schema-convertible"),
+                value.agent_types,
                 value.agent_type_provision_configs,
             ),
             created_at: Default::default(),

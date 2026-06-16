@@ -283,7 +283,7 @@ tower = "0.5.2"
 try_match = "0.4.2"
 trybuild = "1.0"
 tryhard = "0.5.1"
-typed-path = "0.10.0"
+typed-path = { version = "0.10.0", default-features = false }
 unicode-segmentation = "1.12.0"
 url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"

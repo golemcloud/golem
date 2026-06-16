@@ -20,7 +20,6 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -265,13 +264,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .iter()
         .map(|r| match r {
             Ok(Ok((r, _))) => {
-                let Value::F64(seconds) = r
-                    .clone()
-                    .into_return_value()
-                    .expect("Expected single return value")
-                else {
-                    panic!("Unexpected result")
-                };
+                let seconds = r.clone().into_typed::<f64>().unwrap();
                 (seconds * 1000.0) as u64
             }
             other => panic!("Error: {other:?}"),
@@ -355,7 +348,7 @@ async fn initial_large_memory_allocation(
     }
 
     for i in 0..N {
-        assert_eq!(results[i], data_value!(536870912u64));
+        assert_eq!(results[i].clone().into_typed::<u64>()?, 536870912);
     }
 
     Ok(())
@@ -417,7 +410,7 @@ async fn dynamic_large_memory_allocation(
     }
 
     for i in 0..N {
-        assert_eq!(results[i], data_value!(0u64));
+        assert_eq!(results[i].clone().into_typed::<u64>()?, 0);
     }
 
     Ok(())
@@ -474,7 +467,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     let result_a = executor
         .invoke_and_await_agent(&component, &agent_a, "run", data_value!())
         .await?;
-    assert_eq!(result_a, data_value!(536870912u64));
+    assert_eq!(result_a.into_typed::<u64>()?, 536870912);
     info!("Worker A completed, now idle");
 
     // Verify worker A is Idle
@@ -490,7 +483,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     let result_b = executor
         .invoke_and_await_agent(&component, &agent_b, "run", data_value!())
         .await?;
-    assert_eq!(result_b, data_value!(536870912u64));
+    assert_eq!(result_b.into_typed::<u64>()?, 536870912);
     info!("Worker B completed first invocation, now idle");
 
     let meta_b = executor
@@ -516,7 +509,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     let result_c = executor
         .invoke_and_await_agent(&component, &agent_c, "run", data_value!())
         .await?;
-    assert_eq!(result_c, data_value!(536870912u64));
+    assert_eq!(result_c.into_typed::<u64>()?, 536870912);
     info!("Worker C completed successfully (eviction worked)");
 
     // Worker B's pending invocation should eventually complete.
