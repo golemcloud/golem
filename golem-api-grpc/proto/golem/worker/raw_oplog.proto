@@ -15,14 +15,7 @@ import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
-//
-// The variants `host_call = 3`, `begin_remote_write = 14`, `end_remote_write = 15` were
-// removed and replaced by `start`, `end`, `cancelled`. Their tag numbers are reserved to
-// prevent accidental reuse should we ever need rolling-version compatibility in the future.
 message RawOplogEntry {
-  reserved 3, 14, 15;
-  reserved "host_call", "begin_remote_write", "end_remote_write";
-
   google.protobuf.Timestamp timestamp = 1;
   oneof entry {
     RawCreateParameters create = 2;
