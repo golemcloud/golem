@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&rendered).unwrap(),
             json!({
-                CLI_OUTPUT_TYPE_FIELD: "test.output@1",
+                CLI_OUTPUT_TYPE_FIELD: "test.output",
                 "ok": true,
             })
         );
