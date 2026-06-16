@@ -85,30 +85,24 @@ mod tests {
         rust_type: &'static str,
         output_type: &'static str,
         examples: fn() -> Vec<Value>,
-        arbitrary: Option<fn() -> OutputDocumentStrategy>,
+        arbitrary: fn() -> OutputDocumentStrategy,
     }
 
     macro_rules! registry_entry {
-        ($rust_type:literal, $output_type:literal) => {
-            CliOutputTestEntry {
-                rust_type: $rust_type,
-                output_type: $output_type,
-                examples: || vec![json!({ CLI_OUTPUT_TYPE_FIELD: $output_type })],
-                arbitrary: None,
-            }
-        };
         ($rust_type:literal, $output_type:literal, $arbitrary:expr) => {
             CliOutputTestEntry {
                 rust_type: $rust_type,
                 output_type: $output_type,
                 examples: || {
                     let mut runner = proptest::test_runner::TestRunner::deterministic();
-                    vec![($arbitrary)()
-                        .new_tree(&mut runner)
-                        .expect("example strategy should produce a value")
-                        .current()]
+                    vec![
+                        ($arbitrary)()
+                            .new_tree(&mut runner)
+                            .expect("example strategy should produce a value")
+                            .current(),
+                    ]
                 },
-                arbitrary: Some($arbitrary),
+                arbitrary: $arbitrary,
             }
         };
     }
@@ -607,12 +601,11 @@ mod tests {
             .expect("command output schema must be a valid JSON schema");
 
         for entry in CLI_OUTPUT_TEST_REGISTRY.iter().filter(|entry| {
-            entry.arbitrary.is_some()
-                && !definition_allows_additional_properties(
-                    definitions
-                        .get(entry.output_type)
-                        .unwrap_or_else(|| panic!("missing definition for {}", entry.output_type)),
-                )
+            !definition_allows_additional_properties(
+                definitions
+                    .get(entry.output_type)
+                    .unwrap_or_else(|| panic!("missing definition for {}", entry.output_type)),
+            )
         }) {
             for mut example in (entry.examples)() {
                 let Some(object) = example.as_object_mut() else {
@@ -952,7 +945,7 @@ mod tests {
     fn arb_registered_output_document() -> BoxedStrategy<Value> {
         let strategies = CLI_OUTPUT_TEST_REGISTRY
             .iter()
-            .filter_map(|entry| entry.arbitrary.map(|strategy| strategy()))
+            .map(|entry| (entry.arbitrary)())
             .collect::<Vec<_>>();
         proptest::strategy::Union::new(strategies).boxed()
     }
