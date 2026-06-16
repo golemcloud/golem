@@ -25,18 +25,29 @@ mod tests {
     };
     use golem_rust::agentic::{Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, ElementValue,
-        Snapshotting, SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, Snapshotting,
+        SnapshottingConfig,
     };
-    use golem_rust::value_and_type::IntoValue;
-    use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
-    use golem_rust::{Schema, agent_definition, agent_implementation, agentic::BaseAgent};
-    use golem_rust_macro::{FromValueAndType, IntoValue, description, endpoint, prompt, read_only};
+    use golem_rust::schema::VariantValuePayload;
+    use golem_rust::{
+        AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, IntoSchema, MultimodalSchema,
+    };
+    use golem_rust::{SchemaType, SchemaValue};
+    use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
+    use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
     use test_r::test;
     use wasip2::clocks::wall_clock::Datetime;
 
-    #[derive(Clone, Debug, Schema)]
+    fn schema_value<T: IntoSchema>(value: T) -> SchemaValue {
+        value.to_value()
+    }
+
+    fn decode_schema_value<T: Schema>(value: SchemaValue) -> T {
+        T::from_schema_value(value, T::get_type()).unwrap()
+    }
+
+    #[derive(Clone, Debug, IntoSchema, FromSchema)]
     struct Config {
         model: String,
     }
@@ -559,13 +570,13 @@ mod tests {
         }
     }
 
-    #[derive(Schema, MultimodalSchema)]
+    #[derive(IntoSchema, FromSchema, MultimodalSchema)]
     enum TextOrImage {
         Text(String),
         Image(Vec<u8>),
     }
 
-    #[derive(Schema, Clone)]
+    #[derive(IntoSchema, FromSchema, Clone)]
     struct UserId {
         id: String,
     }
@@ -594,6 +605,106 @@ mod tests {
         let initiator_registered_under_canonical_name =
             with_agent_initiator(|_| async { true }, &canonical_name);
         assert!(initiator_registered_under_canonical_name);
+    }
+
+    #[test]
+    fn multimodal_structured_values_are_ordered_list_variants() {
+        let value = MultimodalAdvanced::new([
+            TextOrImage::Image(vec![1, 2, 3]),
+            TextOrImage::Text("hello".to_string()),
+        ])
+        .convert_to_schema_value()
+        .unwrap();
+
+        let SchemaValue::List { elements } = value else {
+            panic!("expected multimodal schema list")
+        };
+        assert!(matches!(
+            elements[0],
+            SchemaValue::Variant(VariantValuePayload { case: 1, .. })
+        ));
+        assert!(matches!(
+            elements[1],
+            SchemaValue::Variant(VariantValuePayload { case: 0, .. })
+        ));
+
+        let duplicate = MultimodalAdvanced::new([
+            TextOrImage::Text("first".to_string()),
+            TextOrImage::Text("second".to_string()),
+        ]);
+        assert!(duplicate.convert_to_schema_value().is_ok());
+
+        let missing_image = MultimodalAdvanced::new([TextOrImage::Text("only text".to_string())]);
+        assert!(missing_image.convert_to_schema_value().is_ok());
+    }
+
+    #[test]
+    fn base_agent_invoke_accepts_multimodal_schema_value_inside_parameter_record() {
+        EchoImpl::__register_agent_type();
+
+        let mut agent = EchoImpl::new(
+            UserId {
+                id: "id".to_string(),
+            },
+            Config {
+                model: "model".to_string(),
+            },
+        );
+        let input = MultimodalAdvanced::new([
+            TextOrImage::Image(vec![1, 2, 3]),
+            TextOrImage::Text("hello".to_string()),
+        ])
+        .convert_to_schema_value()
+        .unwrap();
+
+        let output = wstd::runtime::block_on(agent.invoke(
+            "echo_multimodal_advanced".to_string(),
+            SchemaValue::Record {
+                fields: vec![input],
+            },
+            Principal::Anonymous,
+        ))
+        .unwrap()
+        .unwrap();
+
+        let SchemaValue::List { elements } = output else {
+            panic!("expected multimodal output schema list")
+        };
+        assert!(matches!(
+            elements[0],
+            SchemaValue::Variant(VariantValuePayload { case: 1, .. })
+        ));
+        assert!(matches!(
+            elements[1],
+            SchemaValue::Variant(VariantValuePayload { case: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn base_agent_invoke_rejects_extra_parameter_record_fields() {
+        EchoImpl::__register_agent_type();
+
+        let mut agent = EchoImpl::new(
+            UserId {
+                id: "id".to_string(),
+            },
+            Config {
+                model: "model".to_string(),
+            },
+        );
+
+        let result = wstd::runtime::block_on(agent.invoke(
+            "echo".to_string(),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("hello".to_string()),
+                    SchemaValue::String("extra".to_string()),
+                ],
+            },
+            Principal::Anonymous,
+        ));
+
+        assert!(result.is_err());
     }
 
     #[agent_definition]
@@ -1352,12 +1463,13 @@ mod tests {
             golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
 
         fn project_for_comparsion(
-            mut value: AgentConfigDeclaration,
+            schema: &golem_rust::schema::wit::wire::SchemaGraph,
+            value: AgentConfigDeclaration,
         ) -> (AgentConfigSource, Vec<String>, String) {
             (
                 value.source,
                 value.path,
-                format!("{:?}", value.value_type.nodes.swap_remove(0).type_),
+                format!("{:?}", schema.type_nodes[value.value_type as usize].body),
             )
         }
 
@@ -1365,38 +1477,38 @@ mod tests {
             agent
                 .config
                 .into_iter()
-                .map(project_for_comparsion)
+                .map(|entry| project_for_comparsion(&agent.schema, entry))
                 .collect::<Vec<_>>(),
             vec![
                 (
                     AgentConfigSource::Local,
                     vec!["url".to_string()],
-                    "WitTypeNode::PrimStringType".to_string()
+                    "SchemaTypeBody::StringType".to_string()
                 ),
                 (
                     AgentConfigSource::Local,
                     vec!["port".to_string()],
-                    "WitTypeNode::PrimU32Type".to_string()
+                    "SchemaTypeBody::U32Type".to_string()
                 ),
                 (
                     AgentConfigSource::Local,
                     vec!["nested".to_string(), "foo".to_string(),],
-                    "WitTypeNode::PrimStringType".to_string()
+                    "SchemaTypeBody::StringType".to_string()
                 ),
                 (
                     AgentConfigSource::Local,
                     vec!["nested".to_string(), "bar".to_string(),],
-                    "WitTypeNode::PrimS32Type".to_string()
+                    "SchemaTypeBody::S32Type".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,
                     vec!["nested".to_string(), "nested_secret".to_string(),],
-                    "WitTypeNode::PrimBoolType".to_string()
+                    "SchemaTypeBody::BoolType".to_string()
                 ),
                 (
                     AgentConfigSource::Secret,
                     vec!["api_key".to_string()],
-                    "WitTypeNode::PrimStringType".to_string()
+                    "SchemaTypeBody::StringType".to_string()
                 )
             ]
         );
@@ -1513,57 +1625,56 @@ mod tests {
         );
     }
 
-    // --- Schema::from_element_value roundtrip tests ---
-    // These verify that the optimized from_element_value (which bypasses T::get_type())
-    // produces the same results as constructing a full ValueAndType.
+    // --- Schema::from_schema_value roundtrip tests ---
+    // These verify that Schema decodes schema-native component model values directly.
 
     #[test]
-    fn test_from_element_value_roundtrip_string() {
+    fn test_from_schema_value_roundtrip_string() {
         let original = "hello world".to_string();
-        let ev = ElementValue::ComponentModel(original.clone().into_value());
-        let recovered = String::from_element_value(ev).unwrap();
+        let value = schema_value(original.clone());
+        let recovered = decode_schema_value::<String>(value);
         assert_eq!(recovered, original);
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_u64() {
+    fn test_from_schema_value_roundtrip_u64() {
         let original: u64 = 123456789;
-        let ev = ElementValue::ComponentModel(original.into_value());
-        let recovered = u64::from_element_value(ev).unwrap();
+        let value = schema_value(original);
+        let recovered = decode_schema_value::<u64>(value);
         assert_eq!(recovered, original);
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_bool() {
+    fn test_from_schema_value_roundtrip_bool() {
         for original in [true, false] {
-            let ev = ElementValue::ComponentModel(original.into_value());
-            let recovered = bool::from_element_value(ev).unwrap();
+            let value = schema_value(original);
+            let recovered = decode_schema_value::<bool>(value);
             assert_eq!(recovered, original);
         }
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_option() {
+    fn test_from_schema_value_roundtrip_option() {
         let some_val: Option<u32> = Some(42);
-        let ev = ElementValue::ComponentModel(some_val.into_value());
-        let recovered = Option::<u32>::from_element_value(ev).unwrap();
+        let value = schema_value(some_val);
+        let recovered = decode_schema_value::<Option<u32>>(value);
         assert_eq!(recovered, Some(42));
 
         let none_val: Option<u32> = None;
-        let ev = ElementValue::ComponentModel(none_val.into_value());
-        let recovered = Option::<u32>::from_element_value(ev).unwrap();
+        let value = schema_value(none_val);
+        let recovered = decode_schema_value::<Option<u32>>(value);
         assert_eq!(recovered, None);
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_vec() {
+    fn test_from_schema_value_roundtrip_vec() {
         let original = vec![1u32, 2, 3, 4, 5];
-        let ev = ElementValue::ComponentModel(original.clone().into_value());
-        let recovered = Vec::<u32>::from_element_value(ev).unwrap();
+        let value = schema_value(original.clone());
+        let recovered = decode_schema_value::<Vec<u32>>(value);
         assert_eq!(recovered, original);
     }
 
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     struct TestStruct {
         name: String,
         age: u32,
@@ -1573,7 +1684,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_struct() {
+    fn test_from_schema_value_roundtrip_struct() {
         let original = TestStruct {
             name: "test user".to_string(),
             age: 42,
@@ -1581,18 +1692,18 @@ mod tests {
             score: 99.5,
             tags: vec!["a".to_string(), "b".to_string()],
         };
-        let ev = ElementValue::ComponentModel(original.clone().into_value());
-        let recovered = TestStruct::from_element_value(ev).unwrap();
+        let value = schema_value(original.clone());
+        let recovered = decode_schema_value::<TestStruct>(value);
         assert_eq!(recovered, original);
     }
 
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     struct NestedInner {
         x: String,
         y: u32,
     }
 
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     struct NestedOuter {
         id: u64,
         items: Vec<NestedInner>,
@@ -1600,7 +1711,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_nested_struct() {
+    fn test_from_schema_value_roundtrip_nested_struct() {
         let original = NestedOuter {
             id: 999,
             items: vec![
@@ -1615,12 +1726,12 @@ mod tests {
             ],
             label: Some("nested test".to_string()),
         };
-        let ev = ElementValue::ComponentModel(original.clone().into_value());
-        let recovered = NestedOuter::from_element_value(ev).unwrap();
+        let value = schema_value(original.clone());
+        let recovered = decode_schema_value::<NestedOuter>(value);
         assert_eq!(recovered, original);
     }
 
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     enum TestEnum {
         A,
         B(u32),
@@ -1628,7 +1739,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_enum() {
+    fn test_from_schema_value_roundtrip_enum() {
         for original in [
             TestEnum::A,
             TestEnum::B(42),
@@ -1637,26 +1748,120 @@ mod tests {
                 value: true,
             },
         ] {
-            let ev = ElementValue::ComponentModel(original.clone().into_value());
-            let recovered = TestEnum::from_element_value(ev).unwrap();
+            let value = schema_value(original.clone());
+            let recovered = decode_schema_value::<TestEnum>(value);
             assert_eq!(recovered, original);
         }
     }
 
     #[test]
-    fn test_from_element_value_roundtrip_result() {
+    fn test_from_schema_value_roundtrip_result() {
         let ok_val: Result<String, u32> = Ok("success".to_string());
-        let ev = ElementValue::ComponentModel(ok_val.clone().into_value());
-        let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
+        let value = schema_value(ok_val.clone());
+        let recovered = decode_schema_value::<Result<String, u32>>(value);
         assert_eq!(recovered, ok_val);
 
         let err_val: Result<String, u32> = Err(404);
-        let ev = ElementValue::ComponentModel(err_val.clone().into_value());
-        let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
+        let value = schema_value(err_val.clone());
+        let recovered = decode_schema_value::<Result<String, u32>>(value);
         assert_eq!(recovered, err_val);
     }
 
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    #[test]
+    fn output_schema_value_is_not_record_wrapped_for_single_return() {
+        let value = schema_value("hello".to_string());
+
+        assert_eq!(value, SchemaValue::String("hello".to_string()));
+
+        let recovered = decode_schema_value::<String>(value);
+        assert_eq!(recovered, "hello");
+    }
+
+    #[test]
+    fn unstructured_inline_values_use_schema_native_payloads() {
+        let text = UnstructuredText::from_inline("hallo", MyLang::German)
+            .to_schema_value()
+            .unwrap();
+        match text {
+            SchemaValue::Variant(VariantValuePayload { case: 0, payload }) => {
+                assert_eq!(
+                    *payload.expect("inline text payload"),
+                    SchemaValue::Text(golem_rust::schema::TextValuePayload {
+                        text: "hallo".to_string(),
+                        language: Some("de".to_string()),
+                    })
+                );
+            }
+            other => panic!("expected inline text variant, got {other:?}"),
+        }
+
+        let binary = UnstructuredBinary::from_inline(vec![1, 2, 3], MyMimeType::PngImage)
+            .to_schema_value()
+            .unwrap();
+        match binary {
+            SchemaValue::Variant(VariantValuePayload { case: 0, payload }) => {
+                assert_eq!(
+                    *payload.expect("inline binary payload"),
+                    SchemaValue::Binary(golem_rust::schema::BinaryValuePayload {
+                        bytes: vec![1, 2, 3],
+                        mime_type: Some("image/png".to_string()),
+                    })
+                );
+            }
+            other => panic!("expected inline binary variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unstructured_url_values_decode_using_expected_schema() {
+        let text_value = UnstructuredText::from_url_any("https://example.com/text.txt")
+            .to_schema_value()
+            .unwrap();
+        let recovered = UnstructuredText::<golem_rust::agentic::AnyLanguage>::from_schema_value(
+            text_value,
+            UnstructuredText::<golem_rust::agentic::AnyLanguage>::get_type(),
+        )
+        .unwrap();
+        assert!(matches!(
+            recovered,
+            UnstructuredText::Url(url) if url == "https://example.com/text.txt"
+        ));
+
+        let binary_value = UnstructuredBinary::<String>::from_url("https://example.com/image.png")
+            .to_schema_value()
+            .unwrap();
+        let recovered = UnstructuredBinary::<String>::from_schema_value(
+            binary_value,
+            UnstructuredBinary::<String>::get_type(),
+        )
+        .unwrap();
+        assert!(matches!(
+            recovered,
+            UnstructuredBinary::Url(url) if url == "https://example.com/image.png"
+        ));
+    }
+
+    #[test]
+    fn unstructured_text_rejects_unknown_language_payload() {
+        let value = SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::Text(
+                golem_rust::schema::TextValuePayload {
+                    text: "bonjour".to_string(),
+                    language: Some("fr".to_string()),
+                },
+            ))),
+        });
+
+        let err = UnstructuredText::<MyLang>::from_schema_value(
+            value,
+            UnstructuredText::<MyLang>::get_type(),
+        )
+        .unwrap_err();
+        assert!(err.contains("Language code 'fr' is not allowed"));
+    }
+
+    #[derive(IntoSchema, FromSchema, PartialEq, Debug, Clone)]
     enum EnumCasePayloadNames {
         Unit,
         NamedRecord { name: String, value: bool },
@@ -1665,34 +1870,33 @@ mod tests {
 
     #[test]
     fn enum_case_payload_type_name_uses_case_name() {
-        let typ = <EnumCasePayloadNames as IntoValue>::get_type();
-        let root = typ.nodes.first().expect("missing root type node");
-
-        let golem_wasm::WitTypeNode::VariantType(cases) = &root.type_ else {
+        let graph = golem_rust::schema::try_into_schema_graph::<EnumCasePayloadNames>()
+            .expect("failed to build schema graph");
+        let SchemaType::Ref { id, .. } = &graph.root else {
+            panic!("expected named enum root");
+        };
+        let def = graph.lookup(id).expect("missing enum definition");
+        let SchemaType::Variant { cases, .. } = &def.body else {
             panic!("expected variant root node");
         };
 
-        let named_record_idx = cases
+        let named_record = cases
             .iter()
-            .find_map(|(name, idx)| (name == "NamedRecord").then_some(*idx))
-            .flatten()
+            .find(|case| case.name == "named-record")
+            .and_then(|case| case.payload.as_ref())
             .expect("missing NamedRecord case payload type");
-        let named_record_node = typ
-            .nodes
-            .get(named_record_idx as usize)
-            .expect("missing NamedRecord payload node");
-        assert_eq!(named_record_node.name.as_deref(), Some("NamedRecord"));
+        let SchemaType::Record { fields, .. } = named_record else {
+            panic!("expected NamedRecord payload to be a record");
+        };
+        assert_eq!(fields[0].name, "name");
+        assert_eq!(fields[1].name, "value");
 
-        let multi_tuple_idx = cases
+        let multi_tuple = cases
             .iter()
-            .find_map(|(name, idx)| (name == "MultiTuple").then_some(*idx))
-            .flatten()
+            .find(|case| case.name == "multi-tuple")
+            .and_then(|case| case.payload.as_ref())
             .expect("missing MultiTuple case payload type");
-        let multi_tuple_node = typ
-            .nodes
-            .get(multi_tuple_idx as usize)
-            .expect("missing MultiTuple payload node");
-        assert_eq!(multi_tuple_node.name.as_deref(), Some("MultiTuple"));
+        assert!(matches!(multi_tuple, SchemaType::Tuple { .. }));
     }
 
     #[agent_definition(mount = "/test")]

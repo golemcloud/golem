@@ -3,8 +3,7 @@ package golem:api@1.5.0;
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:core/types@1.5.0.{account-id, wit-value};
-    use golem:core/types@2.0.0.{typed-schema-value};
+    use golem:core/types@2.0.0.{account-id, schema-value-tree, typed-schema-value};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
@@ -95,7 +94,7 @@ interface oplog {
 
     record raw-local-agent-config-entry {
         path: list<string>,
-        value: wit-value
+        value: schema-value-tree
     }
 
     record local-agent-config-entry {

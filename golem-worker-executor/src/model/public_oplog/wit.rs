@@ -40,8 +40,10 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
-use golem_common::schema::TypedSchemaValue;
-use golem_schema::schema::wit::{encode_typed, wire};
+use golem_common::schema::{
+    ResultValuePayload, SchemaValue, TypedSchemaValue, VariantValuePayload,
+};
+use golem_schema::schema::wit::{decode_value, encode_typed, encode_value, wire};
 
 /// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT
 /// wire form used by the oplog-processor plugin interface. Public-oplog
@@ -49,6 +51,157 @@ use golem_schema::schema::wit::{encode_typed, wire};
 /// fail in practice.
 fn encode_public_typed_schema_value(value: TypedSchemaValue) -> wire::TypedSchemaValue {
     encode_typed(&value).expect("public oplog TypedSchemaValue must be encodable as core@2.0.0 WIT")
+}
+
+fn encode_untyped_schema_value(value: golem_wasm::Value) -> Result<wire::SchemaValueTree, String> {
+    Ok(encode_value(&legacy_value_to_schema_value(value)?))
+}
+
+fn decode_untyped_schema_value(value: wire::SchemaValueTree) -> Result<golem_wasm::Value, String> {
+    let value = decode_value(&value).map_err(|e| e.to_string())?;
+    schema_value_to_legacy_value(value)
+}
+
+fn legacy_value_to_schema_value(value: golem_wasm::Value) -> Result<SchemaValue, String> {
+    match value {
+        golem_wasm::Value::Bool(value) => Ok(SchemaValue::Bool(value)),
+        golem_wasm::Value::U8(value) => Ok(SchemaValue::U8(value)),
+        golem_wasm::Value::U16(value) => Ok(SchemaValue::U16(value)),
+        golem_wasm::Value::U32(value) => Ok(SchemaValue::U32(value)),
+        golem_wasm::Value::U64(value) => Ok(SchemaValue::U64(value)),
+        golem_wasm::Value::S8(value) => Ok(SchemaValue::S8(value)),
+        golem_wasm::Value::S16(value) => Ok(SchemaValue::S16(value)),
+        golem_wasm::Value::S32(value) => Ok(SchemaValue::S32(value)),
+        golem_wasm::Value::S64(value) => Ok(SchemaValue::S64(value)),
+        golem_wasm::Value::F32(value) => Ok(SchemaValue::F32(value)),
+        golem_wasm::Value::F64(value) => Ok(SchemaValue::F64(value)),
+        golem_wasm::Value::Char(value) => Ok(SchemaValue::Char(value)),
+        golem_wasm::Value::String(value) => Ok(SchemaValue::String(value)),
+        golem_wasm::Value::List(values) => Ok(SchemaValue::List {
+            elements: values
+                .into_iter()
+                .map(legacy_value_to_schema_value)
+                .collect::<Result<_, _>>()?,
+        }),
+        golem_wasm::Value::Tuple(values) => Ok(SchemaValue::Tuple {
+            elements: values
+                .into_iter()
+                .map(legacy_value_to_schema_value)
+                .collect::<Result<_, _>>()?,
+        }),
+        golem_wasm::Value::Record(values) => Ok(SchemaValue::Record {
+            fields: values
+                .into_iter()
+                .map(legacy_value_to_schema_value)
+                .collect::<Result<_, _>>()?,
+        }),
+        golem_wasm::Value::Variant {
+            case_idx,
+            case_value,
+        } => Ok(SchemaValue::Variant(VariantValuePayload {
+            case: case_idx,
+            payload: case_value
+                .map(|value| legacy_value_to_schema_value(*value).map(Box::new))
+                .transpose()?,
+        })),
+        golem_wasm::Value::Enum(value) => Ok(SchemaValue::Enum { case: value }),
+        golem_wasm::Value::Flags(value) => Ok(SchemaValue::Flags { bits: value }),
+        golem_wasm::Value::Option(value) => Ok(SchemaValue::Option {
+            inner: value
+                .map(|value| legacy_value_to_schema_value(*value).map(Box::new))
+                .transpose()?,
+        }),
+        golem_wasm::Value::Result(value) => Ok(SchemaValue::Result(match value {
+            Ok(value) => ResultValuePayload::Ok {
+                value: value
+                    .map(|value| legacy_value_to_schema_value(*value).map(Box::new))
+                    .transpose()?,
+            },
+            Err(value) => ResultValuePayload::Err {
+                value: value
+                    .map(|value| legacy_value_to_schema_value(*value).map(Box::new))
+                    .transpose()?,
+            },
+        })),
+        golem_wasm::Value::Handle { .. } => Err(
+            "legacy handle values cannot be represented as golem:core/types@2.0.0 schema-value-tree"
+                .to_string(),
+        ),
+    }
+}
+
+fn schema_value_to_legacy_value(value: SchemaValue) -> Result<golem_wasm::Value, String> {
+    match value {
+        SchemaValue::Bool(value) => Ok(golem_wasm::Value::Bool(value)),
+        SchemaValue::U8(value) => Ok(golem_wasm::Value::U8(value)),
+        SchemaValue::U16(value) => Ok(golem_wasm::Value::U16(value)),
+        SchemaValue::U32(value) => Ok(golem_wasm::Value::U32(value)),
+        SchemaValue::U64(value) => Ok(golem_wasm::Value::U64(value)),
+        SchemaValue::S8(value) => Ok(golem_wasm::Value::S8(value)),
+        SchemaValue::S16(value) => Ok(golem_wasm::Value::S16(value)),
+        SchemaValue::S32(value) => Ok(golem_wasm::Value::S32(value)),
+        SchemaValue::S64(value) => Ok(golem_wasm::Value::S64(value)),
+        SchemaValue::F32(value) => Ok(golem_wasm::Value::F32(value)),
+        SchemaValue::F64(value) => Ok(golem_wasm::Value::F64(value)),
+        SchemaValue::Char(value) => Ok(golem_wasm::Value::Char(value)),
+        SchemaValue::String(value) => Ok(golem_wasm::Value::String(value)),
+        SchemaValue::List { elements } | SchemaValue::FixedList { elements } => {
+            Ok(golem_wasm::Value::List(
+                elements
+                    .into_iter()
+                    .map(schema_value_to_legacy_value)
+                    .collect::<Result<_, _>>()?,
+            ))
+        }
+        SchemaValue::Tuple { elements } => Ok(golem_wasm::Value::Tuple(
+            elements
+                .into_iter()
+                .map(schema_value_to_legacy_value)
+                .collect::<Result<_, _>>()?,
+        )),
+        SchemaValue::Record { fields } => Ok(golem_wasm::Value::Record(
+            fields
+                .into_iter()
+                .map(schema_value_to_legacy_value)
+                .collect::<Result<_, _>>()?,
+        )),
+        SchemaValue::Variant(value) => Ok(golem_wasm::Value::Variant {
+            case_idx: value.case,
+            case_value: value
+                .payload
+                .map(|value| schema_value_to_legacy_value(*value).map(Box::new))
+                .transpose()?,
+        }),
+        SchemaValue::Enum { case } => Ok(golem_wasm::Value::Enum(case)),
+        SchemaValue::Flags { bits } => Ok(golem_wasm::Value::Flags(bits)),
+        SchemaValue::Option { inner } => Ok(golem_wasm::Value::Option(
+            inner
+                .map(|value| schema_value_to_legacy_value(*value).map(Box::new))
+                .transpose()?,
+        )),
+        SchemaValue::Result(value) => Ok(golem_wasm::Value::Result(match value {
+            ResultValuePayload::Ok { value } => Ok(value
+                .map(|value| schema_value_to_legacy_value(*value).map(Box::new))
+                .transpose()?),
+            ResultValuePayload::Err { value } => Err(value
+                .map(|value| schema_value_to_legacy_value(*value).map(Box::new))
+                .transpose()?),
+        })),
+        SchemaValue::Map { .. }
+        | SchemaValue::Text(_)
+        | SchemaValue::Binary(_)
+        | SchemaValue::Path { .. }
+        | SchemaValue::Url { .. }
+        | SchemaValue::Datetime { .. }
+        | SchemaValue::Duration(_)
+        | SchemaValue::Quantity(_)
+        | SchemaValue::Union(_)
+        | SchemaValue::Secret(_)
+        | SchemaValue::QuotaToken(_) => Err(
+            "schema-value-tree contains a value that cannot be represented as legacy wit-value"
+                .to_string(),
+        ),
+    }
 }
 
 impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
@@ -845,11 +998,11 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.uuid.high_bits, v.uuid.low_bits)))
                     .collect(),
                 local_agent_config: params.local_agent_config.into_iter().map(|entry| {
-                    golem_common::model::worker::UntypedAgentConfigEntry {
+                    Ok(golem_common::model::worker::UntypedAgentConfigEntry {
                         path: entry.path,
-                        value: entry.value.into(),
-                    }
-                }).collect(),
+                        value: decode_untyped_schema_value(entry.value)?,
+                    })
+                }).collect::<Result<_, String>>()?,
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
@@ -1516,11 +1669,15 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     .collect(),
                 local_agent_config: local_agent_config
                     .into_iter()
-                    .map(|entry| oplog::RawLocalAgentConfigEntry {
-                        path: entry.path,
-                        value: entry.value.into(),
+                    .map(|entry| {
+                        encode_untyped_schema_value(entry.value).map(|value| {
+                            oplog::RawLocalAgentConfigEntry {
+                                path: entry.path,
+                                value,
+                            }
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<_, String>>()?,
                 original_phantom_id: original_phantom_id.map(|id| id.into()),
                 instance_id: instance_id.into(),
             })),

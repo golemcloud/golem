@@ -1,13 +1,19 @@
 test_r::enable!();
 
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, decode_typed_schema_value,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Schema, SchemaValue, decode_typed_schema_value,
     encode_typed_schema_value, schema::try_into_schema_graph,
 };
 use test_r::test;
 
 #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 struct ReexportedSchemaType {
+    name: String,
+    count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Schema)]
+struct ConvenienceSchemaType {
     name: String,
     count: u32,
 }
@@ -33,6 +39,20 @@ fn derive_schema_through_golem_rust_reexports() {
     let wire = encode_typed_schema_value(&typed).expect("typed value encodes to WIT");
     let decoded_wire = decode_typed_schema_value(&wire).expect("typed value decodes from WIT");
     assert_eq!(decoded_wire, typed);
+}
+
+#[test]
+fn derive_schema_convenience_through_golem_rust_reexport() {
+    let graph = try_into_schema_graph::<ConvenienceSchemaType>().expect("schema graph is valid");
+    assert_eq!(graph.defs.len(), 1);
+
+    let value = ConvenienceSchemaType {
+        name: "test".to_string(),
+        count: 42,
+    };
+    let encoded = value.to_value();
+    let decoded = ConvenienceSchemaType::from_value(&encoded).expect("value decodes");
+    assert_eq!(decoded, value);
 }
 
 #[cfg(feature = "bytes")]

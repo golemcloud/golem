@@ -40,7 +40,7 @@ pub use conversion::{
     SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
 };
 #[cfg(feature = "derive")]
-pub use golem_schema_derive::{FromSchema, IntoSchema};
+pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{

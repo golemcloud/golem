@@ -1,5 +1,5 @@
-use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::agentic::{BasicModality, Multimodal, UnstructuredBinary, UnstructuredText};
+use golem_rust::{agent_definition, agent_implementation};
 
 // Agent methods that don't take any arguments becomes a resource
 // However they are dynamic because it depends on agent identity (constructor)
@@ -17,7 +17,7 @@ pub trait DynamicResource {
 }
 
 pub struct MyDynamicResourceImpl {
-    name: String
+    name: String,
 }
 
 #[agent_implementation]
@@ -32,19 +32,22 @@ impl DynamicResource for MyDynamicResourceImpl {
 
     fn get_weather_report_with_images(&self) -> Multimodal {
         Multimodal::new([
-            BasicModality::text(format!("This is an image of the snow fall in {}.", self.name)),
-            BasicModality::binary(vec![1, 2, 3], "image/png")
+            BasicModality::text(format!(
+                "This is an image of the snow fall in {}.",
+                self.name
+            )),
+            BasicModality::binary(vec![1, 2, 3], "image/png"),
         ])
     }
 
     fn get_weather_report_text(&self) -> UnstructuredText {
-        UnstructuredText::from_inline_any(format!("This is an unstructured weather report for {}.", self.name))
+        UnstructuredText::from_inline_any(format!(
+            "This is an unstructured weather report for {}.",
+            self.name
+        ))
     }
 
     fn get_snow_fall_image(&self) -> UnstructuredBinary<String> {
-        UnstructuredBinary::from_inline(
-            vec![1, 2, 3],
-            "image/png".to_string(),
-        )
+        UnstructuredBinary::from_inline(vec![1, 2, 3], "image/png".to_string())
     }
 }

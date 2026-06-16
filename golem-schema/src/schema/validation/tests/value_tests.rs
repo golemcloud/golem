@@ -524,13 +524,12 @@ fn union_discriminator_mismatch_is_reported() {
 }
 
 #[test]
-fn multimodal_variant_value_validates() {
-    // Multimodal is modelled as a tagged `variant` (each part carries its
-    // alternative name), so the value validator handles it with the generic
-    // variant rules: a scalar `caption: string` body validates against the
-    // `caption` case with no discriminator machinery involved. The
-    // `Role::Multimodal` marker does not change value validation.
-    let mut ty = SchemaType::variant(vec![
+fn multimodal_list_of_variant_values_validates() {
+    // Multimodal is modelled as a list of tagged `variant` parts. Each part
+    // carries its alternative case index, and the outer `Role::Multimodal`
+    // marker is advisory metadata: validation uses the generic list/variant
+    // rules and allows repeated or missing modalities.
+    let variant = SchemaType::variant(vec![
         VariantCaseType {
             name: "caption".to_string(),
             payload: Some(SchemaType::string()),
@@ -542,13 +541,47 @@ fn multimodal_variant_value_validates() {
             metadata: Default::default(),
         },
     ]);
+    let mut ty = SchemaType::list(variant);
     ty.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
     let graph = SchemaGraph::anonymous(ty.clone());
-    let value = SchemaValue::Variant(VariantValuePayload {
-        case: 0,
-        payload: Some(Box::new(SchemaValue::String("hello world".to_string()))),
-    });
-    validate_value(&graph, &ty, &value).expect("multimodal scalar body must validate");
+    let value = SchemaValue::List {
+        elements: vec![
+            SchemaValue::Variant(VariantValuePayload {
+                case: 0,
+                payload: Some(Box::new(SchemaValue::String("hello world".to_string()))),
+            }),
+            SchemaValue::Variant(VariantValuePayload {
+                case: 0,
+                payload: Some(Box::new(SchemaValue::String("second caption".to_string()))),
+            }),
+            SchemaValue::Variant(VariantValuePayload {
+                case: 1,
+                payload: Some(Box::new(SchemaValue::String(
+                    "https://example.com/image.png".to_string(),
+                ))),
+            }),
+        ],
+    };
+    validate_value(&graph, &ty, &value).expect("multimodal list must validate");
+
+    validate_value(&graph, &ty, &SchemaValue::List { elements: vec![] })
+        .expect("empty multimodal list must validate");
+
+    let wrong_payload = SchemaValue::List {
+        elements: vec![SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::Bool(true))),
+        })],
+    };
+    validate_value(&graph, &ty, &wrong_payload).expect_err("wrong payload must fail");
+
+    let unknown_case = SchemaValue::List {
+        elements: vec![SchemaValue::Variant(VariantValuePayload {
+            case: 2,
+            payload: Some(Box::new(SchemaValue::String("unknown".to_string()))),
+        })],
+    };
+    validate_value(&graph, &ty, &unknown_case).expect_err("unknown case must fail");
 }
 
 #[test]

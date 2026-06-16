@@ -1,5 +1,5 @@
-mod snapshot_test;
 pub mod repository;
+mod snapshot_test;
 
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
@@ -67,7 +67,6 @@ impl EphemeralCounter for EphemeralCounterImpl {
     }
 }
 
-
 #[agent_definition(ephemeral)]
 trait EphemeralSingletonCounter {
     fn new() -> Self;
@@ -75,7 +74,7 @@ trait EphemeralSingletonCounter {
 }
 
 struct EphemeralSingletonCounterImpl {
-    count: u32
+    count: u32,
 }
 
 #[agent_implementation]
@@ -89,7 +88,6 @@ impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
         self.count
     }
 }
-
 
 #[agent_definition(ephemeral)]
 trait HostFunctionTests {

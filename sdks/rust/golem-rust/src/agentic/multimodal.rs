@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::SchemaValue;
 use crate::agentic::{
-    MultimodalSchema, Schema, StructuredSchema, StructuredValue, UnstructuredBinary,
-    UnstructuredText,
+    MultimodalSchema, Schema, StructuredSchema, UnstructuredBinary, UnstructuredText,
 };
-use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
+use crate::schema::SchemaGraph;
+use crate::schema::VariantValuePayload;
 
 /// Represents Multimodal input data for agent functions.
 /// Note that you cannot mix a multimodal input with other input types
@@ -103,113 +104,137 @@ impl<T: MultimodalSchema> MultimodalAdvanced<T> {
         }
     }
 
-    pub fn get_schema() -> Vec<(String, ElementSchema)> {
+    pub fn get_schema() -> Vec<(String, SchemaGraph)> {
         T::get_multimodal_schema()
     }
 
-    // With Multimodal schema we get name and element schema
-    pub fn to_name_and_element_values(self) -> Result<Vec<(String, ElementValue)>, String> {
+    // With Multimodal schema we get name and schema value
+    pub fn to_name_and_schema_values(self) -> Result<Vec<(String, SchemaValue)>, String> {
         let items = self.items;
 
         let mut elements = Vec::new();
 
         for item in items {
-            let serialized = <T as MultimodalSchema>::to_element_value(item)?;
+            let serialized = <T as MultimodalSchema>::to_schema_value(item)?;
             elements.push(serialized);
         }
 
         Ok(elements)
     }
 
-    pub fn from_data_value(data: DataValue) -> Result<Self, String> {
-        match data {
-            DataValue::Multimodal(elements) => Self::from_element_values(elements),
-            _ => Err("Expected Multimodal DataValue".to_string()),
-        }
-    }
-
-    pub fn from_element_values(
-        elems: Vec<(String, ElementValue)>,
+    pub fn from_schema_values(
+        elems: Vec<(String, SchemaValue)>,
     ) -> Result<MultimodalAdvanced<T>, String> {
         let mut items = Vec::new();
 
-        for elem in elems {
-            let item = <T as MultimodalSchema>::from_element_value(elem)?;
+        for (name, value) in elems {
+            let item = <T as MultimodalSchema>::from_schema_value(name, value)?;
             items.push(item);
         }
 
         Ok(MultimodalAdvanced { items })
     }
 
-    pub fn convert_to_data_value(self) -> Result<DataValue, String> {
-        let mut named_elements = Vec::new();
+    pub fn convert_to_schema_value(self) -> Result<SchemaValue, String> {
+        let schemas = T::get_multimodal_schema();
+        let mut elements = Vec::new();
         for item in self.items {
             let name = <T as MultimodalSchema>::get_name(&item);
-            let element = <T as MultimodalSchema>::to_raw_element_value(item)?;
-            named_elements.push((name, element));
+            let (value_name, element) = <T as MultimodalSchema>::to_schema_value(item)?;
+            if value_name != name {
+                return Err(format!(
+                    "Multimodal item name mismatch: get_name returned '{name}', to_schema_value returned '{value_name}'"
+                ));
+            }
+            let Some(case) = schemas
+                .iter()
+                .position(|(schema_name, _)| schema_name == &name)
+            else {
+                return Err(format!("Unknown multimodal item '{name}'"));
+            };
+            elements.push(SchemaValue::Variant(VariantValuePayload {
+                case: case as u32,
+                payload: Some(Box::new(element)),
+            }));
         }
-        Ok(DataValue::Multimodal(named_elements))
+
+        Ok(SchemaValue::List { elements })
     }
 
-    pub fn convert_from_data_value(value: DataValue) -> Result<Self, String> {
+    pub fn convert_from_schema_value(
+        value: SchemaValue,
+        schemas: Vec<(String, SchemaGraph)>,
+    ) -> Result<Self, String> {
         match value {
-            DataValue::Multimodal(named_elements) => {
+            SchemaValue::List { elements } => {
                 let mut items = Vec::new();
-                for (name, value) in named_elements {
-                    let item = <T as MultimodalSchema>::from_raw_element_value(name, value)?;
+                for value in elements {
+                    let SchemaValue::Variant(VariantValuePayload { case, payload }) = value else {
+                        return Err(format!("Expected multimodal variant item, got {value:?}"));
+                    };
+                    let (name, _) = schemas
+                        .get(case as usize)
+                        .ok_or_else(|| format!("Unknown multimodal case index: {case}"))?;
+                    let payload = payload
+                        .ok_or_else(|| format!("Missing payload for multimodal item '{name}'"))?;
+                    let item = <T as MultimodalSchema>::from_schema_value(name.clone(), *payload)?;
                     items.push(item);
                 }
                 Ok(MultimodalAdvanced { items })
             }
-            _ => Err("Expected Multimodal DataValue".to_string()),
+            other => Err(format!("Expected Multimodal list, got {other:?}")),
         }
     }
 }
 
 impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
     fn get_type() -> StructuredSchema {
-        StructuredSchema::Multimodal(T::get_multimodal_schema())
+        StructuredSchema::Default(crate::agentic::multimodal_schema_graph(
+            &T::get_multimodal_schema(),
+        ))
     }
 
-    fn to_structured_value(self) -> Result<StructuredValue, String> {
-        let data_value = self.to_name_and_element_values()?;
-        Ok(StructuredValue::Multimodal(data_value))
+    fn to_schema_value(self) -> Result<SchemaValue, String> {
+        self.convert_to_schema_value()
     }
 
-    fn from_structured_value(
-        value: StructuredValue,
-        _schema: StructuredSchema,
-    ) -> Result<Self, String>
+    fn from_schema_value(value: SchemaValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
-        match value {
-            StructuredValue::Multimodal(elements) => Self::from_element_values(elements),
-            _ => Err("Expected Multimodal StructuredValue".to_string()),
+        match schema {
+            StructuredSchema::Default(schema) => Self::convert_from_schema_value(
+                value,
+                multimodal_cases_from_schema_graph(&schema)
+                    .ok_or_else(|| "Expected Multimodal schema".to_string())?,
+            ),
+            _ => Err("Expected Multimodal schema".to_string()),
         }
     }
+}
 
-    fn to_element_value(self) -> Result<ElementValue, String> {
-        Err(
-            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
-                .to_string(),
-        )
+fn multimodal_cases_from_schema_graph(schema: &SchemaGraph) -> Option<Vec<(String, SchemaGraph)>> {
+    if schema.root.metadata().role != Some(crate::schema::Role::Multimodal) {
+        return None;
     }
 
-    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
-        Err(
-            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
-                .to_string(),
-        )
-    }
+    let crate::schema::SchemaType::List { element, .. } = &schema.root else {
+        return None;
+    };
+    let crate::schema::SchemaType::Variant { cases, .. } = element.as_ref() else {
+        return None;
+    };
 
-    fn to_data_value(self) -> Result<DataValue, String> {
-        self.convert_to_data_value()
-    }
-
-    fn from_data_value(value: DataValue) -> Result<Self, String> {
-        MultimodalAdvanced::convert_from_data_value(value)
-    }
+    Some(
+        cases
+            .iter()
+            .filter_map(|case| {
+                case.payload
+                    .as_ref()
+                    .map(|payload| (case.name.clone(), SchemaGraph::anonymous(payload.clone())))
+            })
+            .collect(),
+    )
 }
 
 pub struct Multimodal {
@@ -262,42 +287,16 @@ impl Schema for Multimodal {
         MultimodalAdvanced::<BasicModality>::get_type()
     }
 
-    fn to_structured_value(self) -> Result<StructuredValue, String> {
-        self.value.to_structured_value()
+    fn to_schema_value(self) -> Result<SchemaValue, String> {
+        self.value.to_schema_value()
     }
 
-    fn from_structured_value(
-        value: StructuredValue,
-        schema: StructuredSchema,
-    ) -> Result<Self, String>
+    fn from_schema_value(value: SchemaValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
-        let advanced = MultimodalAdvanced::<BasicModality>::from_structured_value(value, schema)?;
+        let advanced = MultimodalAdvanced::<BasicModality>::from_schema_value(value, schema)?;
         Ok(Multimodal { value: advanced })
-    }
-
-    fn to_element_value(self) -> Result<ElementValue, String> {
-        Err(
-            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
-                .to_string(),
-        )
-    }
-
-    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
-        Err(
-            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
-                .to_string(),
-        )
-    }
-
-    fn to_data_value(self) -> Result<DataValue, String> {
-        self.value.convert_to_data_value()
-    }
-
-    fn from_data_value(value: DataValue) -> Result<Self, String> {
-        MultimodalAdvanced::<BasicModality>::convert_from_data_value(value)
-            .map(|v| Multimodal { value: v })
     }
 }
 
@@ -317,19 +316,19 @@ impl BasicModality {
 }
 
 impl MultimodalSchema for BasicModality {
-    fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
+    fn get_multimodal_schema() -> Vec<(String, SchemaGraph)> {
         vec![
             (
                 "Text".to_string(),
                 <UnstructuredText>::get_type()
-                    .get_element_schema()
-                    .expect("internal error: unable to get element schema for UnstructuredText"),
+                    .get_schema_graph()
+                    .expect("internal error: unable to get schema graph for UnstructuredText"),
             ),
             (
                 "Binary".to_string(),
                 UnstructuredBinary::<String>::get_type()
-                    .get_element_schema()
-                    .expect("internal error: unable to get element schema for UnstructuredBinary"),
+                    .get_schema_graph()
+                    .expect("internal error: unable to get schema graph for UnstructuredBinary"),
             ),
         ]
     }
@@ -341,77 +340,31 @@ impl MultimodalSchema for BasicModality {
         }
     }
 
-    fn to_element_value(self) -> Result<(String, ElementValue), String>
+    fn to_schema_value(self) -> Result<(String, SchemaValue), String>
     where
         Self: Sized,
     {
         match self {
-            BasicModality::Text(text) => {
-                let elem_value = text.to_structured_value()?;
-                Ok((
-                    "Text".to_string(),
-                    elem_value
-                        .get_element_value()
-                        .expect("internal error: unable to get element value for Text"),
-                ))
-            }
-            BasicModality::Binary(binary) => {
-                let elem_value = binary.to_structured_value()?;
-                Ok((
-                    "Binary".to_string(),
-                    elem_value
-                        .get_element_value()
-                        .expect("internal error: unable to get element value for Binary"),
-                ))
-            }
+            BasicModality::Text(text) => Ok(("Text".to_string(), text.to_schema_value()?)),
+            BasicModality::Binary(binary) => Ok(("Binary".to_string(), binary.to_schema_value()?)),
         }
     }
 
-    fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let (name, value) = elem;
-
-        match name.as_str() {
-            "Text" => {
-                let schema = <UnstructuredText>::get_type();
-                let text = UnstructuredText::from_structured_value(
-                    StructuredValue::Default(value),
-                    schema,
-                )?;
-                Ok(BasicModality::Text(text))
-            }
-            "Binary" => {
-                let schema = <UnstructuredBinary<String>>::get_type();
-                let binary = UnstructuredBinary::<String>::from_structured_value(
-                    StructuredValue::Default(value),
-                    schema,
-                )?;
-                Ok(BasicModality::Binary(binary))
-            }
-            _ => Err(format!("Unknown modality name: {}", name)),
-        }
-    }
-
-    fn to_raw_element_value(self) -> Result<ElementValue, String> {
-        match self {
-            BasicModality::Text(text) => Schema::to_element_value(text),
-            BasicModality::Binary(binary) => Schema::to_element_value(binary),
-        }
-    }
-
-    fn from_raw_element_value(name: String, value: ElementValue) -> Result<Self, String>
+    fn from_schema_value(name: String, value: SchemaValue) -> Result<Self, String>
     where
         Self: Sized,
     {
         match name.as_str() {
             "Text" => {
-                let text = UnstructuredText::from_element_value(value)?;
+                let text =
+                    UnstructuredText::from_schema_value(value, <UnstructuredText>::get_type())?;
                 Ok(BasicModality::Text(text))
             }
             "Binary" => {
-                let binary = UnstructuredBinary::<String>::from_element_value(value)?;
+                let binary = UnstructuredBinary::<String>::from_schema_value(
+                    value,
+                    <UnstructuredBinary<String>>::get_type(),
+                )?;
                 Ok(BasicModality::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),
@@ -429,11 +382,10 @@ impl<T: Schema> MultimodalCustom<T> {
     /// # Example
     /// ```ignore
     /// use golem_rust::agentic::*;
-    /// use golem_rust::MultimodalSchema;
-    /// use golem_rust::Schema;
+    /// use golem_rust::{FromSchema, IntoSchema, MultimodalSchema};
     ///
     /// // Define a custom type
-    /// #[derive(Schema)]
+    /// #[derive(IntoSchema, FromSchema)]
     /// struct MyCustomType {
     ///   x: String,
     ///   y: i32,
@@ -473,44 +425,17 @@ impl<T: Schema> Schema for MultimodalCustom<T> {
         MultimodalAdvanced::<CustomModality<T>>::get_type()
     }
 
-    fn to_structured_value(self) -> Result<StructuredValue, String> {
-        self.value.to_structured_value()
+    fn to_schema_value(self) -> Result<SchemaValue, String> {
+        self.value.to_schema_value()
     }
 
-    fn from_structured_value(
-        value: StructuredValue,
-        schema: StructuredSchema,
-    ) -> Result<Self, String>
+    fn from_schema_value(value: SchemaValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
-        let advanced =
-            MultimodalAdvanced::<CustomModality<T>>::from_structured_value(value, schema)?;
+        let advanced = MultimodalAdvanced::<CustomModality<T>>::from_schema_value(value, schema)?;
 
         Ok(MultimodalCustom { value: advanced })
-    }
-
-    fn to_element_value(self) -> Result<ElementValue, String> {
-        Err(
-            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
-                .to_string(),
-        )
-    }
-
-    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
-        Err(
-            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
-                .to_string(),
-        )
-    }
-
-    fn to_data_value(self) -> Result<DataValue, String> {
-        self.value.convert_to_data_value()
-    }
-
-    fn from_data_value(value: DataValue) -> Result<Self, String> {
-        MultimodalAdvanced::<CustomModality<T>>::convert_from_data_value(value)
-            .map(|v| MultimodalCustom { value: v })
     }
 }
 
@@ -534,14 +459,14 @@ impl<T: Schema> CustomModality<T> {
 }
 
 impl<T: Schema> MultimodalSchema for CustomModality<T> {
-    fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
+    fn get_multimodal_schema() -> Vec<(String, SchemaGraph)> {
         let mut schema = BasicModality::get_multimodal_schema();
 
         schema.push((
             "Custom".to_string(),
             T::get_type()
-                .get_element_schema()
-                .expect("internal error: unable to get element schema for Custom modality"),
+                .get_schema_graph()
+                .expect("internal error: unable to get schema graph for Custom modality"),
         ));
         schema
     }
@@ -553,64 +478,27 @@ impl<T: Schema> MultimodalSchema for CustomModality<T> {
         }
     }
 
-    fn to_element_value(self) -> Result<(String, ElementValue), String>
+    fn to_schema_value(self) -> Result<(String, SchemaValue), String>
     where
         Self: Sized,
     {
         match self {
-            CustomModality::Basic(basic) => basic.to_element_value(),
-            CustomModality::Custom(custom) => {
-                let elem_value = custom.to_structured_value()?;
-                Ok((
-                    "Custom".to_string(),
-                    elem_value
-                        .get_element_value()
-                        .expect("internal error: unable to get element value for Custom modality"),
-                ))
-            }
+            CustomModality::Basic(basic) => basic.to_schema_value(),
+            CustomModality::Custom(custom) => Ok(("Custom".to_string(), custom.to_schema_value()?)),
         }
     }
 
-    fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let (name, value) = elem;
-
-        match name.as_str() {
-            "Text" | "Binary" => {
-                let basic = BasicModality::from_element_value((name, value))?;
-                Ok(CustomModality::Basic(basic))
-            }
-            "Custom" => {
-                let schema = T::get_type();
-                let custom = T::from_structured_value(StructuredValue::Default(value), schema)?;
-                Ok(CustomModality::Custom(custom))
-            }
-            _ => Err(format!("Unknown modality name: {}", name)),
-        }
-    }
-
-    fn to_raw_element_value(self) -> Result<ElementValue, String> {
-        match self {
-            CustomModality::Basic(basic) => {
-                <BasicModality as MultimodalSchema>::to_raw_element_value(basic)
-            }
-            CustomModality::Custom(custom) => Schema::to_element_value(custom),
-        }
-    }
-
-    fn from_raw_element_value(name: String, value: ElementValue) -> Result<Self, String>
+    fn from_schema_value(name: String, value: SchemaValue) -> Result<Self, String>
     where
         Self: Sized,
     {
         match name.as_str() {
             "Text" | "Binary" => {
-                let basic = BasicModality::from_raw_element_value(name, value)?;
+                let basic = BasicModality::from_schema_value(name, value)?;
                 Ok(CustomModality::Basic(basic))
             }
             "Custom" => {
-                let custom = T::from_element_value(value)?;
+                let custom = T::from_schema_value(value, T::get_type())?;
                 Ok(CustomModality::Custom(custom))
             }
             _ => Err(format!("Unknown modality name: {}", name)),

@@ -578,8 +578,8 @@ enum LoweredCall {
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: golem_wasm::ComponentId,
-        agent_id: golem_wasm::AgentId,
+        component_id: core_wire::ComponentId,
+        agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
@@ -671,8 +671,8 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let component_id: golem_wasm::ComponentId = metadata.agent_id.component_id.into();
-            let agent_id: golem_wasm::AgentId = metadata.agent_id.clone().into();
+            let component_id: core_wire::ComponentId = metadata.agent_id.component_id.into();
+            let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),
             };

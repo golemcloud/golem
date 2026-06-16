@@ -647,20 +647,16 @@ impl TryFrom<PersistedDurableFunctionInvocation>
     type Error = anyhow::Error;
 
     fn try_from(value: PersistedDurableFunctionInvocation) -> Result<Self, Self::Error> {
-        let response = golem_common::schema::adapters::value::typed_schema_value_to_value_and_type(
-            &value.response.into_typed_schema_value().map_err(|e| {
-                anyhow::anyhow!("Failed to render persisted durable function response: {e}")
-            })?,
-        )
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to convert persisted durable function response to value-and-type: {e}"
-            )
+        let response = value.response.into_typed_schema_value().map_err(|e| {
+            anyhow::anyhow!("Failed to render persisted durable function response: {e}")
+        })?;
+        let response = golem_common::schema::wit::encode_typed(&response).map_err(|e| {
+            anyhow::anyhow!("Failed to encode persisted durable function response: {e}")
         })?;
         Ok(durability::PersistedDurableFunctionInvocation {
             timestamp: value.timestamp.into(),
             function_name: value.function_name,
-            response: response.into(),
+            response,
             function_type: value.function_type.into(),
             entry_version: value.oplog_entry_version.into(),
         })
@@ -774,26 +770,16 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn persist_durable_function_invocation(
         &mut self,
         function_name: String,
-        request: durability::ValueAndType,
-        response: durability::ValueAndType,
+        request: golem_common::schema::wit::wire::TypedSchemaValue,
+        response: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
-        let request_vat: golem_wasm::ValueAndType = request.into();
-        let response_vat: golem_wasm::ValueAndType = response.into();
-        let request_typed =
-            golem_common::schema::adapters::value::value_and_type_to_typed_schema_value(
-                &request_vat,
-            )
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to convert durable function request to schema value: {e}")
-            })?;
-        let response_typed =
-            golem_common::schema::adapters::value::value_and_type_to_typed_schema_value(
-                &response_vat,
-            )
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to convert durable function response to schema value: {e}")
-            })?;
+        let request_typed = golem_common::schema::wit::decode_typed(&request).map_err(|e| {
+            anyhow::anyhow!("Failed to decode durable function request schema value: {e}")
+        })?;
+        let response_typed = golem_common::schema::wit::decode_typed(&response).map_err(|e| {
+            anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
+        })?;
         DurabilityHost::persist_durable_function_invocation(
             self,
             HostFunctionName::Custom(function_name),

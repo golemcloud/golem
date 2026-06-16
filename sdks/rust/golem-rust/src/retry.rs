@@ -1,7 +1,10 @@
 use crate::bindings::golem::api::retry as retry_api;
 
 pub use builder::{NamedPolicy, Policy, Predicate, Props, RetryBuilderError, Value};
-pub use retry_api::{NamedRetryPolicy, PredicateValue, RetryPolicy, RetryPredicate};
+pub use retry_api::{
+    CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, PredicateValue, RetryPolicy,
+    RetryPredicate,
+};
 
 /// Get all retry policies active for this agent.
 pub fn get_retry_policies() -> Vec<NamedRetryPolicy> {
