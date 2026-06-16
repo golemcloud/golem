@@ -37,7 +37,7 @@ pub struct AgentStreamEvent {
 }
 
 impl CliOutput for AgentStreamEvent {
-    const KIND: &'static str = "agent.stream.event";
+    const KIND: &'static str = "agent.stream";
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

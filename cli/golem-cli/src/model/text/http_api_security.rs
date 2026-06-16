@@ -35,7 +35,7 @@ impl MessageWithFields for HttpSecuritySchemeCreateView {
 }
 
 impl CliOutput for HttpSecuritySchemeCreateView {
-    const KIND: &'static str = "api.security-scheme.create.result";
+    const KIND: &'static str = "api.security-scheme.create";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +55,7 @@ impl MessageWithFields for HttpSecuritySchemeGetView {
 }
 
 impl CliOutput for HttpSecuritySchemeGetView {
-    const KIND: &'static str = "api.security-scheme.get.result";
+    const KIND: &'static str = "api.security-scheme.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +75,7 @@ impl MessageWithFields for HttpSecuritySchemeUpdateView {
 }
 
 impl CliOutput for HttpSecuritySchemeUpdateView {
-    const KIND: &'static str = "api.security-scheme.update.result";
+    const KIND: &'static str = "api.security-scheme.update";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +95,7 @@ impl MessageWithFields for HttpSecuritySchemeDeleteView {
 }
 
 impl CliOutput for HttpSecuritySchemeDeleteView {
-    const KIND: &'static str = "api.security-scheme.delete.result";
+    const KIND: &'static str = "api.security-scheme.delete";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +105,7 @@ pub struct HttpSecuritySchemeListView {
 }
 
 impl CliOutput for HttpSecuritySchemeListView {
-    const KIND: &'static str = "api.security-scheme.list.result";
+    const KIND: &'static str = "api.security-scheme.list";
 }
 
 fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {

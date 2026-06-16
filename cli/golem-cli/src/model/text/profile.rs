@@ -29,7 +29,7 @@ pub struct ProfileListView {
 }
 
 impl CliOutput for ProfileListView {
-    const KIND: &'static str = "profile.list.result";
+    const KIND: &'static str = "profile.list";
 }
 
 impl TextView for ProfileListView {
@@ -87,7 +87,7 @@ impl MessageWithFields for ProfileView {
 }
 
 impl CliOutput for ProfileView {
-    const KIND: &'static str = "profile.get.result";
+    const KIND: &'static str = "profile.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ impl TextView for ProfileCreateResult {
 }
 
 impl CliOutput for ProfileCreateResult {
-    const KIND: &'static str = "profile.new.result";
+    const KIND: &'static str = "profile.new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,7 +118,7 @@ impl TextView for ProfileSwitchResult {
 }
 
 impl CliOutput for ProfileSwitchResult {
-    const KIND: &'static str = "profile.switch.result";
+    const KIND: &'static str = "profile.switch";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +133,7 @@ impl TextView for ProfileDeleteResult {
 }
 
 impl CliOutput for ProfileDeleteResult {
-    const KIND: &'static str = "profile.delete.result";
+    const KIND: &'static str = "profile.delete";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,7 +149,7 @@ impl TextView for ProfileConfigSetFormatResult {
 }
 
 impl CliOutput for ProfileConfigSetFormatResult {
-    const KIND: &'static str = "profile.config.set-format.result";
+    const KIND: &'static str = "profile.config.set-format";
 }
 
 impl TextView for ProfileConfig {

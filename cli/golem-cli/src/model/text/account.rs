@@ -47,7 +47,7 @@ impl MessageWithFields for AccountGetView {
 }
 
 impl CliOutput for AccountGetView {
-    const KIND: &'static str = "account.get.result";
+    const KIND: &'static str = "account.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl MessageWithFields for AccountNewView {
 }
 
 impl CliOutput for AccountNewView {
-    const KIND: &'static str = "account.new.result";
+    const KIND: &'static str = "account.new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ impl MessageWithFields for AccountUpdateView {
 }
 
 impl CliOutput for AccountUpdateView {
-    const KIND: &'static str = "account.update.result";
+    const KIND: &'static str = "account.update";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +99,7 @@ impl TextView for AccountDeleteResult {
 }
 
 impl CliOutput for AccountDeleteResult {
-    const KIND: &'static str = "account.delete.result";
+    const KIND: &'static str = "account.delete";
 }
 
 fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
@@ -146,7 +146,7 @@ impl MessageWithFields for PermissionShareGetView {
 }
 
 impl CliOutput for PermissionShareGetView {
-    const KIND: &'static str = "account.permission-share.get.result";
+    const KIND: &'static str = "account.permission-share.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +166,7 @@ impl MessageWithFields for PermissionShareNewView {
 }
 
 impl CliOutput for PermissionShareNewView {
-    const KIND: &'static str = "account.permission-share.new.result";
+    const KIND: &'static str = "account.permission-share.new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,7 +186,7 @@ impl MessageWithFields for PermissionShareUpdateView {
 }
 
 impl CliOutput for PermissionShareUpdateView {
-    const KIND: &'static str = "account.permission-share.update.result";
+    const KIND: &'static str = "account.permission-share.update";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,7 +201,7 @@ impl TextView for PermissionShareDeleteResult {
 }
 
 impl CliOutput for PermissionShareDeleteResult {
-    const KIND: &'static str = "account.permission-share.delete.result";
+    const KIND: &'static str = "account.permission-share.delete";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,7 +235,7 @@ impl TextView for PermissionShareListView {
 }
 
 impl CliOutput for PermissionShareListView {
-    const KIND: &'static str = "account.permission-share.list.result";
+    const KIND: &'static str = "account.permission-share.list";
 }
 
 // TODO: atomic

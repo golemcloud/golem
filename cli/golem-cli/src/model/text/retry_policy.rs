@@ -34,7 +34,7 @@ impl MessageWithFields for RetryPolicyCreateView {
 }
 
 impl CliOutput for RetryPolicyCreateView {
-    const KIND: &'static str = "retry-policy.create.result";
+    const KIND: &'static str = "retry-policy.create";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,7 +51,7 @@ impl MessageWithFields for RetryPolicyGetView {
 }
 
 impl CliOutput for RetryPolicyGetView {
-    const KIND: &'static str = "retry-policy.get.result";
+    const KIND: &'static str = "retry-policy.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ impl MessageWithFields for RetryPolicyUpdateView {
 }
 
 impl CliOutput for RetryPolicyUpdateView {
-    const KIND: &'static str = "retry-policy.update.result";
+    const KIND: &'static str = "retry-policy.update";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +91,7 @@ impl MessageWithFields for RetryPolicyDeleteView {
 }
 
 impl CliOutput for RetryPolicyDeleteView {
-    const KIND: &'static str = "retry-policy.delete.result";
+    const KIND: &'static str = "retry-policy.delete";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +101,7 @@ pub struct RetryPolicyListView {
 }
 
 impl CliOutput for RetryPolicyListView {
-    const KIND: &'static str = "retry-policy.list.result";
+    const KIND: &'static str = "retry-policy.list";
 }
 
 fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {

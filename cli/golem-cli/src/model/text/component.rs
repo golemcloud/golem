@@ -27,7 +27,7 @@ pub struct ComponentListView {
 }
 
 impl CliOutput for ComponentListView {
-    const KIND: &'static str = "component.list.result";
+    const KIND: &'static str = "component.list";
 }
 
 impl TextView for ComponentListView {
@@ -147,7 +147,7 @@ impl MessageWithFields for ComponentGetView {
 }
 
 impl CliOutput for ComponentGetView {
-    const KIND: &'static str = "component.get.result";
+    const KIND: &'static str = "component.get";
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,7 +158,7 @@ pub struct ComponentManifestTraceView {
 }
 
 impl CliOutput for ComponentManifestTraceView {
-    const KIND: &'static str = "component.manifest-trace.result";
+    const KIND: &'static str = "component.manifest-trace";
 }
 
 impl TextView for ComponentManifestTraceView {

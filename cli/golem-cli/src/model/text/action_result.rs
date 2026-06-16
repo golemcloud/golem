@@ -40,7 +40,7 @@ impl TextView for AgentDeleteResult {
 }
 
 impl CliOutput for AgentDeleteResult {
-    const KIND: &'static str = "agent.delete.result";
+    const KIND: &'static str = "agent.delete";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ impl TextView for AgentRevertResult {
 }
 
 impl CliOutput for AgentRevertResult {
-    const KIND: &'static str = "agent.revert.result";
+    const KIND: &'static str = "agent.revert";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +75,7 @@ impl TextView for AgentCancelInvocationResult {
 }
 
 impl CliOutput for AgentCancelInvocationResult {
-    const KIND: &'static str = "agent.cancel-invocation.result";
+    const KIND: &'static str = "agent.cancel-invocation";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,7 +90,7 @@ impl TextView for AgentRedeployResult {
 }
 
 impl CliOutput for AgentRedeployResult {
-    const KIND: &'static str = "agent.redeploy.result";
+    const KIND: &'static str = "agent.redeploy";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,7 +107,7 @@ impl TextView for AgentPluginToggleResult {
 }
 
 impl CliOutput for AgentPluginToggleResult {
-    const KIND: &'static str = "agent.plugin-toggle.result";
+    const KIND: &'static str = "agent.plugin-toggle";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +121,7 @@ impl TextView for CleanResult {
 }
 
 impl CliOutput for CleanResult {
-    const KIND: &'static str = "app.clean.result";
+    const KIND: &'static str = "app.clean";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +135,7 @@ impl TextView for BuildResult {
 }
 
 impl CliOutput for BuildResult {
-    const KIND: &'static str = "app.build.result";
+    const KIND: &'static str = "app.build";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,7 +151,7 @@ impl TextView for NewAppResult {
 }
 
 impl CliOutput for NewAppResult {
-    const KIND: &'static str = "app.new.result";
+    const KIND: &'static str = "app.new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,7 +165,7 @@ impl TextView for DeployResultView {
 }
 
 impl CliOutput for DeployResultView {
-    const KIND: &'static str = "app.deploy.result";
+    const KIND: &'static str = "app.deploy";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,5 +179,5 @@ impl TextView for GenerateBridgeResult {
 }
 
 impl CliOutput for GenerateBridgeResult {
-    const KIND: &'static str = "app.generate-bridge.result";
+    const KIND: &'static str = "app.generate-bridge";
 }

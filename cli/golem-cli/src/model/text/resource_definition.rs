@@ -34,7 +34,7 @@ impl MessageWithFields for ResourceDefinitionCreateView {
 }
 
 impl CliOutput for ResourceDefinitionCreateView {
-    const KIND: &'static str = "resource.create.result";
+    const KIND: &'static str = "resource.create";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +54,7 @@ impl MessageWithFields for ResourceDefinitionUpdateView {
 }
 
 impl CliOutput for ResourceDefinitionUpdateView {
-    const KIND: &'static str = "resource.update.result";
+    const KIND: &'static str = "resource.update";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +74,7 @@ impl MessageWithFields for ResourceDefinitionDeleteView {
 }
 
 impl CliOutput for ResourceDefinitionDeleteView {
-    const KIND: &'static str = "resource.delete.result";
+    const KIND: &'static str = "resource.delete";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +94,7 @@ impl MessageWithFields for ResourceDefinitionGetView {
 }
 
 impl CliOutput for ResourceDefinitionGetView {
-    const KIND: &'static str = "resource.get.result";
+    const KIND: &'static str = "resource.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,7 +104,7 @@ pub struct ResourceDefinitionListView {
 }
 
 impl CliOutput for ResourceDefinitionListView {
-    const KIND: &'static str = "resource.list.result";
+    const KIND: &'static str = "resource.list";
 }
 
 fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {

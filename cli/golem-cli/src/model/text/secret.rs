@@ -42,7 +42,7 @@ impl MessageWithFields for SecretCreateView {
 }
 
 impl CliOutput for SecretCreateView {
-    const KIND: &'static str = "secret.create.result";
+    const KIND: &'static str = "secret.create";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl MessageWithFields for SecretGetView {
 }
 
 impl CliOutput for SecretGetView {
-    const KIND: &'static str = "secret.get.result";
+    const KIND: &'static str = "secret.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ impl MessageWithFields for SecretUpdateView {
 }
 
 impl CliOutput for SecretUpdateView {
-    const KIND: &'static str = "secret.update-value.result";
+    const KIND: &'static str = "secret.update-value";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +114,7 @@ impl MessageWithFields for SecretDeleteView {
 }
 
 impl CliOutput for SecretDeleteView {
-    const KIND: &'static str = "secret.delete.result";
+    const KIND: &'static str = "secret.delete";
 }
 
 fn secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(String, String)> {
@@ -234,7 +234,7 @@ impl TextView for SecretListView {
 }
 
 impl CliOutput for SecretListView {
-    const KIND: &'static str = "secret.list.result";
+    const KIND: &'static str = "secret.list";
 }
 
 #[cfg(test)]

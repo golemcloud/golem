@@ -60,7 +60,7 @@ impl MessageWithFields for DeploymentNewView {
 }
 
 impl CliOutput for DeploymentNewView {
-    const KIND: &'static str = "deployment.create.result";
+    const KIND: &'static str = "deployment.create";
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ pub struct DeploymentListView {
 }
 
 impl CliOutput for DeploymentListView {
-    const KIND: &'static str = "deployment.list.result";
+    const KIND: &'static str = "deployment.list";
 }
 
 impl TextView for DeploymentListView {

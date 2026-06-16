@@ -41,7 +41,7 @@ impl MessageWithFields for AgentTypeView {
 }
 
 impl CliOutput for AgentTypeView {
-    const KIND: &'static str = "agent-type.get.result";
+    const KIND: &'static str = "agent-type.get";
 }
 
 impl From<&DeployedRegisteredAgentType> for AgentTypeView {
@@ -57,7 +57,7 @@ pub struct AgentTypeListView {
 }
 
 impl CliOutput for AgentTypeListView {
-    const KIND: &'static str = "agent-type.list.result";
+    const KIND: &'static str = "agent-type.list";
 }
 
 impl TextView for AgentTypeListView {

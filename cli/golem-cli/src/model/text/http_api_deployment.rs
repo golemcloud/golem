@@ -37,7 +37,7 @@ impl MessageWithFields for HttpApiDeploymentGetView {
 }
 
 impl CliOutput for HttpApiDeploymentGetView {
-    const KIND: &'static str = "api.deployment.get.result";
+    const KIND: &'static str = "api.deployment.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ pub struct HttpApiDeploymentListView {
 }
 
 impl CliOutput for HttpApiDeploymentListView {
-    const KIND: &'static str = "api.deployment.list.result";
+    const KIND: &'static str = "api.deployment.list";
 }
 
 fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> {

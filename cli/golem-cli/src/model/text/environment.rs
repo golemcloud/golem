@@ -71,7 +71,7 @@ pub struct EnvironmentListView {
 }
 
 impl CliOutput for EnvironmentListView {
-    const KIND: &'static str = "environment.list.result";
+    const KIND: &'static str = "environment.list";
 }
 
 impl TextView for EnvironmentListView {

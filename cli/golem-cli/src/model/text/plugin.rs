@@ -58,7 +58,7 @@ pub struct PluginListView {
 }
 
 impl CliOutput for PluginListView {
-    const KIND: &'static str = "plugin.list.result";
+    const KIND: &'static str = "plugin.list";
 }
 
 impl TextView for PluginListView {
@@ -125,7 +125,7 @@ impl MessageWithFields for PluginRegistrationRegisterView {
 }
 
 impl CliOutput for PluginRegistrationRegisterView {
-    const KIND: &'static str = "plugin.register.result";
+    const KIND: &'static str = "plugin.register";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,7 +146,7 @@ impl MessageWithFields for PluginRegistrationGetView {
 }
 
 impl CliOutput for PluginRegistrationGetView {
-    const KIND: &'static str = "plugin.get.result";
+    const KIND: &'static str = "plugin.get";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,7 +163,7 @@ impl TextView for PluginUnregisterResult {
 }
 
 impl CliOutput for PluginUnregisterResult {
-    const KIND: &'static str = "plugin.unregister.result";
+    const KIND: &'static str = "plugin.unregister";
 }
 
 fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, String)> {

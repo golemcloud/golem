@@ -4,239 +4,239 @@
   "description": "Structured output documents emitted by golem-cli data output formats. Every document is identified by its top-level $type field.",
   "oneOf": [
     {
-      "$ref": "#/definitions/account.delete.result"
+      "$ref": "#/definitions/account.delete"
     },
     {
-      "$ref": "#/definitions/account.get.result"
+      "$ref": "#/definitions/account.get"
     },
     {
-      "$ref": "#/definitions/account.new.result"
+      "$ref": "#/definitions/account.new"
     },
     {
-      "$ref": "#/definitions/account.permission-share.delete.result"
+      "$ref": "#/definitions/account.permission-share.delete"
     },
     {
-      "$ref": "#/definitions/account.permission-share.get.result"
+      "$ref": "#/definitions/account.permission-share.get"
     },
     {
-      "$ref": "#/definitions/account.permission-share.list.result"
+      "$ref": "#/definitions/account.permission-share.list"
     },
     {
-      "$ref": "#/definitions/account.permission-share.new.result"
+      "$ref": "#/definitions/account.permission-share.new"
     },
     {
-      "$ref": "#/definitions/account.permission-share.update.result"
+      "$ref": "#/definitions/account.permission-share.update"
     },
     {
-      "$ref": "#/definitions/account.update.result"
+      "$ref": "#/definitions/account.update"
     },
     {
-      "$ref": "#/definitions/agent-type.get.result"
+      "$ref": "#/definitions/agent-type.get"
     },
     {
-      "$ref": "#/definitions/agent-type.list.result"
+      "$ref": "#/definitions/agent-type.list"
     },
     {
-      "$ref": "#/definitions/agent.cancel-invocation.result"
+      "$ref": "#/definitions/agent.cancel-invocation"
     },
     {
-      "$ref": "#/definitions/agent.delete.result"
+      "$ref": "#/definitions/agent.delete"
     },
     {
-      "$ref": "#/definitions/agent.files.result"
+      "$ref": "#/definitions/agent.files"
     },
     {
-      "$ref": "#/definitions/agent.get.result"
+      "$ref": "#/definitions/agent.get"
     },
     {
-      "$ref": "#/definitions/agent.invoke.result"
+      "$ref": "#/definitions/agent.invoke"
     },
     {
-      "$ref": "#/definitions/agent.list.result"
+      "$ref": "#/definitions/agent.list"
     },
     {
-      "$ref": "#/definitions/agent.new.result"
+      "$ref": "#/definitions/agent.new"
     },
     {
-      "$ref": "#/definitions/agent.oplog.result"
+      "$ref": "#/definitions/agent.oplog"
     },
     {
-      "$ref": "#/definitions/agent.plugin-toggle.result"
+      "$ref": "#/definitions/agent.plugin-toggle"
     },
     {
-      "$ref": "#/definitions/agent.redeploy.result"
+      "$ref": "#/definitions/agent.redeploy"
     },
     {
-      "$ref": "#/definitions/agent.revert.result"
+      "$ref": "#/definitions/agent.revert"
     },
     {
-      "$ref": "#/definitions/agent.stream.event"
+      "$ref": "#/definitions/agent.stream"
     },
     {
-      "$ref": "#/definitions/agent.update.result"
+      "$ref": "#/definitions/agent.update"
     },
     {
-      "$ref": "#/definitions/api-token.delete.result"
+      "$ref": "#/definitions/api-token.delete"
     },
     {
-      "$ref": "#/definitions/api-token.list.result"
+      "$ref": "#/definitions/api-token.list"
     },
     {
-      "$ref": "#/definitions/api-token.new.result"
+      "$ref": "#/definitions/api-token.new"
     },
     {
-      "$ref": "#/definitions/api.deployment.get.result"
+      "$ref": "#/definitions/api.deployment.get"
     },
     {
-      "$ref": "#/definitions/api.deployment.list.result"
+      "$ref": "#/definitions/api.deployment.list"
     },
     {
-      "$ref": "#/definitions/api.domain.delete.result"
+      "$ref": "#/definitions/api.domain.delete"
     },
     {
-      "$ref": "#/definitions/api.domain.list.result"
+      "$ref": "#/definitions/api.domain.list"
     },
     {
-      "$ref": "#/definitions/api.domain.register.result"
+      "$ref": "#/definitions/api.domain.register"
     },
     {
-      "$ref": "#/definitions/api.security-scheme.create.result"
+      "$ref": "#/definitions/api.security-scheme.create"
     },
     {
-      "$ref": "#/definitions/api.security-scheme.delete.result"
+      "$ref": "#/definitions/api.security-scheme.delete"
     },
     {
-      "$ref": "#/definitions/api.security-scheme.get.result"
+      "$ref": "#/definitions/api.security-scheme.get"
     },
     {
-      "$ref": "#/definitions/api.security-scheme.list.result"
+      "$ref": "#/definitions/api.security-scheme.list"
     },
     {
-      "$ref": "#/definitions/api.security-scheme.update.result"
+      "$ref": "#/definitions/api.security-scheme.update"
     },
     {
-      "$ref": "#/definitions/app.build.result"
+      "$ref": "#/definitions/app.build"
     },
     {
-      "$ref": "#/definitions/app.clean.result"
+      "$ref": "#/definitions/app.clean"
     },
     {
-      "$ref": "#/definitions/app.deploy-plan.result"
+      "$ref": "#/definitions/app.deploy-plan"
     },
     {
-      "$ref": "#/definitions/app.deploy.result"
+      "$ref": "#/definitions/app.deploy"
     },
     {
-      "$ref": "#/definitions/app.generate-bridge.result"
+      "$ref": "#/definitions/app.generate-bridge"
     },
     {
-      "$ref": "#/definitions/app.new.result"
+      "$ref": "#/definitions/app.new"
     },
     {
-      "$ref": "#/definitions/app.templates.result"
+      "$ref": "#/definitions/app.templates"
     },
     {
-      "$ref": "#/definitions/component.get.result"
+      "$ref": "#/definitions/component.get"
     },
     {
-      "$ref": "#/definitions/component.list.result"
+      "$ref": "#/definitions/component.list"
     },
     {
-      "$ref": "#/definitions/component.manifest-trace.result"
+      "$ref": "#/definitions/component.manifest-trace"
     },
     {
-      "$ref": "#/definitions/deployment.create.result"
+      "$ref": "#/definitions/deployment.create"
     },
     {
-      "$ref": "#/definitions/deployment.diff.result"
+      "$ref": "#/definitions/deployment.diff"
     },
     {
-      "$ref": "#/definitions/deployment.list.result"
+      "$ref": "#/definitions/deployment.list"
     },
     {
-      "$ref": "#/definitions/environment.list.result"
+      "$ref": "#/definitions/environment.list"
     },
     {
-      "$ref": "#/definitions/environment.setup-plan.result"
+      "$ref": "#/definitions/environment.setup-plan"
     },
     {
-      "$ref": "#/definitions/plugin.get.result"
+      "$ref": "#/definitions/plugin.get"
     },
     {
-      "$ref": "#/definitions/plugin.list.result"
+      "$ref": "#/definitions/plugin.list"
     },
     {
-      "$ref": "#/definitions/plugin.register.result"
+      "$ref": "#/definitions/plugin.register"
     },
     {
-      "$ref": "#/definitions/plugin.unregister.result"
+      "$ref": "#/definitions/plugin.unregister"
     },
     {
-      "$ref": "#/definitions/profile.config.set-format.result"
+      "$ref": "#/definitions/profile.config.set-format"
     },
     {
-      "$ref": "#/definitions/profile.delete.result"
+      "$ref": "#/definitions/profile.delete"
     },
     {
-      "$ref": "#/definitions/profile.get.result"
+      "$ref": "#/definitions/profile.get"
     },
     {
-      "$ref": "#/definitions/profile.list.result"
+      "$ref": "#/definitions/profile.list"
     },
     {
-      "$ref": "#/definitions/profile.new.result"
+      "$ref": "#/definitions/profile.new"
     },
     {
-      "$ref": "#/definitions/profile.switch.result"
+      "$ref": "#/definitions/profile.switch"
     },
     {
-      "$ref": "#/definitions/resource.create.result"
+      "$ref": "#/definitions/resource.create"
     },
     {
-      "$ref": "#/definitions/resource.delete.result"
+      "$ref": "#/definitions/resource.delete"
     },
     {
-      "$ref": "#/definitions/resource.get.result"
+      "$ref": "#/definitions/resource.get"
     },
     {
-      "$ref": "#/definitions/resource.list.result"
+      "$ref": "#/definitions/resource.list"
     },
     {
-      "$ref": "#/definitions/resource.update.result"
+      "$ref": "#/definitions/resource.update"
     },
     {
-      "$ref": "#/definitions/retry-policy.create.result"
+      "$ref": "#/definitions/retry-policy.create"
     },
     {
-      "$ref": "#/definitions/retry-policy.delete.result"
+      "$ref": "#/definitions/retry-policy.delete"
     },
     {
-      "$ref": "#/definitions/retry-policy.get.result"
+      "$ref": "#/definitions/retry-policy.get"
     },
     {
-      "$ref": "#/definitions/retry-policy.list.result"
+      "$ref": "#/definitions/retry-policy.list"
     },
     {
-      "$ref": "#/definitions/retry-policy.update.result"
+      "$ref": "#/definitions/retry-policy.update"
     },
     {
-      "$ref": "#/definitions/secret.create.result"
+      "$ref": "#/definitions/secret.create"
     },
     {
-      "$ref": "#/definitions/secret.delete.result"
+      "$ref": "#/definitions/secret.delete"
     },
     {
-      "$ref": "#/definitions/secret.get.result"
+      "$ref": "#/definitions/secret.get"
     },
     {
-      "$ref": "#/definitions/secret.list.result"
+      "$ref": "#/definitions/secret.list"
     },
     {
-      "$ref": "#/definitions/secret.update-value.result"
+      "$ref": "#/definitions/secret.update-value"
     }
   ],
   "definitions": {
-    "account.delete.result": {
+    "account.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -245,7 +245,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.delete.result"
+          "const": "account.delete"
         },
         "deleted": {
           "type": "boolean"
@@ -256,7 +256,7 @@
       },
       "additionalProperties": false
     },
-    "account.get.result": {
+    "account.get": {
       "type": "object",
       "required": [
         "$type",
@@ -270,7 +270,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.get.result"
+          "const": "account.get"
         },
         "id": {
           "type": "string"
@@ -300,7 +300,7 @@
       },
       "additionalProperties": false
     },
-    "account.new.result": {
+    "account.new": {
       "type": "object",
       "required": [
         "$type",
@@ -314,7 +314,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.new.result"
+          "const": "account.new"
         },
         "id": {
           "type": "string"
@@ -344,7 +344,7 @@
       },
       "additionalProperties": false
     },
-    "account.permission-share.delete.result": {
+    "account.permission-share.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -353,7 +353,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.permission-share.delete.result"
+          "const": "account.permission-share.delete"
         },
         "deleted": {
           "type": "boolean"
@@ -364,7 +364,7 @@
       },
       "additionalProperties": false
     },
-    "account.permission-share.get.result": {
+    "account.permission-share.get": {
       "type": "object",
       "required": [
         "$type",
@@ -377,7 +377,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.permission-share.get.result"
+          "const": "account.permission-share.get"
         },
         "id": {
           "type": "string"
@@ -404,7 +404,7 @@
       },
       "additionalProperties": false
     },
-    "account.permission-share.list.result": {
+    "account.permission-share.list": {
       "type": "object",
       "required": [
         "$type",
@@ -412,7 +412,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.permission-share.list.result"
+          "const": "account.permission-share.list"
         },
         "permissionShares": {
           "type": "array",
@@ -423,7 +423,7 @@
       },
       "additionalProperties": false
     },
-    "account.permission-share.new.result": {
+    "account.permission-share.new": {
       "type": "object",
       "required": [
         "$type",
@@ -436,7 +436,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.permission-share.new.result"
+          "const": "account.permission-share.new"
         },
         "id": {
           "type": "string"
@@ -463,7 +463,7 @@
       },
       "additionalProperties": false
     },
-    "account.permission-share.update.result": {
+    "account.permission-share.update": {
       "type": "object",
       "required": [
         "$type",
@@ -476,7 +476,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.permission-share.update.result"
+          "const": "account.permission-share.update"
         },
         "id": {
           "type": "string"
@@ -503,7 +503,7 @@
       },
       "additionalProperties": false
     },
-    "account.update.result": {
+    "account.update": {
       "type": "object",
       "required": [
         "$type",
@@ -517,7 +517,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "account.update.result"
+          "const": "account.update"
         },
         "id": {
           "type": "string"
@@ -619,7 +619,7 @@
       },
       "additionalProperties": false
     },
-    "agent-type.get.result": {
+    "agent-type.get": {
       "type": "object",
       "required": [
         "$type",
@@ -629,7 +629,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent-type.get.result"
+          "const": "agent-type.get"
         },
         "agentType": {
           "type": "string"
@@ -643,7 +643,7 @@
       },
       "additionalProperties": false
     },
-    "agent-type.list.result": {
+    "agent-type.list": {
       "type": "object",
       "required": [
         "$type",
@@ -651,7 +651,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent-type.list.result"
+          "const": "agent-type.list"
         },
         "agentTypes": {
           "type": "array",
@@ -662,7 +662,7 @@
       },
       "additionalProperties": false
     },
-    "agent.cancel-invocation.result": {
+    "agent.cancel-invocation": {
       "type": "object",
       "required": [
         "$type",
@@ -672,7 +672,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.cancel-invocation.result"
+          "const": "agent.cancel-invocation"
         },
         "canceled": {
           "type": "boolean"
@@ -686,7 +686,7 @@
       },
       "additionalProperties": false
     },
-    "agent.delete.result": {
+    "agent.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -695,7 +695,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.delete.result"
+          "const": "agent.delete"
         },
         "deleted": {
           "type": "boolean"
@@ -706,7 +706,7 @@
       },
       "additionalProperties": false
     },
-    "agent.files.result": {
+    "agent.files": {
       "type": "object",
       "required": [
         "$type",
@@ -714,7 +714,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.files.result"
+          "const": "agent.files"
         },
         "nodes": {
           "type": "array",
@@ -725,7 +725,7 @@
       },
       "additionalProperties": false
     },
-    "agent.get.result": {
+    "agent.get": {
       "type": "object",
       "required": [
         "$type",
@@ -734,7 +734,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.get.result"
+          "const": "agent.get"
         },
         "metadata": {
           "$ref": "#/definitions/AgentMetadataView"
@@ -745,7 +745,7 @@
       },
       "additionalProperties": false
     },
-    "agent.invoke.result": {
+    "agent.invoke": {
       "type": "object",
       "required": [
         "$type",
@@ -753,7 +753,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.invoke.result"
+          "const": "agent.invoke"
         },
         "idempotencyKey": {
           "type": "string"
@@ -776,7 +776,7 @@
       },
       "additionalProperties": false
     },
-    "agent.list.result": {
+    "agent.list": {
       "type": "object",
       "required": [
         "$type",
@@ -785,7 +785,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.list.result"
+          "const": "agent.list"
         },
         "agents": {
           "type": "array",
@@ -802,7 +802,7 @@
       },
       "additionalProperties": false
     },
-    "agent.new.result": {
+    "agent.new": {
       "type": "object",
       "required": [
         "$type",
@@ -810,7 +810,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.new.result"
+          "const": "agent.new"
         },
         "componentName": {
           "type": "string"
@@ -821,7 +821,7 @@
       },
       "additionalProperties": false
     },
-    "agent.oplog.result": {
+    "agent.oplog": {
       "type": "object",
       "required": [
         "$type",
@@ -829,7 +829,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.oplog.result"
+          "const": "agent.oplog"
         },
         "entries": {
           "type": "array",
@@ -840,7 +840,7 @@
       },
       "additionalProperties": false
     },
-    "agent.plugin-toggle.result": {
+    "agent.plugin-toggle": {
       "type": "object",
       "required": [
         "$type",
@@ -851,7 +851,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.plugin-toggle.result"
+          "const": "agent.plugin-toggle"
         },
         "activated": {
           "type": "boolean"
@@ -868,7 +868,7 @@
       },
       "additionalProperties": false
     },
-    "agent.redeploy.result": {
+    "agent.redeploy": {
       "type": "object",
       "required": [
         "$type",
@@ -877,7 +877,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.redeploy.result"
+          "const": "agent.redeploy"
         },
         "redeployed": {
           "type": "boolean"
@@ -891,7 +891,7 @@
       },
       "additionalProperties": false
     },
-    "agent.revert.result": {
+    "agent.revert": {
       "type": "object",
       "required": [
         "$type",
@@ -900,7 +900,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.revert.result"
+          "const": "agent.revert"
         },
         "reverted": {
           "type": "boolean"
@@ -919,7 +919,7 @@
       },
       "additionalProperties": false
     },
-    "agent.stream.event": {
+    "agent.stream": {
       "type": "object",
       "required": [
         "$type",
@@ -931,7 +931,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.stream.event"
+          "const": "agent.stream"
         },
         "timestamp": {
           "type": "string"
@@ -964,7 +964,7 @@
       },
       "additionalProperties": false
     },
-    "agent.update.result": {
+    "agent.update": {
       "type": "object",
       "required": [
         "$type",
@@ -973,7 +973,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "agent.update.result"
+          "const": "agent.update"
         },
         "triggered": {
           "type": "array",
@@ -990,7 +990,7 @@
       },
       "additionalProperties": false
     },
-    "api-token.delete.result": {
+    "api-token.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -999,7 +999,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api-token.delete.result"
+          "const": "api-token.delete"
         },
         "deleted": {
           "type": "boolean"
@@ -1010,7 +1010,7 @@
       },
       "additionalProperties": false
     },
-    "api-token.list.result": {
+    "api-token.list": {
       "type": "object",
       "required": [
         "$type",
@@ -1018,7 +1018,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api-token.list.result"
+          "const": "api-token.list"
         },
         "tokens": {
           "type": "array",
@@ -1029,7 +1029,7 @@
       },
       "additionalProperties": false
     },
-    "api-token.new.result": {
+    "api-token.new": {
       "type": "object",
       "required": [
         "$type",
@@ -1041,7 +1041,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api-token.new.result"
+          "const": "api-token.new"
         },
         "id": {
           "type": "string"
@@ -1061,7 +1061,7 @@
       },
       "additionalProperties": false
     },
-    "api.deployment.get.result": {
+    "api.deployment.get": {
       "type": "object",
       "required": [
         "$type",
@@ -1077,7 +1077,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.deployment.get.result"
+          "const": "api.deployment.get"
         },
         "id": {
           "type": "string"
@@ -1113,7 +1113,7 @@
       },
       "additionalProperties": false
     },
-    "api.deployment.list.result": {
+    "api.deployment.list": {
       "type": "object",
       "required": [
         "$type",
@@ -1121,7 +1121,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.deployment.list.result"
+          "const": "api.deployment.list"
         },
         "deployments": {
           "type": "array",
@@ -1132,7 +1132,7 @@
       },
       "additionalProperties": false
     },
-    "api.domain.delete.result": {
+    "api.domain.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -1142,7 +1142,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.domain.delete.result"
+          "const": "api.domain.delete"
         },
         "deleted": {
           "type": "boolean"
@@ -1156,7 +1156,7 @@
       },
       "additionalProperties": false
     },
-    "api.domain.list.result": {
+    "api.domain.list": {
       "type": "object",
       "required": [
         "$type",
@@ -1164,7 +1164,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.domain.list.result"
+          "const": "api.domain.list"
         },
         "domains": {
           "type": "array",
@@ -1175,7 +1175,7 @@
       },
       "additionalProperties": false
     },
-    "api.domain.register.result": {
+    "api.domain.register": {
       "type": "object",
       "required": [
         "$type",
@@ -1185,7 +1185,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.domain.register.result"
+          "const": "api.domain.register"
         },
         "id": {
           "type": "string"
@@ -1315,7 +1315,7 @@
         }
       ]
     },
-    "api.security-scheme.create.result": {
+    "api.security-scheme.create": {
       "type": "object",
       "required": [
         "$type",
@@ -1330,7 +1330,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.security-scheme.create.result"
+          "const": "api.security-scheme.create"
         },
         "id": {
           "type": "string"
@@ -1363,7 +1363,7 @@
       },
       "additionalProperties": false
     },
-    "api.security-scheme.delete.result": {
+    "api.security-scheme.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -1378,7 +1378,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.security-scheme.delete.result"
+          "const": "api.security-scheme.delete"
         },
         "id": {
           "type": "string"
@@ -1411,7 +1411,7 @@
       },
       "additionalProperties": false
     },
-    "api.security-scheme.get.result": {
+    "api.security-scheme.get": {
       "type": "object",
       "required": [
         "$type",
@@ -1426,7 +1426,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.security-scheme.get.result"
+          "const": "api.security-scheme.get"
         },
         "id": {
           "type": "string"
@@ -1459,7 +1459,7 @@
       },
       "additionalProperties": false
     },
-    "api.security-scheme.list.result": {
+    "api.security-scheme.list": {
       "type": "object",
       "required": [
         "$type",
@@ -1467,7 +1467,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.security-scheme.list.result"
+          "const": "api.security-scheme.list"
         },
         "securitySchemes": {
           "type": "array",
@@ -1478,7 +1478,7 @@
       },
       "additionalProperties": false
     },
-    "api.security-scheme.update.result": {
+    "api.security-scheme.update": {
       "type": "object",
       "required": [
         "$type",
@@ -1493,7 +1493,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "api.security-scheme.update.result"
+          "const": "api.security-scheme.update"
         },
         "id": {
           "type": "string"
@@ -1642,7 +1642,7 @@
         }
       ]
     },
-    "app.build.result": {
+    "app.build": {
       "type": "object",
       "required": [
         "$type",
@@ -1650,7 +1650,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.build.result"
+          "const": "app.build"
         },
         "built": {
           "type": "boolean"
@@ -1658,7 +1658,7 @@
       },
       "additionalProperties": false
     },
-    "app.clean.result": {
+    "app.clean": {
       "type": "object",
       "required": [
         "$type",
@@ -1666,7 +1666,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.clean.result"
+          "const": "app.clean"
         },
         "cleaned": {
           "type": "boolean"
@@ -1674,7 +1674,7 @@
       },
       "additionalProperties": false
     },
-    "app.deploy-plan.result": {
+    "app.deploy-plan": {
       "type": "object",
       "required": [
         "$type",
@@ -1683,7 +1683,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.deploy-plan.result"
+          "const": "app.deploy-plan"
         },
         "deploymentDiff": {
           "$ref": "#/definitions/DeploymentDiffPayload"
@@ -1697,7 +1697,7 @@
       },
       "additionalProperties": false
     },
-    "app.deploy.result": {
+    "app.deploy": {
       "type": "object",
       "required": [
         "$type",
@@ -1705,7 +1705,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.deploy.result"
+          "const": "app.deploy"
         },
         "deployed": {
           "type": "boolean"
@@ -1713,7 +1713,7 @@
       },
       "additionalProperties": false
     },
-    "app.generate-bridge.result": {
+    "app.generate-bridge": {
       "type": "object",
       "required": [
         "$type",
@@ -1721,7 +1721,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.generate-bridge.result"
+          "const": "app.generate-bridge"
         },
         "generated": {
           "type": "boolean"
@@ -1729,7 +1729,7 @@
       },
       "additionalProperties": false
     },
-    "app.new.result": {
+    "app.new": {
       "type": "object",
       "required": [
         "$type",
@@ -1739,7 +1739,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.new.result"
+          "const": "app.new"
         },
         "created": {
           "type": "boolean"
@@ -1753,7 +1753,7 @@
       },
       "additionalProperties": false
     },
-    "app.templates.result": {
+    "app.templates": {
       "type": "object",
       "required": [
         "$type",
@@ -1761,7 +1761,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.templates.result"
+          "const": "app.templates"
         },
         "templates": {
           "type": "array",
@@ -1772,7 +1772,7 @@
       },
       "additionalProperties": false
     },
-    "component.get.result": {
+    "component.get": {
       "type": "object",
       "required": [
         "$type",
@@ -1789,7 +1789,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "component.get.result"
+          "const": "component.get"
         },
         "componentName": {
           "type": "string"
@@ -1833,7 +1833,7 @@
       },
       "additionalProperties": false
     },
-    "component.list.result": {
+    "component.list": {
       "type": "object",
       "required": [
         "$type",
@@ -1841,7 +1841,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "component.list.result"
+          "const": "component.list"
         },
         "components": {
           "type": "array",
@@ -1852,7 +1852,7 @@
       },
       "additionalProperties": false
     },
-    "component.manifest-trace.result": {
+    "component.manifest-trace": {
       "type": "object",
       "required": [
         "$type",
@@ -1861,7 +1861,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "component.manifest-trace.result"
+          "const": "component.manifest-trace"
         },
         "componentName": {
           "type": "string"
@@ -3365,7 +3365,7 @@
         { "type": "object", "required": ["type", "first", "second"], "properties": { "type": { "const": "Intersect" }, "first": { "$ref": "#/definitions/ApiRetryPolicy" }, "second": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false }
       ]
     },
-    "deployment.create.result": {
+    "deployment.create": {
       "type": "object",
       "required": [
         "$type",
@@ -3375,7 +3375,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "deployment.create.result"
+          "const": "deployment.create"
         },
         "applicationName": {
           "type": "string"
@@ -3389,14 +3389,14 @@
       },
       "additionalProperties": false
     },
-    "deployment.diff.result": {
+    "deployment.diff": {
       "type": "object",
       "required": [
         "$type"
       ],
       "properties": {
         "$type": {
-          "const": "deployment.diff.result"
+          "const": "deployment.diff"
         },
         "components": {
           "$ref": "#/definitions/DeploymentDiffSection"
@@ -3410,7 +3410,7 @@
       },
       "additionalProperties": false
     },
-    "deployment.list.result": {
+    "deployment.list": {
       "type": "object",
       "required": [
         "$type",
@@ -3418,7 +3418,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "deployment.list.result"
+          "const": "deployment.list"
         },
         "deployments": {
           "type": "array",
@@ -3429,7 +3429,7 @@
       },
       "additionalProperties": false
     },
-    "environment.list.result": {
+    "environment.list": {
       "type": "object",
       "required": [
         "$type",
@@ -3437,7 +3437,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "environment.list.result"
+          "const": "environment.list"
         },
         "environments": {
           "type": "array",
@@ -3448,7 +3448,7 @@
       },
       "additionalProperties": false
     },
-    "environment.setup-plan.result": {
+    "environment.setup-plan": {
       "type": "object",
       "required": [
         "$type",
@@ -3460,7 +3460,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "environment.setup-plan.result"
+          "const": "environment.setup-plan"
         },
         "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
         "agentSecretDefaults": {
@@ -3482,7 +3482,7 @@
       },
       "additionalProperties": false
     },
-    "plugin.get.result": {
+    "plugin.get": {
       "type": "object",
       "required": [
         "$type",
@@ -3497,7 +3497,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "plugin.get.result"
+          "const": "plugin.get"
         },
         "id": {
           "type": "string"
@@ -3526,7 +3526,7 @@
       },
       "additionalProperties": false
     },
-    "plugin.list.result": {
+    "plugin.list": {
       "type": "object",
       "required": [
         "$type",
@@ -3534,7 +3534,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "plugin.list.result"
+          "const": "plugin.list"
         },
         "plugins": {
           "type": "array",
@@ -3545,7 +3545,7 @@
       },
       "additionalProperties": false
     },
-    "plugin.register.result": {
+    "plugin.register": {
       "type": "object",
       "required": [
         "$type",
@@ -3560,7 +3560,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "plugin.register.result"
+          "const": "plugin.register"
         },
         "id": {
           "type": "string"
@@ -3589,7 +3589,7 @@
       },
       "additionalProperties": false
     },
-    "plugin.unregister.result": {
+    "plugin.unregister": {
       "type": "object",
       "required": [
         "$type",
@@ -3600,7 +3600,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "plugin.unregister.result"
+          "const": "plugin.unregister"
         },
         "unregistered": {
           "type": "boolean"
@@ -3779,7 +3779,7 @@
       },
       "additionalProperties": false
     },
-    "profile.config.set-format.result": {
+    "profile.config.set-format": {
       "type": "object",
       "required": [
         "$type",
@@ -3789,7 +3789,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "profile.config.set-format.result"
+          "const": "profile.config.set-format"
         },
         "updated": {
           "type": "boolean"
@@ -3811,7 +3811,7 @@
       },
       "additionalProperties": false
     },
-    "profile.delete.result": {
+    "profile.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -3820,7 +3820,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "profile.delete.result"
+          "const": "profile.delete"
         },
         "deleted": {
           "type": "boolean"
@@ -3831,7 +3831,7 @@
       },
       "additionalProperties": false
     },
-    "profile.get.result": {
+    "profile.get": {
       "type": "object",
       "required": [
         "$type",
@@ -3841,7 +3841,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "profile.get.result"
+          "const": "profile.get"
         },
         "isActive": {
           "type": "boolean"
@@ -3867,7 +3867,7 @@
       },
       "additionalProperties": false
     },
-    "profile.list.result": {
+    "profile.list": {
       "type": "object",
       "required": [
         "$type",
@@ -3875,7 +3875,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "profile.list.result"
+          "const": "profile.list"
         },
         "profiles": {
           "type": "array",
@@ -3886,7 +3886,7 @@
       },
       "additionalProperties": false
     },
-    "profile.new.result": {
+    "profile.new": {
       "type": "object",
       "required": [
         "$type",
@@ -3896,7 +3896,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "profile.new.result"
+          "const": "profile.new"
         },
         "created": {
           "type": "boolean"
@@ -3910,7 +3910,7 @@
       },
       "additionalProperties": false
     },
-    "profile.switch.result": {
+    "profile.switch": {
       "type": "object",
       "required": [
         "$type",
@@ -3919,7 +3919,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "profile.switch.result"
+          "const": "profile.switch"
         },
         "switched": {
           "type": "boolean"
@@ -3930,7 +3930,7 @@
       },
       "additionalProperties": false
     },
-    "resource.create.result": {
+    "resource.create": {
       "type": "object",
       "required": [
         "$type",
@@ -3945,7 +3945,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "resource.create.result"
+          "const": "resource.create"
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -3958,7 +3958,7 @@
       },
       "additionalProperties": false
     },
-    "resource.delete.result": {
+    "resource.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -3973,7 +3973,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "resource.delete.result"
+          "const": "resource.delete"
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -3986,7 +3986,7 @@
       },
       "additionalProperties": false
     },
-    "resource.get.result": {
+    "resource.get": {
       "type": "object",
       "required": [
         "$type",
@@ -4001,7 +4001,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "resource.get.result"
+          "const": "resource.get"
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -4014,7 +4014,7 @@
       },
       "additionalProperties": false
     },
-    "resource.list.result": {
+    "resource.list": {
       "type": "object",
       "required": [
         "$type",
@@ -4022,7 +4022,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "resource.list.result"
+          "const": "resource.list"
         },
         "resources": {
           "type": "array",
@@ -4031,7 +4031,7 @@
       },
       "additionalProperties": false
     },
-    "resource.update.result": {
+    "resource.update": {
       "type": "object",
       "required": [
         "$type",
@@ -4046,7 +4046,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "resource.update.result"
+          "const": "resource.update"
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -4115,7 +4115,7 @@
       "type": "string",
       "enum": ["second", "minute", "hour", "day", "month", "year"]
     },
-    "retry-policy.create.result": {
+    "retry-policy.create": {
       "type": "object",
       "required": [
         "$type",
@@ -4129,7 +4129,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "retry-policy.create.result"
+          "const": "retry-policy.create"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -4141,7 +4141,7 @@
       },
       "additionalProperties": false
     },
-    "retry-policy.delete.result": {
+    "retry-policy.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -4155,7 +4155,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "retry-policy.delete.result"
+          "const": "retry-policy.delete"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -4167,7 +4167,7 @@
       },
       "additionalProperties": false
     },
-    "retry-policy.get.result": {
+    "retry-policy.get": {
       "type": "object",
       "required": [
         "$type",
@@ -4181,7 +4181,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "retry-policy.get.result"
+          "const": "retry-policy.get"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -4193,16 +4193,16 @@
       },
       "additionalProperties": false
     },
-    "retry-policy.list.result": {
+    "retry-policy.list": {
       "type": "object",
       "required": ["$type", "retryPolicies"],
       "properties": {
-        "$type": { "const": "retry-policy.list.result" },
+        "$type": { "const": "retry-policy.list" },
         "retryPolicies": { "type": "array", "items": { "$ref": "#/definitions/RetryPolicy" } }
       },
       "additionalProperties": false
     },
-    "retry-policy.update.result": {
+    "retry-policy.update": {
       "type": "object",
       "required": [
         "$type",
@@ -4216,7 +4216,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "retry-policy.update.result"
+          "const": "retry-policy.update"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -4438,7 +4438,7 @@
         { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
       ]
     },
-    "secret.create.result": {
+    "secret.create": {
       "type": "object",
       "required": [
         "$type",
@@ -4446,7 +4446,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.create.result"
+          "const": "secret.create"
         },
         "secret": {
           "$ref": "#/definitions/AgentSecret"
@@ -4454,7 +4454,7 @@
       },
       "additionalProperties": false
     },
-    "secret.delete.result": {
+    "secret.delete": {
       "type": "object",
       "required": [
         "$type",
@@ -4462,7 +4462,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.delete.result"
+          "const": "secret.delete"
         },
         "secret": {
           "$ref": "#/definitions/AgentSecret"
@@ -4470,7 +4470,7 @@
       },
       "additionalProperties": false
     },
-    "secret.get.result": {
+    "secret.get": {
       "type": "object",
       "required": [
         "$type",
@@ -4478,7 +4478,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.get.result"
+          "const": "secret.get"
         },
         "secret": {
           "$ref": "#/definitions/AgentSecret"
@@ -4486,7 +4486,7 @@
       },
       "additionalProperties": false
     },
-    "secret.list.result": {
+    "secret.list": {
       "type": "object",
       "required": [
         "$type",
@@ -4494,7 +4494,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.list.result"
+          "const": "secret.list"
         },
         "secrets": {
           "type": "array",
@@ -4505,7 +4505,7 @@
       },
       "additionalProperties": false
     },
-    "secret.update-value.result": {
+    "secret.update-value": {
       "type": "object",
       "required": [
         "$type",
@@ -4513,7 +4513,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.update-value.result"
+          "const": "secret.update-value"
         },
         "secret": {
           "$ref": "#/definitions/AgentSecret"
@@ -4557,311 +4557,311 @@
   },
   "x-golem-cli-output-types": [
     {
-      "type": "account.delete.result",
+      "type": "account.delete",
       "rustType": "AccountDeleteResult"
     },
     {
-      "type": "account.get.result",
+      "type": "account.get",
       "rustType": "AccountGetView"
     },
     {
-      "type": "account.new.result",
+      "type": "account.new",
       "rustType": "AccountNewView"
     },
     {
-      "type": "account.permission-share.delete.result",
+      "type": "account.permission-share.delete",
       "rustType": "PermissionShareDeleteResult"
     },
     {
-      "type": "account.permission-share.get.result",
+      "type": "account.permission-share.get",
       "rustType": "PermissionShareGetView"
     },
     {
-      "type": "account.permission-share.list.result",
+      "type": "account.permission-share.list",
       "rustType": "PermissionShareListView"
     },
     {
-      "type": "account.permission-share.new.result",
+      "type": "account.permission-share.new",
       "rustType": "PermissionShareNewView"
     },
     {
-      "type": "account.permission-share.update.result",
+      "type": "account.permission-share.update",
       "rustType": "PermissionShareUpdateView"
     },
     {
-      "type": "account.update.result",
+      "type": "account.update",
       "rustType": "AccountUpdateView"
     },
     {
-      "type": "agent-type.get.result",
+      "type": "agent-type.get",
       "rustType": "AgentTypeView"
     },
     {
-      "type": "agent-type.list.result",
+      "type": "agent-type.list",
       "rustType": "AgentTypeListView"
     },
     {
-      "type": "agent.cancel-invocation.result",
+      "type": "agent.cancel-invocation",
       "rustType": "AgentCancelInvocationResult"
     },
     {
-      "type": "agent.delete.result",
+      "type": "agent.delete",
       "rustType": "AgentDeleteResult"
     },
     {
-      "type": "agent.files.result",
+      "type": "agent.files",
       "rustType": "WorkerFilesView"
     },
     {
-      "type": "agent.get.result",
+      "type": "agent.get",
       "rustType": "WorkerGetView"
     },
     {
-      "type": "agent.invoke.result",
+      "type": "agent.invoke",
       "rustType": "InvokeResultView"
     },
     {
-      "type": "agent.list.result",
+      "type": "agent.list",
       "rustType": "AgentsMetadataResponseView"
     },
     {
-      "type": "agent.new.result",
+      "type": "agent.new",
       "rustType": "WorkerCreateView"
     },
     {
-      "type": "agent.oplog.result",
+      "type": "agent.oplog",
       "rustType": "AgentOplogView"
     },
     {
-      "type": "agent.plugin-toggle.result",
+      "type": "agent.plugin-toggle",
       "rustType": "AgentPluginToggleResult"
     },
     {
-      "type": "agent.redeploy.result",
+      "type": "agent.redeploy",
       "rustType": "AgentRedeployResult"
     },
     {
-      "type": "agent.revert.result",
+      "type": "agent.revert",
       "rustType": "AgentRevertResult"
     },
     {
-      "type": "agent.stream.event",
+      "type": "agent.stream",
       "rustType": "AgentStreamEvent"
     },
     {
-      "type": "agent.update.result",
+      "type": "agent.update",
       "rustType": "TryUpdateAllWorkersResult"
     },
     {
-      "type": "api-token.delete.result",
+      "type": "api-token.delete",
       "rustType": "TokenDeleteResult"
     },
     {
-      "type": "api-token.list.result",
+      "type": "api-token.list",
       "rustType": "TokenListView"
     },
     {
-      "type": "api-token.new.result",
+      "type": "api-token.new",
       "rustType": "TokenNewView"
     },
     {
-      "type": "api.deployment.get.result",
+      "type": "api.deployment.get",
       "rustType": "HttpApiDeploymentGetView"
     },
     {
-      "type": "api.deployment.list.result",
+      "type": "api.deployment.list",
       "rustType": "HttpApiDeploymentListView"
     },
     {
-      "type": "api.domain.delete.result",
+      "type": "api.domain.delete",
       "rustType": "DomainRegistrationDeleteResult"
     },
     {
-      "type": "api.domain.list.result",
+      "type": "api.domain.list",
       "rustType": "HttpApiDomainListView"
     },
     {
-      "type": "api.domain.register.result",
+      "type": "api.domain.register",
       "rustType": "DomainRegistrationNewView"
     },
     {
-      "type": "api.security-scheme.create.result",
+      "type": "api.security-scheme.create",
       "rustType": "HttpSecuritySchemeCreateView"
     },
     {
-      "type": "api.security-scheme.delete.result",
+      "type": "api.security-scheme.delete",
       "rustType": "HttpSecuritySchemeDeleteView"
     },
     {
-      "type": "api.security-scheme.get.result",
+      "type": "api.security-scheme.get",
       "rustType": "HttpSecuritySchemeGetView"
     },
     {
-      "type": "api.security-scheme.list.result",
+      "type": "api.security-scheme.list",
       "rustType": "HttpSecuritySchemeListView"
     },
     {
-      "type": "api.security-scheme.update.result",
+      "type": "api.security-scheme.update",
       "rustType": "HttpSecuritySchemeUpdateView"
     },
     {
-      "type": "app.build.result",
+      "type": "app.build",
       "rustType": "BuildResult"
     },
     {
-      "type": "app.clean.result",
+      "type": "app.clean",
       "rustType": "CleanResult"
     },
     {
-      "type": "app.deploy-plan.result",
+      "type": "app.deploy-plan",
       "rustType": "DeployPlanView"
     },
     {
-      "type": "app.deploy.result",
+      "type": "app.deploy",
       "rustType": "DeployResultView"
     },
     {
-      "type": "app.generate-bridge.result",
+      "type": "app.generate-bridge",
       "rustType": "GenerateBridgeResult"
     },
     {
-      "type": "app.new.result",
+      "type": "app.new",
       "rustType": "NewAppResult"
     },
     {
-      "type": "app.templates.result",
+      "type": "app.templates",
       "rustType": "TemplateListView"
     },
     {
-      "type": "component.get.result",
+      "type": "component.get",
       "rustType": "ComponentGetView"
     },
     {
-      "type": "component.list.result",
+      "type": "component.list",
       "rustType": "ComponentListView"
     },
     {
-      "type": "component.manifest-trace.result",
+      "type": "component.manifest-trace",
       "rustType": "ComponentManifestTraceView"
     },
     {
-      "type": "deployment.create.result",
+      "type": "deployment.create",
       "rustType": "DeploymentNewView"
     },
     {
-      "type": "deployment.diff.result",
+      "type": "deployment.diff",
       "rustType": "DeploymentDiff"
     },
     {
-      "type": "deployment.list.result",
+      "type": "deployment.list",
       "rustType": "DeploymentListView"
     },
     {
-      "type": "environment.list.result",
+      "type": "environment.list",
       "rustType": "EnvironmentListView"
     },
     {
-      "type": "environment.setup-plan.result",
+      "type": "environment.setup-plan",
       "rustType": "EnvironmentSetupPlanView"
     },
     {
-      "type": "plugin.get.result",
+      "type": "plugin.get",
       "rustType": "PluginRegistrationGetView"
     },
     {
-      "type": "plugin.list.result",
+      "type": "plugin.list",
       "rustType": "PluginListView"
     },
     {
-      "type": "plugin.register.result",
+      "type": "plugin.register",
       "rustType": "PluginRegistrationRegisterView"
     },
     {
-      "type": "plugin.unregister.result",
+      "type": "plugin.unregister",
       "rustType": "PluginUnregisterResult"
     },
     {
-      "type": "profile.config.set-format.result",
+      "type": "profile.config.set-format",
       "rustType": "ProfileConfigSetFormatResult"
     },
     {
-      "type": "profile.delete.result",
+      "type": "profile.delete",
       "rustType": "ProfileDeleteResult"
     },
     {
-      "type": "profile.get.result",
+      "type": "profile.get",
       "rustType": "ProfileView"
     },
     {
-      "type": "profile.list.result",
+      "type": "profile.list",
       "rustType": "ProfileListView"
     },
     {
-      "type": "profile.new.result",
+      "type": "profile.new",
       "rustType": "ProfileCreateResult"
     },
     {
-      "type": "profile.switch.result",
+      "type": "profile.switch",
       "rustType": "ProfileSwitchResult"
     },
     {
-      "type": "resource.create.result",
+      "type": "resource.create",
       "rustType": "ResourceDefinitionCreateView"
     },
     {
-      "type": "resource.delete.result",
+      "type": "resource.delete",
       "rustType": "ResourceDefinitionDeleteView"
     },
     {
-      "type": "resource.get.result",
+      "type": "resource.get",
       "rustType": "ResourceDefinitionGetView"
     },
     {
-      "type": "resource.list.result",
+      "type": "resource.list",
       "rustType": "ResourceDefinitionListView"
     },
     {
-      "type": "resource.update.result",
+      "type": "resource.update",
       "rustType": "ResourceDefinitionUpdateView"
     },
     {
-      "type": "retry-policy.create.result",
+      "type": "retry-policy.create",
       "rustType": "RetryPolicyCreateView"
     },
     {
-      "type": "retry-policy.delete.result",
+      "type": "retry-policy.delete",
       "rustType": "RetryPolicyDeleteView"
     },
     {
-      "type": "retry-policy.get.result",
+      "type": "retry-policy.get",
       "rustType": "RetryPolicyGetView"
     },
     {
-      "type": "retry-policy.list.result",
+      "type": "retry-policy.list",
       "rustType": "RetryPolicyListView"
     },
     {
-      "type": "retry-policy.update.result",
+      "type": "retry-policy.update",
       "rustType": "RetryPolicyUpdateView"
     },
     {
-      "type": "secret.create.result",
+      "type": "secret.create",
       "rustType": "SecretCreateView"
     },
     {
-      "type": "secret.delete.result",
+      "type": "secret.delete",
       "rustType": "SecretDeleteView"
     },
     {
-      "type": "secret.get.result",
+      "type": "secret.get",
       "rustType": "SecretGetView"
     },
     {
-      "type": "secret.list.result",
+      "type": "secret.list",
       "rustType": "SecretListView"
     },
     {
-      "type": "secret.update-value.result",
+      "type": "secret.update-value",
       "rustType": "SecretUpdateView"
     }
   ]

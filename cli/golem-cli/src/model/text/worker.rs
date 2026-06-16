@@ -86,7 +86,7 @@ impl MessageWithFields for WorkerCreateView {
 }
 
 impl CliOutput for WorkerCreateView {
-    const KIND: &'static str = "agent.new.result";
+    const KIND: &'static str = "agent.new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,15 +250,15 @@ impl MessageWithFields for WorkerGetView {
 }
 
 impl CliOutput for WorkerGetView {
-    const KIND: &'static str = "agent.get.result";
+    const KIND: &'static str = "agent.get";
 }
 
 impl CliOutput for AgentsMetadataResponseView {
-    const KIND: &'static str = "agent.list.result";
+    const KIND: &'static str = "agent.list";
 }
 
 impl CliOutput for TryUpdateAllWorkersResult {
-    const KIND: &'static str = "agent.update.result";
+    const KIND: &'static str = "agent.update";
 }
 
 impl TextView for AgentsMetadataResponseView {
@@ -453,7 +453,7 @@ pub struct AgentOplogView {
 }
 
 impl CliOutput for AgentOplogView {
-    const KIND: &'static str = "agent.oplog.result";
+    const KIND: &'static str = "agent.oplog";
 }
 
 impl TextView for AgentOplogView {
@@ -1248,7 +1248,7 @@ pub struct WorkerFilesView {
 }
 
 impl CliOutput for WorkerFilesView {
-    const KIND: &'static str = "agent.files.result";
+    const KIND: &'static str = "agent.files";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

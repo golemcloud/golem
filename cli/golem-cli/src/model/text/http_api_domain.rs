@@ -42,7 +42,7 @@ impl MessageWithFields for DomainRegistrationNewView {
 }
 
 impl CliOutput for DomainRegistrationNewView {
-    const KIND: &'static str = "api.domain.register.result";
+    const KIND: &'static str = "api.domain.register";
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ impl TextView for DomainRegistrationDeleteResult {
 }
 
 impl CliOutput for DomainRegistrationDeleteResult {
-    const KIND: &'static str = "api.domain.delete.result";
+    const KIND: &'static str = "api.domain.delete";
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,5 +86,5 @@ impl TextView for HttpApiDomainListView {
 }
 
 impl CliOutput for HttpApiDomainListView {
-    const KIND: &'static str = "api.domain.list.result";
+    const KIND: &'static str = "api.domain.list";
 }

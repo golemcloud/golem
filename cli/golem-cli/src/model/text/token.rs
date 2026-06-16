@@ -48,7 +48,7 @@ impl MessageWithFields for TokenNewView {
 }
 
 impl CliOutput for TokenNewView {
-    const KIND: &'static str = "api-token.new.result";
+    const KIND: &'static str = "api-token.new";
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,7 +78,7 @@ impl TextView for TokenListView {
 }
 
 impl CliOutput for TokenListView {
-    const KIND: &'static str = "api-token.list.result";
+    const KIND: &'static str = "api-token.list";
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,5 +93,5 @@ impl TextView for TokenDeleteResult {
 }
 
 impl CliOutput for TokenDeleteResult {
-    const KIND: &'static str = "api-token.delete.result";
+    const KIND: &'static str = "api-token.delete";
 }

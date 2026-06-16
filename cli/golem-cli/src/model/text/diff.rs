@@ -257,7 +257,7 @@ impl TextView for DeploymentDiff {
 }
 
 impl CliOutput for DeploymentDiff {
-    const KIND: &'static str = "deployment.diff.result";
+    const KIND: &'static str = "deployment.diff";
 }
 
 fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
@@ -406,7 +406,7 @@ impl TextView for EnvironmentSetupPlanView<'_> {
 }
 
 impl CliOutput for EnvironmentSetupPlanView<'_> {
-    const KIND: &'static str = "environment.setup-plan.result";
+    const KIND: &'static str = "environment.setup-plan";
 }
 
 impl EnvironmentSetupPlanView<'_> {
@@ -436,7 +436,7 @@ impl TextView for DeployPlanView<'_> {
 }
 
 impl CliOutput for DeployPlanView<'_> {
-    const KIND: &'static str = "app.deploy-plan.result";
+    const KIND: &'static str = "app.deploy-plan";
 }
 
 fn is_compact_diff_path(path: &Path) -> bool {

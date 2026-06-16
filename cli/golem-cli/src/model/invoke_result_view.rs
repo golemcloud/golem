@@ -41,7 +41,7 @@ pub struct InvokeResultView {
 }
 
 impl CliOutput for InvokeResultView {
-    const KIND: &'static str = "agent.invoke.result";
+    const KIND: &'static str = "agent.invoke";
 }
 
 impl InvokeResultView {

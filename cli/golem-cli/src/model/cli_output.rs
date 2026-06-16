@@ -112,351 +112,295 @@ mod tests {
     static CLI_OUTPUT_TEST_REGISTRY: &[CliOutputTestEntry] = &[
         registry_entry!(
             "AccountDeleteResult",
-            "account.delete.result",
+            "account.delete",
             arb_account_delete_result
         ),
-        registry_entry!(
-            "AccountGetView",
-            "account.get.result",
-            arb_account_get_result
-        ),
-        registry_entry!(
-            "AccountNewView",
-            "account.new.result",
-            arb_account_new_result
-        ),
+        registry_entry!("AccountGetView", "account.get", arb_account_get_result),
+        registry_entry!("AccountNewView", "account.new", arb_account_new_result),
         registry_entry!(
             "PermissionShareDeleteResult",
-            "account.permission-share.delete.result",
+            "account.permission-share.delete",
             arb_permission_share_delete_result
         ),
         registry_entry!(
             "PermissionShareGetView",
-            "account.permission-share.get.result",
+            "account.permission-share.get",
             arb_permission_share_get_result
         ),
         registry_entry!(
             "PermissionShareListView",
-            "account.permission-share.list.result",
+            "account.permission-share.list",
             arb_permission_share_list_result
         ),
         registry_entry!(
             "PermissionShareNewView",
-            "account.permission-share.new.result",
+            "account.permission-share.new",
             arb_permission_share_new_result
         ),
         registry_entry!(
             "PermissionShareUpdateView",
-            "account.permission-share.update.result",
+            "account.permission-share.update",
             arb_permission_share_update_result
         ),
         registry_entry!(
             "AccountUpdateView",
-            "account.update.result",
+            "account.update",
             arb_account_update_result
         ),
-        registry_entry!(
-            "AgentTypeView",
-            "agent-type.get.result",
-            arb_agent_type_get_result
-        ),
+        registry_entry!("AgentTypeView", "agent-type.get", arb_agent_type_get_result),
         registry_entry!(
             "AgentTypeListView",
-            "agent-type.list.result",
+            "agent-type.list",
             arb_agent_type_list_result
         ),
         registry_entry!(
             "AgentCancelInvocationResult",
-            "agent.cancel-invocation.result",
+            "agent.cancel-invocation",
             arb_agent_cancel_invocation_result
         ),
-        registry_entry!(
-            "AgentDeleteResult",
-            "agent.delete.result",
-            arb_agent_delete_result
-        ),
-        registry_entry!(
-            "WorkerFilesView",
-            "agent.files.result",
-            arb_agent_files_result
-        ),
-        registry_entry!("WorkerGetView", "agent.get.result", arb_agent_get_result),
-        registry_entry!(
-            "InvokeResultView",
-            "agent.invoke.result",
-            arb_agent_invoke_result
-        ),
+        registry_entry!("AgentDeleteResult", "agent.delete", arb_agent_delete_result),
+        registry_entry!("WorkerFilesView", "agent.files", arb_agent_files_result),
+        registry_entry!("WorkerGetView", "agent.get", arb_agent_get_result),
+        registry_entry!("InvokeResultView", "agent.invoke", arb_agent_invoke_result),
         registry_entry!(
             "AgentsMetadataResponseView",
-            "agent.list.result",
+            "agent.list",
             arb_agent_list_result
         ),
-        registry_entry!("WorkerCreateView", "agent.new.result", arb_agent_new_result),
-        registry_entry!(
-            "AgentOplogView",
-            "agent.oplog.result",
-            arb_agent_oplog_result
-        ),
+        registry_entry!("WorkerCreateView", "agent.new", arb_agent_new_result),
+        registry_entry!("AgentOplogView", "agent.oplog", arb_agent_oplog_result),
         registry_entry!(
             "AgentPluginToggleResult",
-            "agent.plugin-toggle.result",
+            "agent.plugin-toggle",
             arb_agent_plugin_toggle_result
         ),
         registry_entry!(
             "AgentRedeployResult",
-            "agent.redeploy.result",
+            "agent.redeploy",
             arb_agent_redeploy_result
         ),
-        registry_entry!(
-            "AgentRevertResult",
-            "agent.revert.result",
-            arb_agent_revert_result
-        ),
-        registry_entry!(
-            "AgentStreamEvent",
-            "agent.stream.event",
-            arb_agent_stream_event
-        ),
+        registry_entry!("AgentRevertResult", "agent.revert", arb_agent_revert_result),
+        registry_entry!("AgentStreamEvent", "agent.stream", arb_agent_stream_event),
         registry_entry!(
             "TryUpdateAllWorkersResult",
-            "agent.update.result",
+            "agent.update",
             arb_agent_update_result
         ),
         registry_entry!(
             "TokenDeleteResult",
-            "api-token.delete.result",
+            "api-token.delete",
             arb_token_delete_result
         ),
-        registry_entry!(
-            "TokenListView",
-            "api-token.list.result",
-            arb_token_list_result
-        ),
-        registry_entry!("TokenNewView", "api-token.new.result", arb_token_new_result),
+        registry_entry!("TokenListView", "api-token.list", arb_token_list_result),
+        registry_entry!("TokenNewView", "api-token.new", arb_token_new_result),
         registry_entry!(
             "HttpApiDeploymentGetView",
-            "api.deployment.get.result",
+            "api.deployment.get",
             arb_api_deployment_get_result
         ),
         registry_entry!(
             "HttpApiDeploymentListView",
-            "api.deployment.list.result",
+            "api.deployment.list",
             arb_api_deployment_list_result
         ),
         registry_entry!(
             "DomainRegistrationDeleteResult",
-            "api.domain.delete.result",
+            "api.domain.delete",
             arb_api_domain_delete_result
         ),
         registry_entry!(
             "HttpApiDomainListView",
-            "api.domain.list.result",
+            "api.domain.list",
             arb_api_domain_list_result
         ),
         registry_entry!(
             "DomainRegistrationNewView",
-            "api.domain.register.result",
+            "api.domain.register",
             arb_api_domain_register_result
         ),
         registry_entry!(
             "HttpSecuritySchemeCreateView",
-            "api.security-scheme.create.result",
+            "api.security-scheme.create",
             arb_api_security_scheme_create_result
         ),
         registry_entry!(
             "HttpSecuritySchemeDeleteView",
-            "api.security-scheme.delete.result",
+            "api.security-scheme.delete",
             arb_api_security_scheme_delete_result
         ),
         registry_entry!(
             "HttpSecuritySchemeGetView",
-            "api.security-scheme.get.result",
+            "api.security-scheme.get",
             arb_api_security_scheme_get_result
         ),
         registry_entry!(
             "HttpSecuritySchemeListView",
-            "api.security-scheme.list.result",
+            "api.security-scheme.list",
             arb_api_security_scheme_list_result
         ),
         registry_entry!(
             "HttpSecuritySchemeUpdateView",
-            "api.security-scheme.update.result",
+            "api.security-scheme.update",
             arb_api_security_scheme_update_result
         ),
-        registry_entry!("BuildResult", "app.build.result", arb_build_result),
-        registry_entry!("CleanResult", "app.clean.result", arb_clean_result),
-        registry_entry!(
-            "DeployPlanView",
-            "app.deploy-plan.result",
-            arb_deploy_plan_result
-        ),
-        registry_entry!("DeployResultView", "app.deploy.result", arb_deploy_result),
+        registry_entry!("BuildResult", "app.build", arb_build_result),
+        registry_entry!("CleanResult", "app.clean", arb_clean_result),
+        registry_entry!("DeployPlanView", "app.deploy-plan", arb_deploy_plan_result),
+        registry_entry!("DeployResultView", "app.deploy", arb_deploy_result),
         registry_entry!(
             "GenerateBridgeResult",
-            "app.generate-bridge.result",
+            "app.generate-bridge",
             arb_generate_bridge_result
         ),
-        registry_entry!("NewAppResult", "app.new.result", arb_new_app_result),
+        registry_entry!("NewAppResult", "app.new", arb_new_app_result),
         registry_entry!(
             "TemplateListView",
-            "app.templates.result",
+            "app.templates",
             arb_template_list_result
         ),
         registry_entry!(
             "ComponentGetView",
-            "component.get.result",
+            "component.get",
             arb_component_get_result
         ),
         registry_entry!(
             "ComponentListView",
-            "component.list.result",
+            "component.list",
             arb_component_list_result
         ),
         registry_entry!(
             "ComponentManifestTraceView",
-            "component.manifest-trace.result",
+            "component.manifest-trace",
             arb_component_manifest_trace_result
         ),
         registry_entry!(
             "DeploymentNewView",
-            "deployment.create.result",
+            "deployment.create",
             arb_deployment_create_result
         ),
         registry_entry!(
             "DeploymentDiff",
-            "deployment.diff.result",
+            "deployment.diff",
             arb_deployment_diff_result
         ),
         registry_entry!(
             "DeploymentListView",
-            "deployment.list.result",
+            "deployment.list",
             arb_deployment_list_result
         ),
         registry_entry!(
             "EnvironmentListView",
-            "environment.list.result",
+            "environment.list",
             arb_environment_list_result
         ),
         registry_entry!(
             "EnvironmentSetupPlanView",
-            "environment.setup-plan.result",
+            "environment.setup-plan",
             arb_environment_setup_plan_result
         ),
         registry_entry!(
             "PluginRegistrationGetView",
-            "plugin.get.result",
+            "plugin.get",
             arb_plugin_get_result
         ),
-        registry_entry!(
-            "PluginListView",
-            "plugin.list.result",
-            arb_plugin_list_result
-        ),
+        registry_entry!("PluginListView", "plugin.list", arb_plugin_list_result),
         registry_entry!(
             "PluginRegistrationRegisterView",
-            "plugin.register.result",
+            "plugin.register",
             arb_plugin_register_result
         ),
         registry_entry!(
             "PluginUnregisterResult",
-            "plugin.unregister.result",
+            "plugin.unregister",
             arb_plugin_unregister_result
         ),
         registry_entry!(
             "ProfileConfigSetFormatResult",
-            "profile.config.set-format.result",
+            "profile.config.set-format",
             arb_profile_config_set_format_result
         ),
         registry_entry!(
             "ProfileDeleteResult",
-            "profile.delete.result",
+            "profile.delete",
             arb_profile_delete_result
         ),
-        registry_entry!("ProfileView", "profile.get.result", arb_profile_get_result),
-        registry_entry!(
-            "ProfileListView",
-            "profile.list.result",
-            arb_profile_list_result
-        ),
+        registry_entry!("ProfileView", "profile.get", arb_profile_get_result),
+        registry_entry!("ProfileListView", "profile.list", arb_profile_list_result),
         registry_entry!(
             "ProfileCreateResult",
-            "profile.new.result",
+            "profile.new",
             arb_profile_create_result
         ),
         registry_entry!(
             "ProfileSwitchResult",
-            "profile.switch.result",
+            "profile.switch",
             arb_profile_switch_result
         ),
         registry_entry!(
             "ResourceDefinitionCreateView",
-            "resource.create.result",
+            "resource.create",
             arb_resource_create_result
         ),
         registry_entry!(
             "ResourceDefinitionDeleteView",
-            "resource.delete.result",
+            "resource.delete",
             arb_resource_delete_result
         ),
         registry_entry!(
             "ResourceDefinitionGetView",
-            "resource.get.result",
+            "resource.get",
             arb_resource_get_result
         ),
         registry_entry!(
             "ResourceDefinitionListView",
-            "resource.list.result",
+            "resource.list",
             arb_resource_list_result
         ),
         registry_entry!(
             "ResourceDefinitionUpdateView",
-            "resource.update.result",
+            "resource.update",
             arb_resource_update_result
         ),
         registry_entry!(
             "RetryPolicyCreateView",
-            "retry-policy.create.result",
+            "retry-policy.create",
             arb_retry_policy_create_result
         ),
         registry_entry!(
             "RetryPolicyDeleteView",
-            "retry-policy.delete.result",
+            "retry-policy.delete",
             arb_retry_policy_delete_result
         ),
         registry_entry!(
             "RetryPolicyGetView",
-            "retry-policy.get.result",
+            "retry-policy.get",
             arb_retry_policy_get_result
         ),
         registry_entry!(
             "RetryPolicyListView",
-            "retry-policy.list.result",
+            "retry-policy.list",
             arb_retry_policy_list_result
         ),
         registry_entry!(
             "RetryPolicyUpdateView",
-            "retry-policy.update.result",
+            "retry-policy.update",
             arb_retry_policy_update_result
         ),
         registry_entry!(
             "SecretCreateView",
-            "secret.create.result",
+            "secret.create",
             arb_secret_create_result
         ),
         registry_entry!(
             "SecretDeleteView",
-            "secret.delete.result",
+            "secret.delete",
             arb_secret_delete_result
         ),
-        registry_entry!("SecretGetView", "secret.get.result", arb_secret_get_result),
-        registry_entry!(
-            "SecretListView",
-            "secret.list.result",
-            arb_secret_list_result
-        ),
+        registry_entry!("SecretGetView", "secret.get", arb_secret_get_result),
+        registry_entry!("SecretListView", "secret.list", arb_secret_list_result),
         registry_entry!(
             "SecretUpdateView",
-            "secret.update-value.result",
+            "secret.update-value",
             arb_secret_update_value_result
         ),
     ];
@@ -622,7 +566,7 @@ mod tests {
             "schema must reject output documents without {CLI_OUTPUT_TYPE_FIELD}"
         );
 
-        let unknown_type = json!({ CLI_OUTPUT_TYPE_FIELD: "unknown.result" });
+        let unknown_type = json!({ CLI_OUTPUT_TYPE_FIELD: "unknown" });
         assert!(
             !validator.is_valid(&unknown_type),
             "schema must reject unknown output document types"
@@ -914,13 +858,9 @@ mod tests {
     }
 
     fn is_valid_kind(kind: &str) -> bool {
-        let mut parts = kind.split('.').collect::<Vec<_>>();
-        let Some(suffix) = parts.pop() else {
-            return false;
-        };
+        let parts = kind.split('.').collect::<Vec<_>>();
 
-        matches!(suffix, "result" | "event" | "progress" | "diagnostic")
-            && parts.len() >= 2
+        parts.len() >= 2
             && parts.iter().all(|part| {
                 !part.is_empty()
                     && part.bytes().all(|byte| {
