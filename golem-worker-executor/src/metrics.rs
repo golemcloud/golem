@@ -111,22 +111,24 @@ pub mod runtime {
     use tokio::runtime::Handle;
     use tokio::task::JoinSet;
 
-    /// How often the mimalloc allocator gauges are refreshed from
-    /// `mi_process_info`. Prometheus scrapes the rendered values independently;
-    /// this is the in-process sampling resolution.
-    const SAMPLING_INTERVAL: Duration = Duration::from_secs(30);
-
     /// Spawns a background task that periodically samples mimalloc allocator
     /// memory accounting into the Prometheus gauges defined in
     /// [`crate::metrics::mimalloc`].
     ///
+    /// `sampling_interval` controls how often the gauges are refreshed from
+    /// `mi_process_info`; Prometheus scrapes the rendered values independently.
+    ///
     /// The gauges live in the default `prometheus` registry, so they are
     /// rendered on the executor's existing `/metrics` endpoint without any
     /// additional wiring.
-    pub fn install_runtime_metrics(runtime: Handle, join_set: &mut JoinSet<anyhow::Result<()>>) {
+    pub fn install_runtime_metrics(
+        runtime: Handle,
+        sampling_interval: Duration,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) {
         join_set.spawn_on(
             async move {
-                let mut interval = tokio::time::interval(SAMPLING_INTERVAL);
+                let mut interval = tokio::time::interval(sampling_interval);
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     interval.tick().await;

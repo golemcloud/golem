@@ -1050,7 +1050,11 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
 
-    crate::metrics::runtime::install_runtime_metrics(runtime.clone(), join_set);
+    crate::metrics::runtime::install_runtime_metrics(
+        runtime.clone(),
+        golem_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
 
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
