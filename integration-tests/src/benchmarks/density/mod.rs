@@ -95,9 +95,10 @@ impl Display for AgentMode {
 ///   registry mints a distinct `component_id` per agent. The raw blob is
 ///   deduplicated in object storage, but the executor's compiled-component
 ///   cache keys on `component_id` and produces one entry per agent — the
-///   compiled-cache-thrash signal this mode exists to measure. Capped at
-///   [`prep::PER_AGENT_COMPONENT_COUNT`] components (one per agent), and
-///   identified in cell names and the result schema by `per-agent-component`.
+///   compiled-cache-thrash signal this mode exists to measure. Identified in
+///   cell names and the result schema by `per-agent-component`. When the ramp
+///   exceeds the number of distinct components density-prep uploaded
+///   ([`prep::PER_AGENT_COMPONENT_COUNT`]), agents reuse components round-robin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ComponentSharing {
     Shared,
@@ -112,19 +113,6 @@ impl ComponentSharing {
             ComponentSharing::PerAgent => "per-agent-component",
         }
     }
-
-    /// Upper bound on the agent ramp for this sharing mode.
-    ///
-    /// `PerAgent` is capped at the number of distinct components density-prep
-    /// uploads (one component per agent). `Shared` is capped at the
-    /// resident-agent count we expect the per-pod memory ceiling to be reached
-    /// well before.
-    pub fn upper_bound(self) -> u32 {
-        match self {
-            ComponentSharing::Shared => 10_000,
-            ComponentSharing::PerAgent => prep::PER_AGENT_COMPONENT_COUNT,
-        }
-    }
 }
 
 impl Display for ComponentSharing {
@@ -133,27 +121,18 @@ impl Display for ComponentSharing {
     }
 }
 
-/// The agent-count ramp the driver walks for a cell, in increasing order. The
-/// driver creates/activates agents up to each step, takes its measurements,
-/// then advances — until a catastrophic ceiling fires or the sharing mode's
-/// [`ComponentSharing::upper_bound`] is hit.
+/// Default agent-count ramp, used when a cell does not specify one in the suite
+/// YAML. The driver creates/activates agents up to each step, takes its
+/// measurements, then advances — until a catastrophic ceiling fires or the ramp
+/// is exhausted.
 ///
 /// Resolution is concentrated around the 500–1500 per-pod knee observed in
 /// cloud-perf (halved from the 2-pod cloud-perf numbers since density is
-/// single-pod), then coarsens. Steps past the upper bound are dropped.
-pub const AGENT_RAMP: &[u32] = &[
+/// single-pod), then coarsens. This is a stress test: the operator can override
+/// the ramp per cell (or the suite default) with any values.
+pub const DEFAULT_AGENT_RAMP: &[u32] = &[
     100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 10000,
 ];
-
-/// Returns the ramp steps applicable to `sharing`, dropping any step that
-/// exceeds the upper bound and always including the upper bound itself as the
-/// final step.
-pub fn ramp_for(sharing: ComponentSharing) -> Vec<u32> {
-    let bound = sharing.upper_bound();
-    let mut steps: Vec<u32> = AGENT_RAMP.iter().copied().filter(|&n| n < bound).collect();
-    steps.push(bound);
-    steps
-}
 
 #[cfg(test)]
 mod tests {
@@ -161,20 +140,11 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn ramp_shared_caps_at_10000() {
-        let steps = ramp_for(ComponentSharing::Shared);
-        assert_eq!(*steps.last().unwrap(), 10_000);
-        assert!(steps.windows(2).all(|w| w[0] < w[1]), "strictly increasing");
-    }
-
-    #[test]
-    fn ramp_per_agent_caps_at_component_count() {
-        let steps = ramp_for(ComponentSharing::PerAgent);
-        assert_eq!(*steps.last().unwrap(), prep::PER_AGENT_COMPONENT_COUNT);
+    fn default_ramp_is_strictly_increasing() {
         assert!(
-            steps.iter().all(|&n| n <= prep::PER_AGENT_COMPONENT_COUNT),
-            "no step exceeds the per-agent component count"
+            DEFAULT_AGENT_RAMP.windows(2).all(|w| w[0] < w[1]),
+            "default ramp must be strictly increasing"
         );
-        assert!(steps.windows(2).all(|w| w[0] < w[1]), "strictly increasing");
+        assert!(!DEFAULT_AGENT_RAMP.is_empty());
     }
 }

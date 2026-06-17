@@ -107,6 +107,12 @@ pub enum BenchmarkConfig {
         #[arg(long)]
         prefill: Option<u32>,
 
+        /// Comma-separated increasing agent-count ramp the cell walks (e.g.
+        /// `100,250,500,1000`). Supplied per-cell by the buildspec from the
+        /// suite YAML. When omitted, the built-in default ramp is used.
+        #[arg(long, value_delimiter = ',')]
+        ramp: Option<Vec<u32>>,
+
         /// Optional executor `/metrics` URL (per-cell kubectl port-forward) for
         /// the cross-axis snapshot. When absent, snapshots are empty and
         /// ceilings are still detected from driver-local signals.

@@ -14,13 +14,14 @@
 # integration-tests/src/benchmarks/density/agent.rs — the Rust matrix is the
 # source of truth for the axes; this file mirrors it for the buildspec loop.
 #
-# The agent count is NOT a suite parameter: each cell ramps the agent count
-# internally (see AGENT_RAMP in integration-tests/src/benchmarks/density/mod.rs)
-# until the ceiling-detection state machine reports a catastrophic ceiling or
-# the sharing-mode upper bound (10000 shared / 2000 per-agent) is hit.
+# The agent count is NOT a fixed suite parameter: each cell ramps the agent
+# count internally along its `ramp` (a per-cell list overriding the top-level
+# `defaultRamp`) until the ceiling-detection state machine reports a
+# catastrophic ceiling or the ramp is exhausted.
 #
-# Per-cell invocation shape (the buildspec fills in the cloud flags and the
-# per-cell executor-metrics port-forward URL and pod name):
+# Per-cell invocation shape (the buildspec fills in the cloud flags, the
+# per-cell executor-metrics port-forward URL and pod name, and the resolved
+# `--ramp` from this file):
 #
 #   benchmarks density \
 #     --action cell \
@@ -29,6 +30,7 @@
 #     --scenario <scenario> \
 #     --agent-mode <durable|ephemeral> \
 #     --sharing <shared|per-agent> \
+#     --ramp 100,250,500,1000,... \
 #     [--active-fraction <pct>] \
 #     [--prefill <n>] \
 #     --executor-metrics-url http://localhost:9101/metrics \
@@ -38,6 +40,13 @@
 
 name: cloud-density-agent
 section: agent
+
+# Agent-count ramp every cell walks unless it overrides `ramp` below. This is a
+# stress test: tune these freely. Resolution is concentrated around the
+# ~500-1500 per-pod knee observed in cloud-perf (halved for single-pod), then
+# coarsens. A cell stops at the first catastrophic ceiling or when the ramp is
+# exhausted (recorded as terminatedReason=upper_bound_hit).
+defaultRamp: [100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 10000]
 
 cells:
   # Scenario 1 — create-only: create N idle agents, each invoked once then left

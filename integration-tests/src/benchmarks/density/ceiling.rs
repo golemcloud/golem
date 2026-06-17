@@ -263,15 +263,16 @@ impl CeilingDetector {
         // Catastrophic conditions are checked first and independently of the
         // latency-based ceilings: they can fire from any non-terminal state.
         if !self.is_terminal()
-            && let Some(reason) = self.catastrophic_reason(sample) {
-                self.state = CeilingState::Catastrophic { reason };
-                events.push(CeilingEvent::Catastrophic {
-                    at: sample.coord,
-                    reason,
-                    snapshot: sample.snapshot.clone(),
-                });
-                return events;
-            }
+            && let Some(reason) = self.catastrophic_reason(sample)
+        {
+            self.state = CeilingState::Catastrophic { reason };
+            events.push(CeilingEvent::Catastrophic {
+                at: sample.coord,
+                reason,
+                snapshot: sample.snapshot.clone(),
+            });
+            return events;
+        }
 
         match &mut self.state {
             CeilingState::BaselineCollecting { samples } => {
@@ -314,9 +315,10 @@ impl CeilingDetector {
         }
         // Schedule-density only: queue depth has not drained for 60s.
         if let Some(depth) = sample.queue_depth
-            && self.queue_tracker.observe(depth, self.elapsed_secs) {
-                return Some(TerminatedReason::LagRunaway);
-            }
+            && self.queue_tracker.observe(depth, self.elapsed_secs)
+        {
+            return Some(TerminatedReason::LagRunaway);
+        }
         None
     }
 

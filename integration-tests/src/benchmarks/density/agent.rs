@@ -49,7 +49,7 @@ use crate::benchmarks::density::ceiling::{
     CeilingDetector, CeilingEvent, CrossAxisSnapshot, Sample, SampleCoord, TerminatedReason,
 };
 use crate::benchmarks::density::prep::PrepManifest;
-use crate::benchmarks::density::{AgentMode, ComponentSharing, metrics, ramp_for};
+use crate::benchmarks::density::{AgentMode, ComponentSharing, metrics};
 use golem_common::agent_id;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
@@ -106,9 +106,12 @@ pub struct CellConfig {
     pub sharing: ComponentSharing,
     /// Percentage of agents kept active (scenario 2 only): 25 / 50 / 75.
     pub active_fraction: Option<u32>,
-    /// Number of idle agents to pre-fill before measuring (scenario 4 only):
-    /// 500 / 1000 / 2000.
+    /// Number of idle agents to pre-fill before measuring (scenario 4 only).
     pub prefill_n: Option<u32>,
+    /// Increasing agent-count ramp the driver walks for this cell. Supplied by
+    /// the suite YAML (per-cell `ramp` or the suite `defaultRamp`); falls back
+    /// to [`super::DEFAULT_AGENT_RAMP`] when neither is given.
+    pub ramp: Vec<u32>,
 }
 
 impl CellConfig {
@@ -604,7 +607,7 @@ async fn run_ramp_cell(
     components: &[ComponentDto],
     probe: &ExecutorProbe,
 ) -> anyhow::Result<CellOutcome> {
-    let ramp = ramp_for(config.sharing);
+    let ramp = config.ramp.clone();
     let mut detector = CeilingDetector::new();
     let mut outcome = CellOutcome::default();
     let mut active = ActiveLoad::new();
@@ -809,8 +812,10 @@ async fn run_resume_cell(
     // Now ramp additional agents on top of the prefill, taking resume/create
     // probe pairs at each step. Fresh agents use indices above the prefill
     // range; resumes target the earliest (most likely already-evicted) agents.
-    let ramp: Vec<u32> = ramp_for(config.sharing)
-        .into_iter()
+    let ramp: Vec<u32> = config
+        .ramp
+        .iter()
+        .copied()
         .filter(|&n| n > prefill)
         .collect();
     let mut next_fresh = prefill;
@@ -893,7 +898,6 @@ async fn run_resume_cell(
     Ok(outcome)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,6 +911,7 @@ mod tests {
             sharing: ComponentSharing::Shared,
             active_fraction: Some(50),
             prefill_n: None,
+            ramp: vec![100, 250, 500],
         };
         assert_eq!(active_count(&cell, 1000), 500);
     }
@@ -919,6 +924,7 @@ mod tests {
             sharing: ComponentSharing::Shared,
             active_fraction: None,
             prefill_n: None,
+            ramp: vec![100, 250, 500],
         };
         assert_eq!(active_count(&cell, 1000), 1000);
     }

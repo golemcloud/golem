@@ -301,6 +301,7 @@ async fn main() {
             sharing,
             active_fraction,
             prefill,
+            ramp,
             executor_metrics_url,
             executor_pod_name,
             executor_namespace,
@@ -319,6 +320,7 @@ async fn main() {
                 sharing.map(map_sharing),
                 *active_fraction,
                 *prefill,
+                ramp.clone(),
                 executor_metrics_url.clone(),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
@@ -566,6 +568,7 @@ async fn run_density(
     sharing: Option<ComponentSharing>,
     active_fraction: Option<u32>,
     prefill: Option<u32>,
+    ramp: Option<Vec<u32>>,
     executor_metrics_url: Option<String>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
@@ -590,12 +593,17 @@ async fn run_density(
             let manifest =
                 PrepManifest::load(prep_manifest_path).expect("failed to load prep manifest");
 
+            let ramp = ramp.unwrap_or_else(|| {
+                integration_tests::benchmarks::density::DEFAULT_AGENT_RAMP.to_vec()
+            });
+
             let config = CellConfig {
                 scenario: scenario.expect("--scenario required for --action cell"),
                 mode: agent_mode.expect("--agent-mode required for --action cell"),
                 sharing: sharing.expect("--sharing required for --action cell"),
                 active_fraction,
                 prefill_n: prefill,
+                ramp,
             };
 
             let probe = ExecutorProbe {
