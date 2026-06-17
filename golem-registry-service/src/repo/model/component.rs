@@ -211,6 +211,22 @@ impl ComponentRevisionRecord {
                                     )
                                 })
                                 .collect(),
+                            initial_permission: self
+                                .metadata
+                                .value()
+                                .agent_type_initial_permission_card(name)
+                                .map(|card| diff::AgentTypeInitialPermission {
+                                    lower_positive: card.lower_positive.clone(),
+                                    lower_negative: card.lower_negative.clone(),
+                                    upper_positive: card.upper_positive.clone(),
+                                    upper_negative: card.upper_negative.clone(),
+                                })
+                                .unwrap_or_else(|| diff::AgentTypeInitialPermission {
+                                    lower_positive: Vec::new(),
+                                    lower_negative: Vec::new(),
+                                    upper_positive: Vec::new(),
+                                    upper_negative: Vec::new(),
+                                }),
                         };
                     Ok((name.0.clone(), state.into()))
                 })

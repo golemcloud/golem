@@ -16,7 +16,7 @@ use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
     AgentResult, EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream,
-    build_ifs_archive,
+    build_ifs_archive, default_agent_type_provision_config_creation_for_account,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -39,9 +39,11 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ComponentCreation,
-    ComponentDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    AgentTypeInitialPermission, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
+    ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -201,13 +203,17 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         self.deps.redis()
     }
 
+    fn account_email(&self) -> AccountEmail {
+        self.account_email.clone()
+    }
+
     async fn store_component_with(
         &self,
         wasm_name: &str,
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        mut agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -222,6 +228,15 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let client = self.deps.registry_service().client(&self.token).await;
 
         let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
+        for agent_type in &agent_types {
+            agent_type_provision_configs
+                .entry(agent_type.type_name.clone())
+                .or_insert_with(|| {
+                    default_agent_type_provision_config_creation_for_account(
+                        self.account_email.clone(),
+                    )
+                });
+        }
 
         trace!("Agent types in component {component_name}:\n{agent_types:#?}");
 
@@ -295,6 +310,36 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             Some((File::open(source_path).await?, agent_types))
         } else {
             None
+        };
+
+        let agent_type_provision_config_updates = if let Some((_wasm, agent_types)) = &updated_wasm
+        {
+            let previous_component = client
+                .get_component_revision(&component_id.0, previous_revision.get())
+                .await?;
+            let mut updates = agent_type_provision_config_updates.unwrap_or_default();
+
+            for agent_type in agent_types {
+                if !previous_component
+                    .metadata
+                    .agent_type_provision_configs()
+                    .contains_key(&agent_type.type_name)
+                {
+                    let update = updates.entry(agent_type.type_name.clone()).or_default();
+                    if update.initial_permission.is_none() {
+                        update.initial_permission =
+                            Some(AgentTypeInitialPermission::default_for_recipient(
+                                RecipientPattern::Account {
+                                    account: self.account_email.clone(),
+                                },
+                            ));
+                    }
+                }
+            }
+
+            (!updates.is_empty()).then_some(updates)
+        } else {
+            agent_type_provision_config_updates
         };
 
         let component = client

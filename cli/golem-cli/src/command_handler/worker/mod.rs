@@ -1087,16 +1087,13 @@ impl WorkerCommandHandler {
                 let parsed_agent_type_name =
                     ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
 
-                let defaults = parsed_agent_type_name
-                    .as_ref()
-                    .and_then(|agent_type_name| {
-                        worker_component
-                            .metadata
-                            .agent_type_provision_configs()
-                            .get(agent_type_name)
-                            .cloned()
-                    })
-                    .unwrap_or_default();
+                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                    worker_component
+                        .metadata
+                        .agent_type_provision_configs()
+                        .get(agent_type_name)
+                        .cloned()
+                });
 
                 let source_language = parsed_agent_type_name
                     .as_ref()
@@ -1332,8 +1329,7 @@ impl WorkerCommandHandler {
             .metadata
             .agent_type_provision_configs()
             .get(&agent_name_match.agent_type_name)
-            .cloned()
-            .unwrap_or_default();
+            .cloned();
 
         let secret_config_paths = secret_config_paths_for_agent_type(
             component.metadata.agent_types(),

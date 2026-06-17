@@ -266,6 +266,8 @@ pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
@@ -292,6 +294,7 @@ impl ComponentTemplate {
             clean: self.clean.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
+                initial_card: self.initial_card.clone(),
                 env_merge_mode: self.env_merge_mode,
                 env: self.env.clone(),
                 plugins_merge_mode: self.plugins_merge_mode,
@@ -325,6 +328,8 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
@@ -351,6 +356,7 @@ impl Component {
             clean: self.clean.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
+                initial_card: self.initial_card.clone(),
                 env_merge_mode: self.env_merge_mode,
                 env: self.env.clone(),
                 plugins_merge_mode: self.plugins_merge_mode,
@@ -382,6 +388,8 @@ pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
@@ -406,6 +414,7 @@ impl ComponentPreset {
             clean: self.clean,
             agent_properties: AgentLayerProperties {
                 config: self.config,
+                initial_card: self.initial_card,
                 env_merge_mode: self.env_merge_mode,
                 env: self.env,
                 plugins_merge_mode: self.plugins_merge_mode,
@@ -424,6 +433,8 @@ pub struct Agent {
     pub templates: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -444,6 +455,7 @@ impl Agent {
     pub fn agent_layer_properties(&self) -> AgentLayerProperties {
         AgentLayerProperties {
             config: self.config.clone(),
+            initial_card: self.initial_card.clone(),
             env_merge_mode: self.env_merge_mode,
             env: self.env.clone(),
             plugins_merge_mode: self.plugins_merge_mode,
@@ -462,6 +474,8 @@ pub struct AgentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
@@ -479,6 +493,7 @@ impl AgentPreset {
     pub fn into_agent_layer_properties(self) -> AgentLayerProperties {
         AgentLayerProperties {
             config: self.config,
+            initial_card: self.initial_card,
             env_merge_mode: self.env_merge_mode,
             env: self.env,
             plugins_merge_mode: self.plugins_merge_mode,
@@ -680,6 +695,24 @@ pub struct InitialComponentFile {
     pub permissions: Option<AgentFilePermissions>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestInitialCard {
+    #[serde(default)]
+    pub lower_bound: ManifestInitialCardBound,
+    #[serde(default)]
+    pub upper_bound: ManifestInitialCardBound,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestInitialCardBound {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positive: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub negative: Vec<String>,
+}
+
 // Common component-level fields merged from templates/components/presets.
 // This helper intentionally stays outside serde parsing: using flatten here would weaken
 // strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
@@ -702,6 +735,8 @@ pub struct ComponentLayerProperties {
 pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1190,6 +1225,7 @@ mod test {
                     custom_commands,
                     clean,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1251,6 +1287,7 @@ mod test {
                     custom_commands,
                     clean,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1316,6 +1353,7 @@ mod test {
                     custom_commands,
                     clean,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1352,6 +1390,7 @@ mod test {
                 )| AgentPreset {
                     default: is_default.then_some(Marker),
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1390,6 +1429,7 @@ mod test {
                 )| Agent {
                     templates,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1954,6 +1994,33 @@ mod test {
         let result = Application::from_yaml_str(source);
 
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn agents_accept_initial_card() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            agents:
+              Cart:
+                initialCard:
+                  lowerBound:
+                    positive:
+                      - 'filesystem(?self) @ account@example.com/app/env/component/Cart : read : /data/**'
+                    negative: []
+                  upperBound:
+                    positive: []
+                    negative: []
+        "# };
+
+        let app = Application::from_yaml_str(source).expect("initialCard should parse");
+        let initial_card = app
+            .agents
+            .get(&AgentTypeName("Cart".to_string()))
+            .and_then(|agent| agent.initial_card.as_ref())
+            .expect("agent initialCard should be present");
+
+        assert_eq!(initial_card.lower_bound.positive.len(), 1);
     }
 
     #[test]

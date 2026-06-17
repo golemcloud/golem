@@ -15671,6 +15671,42 @@ components:
           $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
       required:
       - currentRevision
+    AgentTypeInitialPermission:
+      title: AgentTypeInitialPermission
+      type: object
+      properties:
+        lowerBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - default:
+              negative: []
+              positive: []
+        upperBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - default:
+              negative: []
+              positive: []
+    AgentTypeInitialPermissionBoundCreation:
+      title: AgentTypeInitialPermissionBoundCreation
+      type: object
+      properties:
+        positive:
+          default: []
+          type: array
+          items:
+            type: string
+        negative:
+          default: []
+          type: array
+          items:
+            type: string
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -15678,30 +15714,36 @@ components:
         in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
       type: object
       properties:
+        initialPermission:
+          $ref: '#/components/schemas/PolymorphicCard'
         env:
-          default: {}
           type: object
           additionalProperties:
             type: string
         config:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         plugins:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/InstalledPlugin'
         files:
-          default: []
           type: array
           items:
             $ref: '#/components/schemas/InitialAgentFile'
+      required:
+      - initialPermission
+      - env
+      - config
+      - plugins
+      - files
     AgentTypeProvisionConfigCreation:
       title: AgentTypeProvisionConfigCreation
       type: object
       properties:
+        initialPermission:
+          $ref: '#/components/schemas/AgentTypeInitialPermission'
         env:
           default: {}
           type: object
@@ -15723,10 +15765,16 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFileOptions'
+      required:
+      - initialPermission
     AgentTypeProvisionConfigUpdate:
       title: AgentTypeProvisionConfigUpdate
       type: object
       properties:
+        initialPermission:
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermission'
+          - {}
         env:
           type: object
           additionalProperties:
@@ -17801,6 +17849,8 @@ components:
           format: uuid
       required:
       - environmentPluginGrantId
+    PolymorphicCard:
+      type: object
     ProducerField:
       title: ProducerField
       type: object

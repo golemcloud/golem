@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
-};
+use super::{PermissionPattern, PolymorphicPermissionPattern};
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};
@@ -74,6 +72,57 @@ pub struct PolymorphicCard {
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Type for PolymorphicCard {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "PolymorphicCard".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
+            poem_openapi::registry::MetaSchema::new("object")
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ToJSON for PolymorphicCard {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(self).ok()
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for PolymorphicCard {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(value) => {
+                serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
+            }
+            None => Err(poem_openapi::types::ParseError::expected_input()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -137,17 +186,4 @@ impl StoredCard {
             other => Err(other),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PolymorphicManifestCard {
-    pub card_id: CardId,
-    pub parent_ids: Vec<CardId>,
-    pub lower_positive: Vec<PolymorphicManifestPermissionPattern>,
-    pub lower_negative: Vec<PolymorphicManifestPermissionPattern>,
-    pub upper_positive: Vec<PolymorphicManifestPermissionPattern>,
-    pub upper_negative: Vec<PolymorphicManifestPermissionPattern>,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub system_card: bool,
 }

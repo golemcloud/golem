@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::json::NormalizedJsonValue;
+use crate::model::card::PolymorphicPermissionPattern;
 use crate::model::component::AgentFilePermissions;
 use crate::model::diff::DiffError;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
@@ -73,6 +74,7 @@ pub struct AgentTypeProvisionConfig {
     pub files_by_path: BTreeMap<String, HashOf<AgentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins_by_grant_id: BTreeMap<Uuid, PluginInstallation>,
+    pub initial_permission: AgentTypeInitialPermission,
 }
 
 impl Hashable for AgentTypeProvisionConfig {
@@ -92,6 +94,8 @@ pub struct AgentTypeProvisionConfigDiff {
     pub plugin_changes: BTreeMapDiff<Uuid, PluginInstallation>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub config_changes: BTreeMapDiff<String, NormalizedJsonValue>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub initial_permission_changed: bool,
 }
 
 impl Diffable for AgentTypeProvisionConfig {
@@ -111,22 +115,42 @@ impl Diffable for AgentTypeProvisionConfig {
             .config
             .diff_with_current(&current.config)?
             .unwrap_or_default();
+        let initial_permission_changed = new.initial_permission != current.initial_permission;
 
         Ok(
             if !env_changes.is_empty()
                 || !file_changes.is_empty()
                 || !plugin_changes.is_empty()
                 || !config_changes.is_empty()
+                || initial_permission_changed
             {
                 Some(AgentTypeProvisionConfigDiff {
                     env_changes,
                     file_changes,
                     plugin_changes,
                     config_changes,
+                    initial_permission_changed,
                 })
             } else {
                 None
             },
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTypeInitialPermission {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lower_positive: Vec<PolymorphicPermissionPattern>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lower_negative: Vec<PolymorphicPermissionPattern>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub upper_positive: Vec<PolymorphicPermissionPattern>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub upper_negative: Vec<PolymorphicPermissionPattern>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

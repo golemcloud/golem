@@ -28,6 +28,7 @@ use golem_common::model::agent::{
     AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::card::{PolymorphicPermissionPattern, render_polymorphic_permission};
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
@@ -627,6 +628,8 @@ pub struct DeploymentDisplayAgentType {
     pub files: BTreeMap<String, DeploymentDisplayAgentFile>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, DeploymentDisplayPlugin>,
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermission::is_empty")]
+    pub initial_permission: DeploymentDisplayInitialPermission,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_mount: Option<DeploymentDisplayHttpMount>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -655,6 +658,36 @@ pub struct DeploymentDisplayPlugin {
     pub priority: i32,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentDisplayInitialPermission {
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionBound::is_empty")]
+    pub lower_bound: DeploymentDisplayInitialPermissionBound,
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionBound::is_empty")]
+    pub upper_bound: DeploymentDisplayInitialPermissionBound,
+}
+
+impl DeploymentDisplayInitialPermission {
+    fn is_empty(&self) -> bool {
+        self.lower_bound.is_empty() && self.upper_bound.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentDisplayInitialPermissionBound {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub positive: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub negative: Vec<String>,
+}
+
+impl DeploymentDisplayInitialPermissionBound {
+    fn is_empty(&self) -> bool {
+        self.positive.is_empty() && self.negative.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -850,6 +883,10 @@ fn display_agent_type(
         plugins: provision_config
             .map(|config| display_plugins(masking, config))
             .unwrap_or_default(),
+        initial_permission: provision_config
+            .map(display_initial_permission)
+            .transpose()?
+            .unwrap_or_default(),
         http_mount: agent.http_mount.as_ref().map(display_http_mount),
         methods: agent
             .methods
@@ -983,6 +1020,29 @@ fn display_plugins(
             )
         })
         .collect()
+}
+
+fn display_initial_permission(
+    provision_config: &diff::AgentTypeProvisionConfig,
+) -> anyhow::Result<DeploymentDisplayInitialPermission> {
+    Ok(DeploymentDisplayInitialPermission {
+        lower_bound: DeploymentDisplayInitialPermissionBound {
+            positive: render_permissions(&provision_config.initial_permission.lower_positive)?,
+            negative: render_permissions(&provision_config.initial_permission.lower_negative)?,
+        },
+        upper_bound: DeploymentDisplayInitialPermissionBound {
+            positive: render_permissions(&provision_config.initial_permission.upper_positive)?,
+            negative: render_permissions(&provision_config.initial_permission.upper_negative)?,
+        },
+    })
+}
+
+fn render_permissions(permissions: &[PolymorphicPermissionPattern]) -> anyhow::Result<Vec<String>> {
+    permissions
+        .iter()
+        .map(render_polymorphic_permission)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::msg)
 }
 
 fn display_method(

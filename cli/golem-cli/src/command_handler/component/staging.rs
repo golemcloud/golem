@@ -22,15 +22,18 @@ use crate::model::app::{
     CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
 };
 use crate::model::app_raw;
+use crate::model::component::initial_permission_recipient_context;
 use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
+use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeProvisionConfigCreation,
-    AgentTypeProvisionConfigUpdate, ArchiveFilePath, PluginInstallation, PluginInstallationAction,
-    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+    AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermission,
+    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ArchiveFilePath,
+    ComponentName, PluginInstallation, PluginInstallationAction, PluginInstallationUpdate,
+    PluginPriority, PluginUninstallation,
 };
 use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDiff};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -526,6 +529,8 @@ impl<'a> ComponentStager<'a> {
 
     pub async fn agent_type_provision_configs(
         &self,
+        environment: &ResolvedEnvironmentIdentity,
+        component_name: &ComponentName,
     ) -> anyhow::Result<BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>> {
         let all_files = self.all_manifest_files().await?;
         let archive_paths_by_source =
@@ -535,7 +540,14 @@ impl<'a> ComponentStager<'a> {
             &self.component_deploy_properties.agent_type_configs
         {
             let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
-            let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
+            let initial_permission = self.normalize_initial_permission(
+                environment,
+                component_name,
+                agent_type_name,
+                manifest_config,
+            )?;
+            let mut creation = manifest_config
+                .to_provision_config_creation(resolved_plugins, initial_permission)?;
             creation.files = self
                 .resolve_archive_files_for_agent(agent_type_name, &archive_paths_by_source)
                 .await?;
@@ -547,6 +559,8 @@ impl<'a> ComponentStager<'a> {
 
     pub async fn agent_type_provision_config_updates(
         &self,
+        environment: &ResolvedEnvironmentIdentity,
+        component_name: &ComponentName,
         changed_files: &ChangedComponentFiles,
     ) -> anyhow::Result<Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>> {
         let changed = match self.diff.changed_agent_types() {
@@ -556,8 +570,14 @@ impl<'a> ComponentStager<'a> {
                 for (name, manifest_config) in &self.component_deploy_properties.agent_type_configs
                 {
                     let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
-                    let mut creation =
-                        manifest_config.to_provision_config_creation(resolved_plugins);
+                    let initial_permission = self.normalize_initial_permission(
+                        environment,
+                        component_name,
+                        name,
+                        manifest_config,
+                    )?;
+                    let mut creation = manifest_config
+                        .to_provision_config_creation(resolved_plugins, initial_permission)?;
                     creation.files = self
                         .resolve_archive_files_for_agent(
                             name,
@@ -577,6 +597,7 @@ impl<'a> ComponentStager<'a> {
                     result.insert(
                         name.clone(),
                         AgentTypeProvisionConfigUpdate {
+                            initial_permission: Some(creation.initial_permission),
                             env: Some(creation.env),
                             config: Some(creation.config),
                             files_to_add_or_update: self
@@ -606,7 +627,14 @@ impl<'a> ComponentStager<'a> {
             .filter(|(name, _)| changed.contains(name.0.as_str()))
         {
             let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
-            let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
+            let initial_permission = self.normalize_initial_permission(
+                environment,
+                component_name,
+                name,
+                manifest_config,
+            )?;
+            let mut creation = manifest_config
+                .to_provision_config_creation(resolved_plugins, initial_permission)?;
             creation.files = self
                 .resolve_archive_files_for_agent(name, &changed_files.archive_paths_by_source)
                 .await?;
@@ -680,6 +708,8 @@ impl<'a> ComponentStager<'a> {
             result.insert(
                 name.clone(),
                 AgentTypeProvisionConfigUpdate {
+                    initial_permission: self
+                        .initial_permission_update_for(name, creation.initial_permission),
                     env: Some(creation.env),
                     config: Some(creation.config),
                     files_to_add_or_update: self
@@ -692,5 +722,42 @@ impl<'a> ComponentStager<'a> {
         }
 
         Ok(Some(result))
+    }
+
+    fn normalize_initial_permission(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        component_name: &ComponentName,
+        agent_type_name: &AgentTypeName,
+        manifest_config: &AgentTypeManifestProvisionConfig,
+    ) -> anyhow::Result<AgentTypeInitialPermission> {
+        let context =
+            initial_permission_recipient_context(environment, component_name, agent_type_name);
+        Ok(manifest_config.to_initial_permission(&context))
+    }
+
+    fn initial_permission_update_for(
+        &self,
+        name: &AgentTypeName,
+        initial_permission: AgentTypeInitialPermission,
+    ) -> Option<AgentTypeInitialPermission> {
+        match &self.diff {
+            ComponentDiff::All => Some(initial_permission),
+            ComponentDiff::Diff { diff } => {
+                match diff
+                    .agent_type_provision_config_changes
+                    .get(name.0.as_str())
+                {
+                    Some(diff::BTreeMapDiffValue::Create)
+                    | Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
+                        ..
+                    })) => Some(initial_permission),
+                    Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                        diff,
+                    })) if diff.initial_permission_changed => Some(initial_permission),
+                    _ => None,
+                }
+            }
+        }
     }
 }

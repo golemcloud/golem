@@ -15,14 +15,17 @@
 use anyhow::{Context, anyhow};
 use golem_common::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountEmail;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::card::PolymorphicCard;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::component::{
+    AgentTypeInitialPermission, ComponentDto, ComponentId, ComponentName, ComponentRevision,
+};
 use golem_common::model::component_metadata::{
-    ComponentMetadata, LinearMemory, RawComponentMetadata, default_agent_initial_card,
+    ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
@@ -195,7 +198,8 @@ impl FileSystemComponentWriter {
             .map_err(|err| anyhow!("Failed to read component size: {err:#}"))?
             .len();
 
-        let agent_type_initial_permissions = default_initial_permissions(&agent_types);
+        let agent_type_provision_configs =
+            with_default_initial_permissions(agent_type_provision_configs, &agent_types);
 
         let metadata = LocalFileSystemComponentMetadata {
             account_id,
@@ -214,7 +218,6 @@ impl FileSystemComponentWriter {
             root_package_name,
             root_package_version,
             wasm_hash,
-            agent_type_initial_permissions,
             final_hash: Hash::empty(),
         }
         .with_updated_hash()?;
@@ -594,7 +597,6 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub wasm_filename: String,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentTypeSchema>,
-    pub agent_type_initial_permissions: BTreeMap<AgentTypeName, PolymorphicCard>,
     pub target_path: PathBuf,
 
     pub root_package_name: Option<String>,
@@ -633,8 +635,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.root_package_version,
                 value.agent_types,
                 value.agent_type_provision_configs,
-            )
-            .with_agent_initial_permissions(value.agent_type_initial_permissions),
+            ),
             created_at: Default::default(),
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,
@@ -643,11 +644,25 @@ impl From<LocalFileSystemComponentMetadata> for Component {
     }
 }
 
-fn default_initial_permissions(
+fn with_default_initial_permissions(
+    mut provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     agent_types: &[AgentTypeSchema],
-) -> BTreeMap<AgentTypeName, PolymorphicCard> {
-    agent_types
-        .iter()
-        .map(|agent_type| (agent_type.type_name.clone(), default_agent_initial_card()))
-        .collect()
+) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
+    for agent_type in agent_types {
+        provision_configs
+            .entry(agent_type.type_name.clone())
+            .or_insert_with(|| AgentTypeProvisionConfig {
+                initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                    RecipientPattern::Account {
+                        account: AccountEmail::new("test@golem"),
+                    },
+                )
+                .to_polymorphic_card(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            });
+    }
+    provision_configs
 }

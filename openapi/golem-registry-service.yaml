@@ -8163,37 +8163,81 @@ components:
           format: uint64
         secretValue:
           $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
+    AgentTypeInitialPermission:
+      type: object
+      title: AgentTypeInitialPermission
+      properties:
+        lowerBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - default:
+              negative: []
+              positive: []
+        upperBound:
+          default:
+            negative: []
+            positive: []
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - default:
+              negative: []
+              positive: []
+    AgentTypeInitialPermissionBoundCreation:
+      type: object
+      title: AgentTypeInitialPermissionBoundCreation
+      properties:
+        positive:
+          type: array
+          default: []
+          items:
+            type: string
+        negative:
+          type: array
+          default: []
+          items:
+            type: string
     AgentTypeProvisionConfig:
       type: object
       title: AgentTypeProvisionConfig
       description: |-
         Per-agent-type provisioning configuration stored alongside AgentType declarations
         in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
+      required:
+      - initialPermission
+      - env
+      - config
+      - plugins
+      - files
       properties:
+        initialPermission:
+          $ref: '#/components/schemas/PolymorphicCard'
         env:
           type: object
-          default: {}
           additionalProperties:
             type: string
         config:
           type: array
-          default: []
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         plugins:
           type: array
-          default: []
           items:
             $ref: '#/components/schemas/InstalledPlugin'
         files:
           type: array
-          default: []
           items:
             $ref: '#/components/schemas/InitialAgentFile'
     AgentTypeProvisionConfigCreation:
       type: object
       title: AgentTypeProvisionConfigCreation
+      required:
+      - initialPermission
       properties:
+        initialPermission:
+          $ref: '#/components/schemas/AgentTypeInitialPermission'
         env:
           type: object
           default: {}
@@ -8219,6 +8263,11 @@ components:
       type: object
       title: AgentTypeProvisionConfigUpdate
       properties:
+        initialPermission:
+          default: null
+          allOf:
+          - $ref: '#/components/schemas/AgentTypeInitialPermission'
+          - default: null
         env:
           type: object
           additionalProperties:
@@ -11168,6 +11217,8 @@ components:
           type: string
           format: uuid
           description: EnvironmentPluginGrantId to identify the plugin to update
+    PolymorphicCard:
+      type: object
     ProducerField:
       type: object
       title: ProducerField

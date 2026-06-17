@@ -183,12 +183,7 @@ fn permission_parts(value: &str) -> Result<PermissionParts, String> {
     let (owner, rest) = rest
         .split_once(") @ ")
         .ok_or_else(|| "missing class owner close before recipient separator".to_string())?;
-    let (recipient, rest) = rest
-        .split_once(':')
-        .ok_or_else(|| "missing verb separator".to_string())?;
-    let (verb, resource) = rest
-        .split_once(':')
-        .ok_or_else(|| "missing resource separator".to_string())?;
+    let (recipient, verb, resource) = permission_tail_parts(rest)?;
 
     Ok(PermissionParts {
         class: class.trim().to_string(),
@@ -197,6 +192,21 @@ fn permission_parts(value: &str) -> Result<PermissionParts, String> {
         verb: verb.trim().to_string(),
         resource: resource.trim().to_string(),
     })
+}
+
+fn permission_tail_parts(value: &str) -> Result<(&str, &str, &str), String> {
+    let (recipient, rest) = value
+        .split_once(" : ")
+        .ok_or_else(|| "missing verb separator".to_string())?;
+    let (verb, resource) =
+        split_resource_separator(rest).ok_or_else(|| "missing resource separator".to_string())?;
+    Ok((recipient, verb, resource))
+}
+
+fn split_resource_separator(value: &str) -> Option<(&str, &str)> {
+    value
+        .split_once(" : ")
+        .or_else(|| value.strip_suffix(" :").map(|verb| (verb, "")))
 }
 
 fn reject_slot_variables(parts: &PermissionParts) -> Result<(), CardParseError> {

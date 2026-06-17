@@ -1945,6 +1945,8 @@ mod tests {
         ) -> Result<Component, WorkerExecutorError> {
             use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
             use golem_common::model::agent::AgentTypeName;
+            use golem_common::model::card::recipient::RecipientPattern;
+            use golem_common::model::component::AgentTypeInitialPermission;
             use std::collections::BTreeMap;
 
             let provision_configs = if self.installed_plugins.is_empty() {
@@ -1953,8 +1955,18 @@ mod tests {
                 BTreeMap::from([(
                     AgentTypeName("TestPlugin".to_string()),
                     AgentTypeProvisionConfig {
+                        initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                            RecipientPattern::Account {
+                                account: golem_common::model::account::AccountEmail::new(
+                                    "test@golem",
+                                ),
+                            },
+                        )
+                        .to_polymorphic_card(),
                         plugins: self.installed_plugins.clone(),
-                        ..Default::default()
+                        env: BTreeMap::new(),
+                        config: Vec::new(),
+                        files: Vec::new(),
                     },
                 )])
             };
