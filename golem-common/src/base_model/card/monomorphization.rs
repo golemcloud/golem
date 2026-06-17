@@ -580,16 +580,24 @@ mod tests {
     }
 
     fn environment_view_target(owner: &str) -> PermissionTarget {
+        environment_target(owner, EnvironmentVerb::View)
+    }
+
+    fn environment_target(owner: &str, verb: EnvironmentVerb) -> PermissionTarget {
         PermissionTarget::Environment(ClassPermissionTarget::<EnvironmentClass> {
-            verb: Some(EnvironmentVerb::View),
+            verb: Some(verb),
             owner: EnvironmentOwnerPattern::parse(owner).unwrap(),
             resource: EnvironmentResourcePattern::Any,
         })
     }
 
     fn component_view_target(owner: &str) -> PermissionTarget {
+        component_target(owner, ComponentVerb::View)
+    }
+
+    fn component_target(owner: &str, verb: ComponentVerb) -> PermissionTarget {
         PermissionTarget::Component(ClassPermissionTarget::<ComponentClass> {
-            verb: Some(ComponentVerb::View),
+            verb: Some(verb),
             owner: ComponentOwnerPattern::parse(owner).unwrap(),
             resource: ComponentResourcePattern::Any,
         })
@@ -657,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn default_agent_initial_template_is_current_component_scoped() {
+    fn default_agent_initial_template_is_current_environment_scoped() {
         let context = context();
         let template =
             AgentInitialPermissionTemplate::default_for(&context.environment, &context.component);
@@ -684,6 +692,22 @@ mod tests {
                 .unwrap()
         );
         assert!(
+            !surface
+                .authorize(&environment_target(
+                    "owner@example.com/shop/prod",
+                    EnvironmentVerb::Update
+                ))
+                .unwrap()
+        );
+        assert!(
+            !surface
+                .authorize(&component_target(
+                    "owner@example.com/shop/prod/cart-svc",
+                    ComponentVerb::Update
+                ))
+                .unwrap()
+        );
+        assert!(
             surface
                 .authorize(&agent_target(
                     "owner@example.com/shop/prod/cart-svc/Cart(bob)",
@@ -692,7 +716,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            !surface
+            surface
                 .authorize(&agent_target(
                     "owner@example.com/shop/prod/inventory-svc/Inventory(bob)",
                     AgentVerb::Invoke,

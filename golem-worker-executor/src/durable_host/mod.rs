@@ -634,7 +634,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         golem_common::model::card::EffectiveSurface::from_cards(
             std::slice::from_ref(&card),
-            &golem_common::model::card::recipient::RecipientPattern::Any,
+            &golem_common::model::card::recipient::RecipientPattern::Agent {
+                account: component.account_email.as_str().to_string(),
+                application: component.application_name.0.clone(),
+                environment: component.environment_name.0.clone(),
+                component: component.component_name.0.clone(),
+                agent: self.owned_agent_id.agent_id.agent_id.clone(),
+            },
         )
         .unwrap_or_default()
     }
