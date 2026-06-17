@@ -17,10 +17,10 @@ use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -89,7 +89,7 @@ async fn optional_group_present_with_all_fields(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -154,7 +154,7 @@ async fn optional_group_present_with_required_field_only(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -202,7 +202,7 @@ async fn all_optional_group_is_empty_object_when_no_children_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(parsed, json!({ "allOptionalGroup": {} }));
@@ -253,7 +253,7 @@ async fn all_optional_group_present_when_child_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(parsed, json!({ "allOptionalGroup": { "x": 7 } }));
@@ -307,7 +307,7 @@ async fn optional_group_absent_when_required_nested_child_missing(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(parsed, json!({}));
@@ -368,7 +368,7 @@ async fn optional_group_present_when_required_nested_child_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(

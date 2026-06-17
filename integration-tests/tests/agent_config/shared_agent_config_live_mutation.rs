@@ -21,10 +21,10 @@ use golem_client::model::AgentSecretCreation;
 use golem_common::model::agent_secret::{AgentSecretPath, AgentSecretUpdate};
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use golem_wasm::analysis::analysed_type;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
@@ -96,7 +96,7 @@ async fn agent_reads_updated_environment_secret(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -138,7 +138,7 @@ async fn agent_reads_updated_environment_secret(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -206,7 +206,7 @@ async fn agent_fails_on_deleted_environment_secret(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -327,7 +327,7 @@ async fn agent_reads_recreated_environment_secret(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -407,7 +407,7 @@ async fn agent_reads_secret_after_canonicalized_update(
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
 
-        let_assert!(Value::String(config) = response);
+        let_assert!(SchemaValue::String(config) = response);
 
         if config.contains("bar") {
             parsed_config = serde_json::from_str(&config)?;

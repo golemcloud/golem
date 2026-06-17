@@ -20,10 +20,10 @@ use golem_client::api::{RegistryServiceClient, WorkerError};
 use golem_client::model::AgentSecretCreation;
 use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use golem_wasm::analysis::analysed_type;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
@@ -92,7 +92,7 @@ async fn agent_reads_secret_created_from_default(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
 
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
@@ -170,7 +170,7 @@ async fn agent_reads_secret_updated_from_default(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
 
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
@@ -259,7 +259,7 @@ async fn agent_reads_secret_with_different_casing(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
 
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
@@ -312,7 +312,7 @@ async fn agent_reads_secret_with_mixed_case_path(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
 
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 

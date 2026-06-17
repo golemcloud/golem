@@ -33,12 +33,12 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator,
 };
+use golem_common::schema::schema_value::ResultValuePayload;
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerLogEventStream, update_counts};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::{FromValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
 use std::collections::{HashMap, HashSet};
@@ -84,31 +84,50 @@ async fn dynamic_worker_creation(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let agent_name = agent_id.to_string();
-    assert_eq!(args, Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
+    assert_eq!(
+        args,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List { elements: vec![] }))
+        })
+    );
     assert_eq!(
         env,
-        Value::Result(Ok(Some(Box::new(Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String(agent_name.clone())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String(agent_name)
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component.id))
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                Value::String("0".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_TYPE".to_string()),
-                Value::String("Environment".to_string()),
-            ])
-        ])))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(agent_name.clone())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(agent_name)
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(format!("{}", component.id))
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string()),
+                        ]
+                    }
+                ]
+            }))
+        })
     );
 
     Ok(())
@@ -145,7 +164,7 @@ async fn counter_resource_test_1(
 
     let result_value = result.into_return_value().expect("Expected a return value");
 
-    assert_eq!(result_value, Value::U64(5));
+    assert_eq!(result_value, SchemaValue::U64(5));
 
     user.check_oplog_is_queryable(&agent_id).await?;
     Ok(())
@@ -182,7 +201,7 @@ async fn counter_resource_test_1_json(
 
     let result_value = result.into_return_value().expect("Expected a return value");
 
-    assert_eq!(result_value, Value::U64(5));
+    assert_eq!(result_value, SchemaValue::U64(5));
 
     user.check_oplog_is_queryable(&agent_id).await?;
     Ok(())
@@ -249,23 +268,31 @@ async fn shopping_cart_example(
 
     assert_eq!(
         contents_value,
-        Value::List(vec![
-            Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1001".to_string()),
-                Value::String("Golem Cloud Subscription 1y".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::U64(2),
-            ]),
-        ])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1000".to_string()),
+                        SchemaValue::String("Golem T-Shirt M".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1001".to_string()),
+                        SchemaValue::String("Golem Cloud Subscription 1y".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1002".to_string()),
+                        SchemaValue::String("Mud Golem".to_string()),
+                        SchemaValue::U64(2),
+                    ]
+                },
+            ]
+        }
     );
 
     Ok(())
@@ -307,7 +334,7 @@ async fn rust_rpc_with_payload(
         .into_return_value()
         .expect("Expected a single return value");
 
-    let uuid = UuidRecord::from_value(uuid_as_value.clone()).expect("UUID expected");
+    let uuid = <uuid::Uuid as FromSchema>::from_value(&uuid_as_value).expect("UUID expected");
 
     let child_agent_id = agent_id!("RustChild", uuid);
 
@@ -323,11 +350,15 @@ async fn rust_rpc_with_payload(
 
     assert_eq!(
         option_payload_as_value,
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::String("hello world".to_string()),
-            uuid_as_value.clone(),
-            Value::Enum(0)
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("hello world".to_string()),
+                    uuid_as_value.clone(),
+                    SchemaValue::Enum { case: 0 }
+                ]
+            }))
+        }
     );
     Ok(())
 }
@@ -732,7 +763,7 @@ async fn auto_update_on_idle(
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    assert_eq!(result, data_value!(0u64));
+    assert_eq!(result.into_return_value(), Some(SchemaValue::U64(0)));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
@@ -779,43 +810,39 @@ async fn auto_update_on_idle_via_host_function(
         .await?;
 
     let (high_bits, low_bits) = agent_id.component_id.0.as_u64_pair();
-    user.invoke_and_await_agent(
-        &host_api_component,
-        &host_api_agent_id,
-        "update_worker",
-        data_value!(
-            Record(vec![
-                (
-                    "component_id",
-                    Record(vec![(
-                        "uuid",
-                        Record(vec![
-                            ("high_bits", high_bits.into_value_and_type()),
-                            ("low_bits", low_bits.into_value_and_type()),
-                        ])
-                        .into_value_and_type(),
-                    )])
-                    .into_value_and_type(),
-                ),
-                (
-                    "agent_id",
-                    parsed_agent_id.to_string().into_value_and_type(),
-                ),
-            ])
-            .into_value_and_type(),
-            updated_component.revision.into_value_and_type(),
-            ValueAndType {
-                value: Value::Variant {
-                    case_idx: 0,
-                    case_value: None,
+    user.invoke_and_await_agent(&host_api_component, &host_api_agent_id, "update_worker", {
+        use golem_common::schema::schema_value::VariantValuePayload;
+        use golem_common::schema::{
+            SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, build_input_record,
+        };
+        fn ph(value: SchemaValue) -> TypedSchemaValue {
+            TypedSchemaValue::new(
+                SchemaGraph {
+                    defs: vec![],
+                    root: SchemaType::bool(),
                 },
-                typ: analysed_type::variant(vec![
-                    analysed_type::unit_case("automatic"),
-                    analysed_type::unit_case("snapshot-based"),
-                ]),
-            },
-        ),
-    )
+                value,
+            )
+        }
+        build_input_record(vec![
+            ph(SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::Record {
+                        fields: vec![SchemaValue::Record {
+                            fields: vec![SchemaValue::U64(high_bits), SchemaValue::U64(low_bits)],
+                        }],
+                    },
+                    SchemaValue::String(parsed_agent_id.to_string()),
+                ],
+            }),
+            ph(SchemaValue::U64(updated_component.revision.into())),
+            ph(SchemaValue::Variant(VariantValuePayload {
+                case: 0,
+                payload: None,
+            })),
+        ])
+        .expect("data_value")
+    })
     .await?
     .into_return_value();
 
@@ -827,7 +854,7 @@ async fn auto_update_on_idle_via_host_function(
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    assert_eq!(result, data_value!(0u64));
+    assert_eq!(result.into_return_value(), Some(SchemaValue::U64(0)));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
@@ -1028,9 +1055,9 @@ async fn worker_recreation(
         .into_return_value()
         .expect("Expected a return value");
 
-    assert_eq!(result1_value, Value::U64(1200));
-    assert_eq!(result2_value, Value::U64(1));
-    assert_eq!(result3_value, Value::U64(0));
+    assert_eq!(result1_value, SchemaValue::U64(1200));
+    assert_eq!(result2_value, SchemaValue::U64(1));
+    assert_eq!(result3_value, SchemaValue::U64(0));
 
     Ok(())
 }
@@ -1098,7 +1125,7 @@ async fn stale_scheduled_invocation_dropped_after_worker_recreation(
 
     assert_eq!(
         result,
-        Value::U64(0),
+        SchemaValue::U64(0),
         "Stale scheduled invocation was unexpectedly delivered to the recreated worker"
     );
 
@@ -1156,13 +1183,21 @@ async fn worker_use_initial_files(
 
     assert_eq!(
         result,
-        Value::Tuple(vec![
-            Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
-            Value::Option(None),
-            Value::Option(None),
-            Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
-            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-        ])
+        SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("foo\n".to_string())))
+                },
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("baz\n".to_string())))
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("hello world".to_string())))
+                },
+            ]
+        }
     );
 
     Ok(())
@@ -1485,11 +1520,13 @@ async fn resolve_components_from_name(
 
     assert_eq!(
         result,
-        Value::Record(vec![
-            Value::Bool(true),
-            Value::Bool(true),
-            Value::Bool(false),
-        ])
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(false),
+            ]
+        }
     );
 
     Ok(())
@@ -1519,16 +1556,17 @@ async fn agent_promise_await(
         .invoke_and_await_agent(&component, &promise_agent_id, "getPromise", data_value!())
         .await?;
 
-    let promise_id_vat = result
-        .into_return_value_and_type()
+    let promise_id_value = result
+        .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
     let promise_id =
-        PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
+        <PromiseId as FromSchema>::from_value(&promise_id_value).map_err(|e| anyhow!("{e}"))?;
 
     let task = {
         let executor_clone = user.clone();
         let agent_id_clone = promise_agent_id.clone();
         let component_clone = component.clone();
+        let promise_id_clone = promise_id.clone();
         tokio::spawn(
             async move {
                 executor_clone
@@ -1536,7 +1574,7 @@ async fn agent_promise_await(
                         &component_clone,
                         &agent_id_clone,
                         "awaitPromise",
-                        data_value!(promise_id_vat),
+                        data_value!(promise_id_clone),
                     )
                     .await
             }
@@ -1553,7 +1591,7 @@ async fn agent_promise_await(
     let result = task.await??;
     assert_eq!(
         result.into_return_value(),
-        Some(Value::String("hello".to_string()))
+        Some(SchemaValue::String("hello".to_string()))
     );
 
     Ok(())
@@ -1759,7 +1797,7 @@ async fn agent_update_constructor_signature(
     let result1a = user
         .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
         .await?;
-    assert_eq!(result1a.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(result1a.into_return_value(), Some(SchemaValue::U32(1)));
 
     let old_singleton_id = agent_id!("Caller");
     let old_singleton = user
@@ -1770,7 +1808,7 @@ async fn agent_update_constructor_signature(
     let result1b = user
         .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
         .await?;
-    assert_eq!(result1b.into_return_value(), Some(Value::U32(2)));
+    assert_eq!(result1b.into_return_value(), Some(SchemaValue::U32(2)));
 
     user.update_component(&component.id, "it_agent_update_v2_release")
         .await?;
@@ -1780,7 +1818,7 @@ async fn agent_update_constructor_signature(
     let result2a = user
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
-    assert_eq!(result2a.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(result2a.into_return_value(), Some(SchemaValue::U32(1)));
 
     let new_singleton_id = agent_id!("NewCaller");
     let _new_singleton = user
@@ -1789,7 +1827,7 @@ async fn agent_update_constructor_signature(
     let result2b = user
         .invoke_and_await_agent(&component, &new_singleton_id, "call", data_value!(123u64))
         .await?;
-    assert_eq!(result2b.into_return_value(), Some(Value::U32(2)));
+    assert_eq!(result2b.into_return_value(), Some(SchemaValue::U32(2)));
 
     // Still able to call both agents
     let result3a = user
@@ -1806,8 +1844,8 @@ async fn agent_update_constructor_signature(
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
 
-    assert_eq!(result3a.into_return_value(), Some(Value::U32(3)));
-    assert_eq!(result4a.into_return_value(), Some(Value::U32(3)));
+    assert_eq!(result3a.into_return_value(), Some(SchemaValue::U32(3)));
+    assert_eq!(result4a.into_return_value(), Some(SchemaValue::U32(3)));
 
     // Still able to do RPC
     let result3b = user
@@ -1819,12 +1857,12 @@ async fn agent_update_constructor_signature(
             data_value!("agent1"),
         )
         .await?;
-    assert_eq!(result3b.into_return_value(), Some(Value::U32(4)));
+    assert_eq!(result3b.into_return_value(), Some(SchemaValue::U32(4)));
 
     let result4b = user
         .invoke_and_await_agent(&component, &new_singleton_id, "call", data_value!(123u64))
         .await?;
-    assert_eq!(result4b.into_return_value(), Some(Value::U32(4)));
+    assert_eq!(result4b.into_return_value(), Some(SchemaValue::U32(4)));
 
     // Enumerate agents
     let mut cursor = ScanCursor::default();
@@ -1889,7 +1927,7 @@ async fn deployment_invalidates_agent_resolution_cache(
     let result_v1 = user
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
-    assert_eq!(result_v1.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(result_v1.into_return_value(), Some(SchemaValue::U32(1)));
 
     // Update to v2: it_agent_update_v2_release has CounterAgent with both increment() AND
     // decrement(). This triggers a new deployment revision and invalidation event.
@@ -1911,7 +1949,10 @@ async fn deployment_invalidates_agent_resolution_cache(
         .invoke_and_await_agent(&component, &agent_v2_id, "decrement", data_value!())
         .await?;
     // Counter starts at 0, decrement returns option::none
-    assert_eq!(result_v2.into_return_value(), Some(Value::Option(None)));
+    assert_eq!(
+        result_v2.into_return_value(),
+        Some(SchemaValue::Option { inner: None })
+    );
 
     Ok(())
 }
