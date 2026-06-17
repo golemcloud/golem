@@ -42,7 +42,7 @@ use crate::model::text::help::{
     ParameterErrorTableView,
 };
 use crate::model::text::worker::{
-    AgentOplogView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    AgentOplogEntryView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
     format_agent_name_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
@@ -692,7 +692,6 @@ impl WorkerCommandHandler {
 
         let batch_size = self.ctx.http_batch_size();
         let mut cursor = Option::<OplogCursor>::None;
-        let mut all_entries = Vec::<(u64, PublicOplogEntry)>::new();
         let mut had_entries = false;
         loop {
             let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
@@ -723,12 +722,10 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                if self.ctx.format().is_structured() {
-                    all_entries.extend(entries);
-                } else {
+                for (index, entry) in entries {
                     self.ctx
                         .log_handler()
-                        .log_view(&AgentOplogView { entries })?;
+                        .log_view(&AgentOplogEntryView { index, entry })?;
                 }
             }
 
@@ -737,11 +734,7 @@ impl WorkerCommandHandler {
             }
         }
 
-        if self.ctx.format().is_structured() {
-            self.ctx.log_handler().log_view(&AgentOplogView {
-                entries: all_entries,
-            })?;
-        } else if !had_entries {
+        if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -871,6 +864,10 @@ impl WorkerCommandHandler {
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        if refresh.is_some() && self.ctx.format().is_structured() {
+            bail!("--refresh is only supported with --format text");
+        }
+
         let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)

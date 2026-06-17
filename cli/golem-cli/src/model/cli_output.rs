@@ -176,7 +176,7 @@ mod tests {
             arb_agent_list_result
         ),
         registry_entry!("WorkerCreateView", "agent.new", arb_agent_new_result),
-        registry_entry!("AgentOplogView", "agent.oplog", arb_agent_oplog_result),
+        registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
         registry_entry!(
             "AgentPluginToggleResult",
             "agent.plugin-toggle",
@@ -1035,17 +1035,6 @@ mod tests {
         .boxed()
     }
 
-    fn render_sample_agent_oplog() -> Value {
-        to_cli_output_value(&crate::model::text::worker::AgentOplogView {
-            entries: sample_public_oplog_entries()
-                .into_iter()
-                .enumerate()
-                .map(|(index, entry)| (index as u64, entry))
-                .collect(),
-        })
-        .expect("generated agent oplog should serialize")
-    }
-
     fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogEntry> {
         use golem_common::base_model::retry_policy::{
             ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
@@ -1204,21 +1193,32 @@ mod tests {
                 ),
                 instance_id: Uuid::parse_str("33a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
             }),
-            PublicOplogEntry::HostCall(HostCallParams {
+            PublicOplogEntry::Start(StartParams {
                 timestamp: timestamp(),
+                parent_start_index: Some(OplogIndex::from_u64(1)),
                 function_name: "wasi:keyvalue/store.{get}".to_string(),
-                request: "request".to_string().into_value_and_type(),
-                response: golem_wasm::ValueAndType {
-                    value: golem_wasm::Value::List(vec![golem_wasm::Value::U64(1)]),
-                    typ: golem_wasm::analysis::analysed_type::list(
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                },
+                request: Some("request".to_string().into_value_and_type()),
                 durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
                     WriteRemoteBatchedParameters {
                         index: Some(OplogIndex::from_u64(1)),
                     },
                 ),
+            }),
+            PublicOplogEntry::End(EndParams {
+                timestamp: timestamp(),
+                start_index: OplogIndex::from_u64(1),
+                response: Some(golem_wasm::ValueAndType {
+                    value: golem_wasm::Value::List(vec![golem_wasm::Value::U64(1)]),
+                    typ: golem_wasm::analysis::analysed_type::list(
+                        golem_wasm::analysis::analysed_type::u64(),
+                    ),
+                }),
+                forced_commit: false,
+            }),
+            PublicOplogEntry::Cancelled(CancelledParams {
+                timestamp: timestamp(),
+                start_index: OplogIndex::from_u64(2),
+                partial: Some("partial".to_string().into_value_and_type()),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp: timestamp(),
@@ -1262,13 +1262,6 @@ mod tests {
                 timestamp: timestamp(),
             }),
             PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp: timestamp(),
-                begin_index: OplogIndex::from_u64(1),
-            }),
-            PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
-                timestamp: timestamp(),
-            }),
-            PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
                 timestamp: timestamp(),
                 begin_index: OplogIndex::from_u64(1),
             }),
@@ -2147,7 +2140,20 @@ mod tests {
     }
 
     fn arb_agent_oplog_result() -> OutputDocumentStrategy {
-        Just(render_sample_agent_oplog()).boxed()
+        let entries = sample_public_oplog_entries()
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                to_cli_output_value(&crate::model::text::worker::AgentOplogEntryView {
+                    index: index as u64,
+                    entry,
+                })
+                .expect("generated agent oplog entry should serialize")
+            })
+            .map(Just)
+            .collect::<Vec<_>>();
+
+        proptest::strategy::Union::new(entries).boxed()
     }
 
     fn arb_agent_stream_event() -> OutputDocumentStrategy {

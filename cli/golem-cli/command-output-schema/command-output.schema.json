@@ -893,17 +893,19 @@
       "type": "object",
       "required": [
         "$type",
-        "entries"
+        "index",
+        "entry"
       ],
       "properties": {
         "$type": {
           "const": "agent.oplog"
         },
-        "entries": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/AgentOplogEntry"
-          }
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entry": {
+          "$ref": "#/definitions/PublicOplogEntry"
         }
       },
       "additionalProperties": false
@@ -2921,20 +2923,12 @@
       },
       "additionalProperties": false
     },
-    "AgentOplogEntry": {
-      "type": "array",
-      "items": [
-        { "type": "integer", "minimum": 0 },
-        { "$ref": "#/definitions/PublicOplogEntry" }
-      ],
-      "additionalItems": false,
-      "minItems": 2,
-      "maxItems": 2
-    },
     "PublicOplogEntry": {
       "oneOf": [
         { "$ref": "#/definitions/PublicOplogEntryCreate" },
-        { "$ref": "#/definitions/PublicOplogEntryHostCall" },
+        { "$ref": "#/definitions/PublicOplogEntryStart" },
+        { "$ref": "#/definitions/PublicOplogEntryEnd" },
+        { "$ref": "#/definitions/PublicOplogEntryCancelled" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
@@ -2945,8 +2939,6 @@
         { "$ref": "#/definitions/PublicOplogEntryExited" },
         { "$ref": "#/definitions/PublicOplogEntryBeginAtomicRegion" },
         { "$ref": "#/definitions/PublicOplogEntryEndAtomicRegion" },
-        { "$ref": "#/definitions/PublicOplogEntryBeginRemoteWrite" },
-        { "$ref": "#/definitions/PublicOplogEntryEndRemoteWrite" },
         { "$ref": "#/definitions/PublicOplogEntryPendingAgentInvocation" },
         { "$ref": "#/definitions/PublicOplogEntryPendingUpdate" },
         { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
@@ -3028,16 +3020,39 @@
       },
       "additionalProperties": false
     },
-    "PublicOplogEntryHostCall": {
+    "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "functionName", "request", "response", "durableFunctionType"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "request", "durableFunctionType"],
       "properties": {
-        "type": { "const": "HostCall" },
+        "type": { "const": "Start" },
         "timestamp": { "type": "string" },
+        "parentStartIndex": { "type": ["integer", "null"], "minimum": 0 },
         "functionName": { "type": "string" },
-        "request": { "$ref": "#/definitions/ValueAndTypeJson" },
-        "response": { "$ref": "#/definitions/ValueAndTypeJson" },
+        "request": { "oneOf": [{ "$ref": "#/definitions/ValueAndTypeJson" }, { "type": "null" }] },
         "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryEnd": {
+      "type": "object",
+      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit"],
+      "properties": {
+        "type": { "const": "End" },
+        "timestamp": { "type": "string" },
+        "startIndex": { "type": "integer", "minimum": 0 },
+        "response": { "oneOf": [{ "$ref": "#/definitions/ValueAndTypeJson" }, { "type": "null" }] },
+        "forcedCommit": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCancelled": {
+      "type": "object",
+      "required": ["type", "timestamp", "startIndex", "partial"],
+      "properties": {
+        "type": { "const": "Cancelled" },
+        "timestamp": { "type": "string" },
+        "startIndex": { "type": "integer", "minimum": 0 },
+        "partial": { "oneOf": [{ "$ref": "#/definitions/ValueAndTypeJson" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
@@ -3077,7 +3092,6 @@
     "PublicOplogEntryInterrupted": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Interrupted" } } }] },
     "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
     "PublicOplogEntryBeginAtomicRegion": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginAtomicRegion" } } }] },
-    "PublicOplogEntryBeginRemoteWrite": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginRemoteWrite" } } }] },
     "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
     "PublicOplogEntryError": {
       "type": "object",
@@ -3102,12 +3116,6 @@
       "type": "object",
       "required": ["type", "timestamp", "beginIndex"],
       "properties": { "type": { "const": "EndAtomicRegion" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryEndRemoteWrite": {
-      "type": "object",
-      "required": ["type", "timestamp", "beginIndex"],
-      "properties": { "type": { "const": "EndRemoteWrite" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryPendingAgentInvocation": {
@@ -5231,7 +5239,7 @@
     },
     {
       "type": "agent.oplog",
-      "rustType": "AgentOplogView"
+      "rustType": "AgentOplogEntryView"
     },
     {
       "type": "agent.plugin-toggle",

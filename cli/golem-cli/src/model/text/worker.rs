@@ -448,20 +448,22 @@ impl TextView for InvokeResultView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentOplogView {
-    pub entries: Vec<(u64, PublicOplogEntry)>,
+pub struct AgentOplogEntryView {
+    pub index: u64,
+    pub entry: PublicOplogEntry,
 }
 
-impl CliOutput for AgentOplogView {
+impl CliOutput for AgentOplogEntryView {
     const KIND: &'static str = "agent.oplog";
 }
 
-impl TextView for AgentOplogView {
+impl TextView for AgentOplogEntryView {
     fn log(&self) {
-        for (idx, entry) in &self.entries {
-            logln(format!("{}: ", format_main_id(&format!("#{idx:0>5}"))));
-            entry.log()
-        }
+        logln(format!(
+            "{}: ",
+            format_main_id(&format!("#{:0>5}", self.index))
+        ));
+        self.entry.log()
     }
 }
 

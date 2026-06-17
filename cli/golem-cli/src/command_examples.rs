@@ -240,7 +240,7 @@ pub const AGENT_LIST: &str = "Examples:
   # Force fresh status for each agent
   golem-cli agent list --precise
 
-  # Watch mode (default 400ms refresh)
+  # Watch mode (text output only, default 400ms refresh)
   golem-cli agent list --refresh
   golem-cli agent list --refresh=1000";
 
@@ -249,7 +249,10 @@ pub const AGENT_STREAM: &str = "Examples:
   golem-cli agent stream 'CounterAgent(\"my-counter\")'
 
   # Hide log levels and timestamps; show only payload entries
-  golem-cli agent stream 'CounterAgent(\"my-counter\")' --stream-no-timestamp --stream-no-log-level --logs-only";
+  golem-cli agent stream 'CounterAgent(\"my-counter\")' --stream-no-timestamp --stream-no-log-level --logs-only
+
+  # In structured formats, each stream event is emitted as a separate document
+  golem-cli --format json agent stream 'CounterAgent(\"my-counter\")'";
 
 pub const AGENT_UPDATE: &str = "Examples:
   # Update one agent in automatic mode (default), to the current deployed revision
@@ -288,7 +291,7 @@ pub const AGENT_SIMULATE_CRASH: &str = "Examples:
   golem-cli agent invoke   'Counter(\"c1\")' get_value";
 
 pub const AGENT_OPLOG: &str = "Examples:
-  # Dump the entire oplog of an agent
+  # Stream the entire oplog of an agent
   golem-cli agent oplog 'CounterAgent(\"my-counter\")'
 
   # Continue from a specific oplog index
@@ -296,7 +299,10 @@ pub const AGENT_OPLOG: &str = "Examples:
 
   # Filter using a Lucene query
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'error'
-  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'";
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'
+
+  # In structured formats, each oplog entry is emitted as a separate document
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'";
 
 pub const AGENT_REVERT: &str = "Examples:
   # Undo the agent's last N invocations

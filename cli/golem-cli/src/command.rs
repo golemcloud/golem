@@ -1381,16 +1381,14 @@ pub mod worker {
             /// Press Ctrl+C to exit watch mode.
             ///
             /// Watch mode redraws into the alternate terminal screen, so it is
-            /// intended for interactive use. It is not meaningful with
-            /// `--format json/yaml/toon`: structured output is overwritten on every
-            /// frame and the alternate-screen restore on exit will leave you with
-            /// no captured payload.
+            /// intended for interactive text output only.
             ///
             /// Mutually exclusive with `--scan-cursor`.
             #[arg(long, default_missing_value = "400", value_name = "MILLIS", num_args = 0..=1, conflicts_with = "scan_cursor")]
             refresh: Option<u64>,
         },
-        /// Connect to an agent and live stream its standard output, error and log channels
+        /// Connect to an agent and live stream its standard output, error and log channels.
+        /// Structured formats emit one output document per stream event.
         #[command(after_help = crate::command_examples::AGENT_STREAM)]
         Stream {
             #[command(flatten)]
@@ -1448,7 +1446,8 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
         },
-        /// Queries and dumps an agent's full oplog
+        /// Queries and streams an agent's full oplog.
+        /// Structured formats emit one output document per oplog entry.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
