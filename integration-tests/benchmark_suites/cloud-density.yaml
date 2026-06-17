@@ -1,0 +1,177 @@
+# Cloud agent-density benchmark suite (golemcloud/golem#3523).
+#
+# Unlike cloud-perf (which is run by the benchmark binary's `suite` runner),
+# agent-density is driven cell-by-cell by the buildspec: each cell needs a
+# clean, freshly-restarted executor (the between-cell transition scales the
+# executor to 0, wipes the running-workers/schedule keyvalue namespaces, and
+# scales back). The buildspec therefore invokes the benchmark binary once per
+# cell via the `density` subcommand and uploads each cell's result to S3 as it
+# completes.
+#
+# This file is the canonical, ordered list of the 26 cells. The buildspec reads
+# it (with yq) to obtain each cell's `density --action cell` arguments. Keep it
+# in sync with `all_cells()` in
+# integration-tests/src/benchmarks/density/agent.rs — the Rust matrix is the
+# source of truth for the axes; this file mirrors it for the buildspec loop.
+#
+# The agent count is NOT a suite parameter: each cell ramps the agent count
+# internally (see AGENT_RAMP in integration-tests/src/benchmarks/density/mod.rs)
+# until the ceiling-detection state machine reports a catastrophic ceiling or
+# the sharing-mode upper bound (10000 shared / 2000 per-agent) is hit.
+#
+# Per-cell invocation shape (the buildspec fills in the cloud flags and the
+# per-cell executor-metrics port-forward URL and pod name):
+#
+#   benchmarks density \
+#     --action cell \
+#     --section agent \
+#     --prep-manifest prep-manifest.json \
+#     --scenario <scenario> \
+#     --agent-mode <durable|ephemeral> \
+#     --sharing <shared|per-agent> \
+#     [--active-fraction <pct>] \
+#     [--prefill <n>] \
+#     --executor-metrics-url http://localhost:9101/metrics \
+#     --executor-pod-name <pod> \
+#     --save-to-json cell-NN-<name>.json \
+#     cloud --api-url ... --apps-base-domain ... --admin-account-token ...
+
+name: cloud-density-agent
+section: agent
+
+cells:
+  # Scenario 1 — create-only: create N idle agents, each invoked once then left
+  # to drift to LoadedIdle. Measures the create path. 2 modes x 2 sharing.
+  - name: create-only-durable-shared-component
+    scenario: create-only
+    agentMode: durable
+    sharing: shared
+  - name: create-only-durable-per-agent-component
+    scenario: create-only
+    agentMode: durable
+    sharing: per-agent
+  - name: create-only-ephemeral-shared-component
+    scenario: create-only
+    agentMode: ephemeral
+    sharing: shared
+  - name: create-only-ephemeral-per-agent-component
+    scenario: create-only
+    agentMode: ephemeral
+    sharing: per-agent
+
+  # Scenario 2 — create-with-active-fraction: like scenario 1, but a fraction of
+  # the agents are kept active (one in-flight busy_for(500ms) call each,
+  # looping). 2 modes x 2 sharing x 3 fractions (25/50/75).
+  - name: create-with-active-durable-shared-component-active-25pct
+    scenario: create-with-active
+    agentMode: durable
+    sharing: shared
+    activeFraction: 25
+  - name: create-with-active-durable-shared-component-active-50pct
+    scenario: create-with-active
+    agentMode: durable
+    sharing: shared
+    activeFraction: 50
+  - name: create-with-active-durable-shared-component-active-75pct
+    scenario: create-with-active
+    agentMode: durable
+    sharing: shared
+    activeFraction: 75
+  - name: create-with-active-durable-per-agent-component-active-25pct
+    scenario: create-with-active
+    agentMode: durable
+    sharing: per-agent
+    activeFraction: 25
+  - name: create-with-active-durable-per-agent-component-active-50pct
+    scenario: create-with-active
+    agentMode: durable
+    sharing: per-agent
+    activeFraction: 50
+  - name: create-with-active-durable-per-agent-component-active-75pct
+    scenario: create-with-active
+    agentMode: durable
+    sharing: per-agent
+    activeFraction: 75
+  - name: create-with-active-ephemeral-shared-component-active-25pct
+    scenario: create-with-active
+    agentMode: ephemeral
+    sharing: shared
+    activeFraction: 25
+  - name: create-with-active-ephemeral-shared-component-active-50pct
+    scenario: create-with-active
+    agentMode: ephemeral
+    sharing: shared
+    activeFraction: 50
+  - name: create-with-active-ephemeral-shared-component-active-75pct
+    scenario: create-with-active
+    agentMode: ephemeral
+    sharing: shared
+    activeFraction: 75
+  - name: create-with-active-ephemeral-per-agent-component-active-25pct
+    scenario: create-with-active
+    agentMode: ephemeral
+    sharing: per-agent
+    activeFraction: 25
+  - name: create-with-active-ephemeral-per-agent-component-active-50pct
+    scenario: create-with-active
+    agentMode: ephemeral
+    sharing: per-agent
+    activeFraction: 50
+  - name: create-with-active-ephemeral-per-agent-component-active-75pct
+    scenario: create-with-active
+    agentMode: ephemeral
+    sharing: per-agent
+    activeFraction: 75
+
+  # Scenario 3 — concurrent-active: all N agents kept active concurrently.
+  # 2 modes x 2 sharing.
+  - name: concurrent-active-durable-shared-component
+    scenario: concurrent-active
+    agentMode: durable
+    sharing: shared
+  - name: concurrent-active-durable-per-agent-component
+    scenario: concurrent-active
+    agentMode: durable
+    sharing: per-agent
+  - name: concurrent-active-ephemeral-shared-component
+    scenario: concurrent-active
+    agentMode: ephemeral
+    sharing: shared
+  - name: concurrent-active-ephemeral-per-agent-component
+    scenario: concurrent-active
+    agentMode: ephemeral
+    sharing: per-agent
+
+  # Scenario 4 — resume-under-saturation (durable-only): pre-fill N idle agents
+  # to force eviction, then measure resume-vs-create latency under memory
+  # pressure. durable x 2 sharing x 3 pre-fill values (500/1000/2000).
+  - name: resume-under-saturation-durable-shared-component-prefill-500
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: shared
+    prefill: 500
+  - name: resume-under-saturation-durable-shared-component-prefill-1000
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: shared
+    prefill: 1000
+  - name: resume-under-saturation-durable-shared-component-prefill-2000
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: shared
+    prefill: 2000
+  - name: resume-under-saturation-durable-per-agent-component-prefill-500
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: per-agent
+    prefill: 500
+  - name: resume-under-saturation-durable-per-agent-component-prefill-1000
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: per-agent
+    prefill: 1000
+  - name: resume-under-saturation-durable-per-agent-component-prefill-2000
+    scenario: resume-under-saturation
+    agentMode: durable
+    sharing: per-agent
+    prefill: 2000

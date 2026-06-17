@@ -15,7 +15,10 @@
 mod config;
 mod results;
 
-pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
+pub use config::{
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
+    DensityScenarioArg, DensitySectionArg, DensitySharingArg, RunConfig,
+};
 pub use results::{
     BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey, RunMetadata,
 };

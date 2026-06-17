@@ -68,19 +68,119 @@ pub enum BenchmarkConfig {
         #[command(subcommand)]
         mode: TestMode,
     },
+    /// Cloud density benchmarks (golemcloud/golem#3516). The buildspec drives
+    /// the cell-by-cell loop; this subcommand runs exactly one action per
+    /// invocation. `--action prep` performs the one-time density-prep and
+    /// writes the prep manifest; `--action cell` runs one density cell using a
+    /// previously-written manifest.
+    Density {
+        /// Action to perform: `prep` (one-time setup) or `cell` (run one cell).
+        #[arg(long, value_enum)]
+        action: DensityAction,
+
+        /// Density section. Only `agent` is implemented in v1.
+        #[arg(long, value_enum, default_value = "agent")]
+        section: DensitySectionArg,
+
+        /// Path to the prep manifest. Written by `--action prep`, read by
+        /// `--action cell`.
+        #[arg(long)]
+        prep_manifest: PathBuf,
+
+        /// Cell scenario (required for `--action cell`).
+        #[arg(long, value_enum)]
+        scenario: Option<DensityScenarioArg>,
+
+        /// Agent durability mode (required for `--action cell`).
+        #[arg(long, value_enum)]
+        agent_mode: Option<DensityAgentModeArg>,
+
+        /// Component sharing mode (required for `--action cell`).
+        #[arg(long, value_enum)]
+        sharing: Option<DensitySharingArg>,
+
+        /// Active fraction percentage (scenario create-with-active only).
+        #[arg(long)]
+        active_fraction: Option<u32>,
+
+        /// Pre-fill agent count (scenario resume-under-saturation only).
+        #[arg(long)]
+        prefill: Option<u32>,
+
+        /// Optional executor `/metrics` URL (per-cell kubectl port-forward) for
+        /// the cross-axis snapshot. When absent, snapshots are empty and
+        /// ceilings are still detected from driver-local signals.
+        #[arg(long)]
+        executor_metrics_url: Option<String>,
+
+        /// Optional executor pod name for `kubectl` restart-count polling.
+        #[arg(long)]
+        executor_pod_name: Option<String>,
+
+        /// Kubernetes namespace of the executor pod.
+        #[arg(long, default_value = "golem-release")]
+        executor_namespace: String,
+
+        /// Save the cell result to a JSON file.
+        #[arg(long)]
+        save_to_json: Option<PathBuf>,
+
+        #[command(subcommand)]
+        mode: TestMode,
+    },
+}
+
+/// Density subcommand action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityAction {
+    Prep,
+    Cell,
+}
+
+/// Density section selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensitySectionArg {
+    Agent,
+    Schedule,
+    Promise,
+}
+
+/// Agent-density scenario selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityScenarioArg {
+    CreateOnly,
+    CreateWithActive,
+    ConcurrentActive,
+    ResumeUnderSaturation,
+}
+
+/// Agent durability mode selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityAgentModeArg {
+    Durable,
+    Ephemeral,
+}
+
+/// Component sharing mode selector for the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensitySharingArg {
+    Shared,
+    PerAgent,
 }
 
 impl BenchmarkConfig {
     pub fn mode(&self) -> &TestMode {
         match self {
-            BenchmarkConfig::Benchmark { mode, .. } | BenchmarkConfig::Suite { mode, .. } => mode,
+            BenchmarkConfig::Benchmark { mode, .. }
+            | BenchmarkConfig::Suite { mode, .. }
+            | BenchmarkConfig::Density { mode, .. } => mode,
         }
     }
 
     pub fn iterations(&self) -> usize {
         match self {
             BenchmarkConfig::Benchmark { iterations, .. } => *iterations,
-            BenchmarkConfig::Suite { .. } => 0,
+            BenchmarkConfig::Suite { .. } | BenchmarkConfig::Density { .. } => 0,
         }
     }
 }

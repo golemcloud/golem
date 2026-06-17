@@ -21,13 +21,17 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, RunMetadata,
+    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityScenarioArg,
+    DensitySectionArg, DensitySharingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
     BenchmarkCliParameters, BenchmarkTestDependencies, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
+use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
+use integration_tests::benchmarks::density::{AgentMode, ComponentSharing, DensitySection};
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
@@ -288,6 +292,41 @@ async fn main() {
                 println!("{}", suite_result.view());
             }
         }
+        BenchmarkConfig::Density {
+            action,
+            section,
+            prep_manifest,
+            scenario,
+            agent_mode,
+            sharing,
+            active_fraction,
+            prefill,
+            executor_metrics_url,
+            executor_pod_name,
+            executor_namespace,
+            save_to_json,
+            ..
+        } => {
+            run_density(
+                params.benchmark_config.mode(),
+                params.service_verbosity(),
+                params.otlp,
+                *action,
+                map_section(*section),
+                prep_manifest,
+                scenario.map(map_scenario),
+                agent_mode.map(map_agent_mode),
+                sharing.map(map_sharing),
+                *active_fraction,
+                *prefill,
+                executor_metrics_url.clone(),
+                executor_pod_name.clone(),
+                executor_namespace.clone(),
+                save_to_json.clone(),
+                params.json,
+            )
+            .await;
+        }
     }
 
     if let Some(provider) = tracer_provider {
@@ -477,4 +516,129 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
     deps.kill_all().await;
 
     info!("Cloud pre-flight warmup complete.");
+}
+
+// ── Density subcommand handling ───────────────────────────────────────────────
+
+fn map_section(arg: DensitySectionArg) -> DensitySection {
+    match arg {
+        DensitySectionArg::Agent => DensitySection::Agent,
+        DensitySectionArg::Schedule => DensitySection::Schedule,
+        DensitySectionArg::Promise => DensitySection::Promise,
+    }
+}
+
+fn map_scenario(arg: DensityScenarioArg) -> Scenario {
+    match arg {
+        DensityScenarioArg::CreateOnly => Scenario::CreateOnly,
+        DensityScenarioArg::CreateWithActive => Scenario::CreateWithActiveFraction,
+        DensityScenarioArg::ConcurrentActive => Scenario::ConcurrentActive,
+        DensityScenarioArg::ResumeUnderSaturation => Scenario::ResumeUnderSaturation,
+    }
+}
+
+fn map_agent_mode(arg: DensityAgentModeArg) -> AgentMode {
+    match arg {
+        DensityAgentModeArg::Durable => AgentMode::Durable,
+        DensityAgentModeArg::Ephemeral => AgentMode::Ephemeral,
+    }
+}
+
+fn map_sharing(arg: DensitySharingArg) -> ComponentSharing {
+    match arg {
+        DensitySharingArg::Shared => ComponentSharing::Shared,
+        DensitySharingArg::PerAgent => ComponentSharing::PerAgent,
+    }
+}
+
+/// Runs one density action: either the one-time prep (writing the manifest) or
+/// a single cell (using a previously-written manifest).
+#[allow(clippy::too_many_arguments)]
+async fn run_density(
+    mode: &TestMode,
+    verbosity: Level,
+    otlp: bool,
+    action: DensityAction,
+    section: DensitySection,
+    prep_manifest_path: &std::path::Path,
+    scenario: Option<Scenario>,
+    agent_mode: Option<AgentMode>,
+    sharing: Option<ComponentSharing>,
+    active_fraction: Option<u32>,
+    prefill: Option<u32>,
+    executor_metrics_url: Option<String>,
+    executor_pod_name: Option<String>,
+    executor_namespace: String,
+    save_to_json: Option<std::path::PathBuf>,
+    json: bool,
+) {
+    if !matches!(mode, TestMode::Cloud { .. }) {
+        panic!("density benchmarks require cloud mode");
+    }
+
+    let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
+
+    match action {
+        DensityAction::Prep => {
+            let manifest = run_prep(&deps, section).await.expect("density-prep failed");
+            manifest
+                .save(prep_manifest_path)
+                .expect("failed to write prep manifest");
+            info!("Density-prep manifest written to {prep_manifest_path:?}");
+        }
+        DensityAction::Cell => {
+            let manifest =
+                PrepManifest::load(prep_manifest_path).expect("failed to load prep manifest");
+
+            let config = CellConfig {
+                scenario: scenario.expect("--scenario required for --action cell"),
+                mode: agent_mode.expect("--agent-mode required for --action cell"),
+                sharing: sharing.expect("--sharing required for --action cell"),
+                active_fraction,
+                prefill_n: prefill,
+            };
+
+            let probe = ExecutorProbe {
+                metrics_url: executor_metrics_url,
+                pod_name: executor_pod_name,
+                namespace: executor_namespace,
+                http: reqwest::Client::new(),
+            };
+
+            let result = integration_tests::benchmarks::density::agent::run_cell(
+                &config, &manifest, &deps, &probe,
+            )
+            .await
+            .expect("density cell failed");
+
+            // Emit the cell result as a single-result suite so the JSON shape
+            // matches cloud-perf (BenchmarkSuiteResultCollection), and the
+            // buildspec can upload it directly to S3.
+            let mut suite_result = BenchmarkSuiteResult::new(&format!("density-{section}"));
+            suite_result.add(result);
+            if let Some(run_id) = cloud_bench_run_id() {
+                suite_result.run_id = Some(format!("bench-{run_id}"));
+                let metadata = RunMetadata::from_env();
+                if !metadata.is_empty() {
+                    suite_result.run_metadata = Some(metadata);
+                }
+            }
+
+            if let Some(path) = &save_to_json {
+                suite_result
+                    .save_to_json(path)
+                    .expect("Failed to save density cell JSON result");
+            }
+
+            if json {
+                let str = serde_json::to_string(&suite_result)
+                    .expect("Failed to serialize density cell result");
+                println!("{str}");
+            } else {
+                println!("{}", suite_result.view());
+            }
+        }
+    }
+
+    deps.kill_all().await;
 }
