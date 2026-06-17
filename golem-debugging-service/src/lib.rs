@@ -375,13 +375,19 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing debug worker executor");
 
-    let total_system_memory = golem_config.memory.total_system_memory();
-    let system_memory = golem_config.memory.system_memory();
-    let worker_memory = golem_config.memory.worker_memory();
+    let memory_snapshot =
+        golem_worker_executor::services::active_workers::memory_probe::default_probe(
+            golem_config.memory.system_memory_override,
+        )
+        .snapshot();
+    let total_system_memory = memory_snapshot.limit_bytes;
+    let used_system_memory = memory_snapshot.current_bytes;
+    let worker_memory =
+        (total_system_memory as f64 * golem_config.memory.worker_memory_ratio) as u64;
     info!(
-        "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
+        "Measured memory limit: {}, Currently used: {}, Usable for workers: {}",
         ISizeFormatter::new(total_system_memory, humansize::BINARY),
-        ISizeFormatter::new(system_memory, humansize::BINARY),
+        ISizeFormatter::new(used_system_memory, humansize::BINARY),
         ISizeFormatter::new(worker_memory, humansize::BINARY)
     );
 

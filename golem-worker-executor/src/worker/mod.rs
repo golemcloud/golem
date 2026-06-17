@@ -28,7 +28,8 @@ use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
-    FilesystemStoragePermit, RegisteredConcurrentAccount, WorkerMemoryPermit,
+    FilesystemStoragePermit, HeldComponentCharge, MemoryGrant, RegisteredConcurrentAccount,
+    WorkerComponentCharge,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -61,6 +62,7 @@ use golem_common::model::agent::{
     AgentMode, LegacyParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::CanonicalFilePath;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -562,6 +564,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
                 crate::metrics::workers::inc_worker_waiting_for_memory();
+                crate::metrics::wasm::record_worker_resident_linear_memory(
+                    this.get_latest_worker_metadata()
+                        .await
+                        .last_known_status
+                        .total_linear_memory_size,
+                );
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
@@ -1354,15 +1362,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
-    /// Gets the estimated memory requirement of the worker
+    /// Gets the estimated memory requirement of the worker.
+    ///
+    /// This covers only the per-worker linear memory. The compiled component
+    /// module is shared by all workers of a component and is charged once per
+    /// resident component via the component-charge registry, not per worker.
     pub async fn memory_requirement(&self) -> Result<u64, WorkerExecutorError> {
         let metadata = self.get_latest_worker_metadata().await;
 
-        let ml = metadata.last_known_status.total_linear_memory_size as f64;
-        let sw = metadata.last_known_status.component_size as f64;
-        let c = 2.0;
-        let x = self.worker_estimate_coefficient;
-        Ok((x * (ml + c * sw)) as u64)
+        let linear_memory_bytes = metadata.last_known_status.total_linear_memory_size as f64;
+        let estimate_coefficient = self.worker_estimate_coefficient;
+        Ok((estimate_coefficient * linear_memory_bytes) as u64)
+    }
+
+    /// Returns the component identity and compiled-module size used to charge
+    /// the shared module memory once per resident component.
+    pub async fn component_charge_requirement(
+        &self,
+    ) -> Result<(ComponentId, ComponentRevision, u64), WorkerExecutorError> {
+        let metadata = self.get_latest_worker_metadata().await;
+        let component_id = self.owned_agent_id.component_id();
+        let component_revision = metadata.last_known_status.component_revision;
+        let component_module_bytes = metadata.last_known_status.component_size;
+        Ok((component_id, component_revision, component_module_bytes))
     }
 
     /// Gets the storage requirement of the worker based on the last known status.
@@ -1540,20 +1562,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // Should only be called from invocation loop
     pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
+        // The instance lock must not be held while running the admission gate:
+        // it may run the eviction scan, which takes other workers' instance
+        // locks. Holding this worker's instance lock across that scan while
+        // another growing worker does the same is an AB-BA deadlock. So check the
+        // state, release the lock, then run the gate.
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(_) => {}
+            WorkerInstance::Stopping(_)
+            | WorkerInstance::WaitingForPermit(_)
+            | WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Deleting => return Ok(()),
+        }
+
+        let Some(extra_grant) = self.active_workers().try_acquire(delta).await else {
+            crate::metrics::workers::record_worker_memory_grow_rejected();
+            return Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory));
+        };
+
+        // Re-check state under the lock: the worker may have changed state while
+        // the gate ran. If it is still running, merge the extra grant into the
+        // running worker so its whole reservation releases together on unload.
+        // Otherwise drop `extra_grant` here, returning the reservation to the
+        // gate, and treat the grow as a no-op (matching the non-running arms).
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(running) => {
-                if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
-                    running.merge_extra_permits(new_permits);
-                    Ok(())
-                } else {
-                    Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
-                }
+                running.merge_extra_memory_grant(extra_grant);
             }
-            WorkerInstance::Stopping(_) => Ok(()),
-            WorkerInstance::WaitingForPermit(_) => Ok(()),
-            WorkerInstance::Unloaded { .. } => Ok(()),
-            WorkerInstance::Deleting => Ok(()),
+            WorkerInstance::Stopping(_)
+            | WorkerInstance::WaitingForPermit(_)
+            | WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Deleting => {}
         }
+        Ok(())
     }
 
     /// Return `freed_bytes` to the storage semaphore pool.
@@ -2302,11 +2343,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
+                    // Dropping `running` at the end of this arm releases its
+                    // memory grant (and component/storage permits) back to the
+                    // gate.
                     **instance_guard = final_state.into_instance();
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
-                    // RunningWorker::drop releases the memory permit, so dec resident here.
+                    // `stop()` consumes the RunningWorker and drops everything but
+                    // its join handle, releasing its memory grant back to the gate.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
                     crate::metrics::workers::dec_worker_memory_resident();
@@ -2886,7 +2931,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
-        permit: WorkerMemoryPermit,
+        memory_grant: MemoryGrant,
+        component_charge: WorkerComponentCharge,
         filesystem_storage_permit: Option<FilesystemStoragePermit>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
@@ -2901,7 +2947,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
                     this.clone(),
-                    permit,
+                    memory_grant,
+                    component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
                 )
@@ -2915,6 +2962,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
+                // The worker is not becoming resident: dropping `memory_grant`
+                // here returns its reservation to the gate.
             }
         }
     }
@@ -3122,10 +3171,44 @@ impl WaitingWorker {
                 let agent_id = parent.owned_agent_id.agent_id();
                 let registered_concurrent_account = parent.registered_concurrent_account.clone();
                 let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
-                // Do not reserve executor memory while waiting for a per-account
-                // concurrency slot. Otherwise one account could fill the memory
-                // pool with workers that are not allowed to run yet.
-                let permit = parent.active_workers().acquire(memory_requirement).await;
+                // Determine the component's compiled-module size before
+                // reserving any memory, so the worker's memory and its module are
+                // admitted together (the module is reserved first, then the
+                // memory admission accounts for it). The module is charged once
+                // per resident component and shared by all its workers.
+                let (component_id, component_revision, component_module_bytes) = match parent
+                    .component_charge_requirement()
+                    .await
+                {
+                    Ok(requirement) => requirement,
+                    Err(err) => {
+                        warn!(
+                            "Failed to determine component charge requirement, not starting: {err}"
+                        );
+                        return;
+                    }
+                };
+
+                // `memory_grant` and `component_charge` own their reservations
+                // from here on: held as locals until the worker becomes resident
+                // (when they move into the RunningWorker) or this task ends/aborts
+                // (when dropping them returns the reservations to the gate). This
+                // is what makes a start cancelled mid-flight — e.g. the worker
+                // being deleted while still waiting for its remaining permits —
+                // release rather than leak its grant and module charge.
+                //
+                // Admission is not gated while waiting for a per-account
+                // concurrency slot above; otherwise one account could exhaust the
+                // memory headroom with workers that are not allowed to run yet.
+                let (memory_grant, component_charge) = parent
+                    .active_workers()
+                    .acquire_with_component_charge(
+                        memory_requirement,
+                        component_id,
+                        component_revision,
+                        component_module_bytes,
+                    )
+                    .await;
                 // Pre-acquire storage permits for this restart.
                 //
                 // We need to acquire `filesystem_storage_requirement + desired_extra` total:
@@ -3176,7 +3259,8 @@ impl WaitingWorker {
                 debug!("Attempting to start worker after acquiring enough permits");
                 Worker::start_waiting_worker(
                     parent,
-                    permit,
+                    memory_grant,
+                    component_charge,
                     filesystem_storage_permit,
                     concurrent_agent_permit,
                     oom_retry_count,
@@ -3208,7 +3292,18 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    permit: WorkerMemoryPermit,
+    /// The worker's memory reservation with the admission gate, covering its
+    /// initial requirement plus any grow deltas merged in. Held only to be
+    /// dropped: dropping it (on stop, eviction, or this worker being dropped for
+    /// any reason) returns the reservation to the gate, keeping the granted total
+    /// symmetric with what was reserved.
+    #[allow(dead_code)]
+    memory_grant: MemoryGrant,
+    /// Keeps this worker's component module charge alive while it is resident.
+    /// Held only to be dropped: dropping it releases the component's residency
+    /// (and the module reservation if this was the last worker of the component).
+    #[allow(dead_code)]
+    component_charge: Box<dyn HeldComponentCharge>,
     /// Storage semaphore permits held by this worker. `None` until storage
     /// space is first acquired (at startup or on first write). Dropped
     /// automatically when `RunningWorker` is dropped, returning storage
@@ -3239,7 +3334,8 @@ impl RunningWorker {
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
-        permit: WorkerMemoryPermit,
+        memory_grant: MemoryGrant,
+        component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
     ) -> Self {
@@ -3289,7 +3385,8 @@ impl RunningWorker {
             handle: Some(handle),
             sender,
             queue,
-            permit,
+            memory_grant,
+            component_charge: Box::new(component_charge),
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
@@ -3297,8 +3394,11 @@ impl RunningWorker {
         }
     }
 
-    pub fn merge_extra_permits(&mut self, extra_permit: WorkerMemoryPermit) {
-        self.permit.merge(extra_permit);
+    /// Merge an additional memory grant (from a successful grow) into this
+    /// worker's grant, so its whole reservation is released together when the
+    /// worker unloads.
+    pub fn merge_extra_memory_grant(&mut self, extra: MemoryGrant) {
+        self.memory_grant.merge(extra);
     }
 
     /// Merge additional storage permits into this worker's storage permit. If
