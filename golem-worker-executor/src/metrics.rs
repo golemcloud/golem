@@ -105,6 +105,83 @@ pub mod component {
     }
 }
 
+pub mod runtime {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+    use tokio::runtime::Handle;
+    use tokio::task::JoinSet;
+    use tokio_metrics::RuntimeMetricsReporterBuilder;
+
+    /// How often the recorder's upkeep runs to keep its internal storage
+    /// bounded (e.g. pruning idle metrics once an idle timeout is configured).
+    const UPKEEP_INTERVAL: Duration = Duration::from_secs(30);
+
+    /// Installs a dedicated `metrics`-crate Prometheus recorder for tokio
+    /// runtime metrics, spawns the tokio-metrics reporter on `join_set`, and
+    /// returns a renderer that emits the collected metrics in Prometheus text
+    /// format.
+    ///
+    /// `sampling_interval` controls how often metrics are sampled from the
+    /// runtime into the recorder; Prometheus scrapes the rendered values
+    /// independently.
+    ///
+    /// The returned closure is appended to the `prometheus`-crate scrape output
+    /// on the shared `/metrics` endpoint, so all `tokio_*` series appear on the
+    /// same endpoint as the rest of the executor's metrics, carrying the same
+    /// `executor_id` label.
+    ///
+    /// Returns `None` if a global `metrics` recorder is already installed (which
+    /// should not happen in the executor), in which case runtime metrics are
+    /// simply not exported.
+    pub fn install_runtime_metrics(
+        runtime: Handle,
+        sampling_interval: Duration,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) -> Option<Arc<dyn Fn() -> String + Send + Sync>> {
+        let executor_id = crate::identity::executor_id();
+
+        let handle: PrometheusHandle = match PrometheusBuilder::new()
+            .add_global_label("executor_id", executor_id)
+            .install_recorder()
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to install tokio runtime metrics recorder, runtime metrics will not be exported: {err}"
+                );
+                return None;
+            }
+        };
+
+        let reporter = RuntimeMetricsReporterBuilder::default().with_interval(sampling_interval);
+        join_set.spawn_on(
+            async move {
+                reporter.describe_and_run().await;
+                Ok(())
+            },
+            &runtime,
+        );
+
+        // Run periodic upkeep so the recorder's internal storage stays bounded.
+        let upkeep_handle = handle.clone();
+        join_set.spawn_on(
+            async move {
+                let mut interval = tokio::time::interval(UPKEEP_INTERVAL);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    upkeep_handle.run_upkeep();
+                }
+            },
+            &runtime,
+        );
+
+        Some(Arc::new(move || handle.render()))
+    }
+}
+
 pub mod events {
     use lazy_static::lazy_static;
     use prometheus::*;
@@ -775,16 +852,10 @@ pub mod storage {
     use lazy_static::lazy_static;
     use prometheus::*;
 
-    /// Returns the executor identity label: POD_NAME env var, falling back to HOSTNAME, then "unknown".
-    /// Resolved once on first call and cached for the lifetime of the process.
-    pub fn executor_id() -> &'static str {
-        static EXECUTOR_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        EXECUTOR_ID.get_or_init(|| {
-            std::env::var("POD_NAME")
-                .or_else(|_| std::env::var("HOSTNAME"))
-                .unwrap_or_else(|_| "unknown".to_string())
-        })
-    }
+    /// Re-exported from [`crate::identity`], which owns the process identity.
+    /// Kept here so existing metric-recording call sites can keep using
+    /// `crate::metrics::storage::executor_id()`.
+    pub use crate::identity::executor_id;
 
     lazy_static! {
         pub static ref STORAGE_FILESYSTEM_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
