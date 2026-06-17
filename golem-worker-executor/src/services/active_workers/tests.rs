@@ -994,7 +994,7 @@ mod component_module_charge {
 // scanning a little early or late; it can never leak or double-release, and the
 // gate re-measures against the probe afterward.
 mod memory_eviction_planning {
-    use super::super::{EvictionCandidateCost, plan_memory_eviction_stops};
+    use super::super::{EvictionCandidateCost, credit_eviction_stop, plan_memory_eviction_stops};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use std::collections::HashMap;
     use test_r::test;
@@ -1103,6 +1103,73 @@ mod memory_eviction_planning {
         let refcounts = HashMap::from([(comp, 1usize)]);
         let candidates = vec![candidate(100, comp, 200)];
         assert_eq!(plan_memory_eviction_stops(&candidates, &refcounts, 0), 0);
+    }
+
+    /// Stopping the last resident worker of a component frees its linear memory
+    /// *and* its shared compiled module. This is the byte total the actual stop
+    /// loop must report back to the gate; reporting memory alone here under-counts
+    /// reclaimed headroom and drives unnecessary higher-tier evictions.
+    #[test]
+    fn credit_stop_includes_module_for_last_worker_of_component() {
+        let comp = component();
+        let mut remaining = HashMap::from([(comp, 1usize)]);
+        // Sole resident worker: memory 100, module 200 → frees 300.
+        let freed = credit_eviction_stop(&mut remaining, &comp, 100, 200);
+        assert_eq!(
+            freed, 300,
+            "stopping the last worker frees its memory and the component's module"
+        );
+    }
+
+    /// While another resident worker of the same component remains, a stop frees
+    /// only the worker's own linear memory — the shared module stays resident, so
+    /// its bytes must not be credited.
+    #[test]
+    fn credit_stop_excludes_module_while_component_still_resident() {
+        let comp = component();
+        let mut remaining = HashMap::from([(comp, 2usize)]);
+        // First of two workers: memory only.
+        let first = credit_eviction_stop(&mut remaining, &comp, 100, 200);
+        assert_eq!(
+            first, 100,
+            "module not freed while a sibling worker remains"
+        );
+        // Second worker empties the component: memory + module.
+        let second = credit_eviction_stop(&mut remaining, &comp, 100, 200);
+        assert_eq!(second, 300, "module freed once the last worker is stopped");
+    }
+
+    /// The freed total accumulated by crediting each successful stop (the stop
+    /// loop's accounting) matches what the planner credited for the same stops,
+    /// so the gate sees consistent memory between planning and the value returned
+    /// from eviction.
+    #[test]
+    fn credit_stop_total_matches_plan_accounting() {
+        let shared = component();
+        let solo = component();
+        let refcounts = HashMap::from([(shared, 2usize), (solo, 1usize)]);
+        let candidates = vec![
+            candidate(100, shared, 200),
+            candidate(100, shared, 200),
+            candidate(100, solo, 200),
+        ];
+
+        // Plan enough to stop all three.
+        let planned_stops = plan_memory_eviction_stops(&candidates, &refcounts, 100_000);
+        assert_eq!(planned_stops, 3);
+
+        // Replay the same stops through the stop-loop accounting helper.
+        let mut remaining = refcounts;
+        let mut freed = 0u64;
+        for c in candidates.iter().take(planned_stops) {
+            freed += credit_eviction_stop(&mut remaining, &c.component, c.memory, c.module_bytes);
+        }
+        // 3 * memory(100) + module of shared(200, on the 2nd stop) + module of
+        // solo(200) = 300 + 200 + 200 = 700.
+        assert_eq!(
+            freed, 700,
+            "stop-loop freed total credits each worker's memory plus each component's module once"
+        );
     }
 }
 
