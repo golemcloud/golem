@@ -25,14 +25,63 @@ import {
   ConstructorUnionOrderAgentClassName,
   ReadOnlyAgentClassName,
 } from './testUtils';
-import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common@1.5.0';
-import * as util from 'node:util';
+import { InputSchema } from 'golem:agent/common@2.0.0';
 import { EphemeralAgent, FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { WitNodeBuilder } from '../src/internal/mapping/values/WitNodeBuilder';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from '../src/uuid';
-import { AgentClassName, BaseAgent } from '../src';
+import { AgentClassName, BaseAgent, ParsedAgentId } from '../src';
+import { v, schemaValueToWit } from '../src/internal/schema-model';
+import { paramNames, paramRoleTag, paramShape } from './agentTypeHelpers';
+
+// Shared structural shapes (in the compact `normalizeSchema` form produced by
+// `paramShape`). Named TypeScript types project to `ref`s into the agent's
+// schema graph and surface here as `{ def: <name>, ... }`.
+const objectTypeShape = {
+  def: 'ObjectType',
+  record: [
+    ['a', 'string'],
+    ['b', 'f64'],
+    ['c', 'bool'],
+  ],
+};
+
+const unionTypeShape = {
+  def: 'UnionType',
+  variant: [
+    ['UnionType1', 'f64'],
+    ['UnionType2', 'string'],
+    ['UnionType3', 'bool'],
+    ['UnionType4', objectTypeShape],
+  ],
+};
+
+const simpleInterfaceShape = { def: 'SimpleInterfaceType', record: [['n', 'f64']] };
+
+const unstructuredTextShape = {
+  variant: [
+    ['inline', { text: {} }],
+    ['url', { url: {} }],
+  ],
+};
+const unstructuredTextLangShape = {
+  variant: [
+    ['inline', { text: { languages: ['en', 'de'] } }],
+    ['url', { url: {} }],
+  ],
+};
+const unstructuredBinaryJsonShape = {
+  variant: [
+    ['inline', { binary: { mimeTypes: ['application/json'] } }],
+    ['url', { url: {} }],
+  ],
+};
+const unstructuredBinaryAnyShape = {
+  variant: [
+    ['inline', { binary: {} }],
+    ['url', { url: {} }],
+  ],
+};
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -74,54 +123,29 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle UnstructuredText in method params', () => {
-    const elementSchema1 = getElementSchema(
-      barAgentMethod.inputSchema,
-      'unstructuredTextWithLanguageCode',
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'unstructuredTextWithLanguageCode'),
+    ).toEqual(unstructuredTextLangShape);
+
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unstructuredText')).toEqual(
+      unstructuredTextShape,
     );
-
-    const expected = {
-      tag: 'unstructured-text',
-      val: { restrictions: [{ languageCode: 'en' }, { languageCode: 'de' }] },
-    };
-
-    expect(elementSchema1).toEqual(expected);
-
-    const elementSchema2 = getElementSchema(barAgentMethod.inputSchema, 'unstructuredText');
-
-    const expected2 = { tag: 'unstructured-text', val: {} };
-
-    expect(elementSchema2).toEqual(expected2);
   });
 
   it('should handle UnstructuredText in constructor params', () => {
-    const elementSchema1 = getElementSchema(
-      barAgentConstructor.inputSchema,
-      'unstructuredTextWithLanguageCode',
+    expect(
+      paramShape(barAgent, barAgentConstructor.inputSchema, 'unstructuredTextWithLanguageCode'),
+    ).toEqual(unstructuredTextLangShape);
+
+    expect(paramShape(barAgent, barAgentConstructor.inputSchema, 'unstructuredText')).toEqual(
+      unstructuredTextShape,
     );
-
-    const expected = {
-      tag: 'unstructured-text',
-      val: { restrictions: [{ languageCode: 'en' }, { languageCode: 'de' }] },
-    };
-
-    expect(elementSchema1).toEqual(expected);
-
-    const elementSchema2 = getElementSchema(barAgentConstructor.inputSchema, 'unstructuredText');
-
-    const expected2 = { tag: 'unstructured-text', val: {} };
-
-    expect(elementSchema2).toEqual(expected2);
   });
 
   it('should handle UnstructuredBinary in method params', () => {
-    const elementSchema1 = getElementSchema(barAgentMethod.inputSchema, 'unstructuredBinary');
-
-    const expected = {
-      tag: 'unstructured-binary',
-      val: { restrictions: [{ mimeType: 'application/json' }] },
-    };
-
-    expect(elementSchema1).toEqual(expected);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unstructuredBinary')).toEqual(
+      unstructuredBinaryJsonShape,
+    );
   });
 
   it('should handle Multimodal in method params', () => {
@@ -131,36 +155,24 @@ describe('Agent decorator should register the agent class and its methods into A
       throw new Error('fun23 method not found in BarAgent');
     }
 
-    expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
+    // A multimodal parameter is a single record field carrying a `list<variant>`.
+    expect(multimodalAgentMethod.inputSchema.tag).toEqual('parameters');
+    expect(paramNames(multimodalAgentMethod.inputSchema)).toEqual(['multimodalInput']);
 
-    const expected = [
-      [
-        'text',
-        {
-          tag: 'component-model',
-          val: { nodes: [{ type: { tag: 'prim-string-type' } }] },
-        },
-      ],
-      [
-        'image',
-        {
-          tag: 'component-model',
-          val: {
-            nodes: [{ type: { tag: 'list-type', val: 1 } }, { type: { tag: 'prim-u8-type' } }],
-          },
-        },
-      ],
-      ['un-text', { tag: 'unstructured-text', val: {} }],
-      [
-        'un-binary',
-        {
-          tag: 'unstructured-binary',
-          val: { restrictions: [{ mimeType: 'application/json' }] },
-        },
-      ],
-    ];
-
-    expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);
+    expect(paramShape(barAgent, multimodalAgentMethod.inputSchema, 'multimodalInput')).toEqual({
+      list: {
+        variant: [
+          ['text', 'string'],
+          ['image', { list: 'u8' }],
+          ['un-text', unstructuredTextShape],
+          ['un-binary', unstructuredBinaryJsonShape],
+        ],
+      },
+    });
+    // The multimodal role must live on the `list` (root) node itself.
+    expect(paramRoleTag(barAgent, multimodalAgentMethod.inputSchema, 'multimodalInput')).toEqual(
+      'multimodal',
+    );
   });
 
   it('should handle MultimodalBasic in method params', () => {
@@ -170,680 +182,311 @@ describe('Agent decorator should register the agent class and its methods into A
       throw new Error('fun24 method not found in BarAgent');
     }
 
-    expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
+    expect(multimodalAgentMethod.inputSchema.tag).toEqual('parameters');
+    expect(paramNames(multimodalAgentMethod.inputSchema)).toEqual(['multimodalInput']);
 
-    const expected = [
-      ['text', { tag: 'unstructured-text', val: {} }],
-      [
-        'binary',
-        {
-          tag: 'unstructured-binary',
-          val: {},
-        },
-      ],
-    ];
-
-    expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);
+    expect(paramShape(barAgent, multimodalAgentMethod.inputSchema, 'multimodalInput')).toEqual({
+      list: {
+        variant: [
+          ['text', unstructuredTextShape],
+          ['binary', unstructuredBinaryAnyShape],
+        ],
+      },
+    });
+    expect(paramRoleTag(barAgent, multimodalAgentMethod.inputSchema, 'multimodalInput')).toEqual(
+      'multimodal',
+    );
   });
 
   it('should handle UnstructuredBinary in constructor params', () => {
-    const elementSchema1 = getElementSchema(barAgentConstructor.inputSchema, 'unstructuredBinary');
-
-    const expected = {
-      tag: 'unstructured-binary',
-      val: { restrictions: [{ mimeType: 'application/json' }] },
-    };
-
-    expect(elementSchema1).toEqual(expected);
+    expect(paramShape(barAgent, barAgentConstructor.inputSchema, 'unstructuredBinary')).toEqual(
+      unstructuredBinaryJsonShape,
+    );
   });
 
   it('should handle `a: string | undefined` in method params', () => {
-    const optionalStringInGetWeather = getWitType(barAgentMethod.inputSchema, 'optionalStringType');
-
-    expect(optionalStringInGetWeather).toEqual({
-      nodes: [
-        {
-          type: {
-            tag: 'option-type',
-            val: 1,
-          },
-        },
-        {
-          type: {
-            tag: 'prim-string-type',
-          },
-        },
-      ],
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'optionalStringType')).toEqual({
+      option: 'string',
     });
   });
 
   it('should handle optional string in method', () => {
-    const optionalStringInGetWeather = getWitType(barAgentMethod.inputSchema, 'optionalStringType');
-
-    expect(optionalStringInGetWeather).toEqual({
-      nodes: [
-        {
-          type: {
-            tag: 'option-type',
-            val: 1,
-          },
-        },
-        {
-          type: {
-            tag: 'prim-string-type',
-          },
-        },
-      ],
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'optionalStringType')).toEqual({
+      option: 'string',
     });
   });
 
   it('should handle boolean|undefined as option<bool> in method', () => {
-    const optionalBooleanInGetWeather = getWitType(
-      barAgentMethod.inputSchema,
-      'optionalBooleanType',
-    );
-
-    expect(optionalBooleanInGetWeather).toEqual({
-      nodes: [
-        {
-          type: {
-            tag: 'option-type',
-            val: 1,
-          },
-        },
-        {
-          type: {
-            tag: 'prim-bool-type',
-          },
-        },
-      ],
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'optionalBooleanType')).toEqual({
+      option: 'bool',
     });
   });
 
   it('should handle tagged unions in method', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'taggedUnionType');
-
-    const expectedWit = {
-      nodes: [
-        {
-          name: 'TaggedUnion',
-          owner: './testTypes',
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['a', 1],
-              ['b', 2],
-              ['c', 3],
-              ['d', 4],
-              ['e', 5],
-              ['f', 6],
-              ['g', 7],
-              ['h', 8],
-              ['i', undefined],
-              ['j', undefined],
-            ],
-          },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
-        {
-          name: 'UnionType',
-          owner: undefined,
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['UnionType1', 2],
-              ['UnionType2', 1],
-              ['UnionType3', 3],
-              ['UnionType4', 5],
-            ],
-          },
-        },
-        {
-          name: 'ObjectType',
-          owner: undefined,
-          type: {
-            tag: 'record-type',
-            val: [
-              ['a', 1],
-              ['b', 2],
-              ['c', 3],
-            ],
-          },
-        },
-        { name: 'ListType', owner: undefined, type: { tag: 'list-type', val: 1 } },
-        { name: 'TupleType', owner: undefined, type: { tag: 'tuple-type', val: [1, 2, 3] } },
-        {
-          name: 'SimpleInterfaceType',
-          owner: undefined,
-          type: { tag: 'record-type', val: [['n', 2]] },
-        },
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'taggedUnionType')).toEqual({
+      def: 'TaggedUnion',
+      variant: [
+        ['a', 'string'],
+        ['b', 'f64'],
+        ['c', 'bool'],
+        ['d', unionTypeShape],
+        ['e', objectTypeShape],
+        ['f', { list: 'string' }],
+        ['g', { tuple: ['string', 'f64', 'bool'] }],
+        ['h', simpleInterfaceShape],
+        ['i', null],
+        ['j', null],
       ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    });
   });
 
   it('should handle union with only literals in method', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'unionWithOnlyLiterals');
-
-    const expectedWit = {
-      nodes: [
-        {
-          name: 'UnionWithOnlyLiterals',
-          owner: './testTypes',
-          type: { tag: 'enum-type', val: ['foo', 'bar', 'baz'] },
-        },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unionWithOnlyLiterals')).toEqual({
+      def: 'UnionWithOnlyLiterals',
+      enum: ['foo', 'bar', 'baz'],
+    });
   });
 
   it('should handle union with literals in method xxx', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'unionWithLiterals');
-
-    const expectedWit = {
-      nodes: [
-        {
-          name: 'UnionWithLiterals',
-          owner: './testTypes',
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['a', undefined],
-              ['b', undefined],
-              ['c', undefined],
-              ['UnionWithLiterals1', 1],
-            ],
-          },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'record-type', val: [['n', 2]] } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unionWithLiterals')).toEqual({
+      def: 'UnionWithLiterals',
+      variant: [
+        ['a', null],
+        ['b', null],
+        ['c', null],
+        ['UnionWithLiterals1', { record: [['n', 'f64']] }],
       ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    });
   });
 
   it('should handle result type - exact in method', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'resultTypeExact');
-
-    const expectedWit = {
-      nodes: [
-        {
-          name: 'ResultTypeExactBoth',
-          owner: './testTypes',
-          type: { tag: 'result-type', val: [1, 2] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'resultTypeExact')).toEqual({
+      result: ['f64', 'string'],
+    });
   });
 
   it('should handle result type with different key names', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'resultTypeNonExact');
-
-    const expectedWit = {
-      nodes: [
-        {
-          name: 'ResultTypeNonExact',
-          owner: './testTypes',
-          type: { tag: 'result-type', val: [1, 2] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'resultTypeNonExact')).toEqual({
+      result: ['f64', 'string'],
+    });
   });
 
   it('should handle result type with different key names for ok and err', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'resultTypeNonExact2');
-
-    const expectedWit = {
-      nodes: [
-        {
-          name: 'ResultTypeNonExact2',
-          owner: './testTypes',
-          type: { tag: 'result-type', val: [1, 2] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'resultTypeNonExact2')).toEqual({
+      result: ['f64', 'string'],
+    });
   });
 
   it('should handle union with null in constructor', () => {
-    const wit = getWitType(barAgentConstructor.inputSchema, 'optionalUnionType');
-
-    const expectedWit = {
-      nodes: [
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
-        {
-          name: 'UnionType',
-          owner: './testTypes',
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['UnionType1', 2],
-              ['UnionType2', 3],
-              ['UnionType3', 4],
-              ['UnionType4', 5],
-            ],
-          },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
-        {
-          name: 'ObjectType',
-          owner: undefined,
-          type: {
-            tag: 'record-type',
-            val: [
-              ['a', 3],
-              ['b', 2],
-              ['c', 4],
-            ],
-          },
-        },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentConstructor.inputSchema, 'optionalUnionType')).toEqual({
+      option: unionTypeShape,
+    });
   });
 
   it('should handle optional union in method', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'optionalUnionType');
-
-    const expectedWit = {
-      nodes: [
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
-        {
-          name: 'UnionType',
-          owner: './testTypes',
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['UnionType1', 2],
-              ['UnionType2', 3],
-              ['UnionType3', 4],
-              ['UnionType4', 5],
-            ],
-          },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
-        {
-          name: 'ObjectType',
-          owner: undefined,
-          type: {
-            tag: 'record-type',
-            val: [
-              ['a', 3],
-              ['b', 2],
-              ['c', 4],
-            ],
-          },
-        },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'optionalUnionType')).toEqual({
+      option: unionTypeShape,
+    });
   });
 
   it('should handle object|boolean|undefined in method', () => {
-    const wit = getWitType(barAgentMethod.inputSchema, 'objectOrBooleanOrUndefined');
-
-    const expectedWit = {
-      nodes: [
-        { name: undefined, owner: './testTypes', type: { tag: 'option-type', val: 1 } },
-        {
-          name: 'ObjectOrBooleanOrUndefined',
-          owner: './testTypes',
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['ObjectOrBooleanOrUndefined1', 2],
-              ['ObjectOrBooleanOrUndefined2', 5],
-            ],
-          },
-        },
-        {
-          name: undefined,
-          owner: undefined,
-          type: {
-            tag: 'record-type',
-            val: [
-              ['a', 3],
-              ['b', 4],
-            ],
-          },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
-      ],
-    };
-
-    expect(wit).toEqual(expectedWit);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'objectOrBooleanOrUndefined')).toEqual({
+      option: {
+        def: 'ObjectOrBooleanOrUndefined',
+        variant: [
+          [
+            'ObjectOrBooleanOrUndefined1',
+            {
+              record: [
+                ['a', 'f64'],
+                ['b', 'string'],
+              ],
+            },
+          ],
+          ['ObjectOrBooleanOrUndefined2', 'bool'],
+        ],
+      },
+    });
   });
 
   it('should preserve constructor union order for inline object|boolean|undefined', () => {
-    const wit = getWitType(constructorUnionOrderAgent.constructor.inputSchema, 'complex');
-    const nodes = wit.nodes as any[];
-
-    expect(nodes[0]?.type).toEqual({ tag: 'option-type', val: 1 });
-    expect(nodes[1]?.type).toEqual({
-      tag: 'variant-type',
-      val: [
-        ['case1', 2],
-        ['case2', 5],
-      ],
+    expect(
+      paramShape(
+        constructorUnionOrderAgent,
+        constructorUnionOrderAgent.constructor.inputSchema,
+        'complex',
+      ),
+    ).toEqual({
+      option: {
+        variant: [
+          [
+            'case1',
+            {
+              record: [
+                ['a', 'f64'],
+                ['b', 'string'],
+              ],
+            },
+          ],
+          ['case2', 'bool'],
+        ],
+      },
     });
-
-    const recordNode = nodes[2];
-    expect(recordNode?.type?.tag).toBe('record-type');
-    expect(recordNode?.type?.val).toEqual([
-      ['a', 3],
-      ['b', 4],
-    ]);
-
-    expect(nodes[3]?.type).toEqual({ tag: 'prim-f64-type' });
-    expect(nodes[4]?.type).toEqual({ tag: 'prim-string-type' });
-    expect(nodes[5]?.type).toEqual({ tag: 'prim-bool-type' });
   });
 
   it('should handle boolean|undefined as option<bool> in constructor', () => {
-    const wit = getWitType(constructorUnionOrderAgent.constructor.inputSchema, 'flag');
+    expect(
+      paramShape(
+        constructorUnionOrderAgent,
+        constructorUnionOrderAgent.constructor.inputSchema,
+        'flag',
+      ),
+    ).toEqual({ option: 'bool' });
+  });
 
-    expect(wit).toEqual({
-      nodes: [
-        {
-          type: {
-            tag: 'option-type',
-            val: 1,
+  it('union with null works', () => {
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unionWithNull')).toEqual({
+      option: {
+        variant: [
+          ['case1', 'string'],
+          ['case2', 'f64'],
+        ],
+      },
+    });
+  });
+
+  it('object with a: string | undefined works', () => {
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'objectWithUnionWithUndefined1'),
+    ).toEqual({
+      def: 'ObjectWithUnionWithUndefined1',
+      record: [['a', { option: 'string' }]],
+    });
+  });
+
+  it('interface with a: string | undefined works', () => {
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined1'),
+    ).toEqual({
+      def: 'InterfaceWithUnionWithUndefined1',
+      record: [['a', { option: 'string' }]],
+    });
+  });
+
+  it('object with a: string | number | undefined works', () => {
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'objectWithUnionWithUndefined2'),
+    ).toEqual({
+      def: 'ObjectWithUnionWithUndefined2',
+      record: [
+        [
+          'a',
+          {
+            option: {
+              variant: [
+                ['case1', 'string'],
+                ['case2', 'f64'],
+              ],
+            },
           },
-        },
-        {
-          type: {
-            tag: 'prim-bool-type',
-          },
-        },
+        ],
       ],
     });
   });
 
-  it('union with null works', () => {
-    const unionWithNullType = getWitType(barAgentMethod.inputSchema, 'unionWithNull');
-
-    const expected = {
-      nodes: [
-        { type: { tag: 'option-type', val: 1 } },
-        {
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['case1', 2],
-              ['case2', 3],
-            ],
-          },
-        },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
-      ],
-    };
-
-    expect(unionWithNullType).toEqual(expected);
-  });
-
-  it('object with a: string | undefined works', () => {
-    const objectWithUnionWithNull = getWitType(
-      barAgentMethod.inputSchema,
-      'objectWithUnionWithUndefined1',
-    );
-
-    const expected = {
-      nodes: [
-        {
-          name: 'ObjectWithUnionWithUndefined1',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(objectWithUnionWithNull).toEqual(expected);
-  });
-
-  it('interface with a: string | undefined works', () => {
-    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined1');
-
-    const expected = {
-      nodes: [
-        {
-          name: 'InterfaceWithUnionWithUndefined1',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(witType).toEqual(expected);
-  });
-
-  it('object with a: string | number | undefined works', () => {
-    const objectWithUnionWithNull2 = getWitType(
-      barAgentMethod.inputSchema,
-      'objectWithUnionWithUndefined2',
-    );
-
-    const expected = {
-      nodes: [
-        {
-          name: 'ObjectWithUnionWithUndefined2',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        {
-          name: undefined,
-          owner: undefined,
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['case1', 3],
-              ['case2', 4],
-            ],
-          },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
-      ],
-    };
-
-    expect(objectWithUnionWithNull2).toEqual(expected);
-  });
-
   it('interface with a: string | number | undefined works', () => {
-    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined2');
-
-    const expected = {
-      nodes: [
-        {
-          name: 'InterfaceWithUnionWithUndefined2',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        {
-          name: undefined,
-          owner: undefined,
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['case1', 3],
-              ['case2', 4],
-            ],
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined2'),
+    ).toEqual({
+      def: 'InterfaceWithUnionWithUndefined2',
+      record: [
+        [
+          'a',
+          {
+            option: {
+              variant: [
+                ['case1', 'string'],
+                ['case2', 'f64'],
+              ],
+            },
           },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        ],
       ],
-    };
-
-    expect(witType).toEqual(expected);
+    });
   });
 
   it('object with a?: string | number | undefined works', () => {
-    const objectWithUnionWithNull2 = getWitType(
-      barAgentMethod.inputSchema,
-      'objectWithUnionWithUndefined3',
-    );
-
-    const expected = {
-      nodes: [
-        {
-          name: 'ObjectWithUnionWithUndefined3',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        {
-          name: undefined,
-          owner: undefined,
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['case1', 3],
-              ['case2', 4],
-            ],
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'objectWithUnionWithUndefined3'),
+    ).toEqual({
+      def: 'ObjectWithUnionWithUndefined3',
+      record: [
+        [
+          'a',
+          {
+            option: {
+              variant: [
+                ['case1', 'string'],
+                ['case2', 'f64'],
+              ],
+            },
           },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        ],
       ],
-    };
-
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    });
   });
 
   it('interface with a?: string | number | undefined works', () => {
-    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined3');
-
-    const expected = {
-      nodes: [
-        {
-          name: 'InterfaceWithUnionWithUndefined3',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        {
-          name: undefined,
-          owner: undefined,
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['case1', 3],
-              ['case2', 4],
-            ],
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined3'),
+    ).toEqual({
+      def: 'InterfaceWithUnionWithUndefined3',
+      record: [
+        [
+          'a',
+          {
+            option: {
+              variant: [
+                ['case1', 'string'],
+                ['case2', 'f64'],
+              ],
+            },
           },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        ],
       ],
-    };
-
-    expect(witType).toEqual(expected);
+    });
   });
 
   it('object with `a?: string | undefined` works', () => {
-    const objectWithUnionWithNull2 = getWitType(
-      barAgentMethod.inputSchema,
-      'objectWithUnionWithUndefined4',
-    );
-
-    const expected = {
-      nodes: [
-        {
-          name: 'ObjectWithUnionWithUndefined4',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'objectWithUnionWithUndefined4'),
+    ).toEqual({
+      def: 'ObjectWithUnionWithUndefined4',
+      record: [['a', { option: 'string' }]],
+    });
   });
 
   it('interface with `a?: string | undefined` works', () => {
-    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined4');
-
-    const expected = {
-      nodes: [
-        {
-          name: 'InterfaceWithUnionWithUndefined4',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(witType).toEqual(expected);
+    expect(
+      paramShape(barAgent, barAgentMethod.inputSchema, 'interfaceWithUnionWithUndefined4'),
+    ).toEqual({
+      def: 'InterfaceWithUnionWithUndefined4',
+      record: [['a', { option: 'string' }]],
+    });
   });
 
   it('object with optional prop works', () => {
-    const objectWithUnionWithNull2 = getWitType(barAgentMethod.inputSchema, 'objectWithOption');
-
-    const expected = {
-      nodes: [
-        {
-          name: 'ObjectWithOption',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'objectWithOption')).toEqual({
+      def: 'ObjectWithOption',
+      record: [['a', { option: 'string' }]],
+    });
   });
 
   it('interface with optional prop works', () => {
-    const witType = getWitType(barAgentMethod.inputSchema, 'interfaceWithOption');
-
-    const expected = {
-      nodes: [
-        {
-          name: 'InterfaceWithOption',
-          owner: './testTypes',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(witType).toEqual(expected);
+    expect(paramShape(barAgent, barAgentMethod.inputSchema, 'interfaceWithOption')).toEqual({
+      def: 'InterfaceWithOption',
+      record: [['a', { option: 'string' }]],
+    });
   });
 
   it('captures all methods and constructor with correct number of parameters', () => {
@@ -1000,21 +643,17 @@ describe('Annotated FooAgent class', () => {
       throw new Error('FooAgent not found in AgentInitiatorRegistry');
     }
 
-    const builder = new WitNodeBuilder();
-    builder.string('hello');
-    const witValue = builder.build();
-
     const uuid = new Uuid(BigInt(1234), BigInt(5678));
 
-    (globalThis as any).currentAgentId = `FooAgent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    // The agent id (with embedded phantom id) is produced through the same
+    // schema-native `make-agent-id` boundary the runtime uses.
+    (globalThis as any).currentAgentId = ParsedAgentId.make(
+      'FooAgent',
+      v.record([v.string('hello')]),
+      { highBits: uuid.highBits, lowBits: uuid.lowBits },
+    ).value;
 
-    const fooResult = initiator.initiate(
-      {
-        tag: 'tuple',
-        val: [{ tag: 'component-model', val: witValue }],
-      },
-      { tag: 'anonymous' },
-    );
+    const fooResult = initiator.initiate(v.record([v.string('hello')]), { tag: 'anonymous' });
     expect(fooResult.tag).toEqual('ok');
     const foo = fooResult.val as ResolvedAgent;
     const phantomId = foo.phantomId();
@@ -1032,10 +671,10 @@ describe('Annotated FooAgent class', () => {
     const client = FooAgent.get('example');
     expect(client).toBeDefined();
 
-    // NOTE: this agent id is not a valid agent-id syntax, just the one the mocked makeAgentId produces.
-    expect((await client.getId()).value).toEqual(
-      'FooAgent({"tag":"tuple","val":[{"tag":"component-model","val":{"nodes":[{"tag":"prim-string","val":"example"}]}}]})',
-    );
+    // The constructor parameters cross the boundary as a schema-value-tree
+    // record; the mocked makeAgentId embeds its JSON form in the agent id.
+    const expectedTree = schemaValueToWit(v.record([v.string('example')]));
+    expect((await client.getId()).value).toEqual(`FooAgent(${JSON.stringify(expectedTree)})`);
     expect(await client.phantomId()).toBeUndefined();
     expect(await client.getAgentType()).toEqual(agentType);
   });
@@ -1058,20 +697,25 @@ describe('Annotated EphemeralAgent class', () => {
 describe('Agent with principal auto injected', async () => {
   await import('./agentsWithPrincipalAutoInjection');
 
-  it("should never include anything about principal in the agent's constructor or method schemas", () => {
+  it('exposes principal only as an auto-injected field, never as a user-supplied parameter', () => {
     const agentType = AgentTypeRegistry.get(new AgentClassName('AgentWithPrincipalAutoInjection1'));
 
     if (!agentType) {
       throw new Error('AgentWithPrincipalAutoInjection not found in AgentTypeRegistry');
     }
 
-    const constructorParamNames = agentType.constructor.inputSchema.val.map(([name]) => name);
+    const userSupplied = (schema: InputSchema) =>
+      schema.val.filter((f) => f.source.tag === 'user-supplied').map((f) => f.name);
+    const autoInjectedPrincipals = (schema: InputSchema) =>
+      schema.val.filter((f) => f.source.tag === 'auto-injected' && f.source.val === 'principal');
 
-    expect(constructorParamNames).not.toContain('principal');
+    // Principal is never part of the user-supplied value contract...
+    expect(userSupplied(agentType.constructor.inputSchema)).not.toContain('principal');
+    // ...but it IS declared as an auto-injected field so the host injects it.
+    expect(autoInjectedPrincipals(agentType.constructor.inputSchema).length).toBeGreaterThan(0);
 
     agentType.methods.forEach((method) => {
-      const methodParamNames = method.inputSchema.val.map(([name]) => name);
-      expect(methodParamNames).not.toContain('principal');
+      expect(userSupplied(method.inputSchema)).not.toContain('principal');
     });
   });
 });
@@ -1084,69 +728,18 @@ describe('Annotated SingletonAgent class', () => {
       throw new Error('SingletonAgent not found in AgentInitiatorRegistry');
     }
 
-    const params: DataValue = {
-      tag: 'tuple',
-      val: [],
-    };
-
-    (globalThis as any).currentAgentId = `SingletonAgent(${JSON.stringify(params)})`;
+    // No constructor parameters -> an empty input record.
+    const params = v.record([]);
+    (globalThis as any).currentAgentId = ParsedAgentId.make('SingletonAgent', params).value;
 
     const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');
     const foo = singleton.val as ResolvedAgent;
     expect(foo.phantomId()).toBeUndefined();
 
-    const result = await foo.invoke(
-      'test',
-      {
-        tag: 'tuple',
-        val: [],
-      },
-      { tag: 'anonymous' },
-    );
+    const result = await foo.invoke('test', v.record([]), { tag: 'anonymous' });
 
     expect(result.tag).toEqual('ok');
-    expect(result.val).toEqual({
-      tag: 'tuple',
-      val: [
-        {
-          tag: 'component-model',
-          val: {
-            nodes: [
-              {
-                tag: 'prim-string',
-                val: 'test',
-              },
-            ],
-          },
-        },
-      ],
-    });
+    expect(result.val).toEqual({ tag: 'string', value: 'test' });
   });
 });
-
-function getWitType(dataSchema: DataSchema, parameterName: string) {
-  const elementSchema = getElementSchema(dataSchema, parameterName);
-
-  const witType = elementSchema.tag === 'component-model' ? elementSchema.val : undefined;
-
-  if (!witType) {
-    throw new Error(
-      `Test failed - ${parameterName} is not of component-model type in getWeather function in ${BarAgentClassName.value}`,
-    );
-  }
-
-  return witType;
-}
-
-function getElementSchema(inputSchema: DataSchema, parameterName: string) {
-  const schema: [string, ElementSchema] | undefined = inputSchema.val.find(
-    ([name]) => name === parameterName,
-  );
-
-  if (!schema) {
-    throw new Error(`${parameterName} not found in scheme ${util.format(inputSchema)}`);
-  }
-
-  return schema[1];
-}

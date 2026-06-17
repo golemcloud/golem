@@ -1304,6 +1304,22 @@ impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> core_wire::Host for DurableWorkerCtx<Ctx> {
+    async fn parse_uuid(
+        &mut self,
+        uuid: String,
+    ) -> anyhow::Result<Result<core_wire::Uuid, String>> {
+        Ok(uuid::Uuid::parse_str(&uuid)
+            .map(|uuid| uuid.into())
+            .map_err(|e| e.to_string()))
+    }
+
+    async fn uuid_to_string(&mut self, uuid: core_wire::Uuid) -> anyhow::Result<String> {
+        let uuid: uuid::Uuid = uuid.into();
+        Ok(uuid.to_string())
+    }
+}
+
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: AgentId,

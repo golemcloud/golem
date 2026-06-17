@@ -49,6 +49,12 @@ interface types {
         low-bits: u64,
     }
 
+    /// Parses a UUID from a string
+    parse-uuid: func(uuid: string) -> result<uuid, string>;
+
+    /// Converts a UUID to a string
+    uuid-to-string: func(uuid: uuid) -> string;
+
     record datetime {
         /// Seconds since the Unix epoch (UTC).
         seconds: s64,
@@ -64,10 +70,8 @@ interface types {
     // Platform identifiers
     // ============================================================
     //
-    // Duplicated from `golem:core/types@1.5.0` so the agent surface depends on
-    // a single core version (`@2.0.0`). The old `@1.5.0` copies survive only
-    // for packages not yet migrated (e.g. `golem:api@1.5.0`) and are removed in
-    // the final cleanup wave.
+    // Platform identifiers used by the schema-native surfaces. Keeping them
+    // here lets migrated interfaces depend on a single core version.
 
     /// Represents a Golem component
     record component-id {

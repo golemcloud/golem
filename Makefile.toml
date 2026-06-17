@@ -127,10 +127,11 @@ glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/scala/wit/deps
 glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
-# The non-Rust SDKs' agent-guest worlds still reference golem:core@1.5.0 only.
-# Including golem:core@2.0.0 causes their bindgen/codegen to emit version-suffixed
-# module paths (e.g. golem::core1_5_0), which breaks downstream code generators.
-rm -r sdks/ts/wit/deps/golem-core-v2
+# The Scala and MoonBit SDKs' agent-guest worlds still reference golem:core@1.5.0
+# only. Including golem:core@2.0.0 causes their bindgen/codegen to emit
+# version-suffixed module paths (e.g. golem::core1_5_0), which breaks downstream
+# code generators. The Rust and TypeScript SDKs are migrated to golem:core@2.0.0
+# and keep golem-core-v2.
 rm -r sdks/scala/wit/deps/golem-core-v2
 rm -r sdks/moonbit/golem_sdk/wit/deps/golem-core-v2
 """

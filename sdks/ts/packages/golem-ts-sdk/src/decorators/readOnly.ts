@@ -14,7 +14,7 @@
 
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { AgentMethodRegistry } from '../internal/registry/agentMethodRegistry';
-import { CachePolicy } from 'golem:agent/common@1.5.0';
+import { CachePolicy } from 'golem:agent/common@2.0.0';
 import ms from 'ms';
 
 export type CachePolicyOption = 'no-cache' | 'until-write' | { ttl: string };

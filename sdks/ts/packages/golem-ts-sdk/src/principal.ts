@@ -17,7 +17,7 @@ import {
   OidcPrincipal as HostOidcPrincipal,
   GolemUserPrincipal as HostGolemUserPrincipal,
   Principal as HostPrincipal,
-} from 'golem:agent/common@1.5.0';
+} from 'golem:agent/common@2.0.0';
 
 abstract class BasePrincipal {
   // prevents structural compatibility

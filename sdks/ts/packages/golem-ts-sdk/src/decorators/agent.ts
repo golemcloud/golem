@@ -12,18 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  AgentType,
-  DataValue,
-  AgentConstructor,
-  AgentMode,
-  Principal,
-  Snapshotting,
-  AgentConfigDeclaration,
-  AgentConfigSource,
-} from 'golem:agent/common@1.5.0';
+import { AgentType, AgentMode, Principal, Snapshotting } from 'golem:agent/common@2.0.0';
+import { SchemaValue } from '../internal/schema-model';
 import { ResolvedAgent } from '../internal/resolvedAgent';
-import { ConstructorArg, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
   getNewPhantomRemoteClient,
   getPhantomRemoteClient,
@@ -35,16 +27,14 @@ import * as Either from '../newTypes/either';
 import { AgentClassName } from '../agentClassName';
 import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
 import { createCustomError } from '../internal/agentError';
-import { AgentConstructorParamRegistry } from '../internal/registry/agentConstructorParamRegistry';
 import { AgentConstructorRegistry } from '../internal/registry/agentConstructorRegistry';
-import { deserializeDataValue, ParameterDetail } from '../internal/mapping/values/dataValue';
+import { decodeInputRecord } from '../internal/mapping/values/boundaryValue';
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
-import { getAgentConstructorSchema } from '../internal/schema/constructor';
-import { getAgentMethodSchema } from '../internal/schema/method';
+import { resolveAgentConstructor } from '../internal/schema/constructor';
+import { resolveAgentMethods } from '../internal/schema/method';
+import { buildAgentType, resolveAgentConfig } from '../internal/schema/agentType';
 import ms from 'ms';
-import { fromTsType } from '../internal/mapping/types/WitType';
-import { TypeScope } from '../internal/mapping/types/scope';
 import { validateAgentHttpConfig } from '../internal/http/validation';
 
 // Global storage for validation errors
@@ -258,11 +248,7 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    const constructorDataSchema = getAgentConstructorSchema(agentClassName.value, classMetadata);
-
     const httpMount = getHttpMountDetails(options);
-
-    const methods = getAgentMethodSchema(classMetadata, agentClassName.value, httpMount);
 
     const agentTypeName = new AgentClassName(options?.name || agentClassName.value);
 
@@ -285,26 +271,24 @@ export function agent(options?: AgentDecoratorOptions) {
     const agentTypePromptHint =
       AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ?? defaultPromptHint;
 
-    const constructor: AgentConstructor = {
-      name: undefined,
-      description: agentTypeDescription,
-      promptHint: agentTypePromptHint,
-      inputSchema: constructorDataSchema,
-    };
+    const enrichedConstructor = resolveAgentConstructor(
+      agentClassName.value,
+      classMetadata,
+      agentTypeDescription,
+      agentTypePromptHint,
+    );
 
-    // HTTP mount/endpoint validation is performed during agent registration
-    // Errors are stored globally and checked in discover-agent-types
-    // This allows proper error reporting as typed errors rather than WASM instantiation failures
+    const enrichedMethods = resolveAgentMethods(classMetadata, agentClassName.value);
 
     const agentConfigEntries = Either.getOrThrowWith(
-      getAgentConfigEntries(classMetadata.constructorArgs),
+      resolveAgentConfig(classMetadata.constructorArgs),
       (err) => new Error(`Failed to describe config for agent \`${agentTypeName.value}\`: ${err}`),
     );
 
     const agentMode: AgentMode = options?.mode ?? 'durable';
 
     if (agentMode === 'ephemeral') {
-      const readOnlyMethod = methods.find((m) => m.readOnly !== undefined);
+      const readOnlyMethod = enrichedMethods.find((m) => m.readOnly !== undefined);
       if (readOnlyMethod) {
         throw new Error(
           `Agent '${agentTypeName.value}' is ephemeral but method '${readOnlyMethod.name}' is marked as read-only. ` +
@@ -314,22 +298,29 @@ export function agent(options?: AgentDecoratorOptions) {
       }
     }
 
-    const agentType: AgentType = {
+    const agentType: AgentType = buildAgentType({
       typeName: agentTypeName.value,
       description: agentTypeDescription,
       sourceLanguage: 'typescript',
-      constructor,
-      methods,
+      constructor: enrichedConstructor,
+      methods: enrichedMethods,
       dependencies: [],
       mode: agentMode,
       httpMount,
       snapshotting: resolveSnapshotting(options?.snapshotting),
       config: agentConfigEntries,
-    };
+    });
 
     // Validate HTTP configuration during registration
+    // Errors are stored globally and checked in discover-agent-types
+    // This allows proper error reporting as typed errors rather than WASM instantiation failures
     try {
-      validateAgentHttpConfig(agentTypeName.value, httpMount, constructor, methods);
+      validateAgentHttpConfig(
+        agentTypeName.value,
+        httpMount,
+        agentType.constructor,
+        agentType.methods,
+      );
     } catch (e) {
       // Store the validation error but don't throw it
       // This will be checked in discoverAgentTypes
@@ -341,26 +332,6 @@ export function agent(options?: AgentDecoratorOptions) {
     }
 
     AgentTypeRegistry.register(agentClassName, agentType);
-
-    const constructorParamTypes: ParameterDetail[] | undefined = TypeMetadata.get(
-      agentClassName.value,
-    )?.constructorArgs.map((arg) => {
-      const typeInfo = AgentConstructorParamRegistry.getParamType(agentClassName.value, arg.name);
-
-      if (!typeInfo) {
-        throw new Error(
-          `Unsupported type for constructor parameter ${arg.name} in agent ${agentClassName}`,
-        );
-      }
-
-      return { name: arg.name, type: typeInfo };
-    });
-
-    if (!constructorParamTypes) {
-      throw new Error(
-        `Failed to retrieve constructor parameter types for agent ${agentClassName.value}.`,
-      );
-    }
 
     if (agentType.mode === 'durable') {
       (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor, false);
@@ -382,12 +353,12 @@ export function agent(options?: AgentDecoratorOptions) {
     );
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (constructorInput: DataValue, principal: Principal) => {
+      initiate: (constructorInput: SchemaValue, principal: Principal) => {
         let deserializedConstructorArgs: any[];
         try {
-          deserializedConstructorArgs = deserializeDataValue(
+          deserializedConstructorArgs = decodeInputRecord(
             constructorInput,
-            constructorParamTypes,
+            enrichedConstructor.params,
             principal,
           );
         } catch (e) {
@@ -431,36 +402,4 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     });
   };
-}
-
-function getAgentConfigEntries(
-  constructorParameters: ConstructorArg[],
-): Either.Either<AgentConfigDeclaration[], string> {
-  const entries: AgentConfigDeclaration[] = [];
-
-  for (const param of constructorParameters) {
-    if (param.type.kind !== 'config') continue;
-
-    for (const prop of param.type.properties) {
-      const witTypeEither = fromTsType(
-        prop.type,
-        TypeScope.object(param.name, prop.path.at(-1)!, prop.type.optional),
-      );
-      if (Either.isLeft(witTypeEither)) {
-        return Either.left(
-          `parameter \`${param.name}\`, config property \`${prop.path.join('.')}\`: ${witTypeEither.val}`,
-        );
-      }
-
-      const configSource: AgentConfigSource = prop.secret ? 'secret' : 'local';
-
-      entries.push({
-        source: configSource,
-        path: prop.path,
-        valueType: witTypeEither.val[0],
-      });
-    }
-  }
-
-  return Either.right(entries);
 }

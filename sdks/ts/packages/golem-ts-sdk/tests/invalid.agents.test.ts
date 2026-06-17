@@ -322,6 +322,7 @@ test('Config type used as a field inside another Config produces a helpful error
     owner: undefined,
     optional: false,
     properties: [],
+    requiredMembers: [],
   };
   const result = typeMapper(configType, TypeScope.object('myConfig', 'nested', false));
   expect(Either.isLeft(result)).toBe(true);

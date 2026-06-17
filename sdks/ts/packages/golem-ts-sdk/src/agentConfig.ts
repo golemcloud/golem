@@ -13,10 +13,12 @@
 // limitations under the License.
 
 import { Type } from '@golemcloud/golem-ts-types-core';
-import * as WitValue from './internal/mapping/values/WitValue';
-import * as WitType from './internal/mapping/types/WitType';
 import { TypeScope } from './internal/mapping/types/scope';
-import { getConfigValue } from 'golem:agent/host@1.5.0';
+import { getConfigValue } from 'golem:agent/host@2.0.0';
+import { schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
+import { mapTsTypeToResolvedGraph } from './internal/mapping/types/resolvedMapper';
+import { resolvedGraphToSchemaType } from './internal/mapping/types/schemaType';
+import { deserializeGraph } from './internal/mapping/values/schemaValue';
 import * as Either from './newTypes/either';
 
 export class Secret<T> {
@@ -85,12 +87,13 @@ export class Config<T> {
 
 function loadConfigKey(path: string[], type: Type.Type): any {
   const scope = TypeScope.object('config', path.at(-1)!, type.optional);
-  const [witType, analysedType] = Either.getOrThrowWith(
-    WitType.fromTsType(type, scope),
+  const graph = Either.getOrThrowWith(
+    mapTsTypeToResolvedGraph(type, scope),
     (err) => new Error(`Failed to analyse config type at path '${path.join('.')}': ${err}`),
   );
 
-  const witValue = getConfigValue(path, witType);
+  const schemaGraph = resolvedGraphToSchemaType(graph).graph;
+  const valueTree = getConfigValue(path, schemaGraphToWit(schemaGraph));
 
-  return WitValue.toTsValue(witValue, analysedType);
+  return deserializeGraph(schemaValueFromWit(valueTree), graph);
 }
