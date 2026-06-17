@@ -39,6 +39,7 @@ type = "Enabled"
 
 [component_cache]
 max_capacity = 32
+max_concurrent_compilations = 16
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
@@ -307,6 +308,7 @@ without_time = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
