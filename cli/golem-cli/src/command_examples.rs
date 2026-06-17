@@ -152,7 +152,10 @@ pub const OUTPUT_SCHEMA: &str = "Examples:
   golem-cli output-schema --type agent.invoke
 
   # Print a pruned schema bundle for multiple output types
-  golem-cli output-schema --type agent.oplog --type agent.stream";
+  golem-cli output-schema --type agent.oplog --type agent.stream
+
+  # Use a different raw schema output format
+  golem-cli --format yaml output-schema --type agent.invoke";
 
 pub const COMPLETION: &str = "Examples:
   # Print bash completions to stdout

@@ -34,6 +34,7 @@ use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
+use crate::command_handler::log::render_structured_document;
 use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
@@ -43,12 +44,14 @@ use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{Output, log_anyhow_error, logln, set_log_output};
+use crate::model::format::Format;
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
 use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
+use colored::control::SHOULD_COLORIZE;
 use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::process::ExitCode;
@@ -467,32 +470,30 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
-                GolemCliSubcommand::OutputSchema { types, output_type } => {
-                    Self::cmd_output_schema(types, output_type)
-                }
+                GolemCliSubcommand::OutputSchema { types, output_type } => Self::cmd_output_schema(
+                    ctx.global_flags.format.unwrap_or_default(),
+                    types,
+                    output_type,
+                ),
                 GolemCliSubcommand::Completion { shell } => Self::cmd_completion(shell),
             }
         })
     }
 
-    fn cmd_output_schema(types: bool, output_type: Vec<String>) -> anyhow::Result<()> {
-        if types {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &crate::model::cli_output::command_output_type_names()?
-                )?
-            );
+    fn cmd_output_schema(
+        format: Format,
+        types: bool,
+        output_type: Vec<String>,
+    ) -> anyhow::Result<()> {
+        let value = if types {
+            crate::model::cli_output::command_output_type_names()?
         } else if output_type.is_empty() {
-            print!("{}", crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON);
+            crate::model::cli_output::command_output_schema_value()?
         } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &crate::model::cli_output::focused_command_output_schema(&output_type)?
-                )?
-            );
-        }
+            crate::model::cli_output::focused_command_output_schema(&output_type)?
+        };
+
+        println!("{}", render_raw_schema_document(format, &value)?);
         Ok(())
     }
 
@@ -502,6 +503,15 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         debug!(command_name, shell=%shell, "completion");
         clap_complete::generate(shell, &mut command, command_name, &mut std::io::stdout());
         Ok(())
+    }
+}
+
+fn render_raw_schema_document(format: Format, value: &serde_json::Value) -> anyhow::Result<String> {
+    match format {
+        Format::Text => Ok(serde_json::to_string(value)?),
+        Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml | Format::Toon => {
+            render_structured_document(format, SHOULD_COLORIZE.should_colorize(), value)
+        }
     }
 }
 

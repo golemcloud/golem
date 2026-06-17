@@ -39,6 +39,8 @@ Output type names use command/action paths such as `agent.invoke`, `agent.oplog`
 
 ## Discover Output Schemas
 
+`golem output-schema` is raw tooling output, not a normal structured CLI result. In text mode it prints compact single-line JSON. Use the global `--format` flag to request another raw schema format such as `pretty-json`, `yaml`, `pretty-yaml`, or `toon`.
+
 List known output type names:
 
 ```shell
