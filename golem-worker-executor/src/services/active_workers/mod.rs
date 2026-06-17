@@ -493,6 +493,31 @@ pub(crate) struct EvictionCandidateCost<K> {
     pub module_bytes: u64,
 }
 
+/// Accounts the bytes freed by stopping one eviction candidate, updating the
+/// working resident-count map.
+///
+/// A stop always frees the candidate's own linear `memory`. It additionally
+/// frees the component's shared compiled `module_bytes`, but only when this stop
+/// removes the *last* resident worker of the component — tracked by decrementing
+/// `remaining[component]` and crediting the module when it reaches zero. Shared
+/// by both [`plan_memory_eviction_stops`] (advisory planning) and
+/// [`evict_at_most_memory`] (the actual stop loop) so the planned and the
+/// returned freed totals use identical accounting.
+fn credit_eviction_stop<K: Eq + std::hash::Hash + Clone>(
+    remaining: &mut std::collections::HashMap<K, usize>,
+    component: &K,
+    memory: u64,
+    module_bytes: u64,
+) -> u64 {
+    let mut freed = memory;
+    let count = remaining.entry(component.clone()).or_insert(0);
+    *count = count.saturating_sub(1);
+    if *count == 0 {
+        freed += module_bytes;
+    }
+    freed
+}
+
 /// Plan how many leading (oldest-first) candidates the memory-eviction loop
 /// should attempt to stop to free at least `needed_bytes`.
 ///
@@ -522,14 +547,12 @@ pub(crate) fn plan_memory_eviction_stops<K: Eq + std::hash::Hash + Clone>(
         if freed >= needed_bytes {
             break;
         }
-        freed += candidate.memory;
-        // Decrement this component's resident count; if it hits zero, stopping
-        // this worker also releases the component's shared module.
-        let count = remaining.entry(candidate.component.clone()).or_insert(0);
-        *count = count.saturating_sub(1);
-        if *count == 0 {
-            freed += candidate.module_bytes;
-        }
+        freed += credit_eviction_stop(
+            &mut remaining,
+            &candidate.component,
+            candidate.memory,
+            candidate.module_bytes,
+        );
         stops += 1;
     }
     stops
@@ -587,8 +610,20 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
         .collect();
     let planned_stops = plan_memory_eviction_stops(&costs, &refcounts, needed_bytes);
 
+    // Working copy of the resident counts, decremented on each successful stop so
+    // a component's shared module is credited to `freed` exactly once — to the
+    // stop that takes its resident count to zero. This mirrors
+    // `plan_memory_eviction_stops`, but counts only stops that actually
+    // succeeded, so the returned total reflects the memory genuinely reclaimed
+    // (worker linear memory plus released module bytes). The admission gate uses
+    // this total to decide whether to escalate to the next priority tier, so
+    // omitting the module bytes here would under-report reclaimed headroom and
+    // cause unnecessary higher-tier evictions.
+    let mut remaining = refcounts;
     let mut freed = 0u64;
-    for (agent_id, worker, mem, _, _, _) in candidates.into_iter().take(planned_stops) {
+    for (agent_id, worker, mem, component, charge_bytes, _) in
+        candidates.into_iter().take(planned_stops)
+    {
         debug!("Trying to stop {target_class:?} {agent_id} to free up memory");
         if worker.stop_if_evictable(target_class).await {
             debug!("Stopped {target_class:?} {agent_id} to free up {mem} memory");
@@ -596,7 +631,9 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
                 EvictionPriority::Idle => "LoadedIdle",
                 EvictionPriority::Warm => "WarmRunnable",
             });
-            freed += mem;
+            // Credit the worker's linear memory plus, when this stop removes the
+            // last resident worker of its component, the shared module bytes.
+            freed += credit_eviction_stop(&mut remaining, &component, mem, charge_bytes);
         }
     }
     freed
