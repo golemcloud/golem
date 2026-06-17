@@ -168,6 +168,7 @@ impl Drop for WorkerDir {
 }
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_service_base::model::auth::AuthCtx;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
@@ -636,6 +637,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &golem_common::model::card::recipient::RecipientPattern::Any,
         )
         .unwrap_or_default()
+    }
+
+    pub fn agent_auth_ctx(&self) -> AuthCtx {
+        AuthCtx::agent_with_effective_surface(
+            self.created_by(),
+            self.created_by_email().clone(),
+            self.agent_effective_surface(),
+        )
     }
 
     pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {

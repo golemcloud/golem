@@ -14,16 +14,12 @@
 
 use super::*;
 use assert2::assert;
-use golem_common::model::card::owner::{
-    AccountOwnerPattern, AgentOwnerPattern, ComponentOwnerPattern, EmptyOwnerPattern,
-    EnvironmentOwnerPattern,
-};
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb,
-    AgentResourcePattern, AgentVerb, ClassPermissionPattern, ClassPermissionTarget,
-    ComponentResourcePattern, ComponentVerb, EnvironmentResourcePattern, EnvironmentVerb,
-    PermissionPattern, PermissionTarget, SystemResourcePattern, SystemVerb,
+    ClassPermissionPattern, ClassPermissionTarget, PermissionPattern, PermissionTarget,
+    SystemResourcePattern, SystemVerb,
 };
 use test_r::test;
 
@@ -38,15 +34,6 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
         account_plan_id: plan_id,
         account_roles: roles.iter().cloned().collect(),
         effective_surface: empty_effective_surface(),
-    })
-}
-
-fn mk_impersonated(id: AccountId) -> AuthCtx {
-    let account_email = account_email(id);
-    AuthCtx::Agent(AgentAuthCtx {
-        account_id: id,
-        account_email: account_email.clone(),
-        effective_surface: super::temporary_agent_effective_surface(&account_email),
     })
 }
 
@@ -117,36 +104,6 @@ fn account_target(account_id: AccountId) -> PermissionTarget {
     })
 }
 
-fn environment_target(account_id: AccountId, verb: EnvironmentVerb) -> PermissionTarget {
-    PermissionTarget::Environment(ClassPermissionTarget {
-        verb: Some(verb),
-        owner: EnvironmentOwnerPattern::AccountEnvironments {
-            account: account_email(account_id),
-        },
-        resource: EnvironmentResourcePattern::Any,
-    })
-}
-
-fn component_target(account_id: AccountId, verb: ComponentVerb) -> PermissionTarget {
-    PermissionTarget::Component(ClassPermissionTarget {
-        verb: Some(verb),
-        owner: ComponentOwnerPattern::AccountComponents {
-            account: account_email(account_id),
-        },
-        resource: ComponentResourcePattern::Any,
-    })
-}
-
-fn agent_target(account_id: AccountId, verb: AgentVerb) -> PermissionTarget {
-    PermissionTarget::Agent(ClassPermissionTarget {
-        verb: Some(verb),
-        owner: AgentOwnerPattern::AccountAgents {
-            account: account_email(account_id),
-        },
-        resource: AgentResourcePattern::Any,
-    })
-}
-
 fn effective_surface_for_account(
     account_id: AccountId,
     lower_positive: Vec<PermissionPattern>,
@@ -190,57 +147,6 @@ fn user_with_empty_effective_surface_cannot_authorize_permission() {
     let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
 
     assert!(ctx.authorize_permission(&permission).is_err());
-}
-
-#[test]
-fn agent_context_can_authorize_temporary_same_account_permissions() {
-    let account_id = AccountId::new();
-    let ctx = mk_impersonated(account_id);
-
-    assert!(
-        ctx.authorize_permission(&environment_target(account_id, EnvironmentVerb::View))
-            .is_ok()
-    );
-    assert!(
-        ctx.authorize_permission(&component_target(account_id, ComponentVerb::View))
-            .is_ok()
-    );
-    assert!(
-        ctx.authorize_permission(&agent_target(account_id, AgentVerb::View))
-            .is_ok()
-    );
-    assert!(
-        ctx.authorize_permission(&agent_target(account_id, AgentVerb::Invoke))
-            .is_ok()
-    );
-    assert!(
-        ctx.authorize_permission(&agent_target(account_id, AgentVerb::Resume))
-            .is_ok()
-    );
-    assert!(
-        ctx.authorize_permission(&agent_target(account_id, AgentVerb::UpdateRevision))
-            .is_ok()
-    );
-}
-
-#[test]
-fn agent_context_rejects_cross_account_and_non_whitelisted_permissions() {
-    let account_id = AccountId::new();
-    let ctx = mk_impersonated(account_id);
-
-    assert!(
-        ctx.authorize_permission(&environment_target(AccountId::new(), EnvironmentVerb::View))
-            .is_err()
-    );
-    assert!(
-        ctx.authorize_permission(&component_target(AccountId::new(), ComponentVerb::View))
-            .is_err()
-    );
-    assert!(
-        ctx.authorize_permission(&environment_target(account_id, EnvironmentVerb::Update))
-            .is_err()
-    );
-    assert!(ctx.authorize_permission(&report_target()).is_err());
 }
 
 #[test]

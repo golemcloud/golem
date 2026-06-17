@@ -3221,23 +3221,21 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
-        self_effective_surface: &golem_common::model::card::EffectiveSurface,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
                 owned_agent_id,
                 self_created_by,
-                self_created_by_email,
-                self_effective_surface,
                 self_agent_id,
                 self_env,
                 self_stack,
                 config,
+                auth_ctx,
             )
             .await
     }
@@ -3249,11 +3247,10 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
-        self_effective_surface: &golem_common::model::card::EffectiveSurface,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<UntypedDataValue, ServiceRpcError> {
         if self
             .remaining_failures
@@ -3271,11 +3268,10 @@ impl Rpc for FailingRpc {
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_created_by_email,
-                    self_effective_surface,
                     self_agent_id,
                     self_env,
                     self_stack,
+                    auth_ctx,
                 )
                 .await
         }
@@ -3288,11 +3284,10 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
-        self_effective_surface: &golem_common::model::card::EffectiveSurface,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
@@ -3301,11 +3296,10 @@ impl Rpc for FailingRpc {
                 method_name,
                 method_parameters,
                 self_created_by,
-                self_created_by_email,
-                self_effective_surface,
                 self_agent_id,
                 self_env,
                 self_stack,
+                auth_ctx,
             )
             .await
     }

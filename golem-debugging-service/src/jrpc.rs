@@ -19,7 +19,7 @@ use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
 use futures::{SinkExt, StreamExt};
 use golem_common::SafeDisplay;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use poem::web::websocket::{CloseCode, Message, WebSocketStream};
@@ -168,7 +168,6 @@ pub async fn run_jrpc_debug_websocket_session(
 
 struct JrpcSessionData {
     pub account_id: AccountId,
-    pub account_email: AccountEmail,
     pub connected_worker: OwnedAgentId,
 }
 
@@ -254,16 +253,9 @@ impl JrpcSession {
                     .await;
 
                 match result {
-                    Ok((
-                        result,
-                        account_id,
-                        account_email,
-                        connected_worker,
-                        worker_event_receiver,
-                    )) => {
+                    Ok((result, account_id, connected_worker, worker_event_receiver)) => {
                         self.active_session = Some(JrpcSessionData {
                             account_id,
-                            account_email,
                             connected_worker,
                         });
 
@@ -330,10 +322,10 @@ impl JrpcSession {
                         .debug_service
                         .fork(
                             active_session_data.account_id,
-                            active_session_data.account_email.clone(),
                             &owned_agent_id,
                             &params.target_agent_id,
                             params.oplog_index_cut_off,
+                            &self.auth_ctx,
                         )
                         .await;
                     to_json_rpc_result(&jrpc_id, result)
