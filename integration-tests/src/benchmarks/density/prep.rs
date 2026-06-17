@@ -56,22 +56,21 @@ pub const AGENT_COUNTERS_WASM: &str = "it_agent_counters_release";
 /// All are byte-identical uploads of the agent-counters WASM under distinct
 /// names; the registry mints distinct `component_id`s, producing
 /// compiled-component-cache thrash on the executor. The executor's compiled
-/// cache is bounded, so the real per-agent-sharing ceiling is the cache bound —
-/// which we expect well below this count. Kept at 2000 (not the original spec's
-/// 10000) because a real agent-counters WASM is ~760 KB, not ~10 KB: 10000
-/// uploads would be ~7.6 GB of (object-storage-deduplicated but
-/// row-by-row-inserted) data and ~8 minutes of prep, most of which would never
-/// be reached.
-pub const PER_AGENT_COMPONENT_COUNT: u32 = 2000;
+/// cache defaults to 32 entries, so even a few hundred distinct components
+/// thrash it hard — the per-agent ceiling is reached well below this count.
+/// Capped at 999 so that 999 distinct + 1 shared = 1000 components stays within
+/// the default plan's `TotalComponentCount` limit (1000); raising it would
+/// require putting the density account on a higher-quota plan.
+pub const PER_AGENT_COMPONENT_COUNT: u32 = 999;
 
 /// Registry name of the single shared agent-density component (the
 /// shared-component sharing mode, labelled `U`).
 pub const UNIFORM_COMPONENT_NAME: &str = "density-counter-uniform";
 
 /// Builds the registry name of the `index`-th (1-based) per-agent distinct
-/// component: `density-counter-distinct-00001` .. `density-counter-distinct-02000`.
+/// component: `density-counter-distinct-001` .. `density-counter-distinct-999`.
 pub fn distinct_component_name(index: u32) -> String {
-    format!("density-counter-distinct-{index:05}")
+    format!("density-counter-distinct-{index:03}")
 }
 
 /// Persisted record of a completed density-prep, written by the prep step and
