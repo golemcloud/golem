@@ -31,7 +31,6 @@
 
 pub mod agent;
 pub mod ceiling;
-pub mod metrics;
 pub mod prep;
 
 use clap::ValueEnum;

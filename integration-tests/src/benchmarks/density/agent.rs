@@ -49,7 +49,7 @@ use crate::benchmarks::density::ceiling::{
     CeilingDetector, CeilingEvent, CrossAxisSnapshot, Sample, SampleCoord, TerminatedReason,
 };
 use crate::benchmarks::density::prep::PrepManifest;
-use crate::benchmarks::density::{AgentMode, ComponentSharing, metrics};
+use crate::benchmarks::density::{AgentMode, ComponentSharing};
 use golem_common::agent_id;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
@@ -142,20 +142,17 @@ impl CellConfig {
 }
 
 /// Out-of-band executor observations a cell needs that are not derivable from
-/// the driver's own invocation results. Sourced by the buildspec/driver via
-/// kubectl and the `/metrics` port-forward.
+/// the driver's own invocation results. The only such signal in v1 is the pod
+/// restart count (driving the catastrophic pod-restart condition), read via
+/// kubectl. Executor `/metrics` is not scraped in v1 — the S3 result carries
+/// only what the driver measures itself; executor-side context is read from the
+/// Grafana dashboards using the run's start/end timing.
 pub struct ExecutorProbe {
-    /// Optional executor `/metrics` URL (per-cell kubectl port-forward). When
-    /// `None`, snapshots are empty and ceilings are still detected from
-    /// driver-local signals.
-    pub metrics_url: Option<String>,
     /// Optional executor pod name + namespace for `kubectl` restart-count
     /// polling. When `None`, the pod-restart catastrophic condition relies on
     /// the connection-lost backstop instead.
     pub pod_name: Option<String>,
     pub namespace: String,
-    /// HTTP client for scraping `/metrics`.
-    pub http: reqwest::Client,
 }
 
 impl ExecutorProbe {
@@ -194,13 +191,6 @@ impl ExecutorProbe {
                 warn!("density: kubectl restartCount spawn failed: {e:?}");
                 0
             }
-        }
-    }
-
-    async fn snapshot(&self) -> CrossAxisSnapshot {
-        match &self.metrics_url {
-            Some(url) => metrics::scrape_snapshot(&self.http, url).await,
-            None => CrossAxisSnapshot::default(),
         }
     }
 }
@@ -637,7 +627,7 @@ async fn run_ramp_cell(
 
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
             let pod_restart_count = probe.pod_restart_count().await;
-            let snapshot = probe.snapshot().await;
+            let snapshot = CrossAxisSnapshot::default();
             let sample = Sample {
                 latency: outcome_attempt.latency,
                 coord: SampleCoord::Agents(index + 1),
@@ -685,7 +675,7 @@ async fn run_ramp_cell(
             .await;
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
             let pod_restart_count = probe.pod_restart_count().await;
-            let snapshot = probe.snapshot().await;
+            let snapshot = CrossAxisSnapshot::default();
             let sample = Sample {
                 latency: attempt.latency,
                 coord: SampleCoord::Agents(target),
@@ -796,7 +786,7 @@ async fn run_resume_cell(
             coord: SampleCoord::Agents(index + 1),
             pod_restart_count,
             connection_alive: !attempt.connection_lost,
-            snapshot: probe.snapshot().await,
+            snapshot: CrossAxisSnapshot::default(),
             queue_depth: None,
         };
         for event in detector.observe(&sample) {
@@ -844,7 +834,7 @@ async fn run_resume_cell(
 
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
             let pod_restart_count = probe.pod_restart_count().await;
-            let snapshot = probe.snapshot().await;
+            let snapshot = CrossAxisSnapshot::default();
             let sample = Sample {
                 latency: resume.latency,
                 coord: SampleCoord::Agents(target),

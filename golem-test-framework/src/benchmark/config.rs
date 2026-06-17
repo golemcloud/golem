@@ -113,13 +113,8 @@ pub enum BenchmarkConfig {
         #[arg(long, value_delimiter = ',')]
         ramp: Option<Vec<u32>>,
 
-        /// Optional executor `/metrics` URL (per-cell kubectl port-forward) for
-        /// the cross-axis snapshot. When absent, snapshots are empty and
-        /// ceilings are still detected from driver-local signals.
-        #[arg(long)]
-        executor_metrics_url: Option<String>,
-
-        /// Optional executor pod name for `kubectl` restart-count polling.
+        /// Optional executor pod name for `kubectl` restart-count polling
+        /// (drives the catastrophic pod-restart condition).
         #[arg(long)]
         executor_pod_name: Option<String>,
 

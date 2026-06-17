@@ -20,8 +20,7 @@
 # catastrophic ceiling or the ramp is exhausted.
 #
 # Per-cell invocation shape (the buildspec fills in the cloud flags, the
-# per-cell executor-metrics port-forward URL and pod name, and the resolved
-# `--ramp` from this file):
+# executor pod name, and the resolved `--ramp` from this file):
 #
 #   benchmarks density \
 #     --action cell \
@@ -33,7 +32,6 @@
 #     --ramp 100,250,500,1000,... \
 #     [--active-fraction <pct>] \
 #     [--prefill <n>] \
-#     --executor-metrics-url http://localhost:9101/metrics \
 #     --executor-pod-name <pod> \
 #     --save-to-json cell-NN-<name>.json \
 #     cloud --api-url ... --apps-base-domain ... --admin-account-token ...

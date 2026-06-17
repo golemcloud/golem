@@ -302,7 +302,6 @@ async fn main() {
             active_fraction,
             prefill,
             ramp,
-            executor_metrics_url,
             executor_pod_name,
             executor_namespace,
             save_to_json,
@@ -321,7 +320,6 @@ async fn main() {
                 *active_fraction,
                 *prefill,
                 ramp.clone(),
-                executor_metrics_url.clone(),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
                 save_to_json.clone(),
@@ -569,7 +567,6 @@ async fn run_density(
     active_fraction: Option<u32>,
     prefill: Option<u32>,
     ramp: Option<Vec<u32>>,
-    executor_metrics_url: Option<String>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
@@ -607,10 +604,8 @@ async fn run_density(
             };
 
             let probe = ExecutorProbe {
-                metrics_url: executor_metrics_url,
                 pod_name: executor_pod_name,
                 namespace: executor_namespace,
-                http: reqwest::Client::new(),
             };
 
             let result = integration_tests::benchmarks::density::agent::run_cell(
