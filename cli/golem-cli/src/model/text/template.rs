@@ -26,7 +26,7 @@ pub struct TemplateListView {
 }
 
 impl CliOutput for TemplateListView {
-    const KIND: &'static str = "app.templates";
+    const KIND: &'static str = "templates";
 }
 
 impl TextView for TemplateListView {

@@ -35,7 +35,15 @@ Example:
 }
 ```
 
-Output type names use command/action paths such as `agent.invoke`, `agent.oplog`, `agent.stream`, `component.list`, or `environment.list`.
+`$type` values are stable output type identifiers. They often resemble CLI command/action paths, but they are not guaranteed to be literal command paths. Use schema metadata such as `x-golem-command` and, when present, `x-golem-commands` to understand which CLI command or commands can emit a type.
+
+Naming examples:
+
+- Top-level application commands use top-level names such as `new`, `templates`, `build`, `clean`, `generate-bridge`, and `deploy`.
+- Entity commands usually use command-like names such as `agent.invoke`, `component.list`, or `environment.list`.
+- Streaming outputs use the command family plus the streamed resource or event type, such as `agent.stream` for stream events and `agent.oplog` for oplog entries.
+- Deploy subdocuments use `deploy.*` names, such as `deploy.diff` and `deploy.plan`, because they are emitted as part of `golem deploy`.
+- Some semantic output types can be emitted by multiple commands; check `x-golem-commands` when present.
 
 ## Discover Output Schemas
 
@@ -67,9 +75,11 @@ golem output-schema
 
 `--type` returns a pruned JSON Schema containing the selected output definitions and only the referenced definitions needed by those types. This is usually the best schema input for coding agents because it keeps context small.
 
-## Single Documents vs Streams
+## Single Documents, Streams, And Multi-Document Commands
 
 Most structured commands emit exactly one document to stdout.
+
+Some commands emit a finite set of structured documents during one command run. Different `$type`s may appear conditionally, and not every possible document appears every time. For example, `golem deploy` may emit `deploy.diff` and/or `deploy.plan`, followed by a final `deploy` success document.
 
 Some commands emit a stream of documents:
 
@@ -81,6 +91,14 @@ Some commands emit a stream of documents:
 For compact `--format json`, each streamed document is emitted as one JSON line. Parse stdout line by line. For `pretty-json`, YAML, and TOON, parse stdout as a sequence or framed stream, not as one JSON object or array.
 
 Structured stream output may be empty if there are no events or entries.
+
+Focused schemas include `x-golem-output-mode` metadata:
+
+| Mode | Meaning |
+|------|---------|
+| `single` | One structured document on success |
+| `stream` | Multiple documents of the same event/entry type; parse until EOF or interruption |
+| `multi-document` | Finite command-bounded output; multiple `$type`s may appear conditionally |
 
 ## TOON Frames
 
@@ -103,6 +121,7 @@ Some interactive terminal modes are text-only. For example, `agent list --refres
 - Use `golem output-schema --types` to discover possible `$type` values.
 - Use `golem output-schema --type <TYPE>` to get a focused schema before parsing an unfamiliar output type.
 - For single-document commands, parse stdout as one structured document.
+- For multi-document commands, parse stdout as multiple documents and branch on `$type` for each one.
 - For streaming commands, parse stdout as multiple documents and handle each document independently.
 - Do not parse stderr as structured output; treat it as logs and diagnostics.
 - Prefer `$type` and schema fields over text messages, table columns, or human wording.

@@ -184,7 +184,7 @@ impl TextView for CleanResult {
 }
 
 impl CliOutput for CleanResult {
-    const KIND: &'static str = "app.clean";
+    const KIND: &'static str = "clean";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,7 +198,7 @@ impl TextView for BuildResult {
 }
 
 impl CliOutput for BuildResult {
-    const KIND: &'static str = "app.build";
+    const KIND: &'static str = "build";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,7 +214,7 @@ impl TextView for NewAppResult {
 }
 
 impl CliOutput for NewAppResult {
-    const KIND: &'static str = "app.new";
+    const KIND: &'static str = "new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,7 +228,7 @@ impl TextView for DeployResultView {
 }
 
 impl CliOutput for DeployResultView {
-    const KIND: &'static str = "app.deploy";
+    const KIND: &'static str = "deploy";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,5 +242,5 @@ impl TextView for GenerateBridgeResult {
 }
 
 impl CliOutput for GenerateBridgeResult {
-    const KIND: &'static str = "app.generate-bridge";
+    const KIND: &'static str = "generate-bridge";
 }

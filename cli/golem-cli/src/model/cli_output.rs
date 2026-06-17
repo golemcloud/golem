@@ -414,21 +414,17 @@ mod tests {
             "api.security-scheme.update",
             arb_api_security_scheme_update_result
         ),
-        registry_entry!("BuildResult", "app.build", arb_build_result),
-        registry_entry!("CleanResult", "app.clean", arb_clean_result),
-        registry_entry!("DeployPlanView", "app.deploy-plan", arb_deploy_plan_result),
-        registry_entry!("DeployResultView", "app.deploy", arb_deploy_result),
+        registry_entry!("BuildResult", "build", arb_build_result),
+        registry_entry!("CleanResult", "clean", arb_clean_result),
+        registry_entry!("DeployPlanView", "deploy.plan", arb_deploy_plan_result),
+        registry_entry!("DeployResultView", "deploy", arb_deploy_result),
         registry_entry!(
             "GenerateBridgeResult",
-            "app.generate-bridge",
+            "generate-bridge",
             arb_generate_bridge_result
         ),
-        registry_entry!("NewAppResult", "app.new", arb_new_app_result),
-        registry_entry!(
-            "TemplateListView",
-            "app.templates",
-            arb_template_list_result
-        ),
+        registry_entry!("NewAppResult", "new", arb_new_app_result),
+        registry_entry!("TemplateListView", "templates", arb_template_list_result),
         registry_entry!(
             "ComponentGetView",
             "component.get",
@@ -446,17 +442,13 @@ mod tests {
         ),
         registry_entry!(
             "DeploymentNewView",
-            "deployment.create",
+            "deploy.deployment",
             arb_deployment_create_result
         ),
-        registry_entry!(
-            "DeploymentDiff",
-            "deployment.diff",
-            arb_deployment_diff_result
-        ),
+        registry_entry!("DeploymentDiff", "deploy.diff", arb_deployment_diff_result),
         registry_entry!(
             "DeploymentListView",
-            "deployment.list",
+            "deploy.deployments",
             arb_deployment_list_result
         ),
         registry_entry!(
@@ -471,7 +463,7 @@ mod tests {
         ),
         registry_entry!(
             "EnvironmentSetupPlanView",
-            "environment.setup-plan",
+            "deploy.environment-setup-plan",
             arb_environment_setup_plan_result
         ),
         registry_entry!(
@@ -734,6 +726,44 @@ mod tests {
                 assert!(
                     definition.get(field).is_some(),
                     "{output_type} must define top-level {field} metadata"
+                );
+            }
+
+            let output_mode = definition
+                .get("x-golem-output-mode")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{output_type} must define string x-golem-output-mode"));
+            assert!(
+                matches!(output_mode, "single" | "stream" | "multi-document"),
+                "{output_type} has invalid x-golem-output-mode {output_mode:?}"
+            );
+
+            let primary_command = definition
+                .get("x-golem-command")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{output_type} must define string x-golem-command"));
+            assert!(
+                !primary_command.trim().is_empty(),
+                "{output_type} must define non-empty x-golem-command"
+            );
+
+            if let Some(commands) = definition.get("x-golem-commands") {
+                let commands = commands
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{output_type} x-golem-commands must be an array"));
+                assert!(
+                    !commands.is_empty(),
+                    "{output_type} x-golem-commands must not be empty"
+                );
+                assert!(
+                    commands.iter().all(|command| command
+                        .as_str()
+                        .is_some_and(|command| !command.trim().is_empty())),
+                    "{output_type} x-golem-commands must contain only non-empty strings"
+                );
+                assert!(
+                    commands.iter().any(|command| command == primary_command),
+                    "{output_type} x-golem-commands must include x-golem-command"
                 );
             }
         }
@@ -1116,7 +1146,7 @@ mod tests {
     fn is_valid_kind(kind: &str) -> bool {
         let parts = kind.split('.').collect::<Vec<_>>();
 
-        parts.len() >= 2
+        !parts.is_empty()
             && parts.iter().all(|part| {
                 !part.is_empty()
                     && part.bytes().all(|byte| {

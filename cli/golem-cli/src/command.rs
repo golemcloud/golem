@@ -742,9 +742,12 @@ pub enum GolemCliSubcommand {
         /// definitions, API objects). The text format is intended for human
         /// review and is not stable.
         ///
-        /// In `--format json/yaml/toon` the result document only carries
-        /// `{"deployed": true}` indicating that planning succeeded; the
-        /// detailed diff is not yet emitted as structured data.
+        /// In `--format json/yaml/toon`, `deploy` may emit multiple structured
+        /// documents. Depending on the plan, stdout can contain
+        /// `deploy.diff` and/or `deploy.plan`, followed by a final
+        /// `deploy` success document. Parse stdout as a sequence of
+        /// documents and branch on `$type`; do not assume every possible
+        /// document appears.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing

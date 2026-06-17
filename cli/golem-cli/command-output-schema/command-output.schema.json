@@ -127,25 +127,25 @@
       "$ref": "#/definitions/api.security-scheme.update"
     },
     {
-      "$ref": "#/definitions/app.build"
+      "$ref": "#/definitions/build"
     },
     {
-      "$ref": "#/definitions/app.clean"
+      "$ref": "#/definitions/clean"
     },
     {
-      "$ref": "#/definitions/app.deploy-plan"
+      "$ref": "#/definitions/deploy.plan"
     },
     {
-      "$ref": "#/definitions/app.deploy"
+      "$ref": "#/definitions/deploy"
     },
     {
-      "$ref": "#/definitions/app.generate-bridge"
+      "$ref": "#/definitions/generate-bridge"
     },
     {
-      "$ref": "#/definitions/app.new"
+      "$ref": "#/definitions/new"
     },
     {
-      "$ref": "#/definitions/app.templates"
+      "$ref": "#/definitions/templates"
     },
     {
       "$ref": "#/definitions/component.get"
@@ -157,13 +157,13 @@
       "$ref": "#/definitions/component.manifest-trace"
     },
     {
-      "$ref": "#/definitions/deployment.create"
+      "$ref": "#/definitions/deploy.deployment"
     },
     {
-      "$ref": "#/definitions/deployment.diff"
+      "$ref": "#/definitions/deploy.diff"
     },
     {
-      "$ref": "#/definitions/deployment.list"
+      "$ref": "#/definitions/deploy.deployments"
     },
     {
       "$ref": "#/definitions/environment.list"
@@ -172,7 +172,7 @@
       "$ref": "#/definitions/environment.sync-deployment-options"
     },
     {
-      "$ref": "#/definitions/environment.setup-plan"
+      "$ref": "#/definitions/deploy.environment-setup-plan"
     },
     {
       "$ref": "#/definitions/plugin.get"
@@ -1009,6 +1009,7 @@
       "description": "Single structured output document emitted by `golem agent redeploy`.",
       "x-golem-output-mode": "single",
       "x-golem-command": "agent redeploy",
+      "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
@@ -1160,6 +1161,7 @@
       "description": "Single structured output document emitted by `golem agent update`.",
       "x-golem-output-mode": "single",
       "x-golem-command": "agent update",
+      "x-golem-commands": ["agent update","update-agents","component update-agents"],
       "required": [
         "$type",
         "triggered",
@@ -1875,7 +1877,7 @@
         }
       ]
     },
-    "app.build": {
+    "build": {
       "type": "object",
       "description": "Single structured output document emitted by `golem build`.",
       "x-golem-output-mode": "single",
@@ -1886,7 +1888,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.build"
+          "const": "build"
         },
         "built": {
           "type": "boolean"
@@ -1894,7 +1896,7 @@
       },
       "additionalProperties": false
     },
-    "app.clean": {
+    "clean": {
       "type": "object",
       "description": "Single structured output document emitted by `golem clean`.",
       "x-golem-output-mode": "single",
@@ -1905,7 +1907,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.clean"
+          "const": "clean"
         },
         "cleaned": {
           "type": "boolean"
@@ -1913,11 +1915,11 @@
       },
       "additionalProperties": false
     },
-    "app.deploy-plan": {
+    "deploy.plan": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy --plan`.",
-      "x-golem-output-mode": "single",
-      "x-golem-command": "deploy --plan",
+      "description": "May be emitted by `golem deploy` when planning includes deployment or environment setup changes. Other deploy output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "deploy",
       "required": [
         "$type",
         "deploymentDiff",
@@ -1925,7 +1927,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.deploy-plan"
+          "const": "deploy.plan"
         },
         "deploymentDiff": {
           "$ref": "#/definitions/DeploymentDiffPayload"
@@ -1939,10 +1941,10 @@
       },
       "additionalProperties": false
     },
-    "app.deploy": {
+    "deploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy`.",
-      "x-golem-output-mode": "single",
+      "description": "Final success document emitted by `golem deploy` after planning, staging, deployment, or rollback completes. Earlier deploy output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
       "x-golem-command": "deploy",
       "required": [
         "$type",
@@ -1950,7 +1952,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.deploy"
+          "const": "deploy"
         },
         "deployed": {
           "type": "boolean"
@@ -1958,7 +1960,7 @@
       },
       "additionalProperties": false
     },
-    "app.generate-bridge": {
+    "generate-bridge": {
       "type": "object",
       "description": "Single structured output document emitted by `golem generate-bridge`.",
       "x-golem-output-mode": "single",
@@ -1969,7 +1971,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.generate-bridge"
+          "const": "generate-bridge"
         },
         "generated": {
           "type": "boolean"
@@ -1977,7 +1979,7 @@
       },
       "additionalProperties": false
     },
-    "app.new": {
+    "new": {
       "type": "object",
       "description": "Single structured output document emitted by `golem new`.",
       "x-golem-output-mode": "single",
@@ -1990,7 +1992,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.new"
+          "const": "new"
         },
         "created": {
           "type": "boolean"
@@ -2004,7 +2006,7 @@
       },
       "additionalProperties": false
     },
-    "app.templates": {
+    "templates": {
       "type": "object",
       "description": "Single structured output document emitted by `golem templates`.",
       "x-golem-output-mode": "single",
@@ -2015,7 +2017,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "app.templates"
+          "const": "templates"
         },
         "templates": {
           "type": "array",
@@ -4103,10 +4105,10 @@
         { "type": "object", "required": ["type", "first", "second"], "properties": { "type": { "const": "Intersect" }, "first": { "$ref": "#/definitions/ApiRetryPolicy" }, "second": { "$ref": "#/definitions/ApiRetryPolicy" } }, "additionalProperties": false }
       ]
     },
-    "deployment.create": {
+    "deploy.deployment": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy`.",
-      "x-golem-output-mode": "single",
+      "description": "May be emitted by `golem deploy` when a deployment or rollback creates a new current deployment revision. Other deploy output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
       "x-golem-command": "deploy",
       "required": [
         "$type",
@@ -4116,7 +4118,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "deployment.create"
+          "const": "deploy.deployment"
         },
         "applicationName": {
           "type": "string"
@@ -4130,17 +4132,17 @@
       },
       "additionalProperties": false
     },
-    "deployment.diff": {
+    "deploy.diff": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy`.",
-      "x-golem-output-mode": "single",
+      "description": "May be emitted by `golem deploy` when planning includes staging-area deployment differences. Other deploy output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
       "x-golem-command": "deploy",
       "required": [
         "$type"
       ],
       "properties": {
         "$type": {
-          "const": "deployment.diff"
+          "const": "deploy.diff"
         },
         "components": {
           "$ref": "#/definitions/DeploymentDiffSection"
@@ -4154,10 +4156,10 @@
       },
       "additionalProperties": false
     },
-    "deployment.list": {
+    "deploy.deployments": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy`.",
-      "x-golem-output-mode": "single",
+      "description": "May be emitted by `golem deploy` when listing candidate deployments, for example after an ambiguous version selection. Other deploy output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
       "x-golem-command": "deploy",
       "required": [
         "$type",
@@ -4165,7 +4167,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "deployment.list"
+          "const": "deploy.deployments"
         },
         "deployments": {
           "type": "array",
@@ -4217,11 +4219,11 @@
       },
       "additionalProperties": false
     },
-    "environment.setup-plan": {
+    "deploy.environment-setup-plan": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem environment setup-plan`.",
-      "x-golem-output-mode": "single",
-      "x-golem-command": "environment setup-plan",
+      "description": "May be emitted by `golem deploy` when planning environment setup entries. Other deploy output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "deploy",
       "required": [
         "$type",
         "display",
@@ -4232,7 +4234,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "environment.setup-plan"
+          "const": "deploy.environment-setup-plan"
         },
         "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
         "agentSecretDefaults": {
@@ -5568,31 +5570,31 @@
       "rustType": "HttpSecuritySchemeUpdateView"
     },
     {
-      "type": "app.build",
+      "type": "build",
       "rustType": "BuildResult"
     },
     {
-      "type": "app.clean",
+      "type": "clean",
       "rustType": "CleanResult"
     },
     {
-      "type": "app.deploy-plan",
+      "type": "deploy.plan",
       "rustType": "DeployPlanView"
     },
     {
-      "type": "app.deploy",
+      "type": "deploy",
       "rustType": "DeployResultView"
     },
     {
-      "type": "app.generate-bridge",
+      "type": "generate-bridge",
       "rustType": "GenerateBridgeResult"
     },
     {
-      "type": "app.new",
+      "type": "new",
       "rustType": "NewAppResult"
     },
     {
-      "type": "app.templates",
+      "type": "templates",
       "rustType": "TemplateListView"
     },
     {
@@ -5608,15 +5610,15 @@
       "rustType": "ComponentManifestTraceView"
     },
     {
-      "type": "deployment.create",
+      "type": "deploy.deployment",
       "rustType": "DeploymentNewView"
     },
     {
-      "type": "deployment.diff",
+      "type": "deploy.diff",
       "rustType": "DeploymentDiff"
     },
     {
-      "type": "deployment.list",
+      "type": "deploy.deployments",
       "rustType": "DeploymentListView"
     },
     {
@@ -5628,7 +5630,7 @@
       "rustType": "EnvironmentSyncDeploymentOptionsResult"
     },
     {
-      "type": "environment.setup-plan",
+      "type": "deploy.environment-setup-plan",
       "rustType": "EnvironmentSetupPlanView"
     },
     {

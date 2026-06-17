@@ -20,9 +20,14 @@ This is different from the application manifest schema under
 
 1. Keep the public `$type` discriminator model. Every structured output document
    must have the right stable `$type` value.
-2. `$type` values use suffixless command/action paths such as `agent.invoke`,
-   `component.manifest-trace`, or `deployment.diff`. Do not add redundant
-   `.result` or `.event` suffixes.
+2. `$type` values are stable semantic output identifiers. Prefer command-like
+   names when there is a direct command correspondence (for example
+   `agent.invoke` or `component.manifest-trace`). For streaming outputs, use
+   the command family plus the streamed resource or event type (for example
+   `agent.stream` for stream events and `agent.oplog` for oplog entries). Use
+   domain/subdocument names when the output is part of a larger command flow
+   (for example `deploy.diff`). Do not add redundant `.result` or `.event`
+   suffixes.
 3. Keep machine-readable structured output on stdout and human logs, prompts,
    progress, and diagnostics on stderr.
 4. Prefer typed schema definitions over `JsonValue`. Use generic JSON only when
@@ -36,7 +41,11 @@ This is different from the application manifest schema under
 7. Every top-level output definition listed in `x-golem-cli-output-types` must
    include `description`, `x-golem-output-mode`, and `x-golem-command` metadata.
    Use `x-golem-output-mode: "single"` for normal one-document commands and
-   `"stream"` for commands that emit one document per event or entry.
+   `"stream"` for commands that emit one document per event or entry. Use
+   `"multi-document"` for finite command-bounded outputs where multiple `$type`s
+   may appear conditionally during one command run. Use `x-golem-command` for
+   the primary or representative emitting command, and add `x-golem-commands`
+   when an output type is emitted by multiple public commands.
 
 ## Important Files
 
@@ -102,7 +111,8 @@ relational validation is introduced.
 2. Update the Rust DTO/view model if needed.
 3. Update `command-output.schema.json` to match actual serde output.
 4. Add or update top-level output metadata (`description`,
-   `x-golem-output-mode`, `x-golem-command`) for affected schema definitions.
+   `x-golem-output-mode`, `x-golem-command`, and optionally
+   `x-golem-commands`) for affected schema definitions.
 5. Add or improve the generator in `cli_output.rs` using real DTO/view values.
 6. Run focused schema tests and inspect failures as DTO/schema drift.
 7. Check whether user-facing skills under `golem-skills/skills` need updates
@@ -198,10 +208,11 @@ regression seed.
 ## Checklist
 
 1. `$type` is stable and registered in both source and schema.
-2. `$type` follows suffixless command/action path naming.
+2. `$type` is suffixless and semantically named; it is command-like when that is
+   accurate, but not assumed to be a literal CLI command path.
 3. Schema matches actual `serde_json::to_value` output.
 4. Top-level schema definition has `description`, `x-golem-output-mode`, and
-   `x-golem-command` metadata.
+   `x-golem-command` metadata; reused types have `x-golem-commands` when useful.
 5. Output generator constructs real DTO/view values.
 6. Important enum and nested variants are covered by examples or generators.
 7. User-facing skills under `golem-skills/skills` have been checked when public
