@@ -394,19 +394,32 @@ async fn t5_read_only_bypasses_agent_loading(
     let context = TestContext::new(last_unique_id);
 
     // Tight memory budget: enough for one agent_sdk_rust worker, not two.
-    // - `worker_memory_ratio = 1.0` makes the worker pool == system_memory_override
-    //   so the math is easy to reason about.
-    // - 6 MiB has been chosen experimentally so that one Rust agent_sdk
-    //   worker (whose `Worker::memory_requirement()` is ~4 MiB) fits while
-    //   two do not. The assertions below verify the calibration is still
-    //   valid — if the component's linear memory grows or shrinks materially,
-    //   the test will fail with a clear diagnostic instead of silently
-    //   passing or hanging.
-    const SYSTEM_MEMORY: u64 = 6 * 1024 * 1024;
+    //
+    // Under the measured-headroom admission gate, the first resident worker of a
+    // component reserves *two* things against the budget: its own linear-memory
+    // requirement (`Worker::memory_requirement()`, ~`r_req`) and its component's
+    // shared compiled-module charge (`component_size_coefficient * component_size`,
+    // paid once per resident component). R and Q here are the *same* component, so
+    // the module charge is paid once and Q adds only another `r_req`. The eviction
+    // regime is therefore `module + r_req <= budget < module + 2*r_req`: R loads
+    // standalone, but loading Q would exceed the budget and must evict R.
+    //
+    // - `worker_memory_ratio = 1.0` makes the usable worker pool == the budget so
+    //   the math is easy to reason about.
+    // - `component_size_coefficient` is pinned so the assertions below can recompute
+    //   the module charge deterministically from `component_size`.
+    // - 4 MiB has been chosen experimentally to sit inside that window for the Rust
+    //   `agent_sdk` component (module charge ~2.4 MiB, `r_req` ~1.3 MiB → window
+    //   ~[3.7 MiB, 5.0 MiB)). The assertions verify the calibration is still valid —
+    //   if the component's module or linear memory grows or shrinks materially, the
+    //   test fails with a clear diagnostic instead of silently passing or hanging.
+    const SYSTEM_MEMORY: u64 = 4 * 1024 * 1024;
+    const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
             config.memory.system_memory_override = Some(SYSTEM_MEMORY);
             config.memory.worker_memory_ratio = 1.0;
+            config.memory.component_size_coefficient = COMPONENT_SIZE_COEFFICIENT;
             // Tight `acquire_retry_delay` so Q's permit-wait doesn't hang the
             // test if memory pressure eviction takes a moment to settle.
             config.memory.acquire_retry_delay = Duration::from_millis(25);
@@ -434,17 +447,22 @@ async fn t5_read_only_bypasses_agent_loading(
         .await?;
     wait_for_cache_hit(&executor, &component, &r_agent_id, &r_worker_id).await?;
 
-    // Sanity-check the memory budget. The test only makes sense when
-    // `req <= budget < 2 * req`, which is the regime that forces Q's load to
-    // evict R but lets R load standalone.
+    // Sanity-check the memory budget. The test only makes sense in the regime
+    // `module + r_req <= budget < module + 2*r_req`, which forces Q's load to
+    // evict R but lets R load standalone. `module` is the shared compiled-module
+    // charge the gate reserves for the first resident worker of the component;
+    // R and Q share it, so the second worker only adds another `r_req`.
     let r_req = executor.worker_memory_requirement(&r_owned).await?;
+    let module_charge = (COMPONENT_SIZE_COEFFICIENT * component.component_size as f64) as u64;
+    let one_worker = module_charge + r_req;
+    let two_workers = module_charge + 2 * r_req;
     assert!(
-        r_req <= SYSTEM_MEMORY,
-        "memory budget too tight: budget={SYSTEM_MEMORY} but R needs {r_req}. Increase SYSTEM_MEMORY."
+        one_worker <= SYSTEM_MEMORY,
+        "memory budget too tight: budget={SYSTEM_MEMORY} but R needs module {module_charge} + r_req {r_req} = {one_worker}. Increase SYSTEM_MEMORY."
     );
     assert!(
-        2 * r_req > SYSTEM_MEMORY,
-        "memory budget too generous: budget={SYSTEM_MEMORY}, R req={r_req}, 2*req={} fits inside budget so loading Q would not evict R. \
+        two_workers > SYSTEM_MEMORY,
+        "memory budget too generous: budget={SYSTEM_MEMORY}, but module {module_charge} + 2*r_req {} = {two_workers} fits inside budget so loading Q would not evict R. \
          Decrease SYSTEM_MEMORY (or the component grew significantly).",
         2 * r_req
     );
@@ -455,7 +473,8 @@ async fn t5_read_only_bypasses_agent_loading(
     assert!(executor.worker_is_loaded(&r_owned).await);
 
     // Q: a second worker of the same agent type. Loading Q reserves another
-    // `r_req` from the worker memory semaphore, which forces eviction of R.
+    // `r_req` against the budget (Q shares R's already-charged module), which
+    // forces eviction of R.
     let q_agent_id = agent_id!(AGENT_TYPE, format!("t5-q-{unique_id}"));
     let q_worker_id = executor
         .start_agent(&component.id, q_agent_id.clone())
