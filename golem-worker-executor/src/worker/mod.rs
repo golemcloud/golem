@@ -1388,20 +1388,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((estimate_coefficient * linear_memory_bytes) as u64)
     }
 
-    /// Returns the component identity and compiled-module size used to charge
-    /// the shared module memory once per resident component.
+    /// Startup module-charge requirement for a worker about to be (re)started.
     ///
-    /// This resolves the same component revision that [`Worker::create_instance`]
-    /// will instantiate: when a pending update is queued, the worker loads the
-    /// update's `target_revision`, not the last known revision, so the charge
-    /// must be keyed to — and sized from — the target revision. Charging against
-    /// the old revision would key the component-charge refcount to the wrong
-    /// resident module and, if the target module is larger, under-reserve memory.
-    pub async fn component_charge_requirement(
+    /// Returns the component identity and compiled-module size to reserve with
+    /// the gate, keyed to the revision [`Worker::create_instance`] will actually
+    /// instantiate: when a pending update is queued, the worker loads the
+    /// update's `target_revision`, not the last known one, so the charge must be
+    /// keyed to — and sized from — the target. Keying it to the old revision
+    /// would attach the held charge to the wrong resident module and, if the
+    /// target module is larger, under-reserve memory.
+    ///
+    /// Resolving the target's module size is best-effort: if its metadata cannot
+    /// be fetched (most importantly when the target revision does not exist),
+    /// this falls back to the currently-loaded revision and size and proceeds,
+    /// rather than failing. `create_instance` is responsible for attempting the
+    /// update and, on a missing target, writing a `failed_update` and retrying
+    /// against the last known revision — a recovery path that must not be
+    /// pre-empted by an error here. Falling back keeps the worker startable
+    /// instead of wedged in `WaitingForPermit`.
+    pub async fn startup_component_charge_requirement(
         &self,
-    ) -> Result<(ComponentId, ComponentRevision, u64), WorkerExecutorError> {
+    ) -> (ComponentId, ComponentRevision, u64) {
         let metadata = self.get_latest_worker_metadata().await;
         let component_id = self.owned_agent_id.component_id();
+        let current_revision = metadata.last_known_status.component_revision;
+        let current_size = metadata.last_known_status.component_size;
 
         // Mirror create_instance: a queued pending update is applied by loading
         // its target revision, so charge against that revision rather than the
@@ -1411,25 +1422,50 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .pending_updates
             .front()
             .map(|update| update.target_revision);
-        let component_revision = component_charge_revision(
-            pending_target,
-            metadata.last_known_status.component_revision,
-        );
+        let component_revision = component_charge_revision(pending_target, current_revision);
 
-        // When charging against the currently resident revision we can use the
-        // module size already recorded in the status; for a pending-update target
-        // revision we resolve the target's module size from its metadata, so the
-        // reservation matches the module create_instance will actually load.
-        let component_module_bytes =
-            if component_revision == metadata.last_known_status.component_revision {
-                metadata.last_known_status.component_size
-            } else {
-                self.component_service()
-                    .get_metadata(component_id, Some(component_revision))
-                    .await?
-                    .component_size
-            };
-        Ok((component_id, component_revision, component_module_bytes))
+        // The currently-loaded revision's module size is already recorded in the
+        // status; a pending-update target's size is resolved from its metadata.
+        // If that resolution fails, fall back to the current revision and size so
+        // the worker still starts and create_instance can drive (and recover
+        // from) the update.
+        if component_revision == current_revision {
+            return (component_id, current_revision, current_size);
+        }
+        match self
+            .component_service()
+            .get_metadata(component_id, Some(component_revision))
+            .await
+        {
+            Ok(target) => (component_id, component_revision, target.component_size),
+            Err(err) => {
+                debug!(
+                    "Could not resolve pending-update target revision {component_revision} for charge sizing, charging against current revision and letting create_instance drive the update: {err}"
+                );
+                (component_id, current_revision, current_size)
+            }
+        }
+    }
+
+    /// Eviction module-charge accounting for an already-resident worker.
+    ///
+    /// Returns the component identity and compiled-module size of the module the
+    /// worker is *currently* holding a charge for — the last known (loaded)
+    /// revision, never a queued pending-update target. The pending update has not
+    /// been applied yet, so the held charge is still keyed to the loaded
+    /// revision; the eviction planner must use that same key and size, otherwise
+    /// its refcount lookup and freed-bytes accounting would not match the charge
+    /// that is actually released when the worker stops. Infallible: it reads only
+    /// the persisted status, doing no metadata lookup.
+    pub async fn resident_component_charge_requirement(
+        &self,
+    ) -> (ComponentId, ComponentRevision, u64) {
+        let metadata = self.get_latest_worker_metadata().await;
+        (
+            self.owned_agent_id.component_id(),
+            metadata.last_known_status.component_revision,
+            metadata.last_known_status.component_size,
+        )
     }
 
     /// Gets the storage requirement of the worker based on the last known status.
@@ -3221,18 +3257,13 @@ impl WaitingWorker {
                 // admitted together (the module is reserved first, then the
                 // memory admission accounts for it). The module is charged once
                 // per resident component and shared by all its workers.
-                let (component_id, component_revision, component_module_bytes) = match parent
-                    .component_charge_requirement()
-                    .await
-                {
-                    Ok(requirement) => requirement,
-                    Err(err) => {
-                        warn!(
-                            "Failed to determine component charge requirement, not starting: {err}"
-                        );
-                        return;
-                    }
-                };
+                //
+                // Infallible: an unresolvable pending-update target falls back to
+                // the current revision and lets create_instance drive (and
+                // recover from) the update, rather than wedging the worker in
+                // WaitingForPermit with a leaked waiting-for-memory count.
+                let (component_id, component_revision, component_module_bytes) =
+                    parent.startup_component_charge_requirement().await;
 
                 // `memory_grant` and `component_charge` own their reservations
                 // from here on: held as locals until the worker becomes resident
@@ -3994,7 +4025,7 @@ mod tests {
     }
 
     #[test]
-    fn component_charge_revision_uses_last_known_without_pending_update() {
+    fn startup_charge_revision_uses_last_known_without_pending_update() {
         let last_known = ComponentRevision::INITIAL.next().unwrap();
         assert_eq!(
             component_charge_revision(None, last_known),
@@ -4004,13 +4035,13 @@ mod tests {
     }
 
     #[test]
-    fn component_charge_revision_uses_pending_update_target() {
+    fn startup_charge_revision_uses_pending_update_target() {
         let last_known = ComponentRevision::INITIAL;
         let target = ComponentRevision::INITIAL.next().unwrap();
         assert_eq!(
             component_charge_revision(Some(target), last_known),
             target,
-            "a queued pending update is applied by loading its target revision, so the charge must key to the target, not the last known revision"
+            "at startup a queued pending update is applied by loading its target revision, so the charge must key to the target, not the last known revision"
         );
     }
 }

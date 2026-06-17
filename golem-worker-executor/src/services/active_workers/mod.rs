@@ -581,9 +581,14 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
         if let Some(class) = worker.eviction_class().await
             && class == target_class
             && let Ok(mem) = worker.memory_requirement().await
-            && let Ok((component_id, component_revision, module_bytes)) =
-                worker.component_charge_requirement().await
         {
+            // Use the currently-loaded module the resident worker actually holds
+            // a charge for, not any queued pending-update target: the update has
+            // not been applied yet, so the held charge key and size must match the
+            // loaded revision for the refcount lookup and freed accounting to be
+            // correct.
+            let (component_id, component_revision, module_bytes) =
+                worker.resident_component_charge_requirement().await;
             let charge_bytes = (component_size_coefficient * module_bytes as f64) as u64;
             let component: ComponentChargeKey = (component_id, component_revision);
             let last_changed = worker.last_execution_state_change();
