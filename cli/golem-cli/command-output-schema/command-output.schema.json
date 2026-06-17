@@ -253,6 +253,9 @@
   "definitions": {
     "account.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account delete",
       "required": [
         "$type",
         "deleted",
@@ -273,6 +276,9 @@
     },
     "account.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account get",
       "required": [
         "$type",
         "id",
@@ -317,6 +323,9 @@
     },
     "account.new": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account new`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account new",
       "required": [
         "$type",
         "id",
@@ -361,6 +370,9 @@
     },
     "account.permission-share.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account permission-share delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account permission-share delete",
       "required": [
         "$type",
         "deleted",
@@ -381,6 +393,9 @@
     },
     "account.permission-share.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account permission-share get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account permission-share get",
       "required": [
         "$type",
         "id",
@@ -421,6 +436,9 @@
     },
     "account.permission-share.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account permission-share list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account permission-share list",
       "required": [
         "$type",
         "permissionShares"
@@ -440,6 +458,9 @@
     },
     "account.permission-share.new": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account permission-share new`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account permission-share new",
       "required": [
         "$type",
         "id",
@@ -480,6 +501,9 @@
     },
     "account.permission-share.update": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account permission-share update`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account permission-share update",
       "required": [
         "$type",
         "id",
@@ -520,6 +544,9 @@
     },
     "account.update": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem account update`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account update",
       "required": [
         "$type",
         "id",
@@ -636,6 +663,9 @@
     },
     "agent-type.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent-type get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent-type get",
       "required": [
         "$type",
         "agentType",
@@ -660,6 +690,9 @@
     },
     "agent-type.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent-type list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent-type list",
       "required": [
         "$type",
         "agentTypes"
@@ -679,6 +712,9 @@
     },
     "agent.cancel-invocation": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent cancel-invocation`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent cancel-invocation",
       "required": [
         "$type",
         "canceled",
@@ -703,6 +739,9 @@
     },
     "agent.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent delete",
       "required": [
         "$type",
         "deleted",
@@ -723,6 +762,9 @@
     },
     "agent.file-contents": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent file-contents`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent file-contents",
       "required": [
         "$type",
         "saved",
@@ -756,6 +798,9 @@
     },
     "agent.files": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent files`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent files",
       "required": [
         "$type",
         "nodes"
@@ -775,6 +820,9 @@
     },
     "agent.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent get",
       "required": [
         "$type",
         "metadata",
@@ -795,6 +843,9 @@
     },
     "agent.interrupt": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent interrupt`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent interrupt",
       "required": [
         "$type",
         "interrupted",
@@ -815,6 +866,9 @@
     },
     "agent.invoke": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent invoke`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent invoke",
       "required": [
         "$type",
         "idempotencyKey"
@@ -846,6 +900,9 @@
     },
     "agent.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent list",
       "required": [
         "$type",
         "agents",
@@ -872,6 +929,9 @@
     },
     "agent.new": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent new`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent new",
       "required": [
         "$type",
         "componentName"
@@ -891,6 +951,9 @@
     },
     "agent.oplog": {
       "type": "object",
+      "description": "One document emitted per oplog entry by `golem agent oplog` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
+      "x-golem-output-mode": "stream",
+      "x-golem-command": "agent oplog",
       "required": [
         "$type",
         "index",
@@ -912,6 +975,9 @@
     },
     "agent.plugin-toggle": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent plugin-toggle`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent plugin-toggle",
       "required": [
         "$type",
         "activated",
@@ -940,6 +1006,9 @@
     },
     "agent.redeploy": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent redeploy`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent redeploy",
       "required": [
         "$type",
         "redeployed",
@@ -963,6 +1032,9 @@
     },
     "agent.resume": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent resume`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent resume",
       "required": [
         "$type",
         "resumed",
@@ -983,6 +1055,9 @@
     },
     "agent.revert": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent revert`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent revert",
       "required": [
         "$type",
         "reverted",
@@ -1011,6 +1086,9 @@
     },
     "agent.simulate-crash": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent simulate-crash`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent simulate-crash",
       "required": [
         "$type",
         "simulated",
@@ -1031,6 +1109,9 @@
     },
     "agent.stream": {
       "type": "object",
+      "description": "One document emitted per stream event by `golem agent stream` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
+      "x-golem-output-mode": "stream",
+      "x-golem-command": "agent stream",
       "required": [
         "$type",
         "timestamp",
@@ -1076,6 +1157,9 @@
     },
     "agent.update": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem agent update`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent update",
       "required": [
         "$type",
         "triggered",
@@ -1102,6 +1186,9 @@
     },
     "api-token.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api-token delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api-token delete",
       "required": [
         "$type",
         "deleted",
@@ -1122,6 +1209,9 @@
     },
     "api-token.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api-token list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api-token list",
       "required": [
         "$type",
         "tokens"
@@ -1141,6 +1231,9 @@
     },
     "api-token.new": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api-token new`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api-token new",
       "required": [
         "$type",
         "id",
@@ -1173,6 +1266,9 @@
     },
     "api.deployment.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api deployment get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api deployment get",
       "required": [
         "$type",
         "id",
@@ -1225,6 +1321,9 @@
     },
     "api.deployment.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api deployment list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api deployment list",
       "required": [
         "$type",
         "deployments"
@@ -1244,6 +1343,9 @@
     },
     "api.domain.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api domain delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api domain delete",
       "required": [
         "$type",
         "deleted",
@@ -1268,6 +1370,9 @@
     },
     "api.domain.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api domain list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api domain list",
       "required": [
         "$type",
         "domains"
@@ -1287,6 +1392,9 @@
     },
     "api.domain.register": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api domain register`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api domain register",
       "required": [
         "$type",
         "id",
@@ -1427,6 +1535,9 @@
     },
     "api.security-scheme.create": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api security-scheme create`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api security-scheme create",
       "required": [
         "$type",
         "id",
@@ -1475,6 +1586,9 @@
     },
     "api.security-scheme.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api security-scheme delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api security-scheme delete",
       "required": [
         "$type",
         "id",
@@ -1523,6 +1637,9 @@
     },
     "api.security-scheme.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api security-scheme get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api security-scheme get",
       "required": [
         "$type",
         "id",
@@ -1571,6 +1688,9 @@
     },
     "api.security-scheme.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api security-scheme list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api security-scheme list",
       "required": [
         "$type",
         "securitySchemes"
@@ -1590,6 +1710,9 @@
     },
     "api.security-scheme.update": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem api security-scheme update`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api security-scheme update",
       "required": [
         "$type",
         "id",
@@ -1754,6 +1877,9 @@
     },
     "app.build": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem build`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "build",
       "required": [
         "$type",
         "built"
@@ -1770,6 +1896,9 @@
     },
     "app.clean": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem clean`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "clean",
       "required": [
         "$type",
         "cleaned"
@@ -1786,6 +1915,9 @@
     },
     "app.deploy-plan": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem deploy --plan`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy --plan",
       "required": [
         "$type",
         "deploymentDiff",
@@ -1809,6 +1941,9 @@
     },
     "app.deploy": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem deploy`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
       "required": [
         "$type",
         "deployed"
@@ -1825,6 +1960,9 @@
     },
     "app.generate-bridge": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem generate-bridge`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "generate-bridge",
       "required": [
         "$type",
         "generated"
@@ -1841,6 +1979,9 @@
     },
     "app.new": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem new`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "new",
       "required": [
         "$type",
         "created",
@@ -1865,6 +2006,9 @@
     },
     "app.templates": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem templates`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "templates",
       "required": [
         "$type",
         "templates"
@@ -1884,6 +2028,9 @@
     },
     "component.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem component get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "component get",
       "required": [
         "$type",
         "componentName",
@@ -1945,6 +2092,9 @@
     },
     "component.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem component list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "component list",
       "required": [
         "$type",
         "components"
@@ -1964,6 +2114,9 @@
     },
     "component.manifest-trace": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem component manifest-trace`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "component manifest-trace",
       "required": [
         "$type",
         "componentName",
@@ -3952,6 +4105,9 @@
     },
     "deployment.create": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem deploy`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
       "required": [
         "$type",
         "applicationName",
@@ -3976,6 +4132,9 @@
     },
     "deployment.diff": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem deploy`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
       "required": [
         "$type"
       ],
@@ -3997,6 +4156,9 @@
     },
     "deployment.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem deploy`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
       "required": [
         "$type",
         "deployments"
@@ -4016,6 +4178,9 @@
     },
     "environment.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem environment list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "environment list",
       "required": [
         "$type",
         "environments"
@@ -4035,6 +4200,9 @@
     },
     "environment.sync-deployment-options": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem environment sync-deployment-options`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "environment sync-deployment-options",
       "required": [
         "$type",
         "updated"
@@ -4051,6 +4219,9 @@
     },
     "environment.setup-plan": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem environment setup-plan`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "environment setup-plan",
       "required": [
         "$type",
         "display",
@@ -4085,6 +4256,9 @@
     },
     "plugin.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem plugin get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "plugin get",
       "required": [
         "$type",
         "id",
@@ -4129,6 +4303,9 @@
     },
     "plugin.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem plugin list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "plugin list",
       "required": [
         "$type",
         "plugins"
@@ -4148,6 +4325,9 @@
     },
     "plugin.register": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem plugin register`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "plugin register",
       "required": [
         "$type",
         "id",
@@ -4192,6 +4372,9 @@
     },
     "plugin.unregister": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem plugin unregister`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "plugin unregister",
       "required": [
         "$type",
         "unregistered",
@@ -4382,6 +4565,9 @@
     },
     "profile.config.set-format": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem profile config set-format`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "profile config set-format",
       "required": [
         "$type",
         "updated",
@@ -4414,6 +4600,9 @@
     },
     "profile.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem profile delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "profile delete",
       "required": [
         "$type",
         "deleted",
@@ -4434,6 +4623,9 @@
     },
     "profile.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem profile get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "profile get",
       "required": [
         "$type",
         "isActive",
@@ -4470,6 +4662,9 @@
     },
     "profile.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem profile list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "profile list",
       "required": [
         "$type",
         "profiles"
@@ -4489,6 +4684,9 @@
     },
     "profile.new": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem profile new`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "profile new",
       "required": [
         "$type",
         "created",
@@ -4513,6 +4711,9 @@
     },
     "profile.switch": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem profile switch`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "profile switch",
       "required": [
         "$type",
         "switched",
@@ -4533,6 +4734,9 @@
     },
     "resource.create": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem resource create`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "resource create",
       "required": [
         "$type",
         "id",
@@ -4561,6 +4765,9 @@
     },
     "resource.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem resource delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "resource delete",
       "required": [
         "$type",
         "id",
@@ -4589,6 +4796,9 @@
     },
     "resource.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem resource get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "resource get",
       "required": [
         "$type",
         "id",
@@ -4617,6 +4827,9 @@
     },
     "resource.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem resource list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "resource list",
       "required": [
         "$type",
         "resources"
@@ -4634,6 +4847,9 @@
     },
     "resource.update": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem resource update`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "resource update",
       "required": [
         "$type",
         "id",
@@ -4718,6 +4934,9 @@
     },
     "retry-policy.create": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem retry-policy create`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "retry-policy create",
       "required": [
         "$type",
         "id",
@@ -4744,6 +4963,9 @@
     },
     "retry-policy.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem retry-policy delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "retry-policy delete",
       "required": [
         "$type",
         "id",
@@ -4770,6 +4992,9 @@
     },
     "retry-policy.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem retry-policy get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "retry-policy get",
       "required": [
         "$type",
         "id",
@@ -4796,6 +5021,9 @@
     },
     "retry-policy.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem retry-policy list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "retry-policy list",
       "required": ["$type", "retryPolicies"],
       "properties": {
         "$type": { "const": "retry-policy.list" },
@@ -4805,6 +5033,9 @@
     },
     "retry-policy.update": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem retry-policy update`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "retry-policy update",
       "required": [
         "$type",
         "id",
@@ -5041,6 +5272,9 @@
     },
     "secret.create": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem secret create`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "secret create",
       "required": [
         "$type",
         "secret"
@@ -5057,6 +5291,9 @@
     },
     "secret.delete": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem secret delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "secret delete",
       "required": [
         "$type",
         "secret"
@@ -5073,6 +5310,9 @@
     },
     "secret.get": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem secret get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "secret get",
       "required": [
         "$type",
         "secret"
@@ -5089,6 +5329,9 @@
     },
     "secret.list": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem secret list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "secret list",
       "required": [
         "$type",
         "secrets"
@@ -5108,6 +5351,9 @@
     },
     "secret.update-value": {
       "type": "object",
+      "description": "Single structured output document emitted by `golem secret update-value`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "secret update-value",
       "required": [
         "$type",
         "secret"

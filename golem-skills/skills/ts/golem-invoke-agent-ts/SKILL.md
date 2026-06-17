@@ -21,8 +21,6 @@ Text output renders return values using TypeScript syntax. Multiple return value
 
 For machine-readable output, use `--format json` or `--format yaml`. A single return value includes `result` plus `resultJson`; multiple return values include `result` plus `resultsJson`; methods returning `void` or no value omit result fields.
 
-To inspect the full structured CLI output contract, run `golem output-schema`.
-
 ## Agent ID Format
 
 The agent ID identifies the agent type and its constructor parameters:

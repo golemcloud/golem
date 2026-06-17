@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::collections::{BTreeSet, VecDeque};
 
 pub const CLI_OUTPUT_TYPE_FIELD: &str = "$type";
+const CLI_OUTPUT_TYPES_FIELD: &str = "x-golem-cli-output-types";
 pub const COMMAND_OUTPUT_SCHEMA_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/command-output-schema/command-output.schema.json"
@@ -28,6 +30,158 @@ pub trait CliOutput: Serialize {
     fn type_name() -> String {
         Self::KIND.to_string()
     }
+}
+
+pub fn command_output_schema_value() -> anyhow::Result<Value> {
+    serde_json::from_str(COMMAND_OUTPUT_SCHEMA_JSON)
+        .map_err(|err| anyhow!("Embedded command output schema must parse: {err}"))
+}
+
+pub fn command_output_type_names() -> anyhow::Result<Value> {
+    let schema = command_output_schema_value()?;
+    let entries = schema_output_type_entries(&schema)?;
+    let names = entries
+        .iter()
+        .filter_map(|entry| entry.get("type"))
+        .filter_map(Value::as_str)
+        .map(|name| Value::String(name.to_string()))
+        .collect::<Vec<_>>();
+    Ok(Value::Array(names))
+}
+
+pub fn focused_command_output_schema(output_types: &[String]) -> anyhow::Result<Value> {
+    if output_types.is_empty() {
+        bail!("At least one output type must be specified");
+    }
+
+    let schema = command_output_schema_value()?;
+    let definitions = schema
+        .get("definitions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("Command output schema is missing definitions"))?;
+
+    let mut reachable = BTreeSet::<String>::new();
+    let mut queue = VecDeque::<String>::new();
+    for output_type in output_types {
+        if !definitions.contains_key(output_type) {
+            bail!(
+                "Unknown output type: {output_type}; run `golem output-schema --types` to list known output types"
+            );
+        }
+        if reachable.insert(output_type.clone()) {
+            queue.push_back(output_type.clone());
+        }
+    }
+
+    while let Some(name) = queue.pop_front() {
+        let definition = definitions
+            .get(&name)
+            .ok_or_else(|| anyhow!("Command output schema is missing definition {name}"))?;
+        let mut refs = BTreeSet::new();
+        collect_definition_refs(definition, &mut refs);
+        for reference in refs {
+            if !definitions.contains_key(&reference) {
+                bail!("Command output schema references missing definition {reference}");
+            }
+            if reachable.insert(reference.clone()) {
+                queue.push_back(reference);
+            }
+        }
+    }
+
+    let mut focused = Map::new();
+    if let Some(value) = schema.get("$schema") {
+        focused.insert("$schema".to_string(), value.clone());
+    }
+    if let Some(value) = schema.get("title") {
+        focused.insert("title".to_string(), value.clone());
+    }
+    focused.insert(
+        "description".to_string(),
+        Value::String(
+            "Focused structured output schema for selected Golem CLI output types.".to_string(),
+        ),
+    );
+    focused.insert(
+        "oneOf".to_string(),
+        Value::Array(
+            output_types
+                .iter()
+                .map(|output_type| json_ref(output_type))
+                .collect(),
+        ),
+    );
+
+    let mut pruned_definitions = Map::new();
+    for name in &reachable {
+        pruned_definitions.insert(
+            name.clone(),
+            definitions
+                .get(name)
+                .ok_or_else(|| anyhow!("Command output schema is missing definition {name}"))?
+                .clone(),
+        );
+    }
+    focused.insert("definitions".to_string(), Value::Object(pruned_definitions));
+
+    let selected = output_types
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    focused.insert(
+        CLI_OUTPUT_TYPES_FIELD.to_string(),
+        Value::Array(
+            schema_output_type_entries(&schema)?
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|output_type| selected.contains(output_type))
+                })
+                .cloned()
+                .collect(),
+        ),
+    );
+
+    Ok(Value::Object(focused))
+}
+
+fn schema_output_type_entries(schema: &Value) -> anyhow::Result<&Vec<Value>> {
+    schema
+        .get(CLI_OUTPUT_TYPES_FIELD)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("Command output schema is missing {CLI_OUTPUT_TYPES_FIELD}"))
+}
+
+fn collect_definition_refs(value: &Value, refs: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                && let Some(name) = reference.strip_prefix("#/definitions/")
+            {
+                refs.insert(name.to_string());
+            }
+            for value in object.values() {
+                collect_definition_refs(value, refs);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_definition_refs(value, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn json_ref(definition_name: &str) -> Value {
+    let mut reference = Map::new();
+    reference.insert(
+        "$ref".to_string(),
+        Value::String(format!("#/definitions/{definition_name}")),
+    );
+    Value::Object(reference)
 }
 
 pub fn to_cli_output_value<Output: CliOutput>(output: &Output) -> anyhow::Result<Value> {
@@ -69,7 +223,10 @@ fn with_cli_output_type<Output: CliOutput>(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::cli_output::{CLI_OUTPUT_TYPE_FIELD, CliOutput, to_cli_output_value};
+    use crate::model::cli_output::{
+        CLI_OUTPUT_TYPE_FIELD, CliOutput, command_output_type_names, focused_command_output_schema,
+        to_cli_output_value,
+    };
     use proptest::prelude::*;
     use quote::ToTokens;
     use serde_json::{Value, json};
@@ -549,6 +706,97 @@ mod tests {
         jsonschema::options()
             .build(&schema)
             .expect("command output schema must be a valid JSON schema");
+    }
+
+    #[test]
+    fn cli_output_schema_types_lists_only_type_names() {
+        let types = command_output_type_names().expect("type names should render");
+        let types = types.as_array().expect("types output must be an array");
+
+        assert!(
+            types.iter().all(Value::is_string),
+            "types output must contain only strings"
+        );
+        assert!(types.iter().any(|value| value == "agent.oplog"));
+        assert!(types.iter().any(|value| value == "agent.stream"));
+    }
+
+    #[test]
+    fn cli_output_schema_output_definitions_have_agent_metadata() {
+        let schema = load_command_output_schema();
+        let definitions = schema_definitions(&schema);
+
+        for output_type in schema_output_entries(&schema).keys() {
+            let definition = definitions
+                .get(output_type)
+                .unwrap_or_else(|| panic!("missing definition for {output_type}"));
+            for field in ["description", "x-golem-output-mode", "x-golem-command"] {
+                assert!(
+                    definition.get(field).is_some(),
+                    "{output_type} must define top-level {field} metadata"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cli_output_schema_focus_prunes_unrelated_definitions() {
+        let schema = focused_command_output_schema(&["agent.oplog".to_string()])
+            .expect("focused schema should render");
+        let definitions = schema_definitions(&schema);
+
+        assert!(definitions.contains_key("agent.oplog"));
+        assert!(definitions.contains_key("PublicOplogEntry"));
+        assert!(!definitions.contains_key("agent.list"));
+        assert!(!definitions.contains_key("component.list"));
+
+        let entries = schema_output_entries(&schema);
+        assert_eq!(
+            entries.keys().collect::<Vec<_>>(),
+            vec![&"agent.oplog".to_string()]
+        );
+
+        let validator = jsonschema::options()
+            .build(&schema)
+            .expect("focused command output schema must be valid JSON schema");
+        let example = (arb_agent_oplog_result())
+            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+            .expect("oplog strategy should produce value")
+            .current();
+        assert!(
+            validator.is_valid(&example),
+            "focused schema should accept agent.oplog example: {:?}",
+            validator
+                .iter_errors(&example)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cli_output_schema_focus_supports_multiple_types() {
+        let schema =
+            focused_command_output_schema(&["agent.oplog".to_string(), "agent.stream".to_string()])
+                .expect("focused schema should render");
+        let definitions = schema_definitions(&schema);
+
+        assert!(definitions.contains_key("agent.oplog"));
+        assert!(definitions.contains_key("agent.stream"));
+        assert!(!definitions.contains_key("agent.list"));
+
+        let entries = schema_output_entries(&schema);
+        assert_eq!(
+            entries.keys().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from_iter(["agent.oplog".to_string(), "agent.stream".to_string()])
+        );
+    }
+
+    #[test]
+    fn cli_output_schema_focus_rejects_unknown_type() {
+        let error = focused_command_output_schema(&["unknown".to_string()])
+            .expect_err("unknown output type should fail");
+
+        assert!(error.to_string().contains("Unknown output type: unknown"));
     }
 
     #[test]

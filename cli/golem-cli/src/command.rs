@@ -889,7 +889,15 @@ pub enum GolemCliSubcommand {
         subcommand: ResourceDefinitionSubcommand,
     },
     /// Print the structured CLI output JSON schema to stdout
-    OutputSchema,
+    #[command(after_help = crate::command_examples::OUTPUT_SCHEMA)]
+    OutputSchema {
+        /// List known structured output type names as a compact JSON array
+        #[arg(long, conflicts_with = "output_type")]
+        types: bool,
+        /// Print a pruned schema for this output type. Can be repeated.
+        #[arg(long = "type", value_name = "TYPE")]
+        output_type: Vec<String>,
+    },
     /// Generate shell completion. The completion script is written to stdout
     /// as plain text; the global `--format` flag is ignored. Redirect the
     /// output into your shell's completions location (or `source` it from

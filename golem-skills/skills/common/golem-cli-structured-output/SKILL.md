@@ -1,0 +1,106 @@
+---
+name: golem-cli-structured-output
+description: "Understanding and parsing Golem CLI structured output. Use when using --format json, --format yaml, --format toon, discovering $type schemas with golem output-schema, or writing agents/tools that parse CLI output."
+---
+
+# Golem CLI Structured Output
+
+Both `golem` and `golem-cli` can emit machine-readable structured output. Use this skill when building scripts, coding agents, test harnesses, or tools that parse CLI output.
+
+## Formats
+
+Use the global `--format` flag before the command:
+
+```shell
+golem --format json agent list
+golem --format yaml component list
+golem --format toon agent stream <AGENT_ID>
+```
+
+For automation, prefer `--format json` unless you specifically need YAML or TOON.
+
+Human logs, prompts, progress, and diagnostics are written to stderr in structured formats. Parse stdout as the structured payload.
+
+## `$type` Discriminator
+
+Every structured output document has a top-level `$type` field. Branch on `$type` before reading command-specific fields.
+
+Example:
+
+```json
+{
+  "$type": "agent.list",
+  "agents": [],
+  "cursors": {}
+}
+```
+
+Output type names use command/action paths such as `agent.invoke`, `agent.oplog`, `agent.stream`, `component.list`, or `environment.list`.
+
+## Discover Output Schemas
+
+List known output type names:
+
+```shell
+golem output-schema --types
+```
+
+Print a focused schema for one output type:
+
+```shell
+golem output-schema --type agent.invoke
+```
+
+Print a focused schema bundle for multiple output types:
+
+```shell
+golem output-schema --type agent.oplog --type agent.stream
+```
+
+Print the full raw schema only when broad cross-output context is needed:
+
+```shell
+golem output-schema
+```
+
+`--type` returns a pruned JSON Schema containing the selected output definitions and only the referenced definitions needed by those types. This is usually the best schema input for coding agents because it keeps context small.
+
+## Single Documents vs Streams
+
+Most structured commands emit exactly one document to stdout.
+
+Some commands emit a stream of documents:
+
+| Command | `$type` | Shape |
+|---------|---------|-------|
+| `agent stream` | `agent.stream` | One document per stream event |
+| `agent oplog` | `agent.oplog` | One document per oplog entry |
+
+For compact `--format json`, each streamed document is emitted as one JSON line. Parse stdout line by line. For `pretty-json`, YAML, and TOON, parse stdout as a sequence or framed stream, not as one JSON object or array.
+
+Structured stream output may be empty if there are no events or entries.
+
+## TOON Frames
+
+When using `--format toon`, each structured document is framed:
+
+```text
+@toon
+<one TOON document>
+@end
+```
+
+Parse stdout by splitting on exact `@toon` and `@end` marker lines.
+
+## Text-Only Interactive Output
+
+Some interactive terminal modes are text-only. For example, `agent list --refresh` continuously redraws the terminal and cannot be combined with structured formats such as `--format json`, `--format yaml`, or `--format toon`.
+
+## Practical Parsing Guidance
+
+- Use `golem output-schema --types` to discover possible `$type` values.
+- Use `golem output-schema --type <TYPE>` to get a focused schema before parsing an unfamiliar output type.
+- For single-document commands, parse stdout as one structured document.
+- For streaming commands, parse stdout as multiple documents and handle each document independently.
+- Do not parse stderr as structured output; treat it as logs and diagnostics.
+- Prefer `$type` and schema fields over text messages, table columns, or human wording.

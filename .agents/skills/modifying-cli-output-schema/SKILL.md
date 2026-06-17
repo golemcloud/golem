@@ -33,6 +33,10 @@ This is different from the application manifest schema under
    are common drift sources.
 6. For exact object schemas, set `additionalProperties: false` and keep
    `required` entries aligned with `properties`.
+7. Every top-level output definition listed in `x-golem-cli-output-types` must
+   include `description`, `x-golem-output-mode`, and `x-golem-command` metadata.
+   Use `x-golem-output-mode: "single"` for normal one-document commands and
+   `"stream"` for commands that emit one document per event or entry.
 
 ## Important Files
 
@@ -43,7 +47,9 @@ This is different from the application manifest schema under
 - `cli/golem-cli/src/model/text/**` — many structured output view types.
 - `cli/golem-cli/src/model/**` — CLI DTO/view models used by structured output.
 - `golem output-schema` — top-level command that prints the raw schema document
-  for automated agents and tooling.
+  for automated agents and tooling. `--types` prints only output type names;
+  repeated `--type <TYPE>` prints a pruned schema containing only selected
+  output definitions and recursively referenced definitions.
 - `Makefile.toml` — `check-cli-output-schema` and
   `update-cli-output-schema-summary` tasks.
 
@@ -95,14 +101,18 @@ relational validation is introduced.
 1. Identify the affected output kind and `CliOutput` type.
 2. Update the Rust DTO/view model if needed.
 3. Update `command-output.schema.json` to match actual serde output.
-4. Add or improve the generator in `cli_output.rs` using real DTO/view values.
-5. Run focused schema tests and inspect failures as DTO/schema drift.
-6. Check whether user-facing skills under `golem-skills/skills` need updates
+4. Add or update top-level output metadata (`description`,
+   `x-golem-output-mode`, `x-golem-command`) for affected schema definitions.
+5. Add or improve the generator in `cli_output.rs` using real DTO/view values.
+6. Run focused schema tests and inspect failures as DTO/schema drift.
+7. Check whether user-facing skills under `golem-skills/skills` need updates
    when CLI output field names, `$type` names, or examples change.
-7. Check whether `golem-skills/tests` needs updates when output field names,
+8. Check whether `golem-skills/tests` needs updates when output field names,
    `$type` names, JSON formatting, or invoke JSON unwrapping changes.
-8. Verify `golem output-schema` still prints the current raw schema document.
-9. Regenerate the local output summary when the registry or output types change.
+9. Verify `golem output-schema` still prints the current raw schema document,
+   `golem output-schema --types` lists compact type names, and focused schemas
+   such as `golem output-schema --type agent.invoke` remain valid and pruned.
+10. Regenerate the local output summary when the registry or output types change.
 
 ## User-Facing Skill Impact
 
@@ -161,6 +171,8 @@ Smoke-check schema exposure when the command or schema file changed:
 
 ```shell
 cargo run -p golem-cli -- output-schema
+cargo run -p golem-cli -- output-schema --types
+cargo run -p golem-cli -- output-schema --type agent.invoke
 ```
 
 If arbitrary generators changed, rerun the generated-example prop test a few
@@ -188,14 +200,18 @@ regression seed.
 1. `$type` is stable and registered in both source and schema.
 2. `$type` follows suffixless command/action path naming.
 3. Schema matches actual `serde_json::to_value` output.
-4. Output generator constructs real DTO/view values.
-5. Important enum and nested variants are covered by examples or generators.
-6. User-facing skills under `golem-skills/skills` have been checked when public
+4. Top-level schema definition has `description`, `x-golem-output-mode`, and
+   `x-golem-command` metadata.
+5. Output generator constructs real DTO/view values.
+6. Important enum and nested variants are covered by examples or generators.
+7. User-facing skills under `golem-skills/skills` have been checked when public
    output changed.
-7. `golem-skills/tests` impact has been checked when public output changed.
-8. Generated docs from user-facing skills were regenerated if `golem-skills/skills`
+8. `golem-skills/tests` impact has been checked when public output changed.
+9. Generated docs from user-facing skills were regenerated if `golem-skills/skills`
    changed.
-9. `golem output-schema` prints the current raw schema document.
-10. Remaining `JsonValue` leaves are documented and intentional.
-11. Focused schema tests, check task, summary update, and `cargo check -p
+10. `golem output-schema` prints the current raw schema document.
+11. `golem output-schema --types` and `--type <TYPE>` expose compact discovery
+    and pruned schemas for coding agents.
+12. Remaining `JsonValue` leaves are documented and intentional.
+13. Focused schema tests, check task, summary update, and `cargo check -p
    golem-cli` pass.

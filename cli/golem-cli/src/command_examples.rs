@@ -141,6 +141,19 @@ pub const EXEC: &str = "Examples:
   golem-cli exec test
   golem-cli exec lint";
 
+pub const OUTPUT_SCHEMA: &str = "Examples:
+  # Print the full structured output JSON Schema
+  golem-cli output-schema
+
+  # List known structured output type names
+  golem-cli output-schema --types
+
+  # Print a pruned schema for one output type
+  golem-cli output-schema --type agent.invoke
+
+  # Print a pruned schema bundle for multiple output types
+  golem-cli output-schema --type agent.oplog --type agent.stream";
+
 pub const COMPLETION: &str = "Examples:
   # Print bash completions to stdout
   golem-cli completion bash

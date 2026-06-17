@@ -467,14 +467,32 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
-                GolemCliSubcommand::OutputSchema => Self::cmd_output_schema(),
+                GolemCliSubcommand::OutputSchema { types, output_type } => {
+                    Self::cmd_output_schema(types, output_type)
+                }
                 GolemCliSubcommand::Completion { shell } => Self::cmd_completion(shell),
             }
         })
     }
 
-    fn cmd_output_schema() -> anyhow::Result<()> {
-        print!("{}", crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON);
+    fn cmd_output_schema(types: bool, output_type: Vec<String>) -> anyhow::Result<()> {
+        if types {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &crate::model::cli_output::command_output_type_names()?
+                )?
+            );
+        } else if output_type.is_empty() {
+            print!("{}", crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON);
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &crate::model::cli_output::focused_command_output_schema(&output_type)?
+                )?
+            );
+        }
         Ok(())
     }
 

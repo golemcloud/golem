@@ -865,7 +865,7 @@ impl WorkerCommandHandler {
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
         if refresh.is_some() && self.ctx.format().is_structured() {
-            bail!("--refresh is only supported with --format text");
+            bail!("Refresh mode is only supported with --format text");
         }
 
         let filters = apply_list_mode_filter(filters, mode);
