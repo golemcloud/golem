@@ -1239,8 +1239,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let instance_guard = self.lock_non_stopping_worker().await;
         self.bump_read_only_cache_epoch();
         let entry = OplogEntry::pending_update(update_description.clone());
-        self.add_and_commit_oplog_internal(&instance_guard, entry)
-            .await;
+        self.add_and_commit_oplog_internal(
+            &instance_guard,
+            entry,
+            Some(WorkerCommand::WorkAvailable),
+        )
+        .await;
         drop(instance_guard);
     }
 
@@ -1363,18 +1367,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // should only be called from invocation loop
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
-        let pending = self.pending_invocations().await;
-        let keys_to_fail = [
-            vec![key],
-            pending
-                .iter()
-                .filter_map(|entry| entry.idempotency_key())
-                .collect(),
-        ]
-        .concat();
+        let status = self.last_known_status.read().await.clone();
+        let keys_to_fail = invocation_keys_to_fail(&status, Some(key));
+        let stderr = self.worker_event_service.get_last_invocation_errors();
+        let golem_error = trap_type.as_golem_error(&stderr);
         let mut map = self.invocation_results.write().await;
-        for key in keys_to_fail {
-            let stderr = self.worker_event_service.get_last_invocation_errors();
+        for key in &keys_to_fail {
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
@@ -1384,12 +1382,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }),
                 },
             );
-            let golem_error = trap_type.as_golem_error(&stderr);
-            if let Some(golem_error) = golem_error {
+            if let Some(golem_error) = &golem_error {
                 self.events().publish(Event::InvocationCompleted {
                     agent_id: self.owned_agent_id.agent_id(),
                     idempotency_key: key.clone(),
-                    result: Err(golem_error),
+                    result: Err(golem_error.clone()),
                 });
             }
         }
@@ -1951,7 +1948,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 | read_only_cache::InvocationEffect::UnknownAssumeMutating => None,
             };
 
-            self.add_and_commit_oplog_internal(&instance_guard, entry)
+            self.add_and_commit_oplog_internal(&instance_guard, entry, None)
                 .await;
 
             if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
@@ -1962,7 +1959,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let WorkerInstance::Running(running) = &*instance_guard {
-                running.sender.send(WorkerCommand::Unblock).unwrap();
+                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
 
             drop(instance_guard);
@@ -2001,7 +1998,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // - Worker is starting, it will process the request when it is started
 
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Unblock).unwrap();
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
         drop(instance_guard);
@@ -2033,7 +2030,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .push_back(QueuedWorkerInvocation::ReadFile { path, sender });
 
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Unblock).unwrap();
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
         drop(instance_guard);
@@ -2062,7 +2059,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
 
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Unblock).unwrap();
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
         drop(instance_guard);
@@ -2082,7 +2079,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if changed {
             let instance_guard = self.instance.lock().await;
             if let WorkerInstance::Running(running) = &*instance_guard {
-                running.sender.send(WorkerCommand::Unblock).unwrap();
+                running
+                    .sender
+                    .send(WorkerCommand::InternalStatusChanged)
+                    .unwrap();
             };
         }
         result
@@ -2117,14 +2117,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         instance_guard: &MutexGuard<'_, WorkerInstance>,
         entry: OplogEntry,
+        wakeup: Option<WorkerCommand>,
     ) -> OplogIndex {
         let result = self.add_to_oplog(entry).await;
         let (_, changed) = self
             .commit_oplog_and_update_state_internal(CommitLevel::Always)
             .await;
 
-        if changed && let WorkerInstance::Running(running) = &**instance_guard {
-            running.sender.send(WorkerCommand::Unblock).unwrap();
+        if changed
+            && let Some(wakeup) = wakeup
+            && let WorkerInstance::Running(running) = &**instance_guard
+        {
+            running.sender.send(wakeup).unwrap();
         };
 
         result
@@ -2147,6 +2151,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.add_and_commit_oplog_internal(
             &instance_guard,
             OplogEntry::activate_plugin(plugin_grant_id),
+            Some(WorkerCommand::WorkAvailable),
         )
         .await;
 
@@ -2171,6 +2176,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.add_and_commit_oplog_internal(
             &instance_guard,
             OplogEntry::deactivate_plugin(plugin_grant_id),
+            Some(WorkerCommand::WorkAvailable),
         )
         .await;
 
@@ -2221,6 +2227,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.add_and_commit_oplog_internal(
             &instance_guard,
             OplogEntry::cancel_pending_invocation(idempotency_key),
+            Some(WorkerCommand::WorkAvailable),
         )
         .await;
 
@@ -2292,12 +2299,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.bump_read_only_cache_epoch();
 
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
-            self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region))
+            self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region), None)
                 .await;
             self.reattach_worker_status().await;
 
             if let WorkerInstance::Running(running) = &*instance_guard {
-                running.sender.send(WorkerCommand::Unblock).unwrap();
+                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
             drop(instance_guard);
             Ok(())
@@ -2570,18 +2577,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        // Collect all idempotency keys to fail: pending invocations + currently running invocation
         let status = self.last_known_status.read().await.clone();
-        let mut keys_to_fail: Vec<IdempotencyKey> = status
-            .pending_invocations
-            .iter()
-            .filter_map(|inv| inv.idempotency_key().cloned())
-            .collect();
-        if let Some(current_key) = &status.current_idempotency_key
-            && !keys_to_fail.contains(current_key)
-        {
-            keys_to_fail.push(current_key.clone());
-        }
+        let keys_to_fail = invocation_keys_to_fail(&status, None);
 
         let mut invocation_results = self.invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
@@ -3479,7 +3476,7 @@ impl RunningWorker {
         oom_retry_count: u32,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        sender.send(WorkerCommand::Unblock).unwrap();
+        sender.send(WorkerCommand::WorkAvailable).unwrap();
 
         let active_clone = queue.clone();
         let owned_agent_id_clone = owned_agent_id.clone();
@@ -3559,7 +3556,7 @@ impl RunningWorker {
 
     async fn interrupt(&self, kind: InterruptKind) {
         *self.interrupt_signal.lock().await = Some(kind);
-        let _ = self.sender.send(WorkerCommand::Unblock);
+        let _ = self.sender.send(WorkerCommand::WorkAvailable);
     }
 
     async fn create_instance<Ctx: WorkerCtx>(
@@ -4231,9 +4228,39 @@ fn is_snapshot_capable_oplog_processor(
     metadata.has_oplog_processor() && metadata.has_save_snapshot() && metadata.has_load_snapshot()
 }
 
+fn invocation_keys_to_fail(
+    status: &AgentStatusRecord,
+    first_key: Option<&IdempotencyKey>,
+) -> Vec<IdempotencyKey> {
+    let mut keys = Vec::new();
+
+    if let Some(key) = first_key {
+        keys.push(key.clone());
+    }
+
+    for pending_key in status
+        .pending_invocations
+        .iter()
+        .filter_map(|entry| entry.idempotency_key())
+    {
+        if !keys.contains(pending_key) {
+            keys.push(pending_key.clone());
+        }
+    }
+
+    if let Some(current_key) = &status.current_idempotency_key
+        && !keys.contains(current_key)
+    {
+        keys.push(current_key.clone());
+    }
+
+    keys
+}
+
 #[derive(Debug)]
 enum WorkerCommand {
-    Unblock,
+    WorkAvailable,
+    InternalStatusChanged,
     ResumeReplay,
 }
 
