@@ -347,11 +347,14 @@ pub const AGENT_FILES: &str = "Examples:
   golem-cli agent files 'CounterAgent(\"c1\")' --format json";
 
 pub const AGENT_FILE_CONTENTS: &str = "Examples:
-  # Print a file's contents to stdout
+  # Save a file using its guest basename in the current directory
   golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt
 
   # Save the contents to a local file
-  golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt";
+  golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt
+
+  # Machine-readable metadata about the saved file
+  golem-cli --format json agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt";
 
 pub const AGENT_ACTIVATE_PLUGIN: &str = "Examples:
   # First list installed plugins for the agent's component (and their priorities):
