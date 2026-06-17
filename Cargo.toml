@@ -160,6 +160,7 @@ metrohash = "1.0.7"
 miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
+mimalloc = "0.1.52"
 minijinja = "2.7.0"
 
 nanoid = "0.4.0"
@@ -339,6 +340,7 @@ debug = "line-tables-only"
 
 [profile.release]
 panic = "abort"
+lto = "thin"
 
 [profile.benchmarks]
 inherits = "release"

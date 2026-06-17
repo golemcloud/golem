@@ -16,6 +16,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub mod grpc;
+pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod preview2;
@@ -1048,6 +1049,8 @@ pub async fn bootstrap_and_run_worker_executor<
     };
 
     let leak_detector = worker_executor_impl.leak_detector();
+
+    crate::metrics::runtime::install_runtime_metrics(runtime.clone(), join_set);
 
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 

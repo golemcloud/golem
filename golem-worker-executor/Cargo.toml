@@ -74,6 +74,7 @@ log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
+mimalloc = { workspace = true }
 nonempty-collections = { workspace = true }
 nonzero_ext = { workspace = true }
 pgvector = { workspace = true }
