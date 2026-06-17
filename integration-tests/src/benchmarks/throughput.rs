@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
-use golem_common::base_model::agent::DataValue;
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -28,6 +27,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::{AgentId, RoutingTable};
+use golem_common::schema::TypedSchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -441,7 +441,7 @@ type HttpRequestFn = Box<dyn for<'a> Fn(&'a str, usize, usize) -> Request + Send
 pub struct ThroughputBenchmark {
     rust_method_name: String,
     ts_method_name: String,
-    agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
+    agent_params: Box<dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static>,
     http_request: HttpRequestFn,
     rust_http_request: HttpRequestFn,
     deps: BenchmarkTestDependencies,
@@ -464,7 +464,7 @@ impl ThroughputBenchmark {
     pub async fn new(
         rust_method_name: &str,
         ts_method_name: &str,
-        agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
+        agent_params: Box<dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static>,
         http_request: HttpRequestFn,
         rust_http_request: HttpRequestFn,
         mode: &TestMode,
@@ -664,7 +664,7 @@ impl ThroughputBenchmark {
             component: &ComponentDto,
             ids: &[ParsedAgentId],
             method_name: &str,
-            params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
+            params: &(dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static),
             length: usize,
         ) {
             let result_futures = ids
@@ -769,7 +769,7 @@ impl ThroughputBenchmark {
             call_count: usize,
             targets: &[AgentInvocationTarget],
             method_name: &str,
-            params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
+            params: &(dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static),
             prefix: &str,
         ) {
             let result_futures = targets

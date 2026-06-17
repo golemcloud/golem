@@ -65,7 +65,7 @@ use golem_client::model::{
 use golem_common::model::agent::{
     AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
     ElementSchema, ElementValues, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
-    UntypedJsonDataValue, parsed_agent_id_parameters_to_legacy_data_value,
+    UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -78,9 +78,7 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::{
-    data_schema_to_input_schema, legacy_data_value_to_json, schema_agent_type_to_legacy,
-};
+use golem_common::schema::adapters::{data_schema_to_input_schema, schema_agent_type_to_legacy};
 use golem_wasm::analysis::AnalysedType;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -517,10 +515,7 @@ impl WorkerCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: legacy_data_value_to_json(
-                parsed_agent_id_parameters_to_legacy_data_value(&agent_id.parameters)
-                    .map_err(anyhow::Error::msg)?,
-            ),
+            parameters: serde_json::to_value(agent_id.parameters.value())?,
             phantom_id: agent_id.phantom_id,
             method_name: method_name.clone(),
             method_parameters: serde_json::to_value(method_parameters)?,

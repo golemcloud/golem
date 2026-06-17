@@ -648,6 +648,22 @@ pub fn json_schema_value_to_input_value(
     json: JsonValue,
     schema: &DataSchema,
 ) -> Result<SchemaValue, SchemaAdapterError> {
+    Ok(json_schema_value_to_typed_schema_value(json, schema)?
+        .into_parts()
+        .1)
+}
+
+/// Convert raw client JSON carrying a schema-native [`SchemaValue`] into a
+/// validated [`TypedSchemaValue`] (value paired with the record graph derived
+/// from the looked-up [`DataSchema`]).
+///
+/// Same parsing/validation as [`json_schema_value_to_input_value`], but keeps
+/// the typed carrier — used where the schema graph is needed afterwards, e.g.
+/// building a schema-native agent id from REST constructor parameters.
+pub fn json_schema_value_to_typed_schema_value(
+    json: JsonValue,
+    schema: &DataSchema,
+) -> Result<TypedSchemaValue, SchemaAdapterError> {
     let value: SchemaValue = serde_json::from_value(json).map_err(|e| {
         SchemaAdapterError::ValueShapeMismatch(format!("invalid schema value: {e}"))
     })?;
@@ -661,7 +677,54 @@ pub fn json_schema_value_to_input_value(
                 .join("; "),
         )
     })?;
-    Ok(value)
+    Ok(typed)
+}
+
+/// Lift raw client JSON (a bare schema-native [`SchemaValue`]) plus an agent
+/// constructor/method [`InputSchema`] and its owning [`SchemaGraph`] into a
+/// validated [`TypedSchemaValue`].
+///
+/// This is the schema-native counterpart of
+/// [`json_schema_value_to_typed_schema_value`] for callers that already hold
+/// the new agent-layer carriers (`AgentTypeSchema.schema` +
+/// `AgentConstructorSchema.input_schema`), so no legacy [`DataSchema`]
+/// round-trip is required. The agent's named-type definitions
+/// ([`SchemaGraph::defs`]) are preserved so `SchemaType::Ref`s in the field
+/// bodies resolve during validation.
+pub fn json_input_schema_value_to_typed_schema_value(
+    json: JsonValue,
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
+) -> Result<TypedSchemaValue, SchemaAdapterError> {
+    let value: SchemaValue = serde_json::from_value(json).map_err(|e| {
+        SchemaAdapterError::ValueShapeMismatch(format!("invalid schema value: {e}"))
+    })?;
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    let typed = TypedSchemaValue::new(
+        SchemaGraph {
+            defs: graph.defs.clone(),
+            root: SchemaType::record(fields),
+        },
+        value.clone(),
+    );
+    validate_value(typed.graph(), typed.root_type(), &value).map_err(|errors| {
+        SchemaAdapterError::ValueShapeMismatch(
+            errors
+                .into_iter()
+                .map(|err| err.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })?;
+    Ok(typed)
 }
 
 /// Pair a schema-native invocation **output** value with the schema derived

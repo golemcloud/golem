@@ -20,6 +20,7 @@ use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevisio
 use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
+use crate::schema::AgentTypeSchema;
 use async_trait::async_trait;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
@@ -119,13 +120,13 @@ pub struct RegisteredAgentTypeImplementer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue,)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
 }
 
@@ -136,7 +137,7 @@ pub struct RegisteredAgentType {
 /// RegisteredAgentType with deployment specific information
 /// Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
 pub struct DeployedRegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
     pub webhook_prefix_authority_and_path: Option<String>,
 }

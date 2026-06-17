@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, DataValue, GolemUserPrincipal, ParsedAgentId, Principal,
+    AgentMode, AgentTypeName, GolemUserPrincipal, ParsedAgentId, Principal,
 };
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
@@ -46,7 +46,7 @@ use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::adapters::{
-    json_data_value_to_legacy_data_value, json_schema_value_to_input_value,
+    json_schema_value_to_input_value, json_schema_value_to_typed_schema_value,
 };
 use golem_common::schema::{SchemaType, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
@@ -58,11 +58,11 @@ use std::{collections::HashMap, sync::Arc};
 fn build_public_agent_id(
     component_id: ComponentId,
     agent_type_name: AgentTypeName,
-    constructor_parameters: DataValue,
+    constructor_parameters: TypedSchemaValue,
     phantom_id: Option<uuid::Uuid>,
     agent_mode: AgentMode,
 ) -> WorkerResult<AgentId> {
-    let agent_id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+    let agent_id = ParsedAgentId::new_auto_phantom(
         agent_type_name,
         constructor_parameters,
         phantom_id,
@@ -880,7 +880,7 @@ impl WorkerService {
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
 
-        let constructor_parameters = json_data_value_to_legacy_data_value(
+        let constructor_parameters = json_schema_value_to_typed_schema_value(
             request.parameters,
             &agent_type.constructor.input_schema,
         )
@@ -976,7 +976,7 @@ impl WorkerService {
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
 
-        let constructor_parameters = json_data_value_to_legacy_data_value(
+        let constructor_parameters = json_schema_value_to_typed_schema_value(
             request.parameters,
             &agent_type.constructor.input_schema,
         )

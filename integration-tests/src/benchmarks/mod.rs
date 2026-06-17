@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::DataValue;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use opentelemetry::propagation::TextMapPropagator;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request};
@@ -73,7 +72,7 @@ pub async fn delete_workers(
 
 #[derive(Debug)]
 pub struct InvokeResult {
-    pub value: Vec<Value>,
+    pub value: Vec<SchemaValue>,
     pub retries: usize,
     pub timeouts: usize,
     pub accumulated_time: Duration,
@@ -110,7 +109,7 @@ pub async fn invoke_and_await_agent(
     component: &ComponentDto,
     agent_id: &ParsedAgentId,
     method_name: &str,
-    params: DataValue,
+    params: TypedSchemaValue,
 ) -> InvokeResult {
     async {
         const TIMEOUT: Duration = Duration::from_secs(180);
@@ -201,7 +200,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                         accumulated_time += duration;
 
                         break InvokeResult {
-                            value: vec![Value::String(body)],
+                            value: vec![SchemaValue::String(body)],
                             retries,
                             timeouts,
                             accumulated_time,

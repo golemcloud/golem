@@ -33,8 +33,8 @@ use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetada
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::agent::{ParsedAgentId, parsed_agent_id_parameters_to_legacy_data_value};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -56,7 +56,6 @@ use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
 use golem_common::schema::TypedSchemaValue;
-use golem_common::schema::adapters::legacy_data_value_to_json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -389,10 +388,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: legacy_data_value_to_json(
-                        parsed_agent_id_parameters_to_legacy_data_value(&agent_id.parameters)
-                            .map_err(|err| anyhow!("Agent id parameter conversion error: {err}"))?,
-                    ),
+                    parameters: serde_json::to_value(agent_id.parameters.value()).map_err(
+                        |err| anyhow!("Failed to serialize constructor parameters: {err}"),
+                    )?,
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
                     method_parameters,
@@ -457,10 +455,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: legacy_data_value_to_json(
-                        parsed_agent_id_parameters_to_legacy_data_value(&agent_id.parameters)
-                            .map_err(|err| anyhow!("Agent id parameter conversion error: {err}"))?,
-                    ),
+                    parameters: serde_json::to_value(agent_id.parameters.value()).map_err(
+                        |err| anyhow!("Failed to serialize constructor parameters: {err}"),
+                    )?,
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
                     method_parameters,

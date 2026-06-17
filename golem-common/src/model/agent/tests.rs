@@ -31,7 +31,10 @@ use crate::schema::AgentTypeSchema;
 use crate::schema::adapters::agent::{
     agent_type_to_schema, legacy_data_value_to_typed_schema_value,
 };
-use crate::schema::adapters::{input_schema_to_data_schema, untyped_data_value_to_input_value};
+use crate::schema::adapters::{
+    input_schema_to_data_schema, input_value_to_typed_schema_value,
+    untyped_data_value_to_input_value,
+};
 use crate::{agent_id, data_value, phantom_agent_id};
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
@@ -284,6 +287,220 @@ fn roundtrip_test_6() {
             })],
         }),
     )
+}
+
+// =====================================================================
+// Agent-id equivalence: schema-native REST path vs legacy path
+//
+// The invocation REST API now derives the agent id from a bare schema-native
+// `SchemaValue` (via `input_value_to_typed_schema_value`) instead of the legacy
+// `DataValue` (via `from_legacy_parameters`). These tests pin the invariant that
+// already-running agents stay addressable: both paths must render byte-identical
+// agent-id strings for the same logical constructor parameters.
+// =====================================================================
+
+/// Build a `ParsedAgentId` the way the invocation REST API now does: derive a
+/// bare input `SchemaValue` from the looked-up `DataSchema`, wrap it with
+/// `input_value_to_typed_schema_value`, then construct the id.
+fn schema_native_agent_id(
+    agent_type: &str,
+    parameters: DataValue,
+    phantom_id: Option<Uuid>,
+) -> Result<ParsedAgentId, String> {
+    let agent_type_name = AgentTypeName(agent_type.to_string());
+    let agent_type_schema =
+        TestAgentTypes::new().resolve_agent_type_schema_by_name(&agent_type_name)?;
+    let data_schema = input_schema_to_data_schema(
+        &agent_type_schema.schema,
+        &agent_type_schema.constructor.input_schema,
+    )
+    .map_err(|e| e.to_string())?;
+    let value = untyped_data_value_to_input_value(parameters.into(), &data_schema)
+        .map_err(|e| e.to_string())?;
+    let typed =
+        input_value_to_typed_schema_value(&data_schema, value).map_err(|e| e.to_string())?;
+    ParsedAgentId::try_new(agent_type_name, typed, phantom_id)
+}
+
+/// Assert the schema-native REST path renders the exact same agent-id string as
+/// the legacy `DataValue` path, and that the result still parses back cleanly.
+fn assert_schema_native_matches_legacy(
+    agent_type: &str,
+    parameters: DataValue,
+    phantom_id: Option<Uuid>,
+) {
+    let legacy = ParsedAgentId::from_legacy_parameters(
+        AgentTypeName(agent_type.to_string()),
+        parameters.clone(),
+        phantom_id,
+    )
+    .unwrap();
+    let schema_native = schema_native_agent_id(agent_type, parameters, phantom_id).unwrap();
+
+    assert_eq!(
+        schema_native.to_string(),
+        legacy.to_string(),
+        "schema-native agent id must match legacy rendering"
+    );
+    assert_eq!(schema_native.phantom_id, phantom_id);
+
+    let reparsed = ParsedAgentId::parse(schema_native.to_string(), TestAgentTypes::new()).unwrap();
+    assert_eq!(reparsed.to_string(), schema_native.to_string());
+}
+
+#[test]
+fn agent_id_equivalence_empty_params() {
+    assert_schema_native_matches_legacy(
+        "agent-1",
+        DataValue::Tuple(ElementValues { elements: vec![] }),
+        None,
+    );
+}
+
+#[test]
+fn agent_id_equivalence_single_u32() {
+    assert_schema_native_matches_legacy(
+        "agent-2",
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 12u32.into_value_and_type(),
+            })],
+        }),
+        None,
+    );
+}
+
+#[test]
+fn agent_id_equivalence_nested_record_and_flags() {
+    assert_schema_native_matches_legacy(
+        "agent-3",
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 12u32.into_value_and_type(),
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::U32(1),
+                            Value::U32(2),
+                            Value::Flags(vec![true, false, true]),
+                        ]),
+                        record(vec![
+                            field("x", u32()),
+                            field("y", u32()),
+                            field("properties", flags(&["a", "b", "c"])),
+                        ]),
+                    ),
+                }),
+            ],
+        }),
+        None,
+    );
+}
+
+#[test]
+fn agent_id_equivalence_unstructured_text() {
+    assert_schema_native_matches_legacy(
+        "agent-4",
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "hello, world!".to_string(),
+                        text_type: None,
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "\\\"hello,\\\" world!".to_string(),
+                        text_type: Some(TextType {
+                            language_code: "en".to_string(),
+                        }),
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
+            ],
+        }),
+        None,
+    );
+}
+
+#[test]
+fn agent_id_equivalence_unstructured_binary() {
+    assert_schema_native_matches_legacy(
+        "agent-5",
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: "Hello world!".as_bytes().to_vec(),
+                        binary_type: BinaryType {
+                            mime_type: "application/json".to_string(),
+                        },
+                    }),
+                    descriptor: BinaryDescriptor::default(),
+                }),
+                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: "Hello world!".as_bytes().to_vec(),
+                        binary_type: BinaryType {
+                            mime_type: "image/png".to_string(),
+                        },
+                    }),
+                    descriptor: BinaryDescriptor::default(),
+                }),
+            ],
+        }),
+        None,
+    );
+}
+
+#[test]
+fn agent_id_equivalence_list() {
+    assert_schema_native_matches_legacy(
+        "agent-7",
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::List(vec![Value::U32(1), Value::U32(2)]),
+                    list(u32()),
+                ),
+            })],
+        }),
+        None,
+    );
+}
+
+#[test]
+fn agent_id_equivalence_with_phantom_id() {
+    let phantom_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    assert_schema_native_matches_legacy(
+        "agent-3",
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 32u32.into_value_and_type(),
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::U32(12),
+                            Value::U32(32),
+                            Value::Flags(vec![true, true, false]),
+                        ]),
+                        record(vec![
+                            field("x", u32()),
+                            field("y", u32()),
+                            field("properties", flags(&["a", "b", "c"])),
+                        ]),
+                    ),
+                }),
+            ],
+        }),
+        Some(phantom_id),
+    );
 }
 
 #[test]
