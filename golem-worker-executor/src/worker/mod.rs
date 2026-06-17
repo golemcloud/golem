@@ -3303,20 +3303,30 @@ impl WaitingWorker {
             async move {
                 let agent_id = parent.owned_agent_id.agent_id();
                 let registered_concurrent_account = parent.registered_concurrent_account.clone();
-                let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
-                // Determine the component's compiled-module size before
-                // reserving any memory, so the worker's memory and its module are
-                // admitted together (the module is reserved first, then the
-                // memory admission accounts for it). The module is charged once
-                // per resident component and shared by all its workers.
+
+                // Determine the component's compiled-module size before acquiring
+                // the per-account concurrency slot (and before reserving memory),
+                // so the worker's memory and its module are admitted together (the
+                // module is reserved first, then the memory admission accounts for
+                // it). The module is charged once per resident component and shared
+                // by all its workers.
                 //
                 // Charges the pending-update target revision when one is queued
                 // (matching what create_instance loads); only a non-existent
                 // target falls back to the current revision, and transient
                 // resolution failures are retried rather than wedging the worker
                 // in WaitingForPermit or under-reserving against the old revision.
+                //
+                // This resolution is read-only and holds no permits, so it is done
+                // before acquiring the concurrent-agent permit: its retry loop must
+                // not hold one of the account's active-agent slots while the worker
+                // is not yet running, otherwise a single worker whose target
+                // metadata is transiently unavailable could block unrelated workers
+                // of the same account from starting.
                 let (component_id, component_revision, component_module_bytes) =
                     parent.startup_component_charge_requirement().await;
+
+                let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
 
                 // `memory_grant` and `component_charge` own their reservations
                 // from here on: held as locals until the worker becomes resident
