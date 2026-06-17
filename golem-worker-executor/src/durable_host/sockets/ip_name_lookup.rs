@@ -1,0 +1,160 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use wasmtime::component::Resource;
+
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
+use golem_common::model::oplog::types::{SerializableIpAddresses, SerializableSocketError};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestSocketsResolveName, HostResponseSocketsResolveName,
+};
+use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::{
+    Host, HostResolveAddressStream, IpAddress, Network, ResolveAddressStream,
+};
+use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+use wasmtime_wasi::sockets::WasiSocketsView as _;
+use wasmtime_wasi::{DynPollable, Pollable};
+
+impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
+    fn resolve_next_address(
+        &mut self,
+        self_: Resource<ResolveAddressStream>,
+    ) -> Result<Option<IpAddress>, SocketError> {
+        self.observe_function_call(
+            "sockets::ip_name_lookup::resolve_address_stream",
+            "resolve_next_address",
+        );
+        HostResolveAddressStream::resolve_next_address(&mut self.as_wasi_view().sockets(), self_)
+    }
+
+    fn subscribe(
+        &mut self,
+        self_: Resource<ResolveAddressStream>,
+    ) -> wasmtime::Result<Resource<DynPollable>> {
+        self.observe_function_call(
+            "sockets::ip_name_lookup::resolve_address_stream",
+            "subscribe",
+        );
+        HostResolveAddressStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
+    }
+
+    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> wasmtime::Result<()> {
+        self.observe_function_call("sockets::ip_name_lookup::resolve_address_stream", "drop");
+        HostResolveAddressStream::drop(&mut self.as_wasi_view().sockets(), rep)
+    }
+}
+
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn resolve_addresses(
+        &mut self,
+        network: Resource<Network>,
+        name: String,
+    ) -> Result<Resource<ResolveAddressStream>, SocketError> {
+        // `ReadRemote` with a one-shot/loop in-function retry. The eager `Start` captures the
+        // request name; on replay a committed `Start` without its `End` is re-executable (read), so
+        // the live side effect runs from a single shared block for both the live and
+        // incomplete-replay paths.
+        let mut handle = CallHandle::<SocketsIpNameLookupResolveAddresses, NotCancellable>::start(
+            self,
+            HostRequestSocketsResolveName { name: name.clone() },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            let result = loop {
+                let network_borrow = Resource::new_borrow(network.rep());
+                let result = resolve_and_drain_addresses(self, network_borrow, name.clone()).await;
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, |err| match err.downcast_ref() {
+                        Some(
+                            ErrorCode::NameUnresolvable
+                            | ErrorCode::PermanentResolverFailure
+                            | ErrorCode::AccessDenied,
+                        ) => HostFailureKind::Permanent,
+                        _ => HostFailureKind::Transient,
+                    })
+                    .await
+                    .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+
+            let serializable_result = match result {
+                Ok(addresses) => Ok(SerializableIpAddresses::from(addresses)),
+                Err(error) => Err(SerializableSocketError::from(error)),
+            };
+            handle
+                .complete(
+                    self,
+                    HostResponseSocketsResolveName {
+                        result: serializable_result,
+                    },
+                )
+                .await?
+        };
+
+        match result.result {
+            Ok(addresses) => {
+                let addresses: Vec<IpAddress> = addresses.0.into_iter().map(|a| a.into()).collect();
+                let stream = ResolveAddressStream::Done(Ok(addresses.into_iter()));
+                Ok(self.table().push(stream)?)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+async fn resolve_and_drain_addresses<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    network: Resource<Network>,
+    name: String,
+) -> Result<Vec<IpAddress>, SocketError> {
+    let stream = Host::resolve_addresses(&mut ctx.as_wasi_view().sockets(), network, name).await?;
+    let stream = ctx.table().delete(stream)?;
+    let addresses = drain_resolve_address_stream(stream).await?;
+    Ok(addresses)
+}
+
+async fn drain_resolve_address_stream(
+    mut stream: ResolveAddressStream,
+) -> Result<Vec<IpAddress>, SocketError> {
+    let mut addresses = Vec::new();
+
+    stream.ready().await;
+    match stream {
+        ResolveAddressStream::Waiting(_) => return Err(ErrorCode::WouldBlock.into()), // should never happen because of ready() above
+        ResolveAddressStream::Done(iter) => {
+            let iter = iter?;
+            for address in iter {
+                addresses.push(address);
+            }
+        }
+    }
+    Ok(addresses)
+}

@@ -56,6 +56,10 @@ pub async fn extract_agent_types_with_streams(
     let mut linker: Linker<Host> = Linker::new(&engine);
     linker.allow_shadowing(true);
 
+    wasmtime_wasi::p2::add_to_linker_with_options_async(
+        &mut linker,
+        &wasmtime_wasi::p2::bindings::LinkOptions::default(),
+    )?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
 
     let mut builder = WasiCtx::builder();

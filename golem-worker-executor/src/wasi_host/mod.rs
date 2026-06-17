@@ -27,7 +27,7 @@ pub mod logging;
 
 pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
     engine: &Engine,
-    _get: fn(&mut Ctx) -> &mut DurableWorkerCtx<Ctx>,
+    get: fn(&mut Ctx) -> &mut DurableWorkerCtx<Ctx>,
 ) -> wasmtime::Result<Linker<Ctx>> {
     let mut linker = Linker::new(engine);
 
@@ -36,72 +36,199 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
     // Bulk register all p3 wasi-http interfaces. Requires Ctx: WasiHttpView.
     wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
 
+    let mut exit_link_options = wasmtime_wasi::p2::bindings::cli::exit::LinkOptions::default();
+    exit_link_options.cli_exit_with_code(true);
+
+    let mut network_link_options =
+        wasmtime_wasi::p2::bindings::sockets::network::LinkOptions::default();
+    network_link_options.network_error_code(true);
+
+    wasmtime_wasi::p2::bindings::cli::environment::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::cli::exit::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        &exit_link_options,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::cli::stderr::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::cli::stdin::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::cli::stdout::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::cli::terminal_input::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::cli::terminal_output::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::cli::terminal_stderr::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::cli::terminal_stdin::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::cli::terminal_stdout::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::clocks::monotonic_clock::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::clocks::wall_clock::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::filesystem::preopens::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::filesystem::types::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::io::error::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::io::poll::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::io::streams::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::random::random::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::random::insecure::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::random::insecure_seed::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::sockets::instance_network::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::sockets::network::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, &network_link_options, get)?;
+    wasmtime_wasi::p2::bindings::sockets::tcp::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::sockets::tcp_create_socket::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    wasmtime_wasi::p2::bindings::sockets::udp::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+    wasmtime_wasi::p2::bindings::sockets::udp_create_socket::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+
+    wasmtime_wasi_http::p2::bindings::http::outgoing_handler::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, get)?;
+    let http_link_options = wasmtime_wasi_http::p2::bindings::LinkOptions::default();
+    wasmtime_wasi_http::p2::bindings::http::types::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, &(&http_link_options).into(), get)?;
+
     crate::preview2::wasi::blobstore::blobstore::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::blobstore::container::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::blobstore::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::keyvalue::atomic::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::keyvalue::cache::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::keyvalue::eventual::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::keyvalue::eventual_batch::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
-    >(&mut linker, _get)?;
+    >(&mut linker, get)?;
     crate::preview2::wasi::keyvalue::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::keyvalue::wasi_keyvalue_error::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
-    >(&mut linker, _get)?;
+    >(&mut linker, get)?;
     crate::preview2::wasi::logging::logging::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::wasi::config::store::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
 
     crate::preview2::golem::rdbms::ignite2::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::golem::rdbms::mysql::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
     crate::preview2::golem::rdbms::postgres::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
 
     crate::preview2::golem::websocket::client::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
 
     crate::preview2::golem::quota::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        _get,
+        get,
     )?;
 
     Ok(linker)

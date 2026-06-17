@@ -1,0 +1,70 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::model::AgentConfig;
+use crate::services::HasWorker;
+use crate::worker::merge_agent_env_with_default_env;
+use crate::workerctx::WorkerCtx;
+use golem_common::model::AgentId;
+use wasmtime_wasi::cli::WasiCliView as _;
+use wasmtime_wasi::p2::bindings::cli::environment::Host;
+
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+        let default_agent_env = self
+            .agent_type_provision_config()
+            .map(|c| c.env.clone())
+            .unwrap_or_default();
+
+        let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
+        let mut env =
+            merge_agent_env_with_default_env(Some(worker_metadata.env), default_agent_env);
+
+        let current_agent_name = if let Some(agent_id) = self.parsed_agent_id() {
+            let updated_agent_id = agent_id
+                .with_phantom_id(self.state.current_phantom_id)
+                .map_err(wasmtime::Error::msg)?;
+            updated_agent_id.to_string()
+        } else {
+            self.owned_agent_id.agent_name()
+        };
+
+        AgentConfig::enrich_env(
+            &mut env,
+            &AgentId {
+                component_id: self.owned_agent_id.component_id(),
+                agent_id: current_agent_name,
+            },
+            &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
+            self.state.component_metadata.revision,
+        );
+
+        Ok(env)
+    }
+
+    async fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {
+        // NOTE: No need to persist the results of this function as the result values are persisted as part of the initial Create oplog entry
+        self.observe_function_call("cli::environment", "get_arguments");
+        let mut view = self.as_wasi_view();
+        Host::get_arguments(&mut view.cli()).await
+    }
+
+    async fn initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
+        // NOTE: No need to persist the results of this function as the result values are persisted as part of the initial Create oplog entry
+        self.observe_function_call("cli::environment", "initial_cwd");
+        let mut view = self.as_wasi_view();
+        Host::initial_cwd(&mut view.cli()).await
+    }
+}

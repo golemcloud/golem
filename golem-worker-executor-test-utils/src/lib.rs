@@ -1226,7 +1226,7 @@ impl wasmtime_wasi::WasiView for TestWorkerCtx {
 
 impl wasmtime_wasi_http::p3::WasiHttpView for TestWorkerCtx {
     fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
+        self.durable_ctx.as_wasi_http_view_p3()
     }
 }
 
@@ -1553,7 +1553,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.as_wasi_view()
     }
 
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view()
     }
 

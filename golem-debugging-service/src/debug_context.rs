@@ -454,10 +454,21 @@ impl HostCancellationToken for DebugContext {
     }
 }
 
-// TODO(p3) Blocker 3: durable cli::environment::Host implementation removed during the p2 -> p3
-// migration. The bulk `wasmtime_wasi::p3::add_to_linker` call now provides the default p3
-// environment host; durable instrumentation will need to be re-introduced via the new
-// accessor-based pattern.
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+    }
+}
 
 impl wasmtime_wasi::WasiView for DebugContext {
     fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
@@ -467,7 +478,7 @@ impl wasmtime_wasi::WasiView for DebugContext {
 
 impl wasmtime_wasi_http::p3::WasiHttpView for DebugContext {
     fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
+        self.durable_ctx.as_wasi_http_view_p3()
     }
 }
 
@@ -618,7 +629,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.as_wasi_view()
     }
 
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view()
     }
 
