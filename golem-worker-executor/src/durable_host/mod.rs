@@ -27,6 +27,7 @@ pub mod http;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub mod p3;
 pub mod quota;
 mod random;
 pub mod rdbms;
