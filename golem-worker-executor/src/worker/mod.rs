@@ -128,6 +128,35 @@ fn component_charge_revision(
     pending_target_revision.unwrap_or(last_known_revision)
 }
 
+/// How a pending-update target's metadata-resolution outcome should drive the
+/// startup component charge.
+#[derive(Debug, PartialEq, Eq)]
+enum TargetChargeAction {
+    /// The target resolved: charge it with the resolved module size.
+    ChargeTarget { module_bytes: u64 },
+    /// The target does not exist: `create_instance` will fail the update and load
+    /// the current revision, so charge the current revision instead.
+    FallBackToCurrent,
+    /// Resolution failed transiently: `create_instance` may still load the
+    /// target, so retry rather than charging the current revision.
+    Retry,
+}
+
+/// Classifies a `get_metadata(target)` result into the startup charge action,
+/// preserving the invariant that admission charges the target revision whenever
+/// `create_instance` can still load it. Only a definitely-absent target
+/// (`ComponentNotFound`) falls back to the current revision; transient errors
+/// are retried.
+fn classify_target_charge(result: &Result<u64, WorkerExecutorError>) -> TargetChargeAction {
+    match result {
+        Ok(module_bytes) => TargetChargeAction::ChargeTarget {
+            module_bytes: *module_bytes,
+        },
+        Err(WorkerExecutorError::ComponentNotFound { .. }) => TargetChargeAction::FallBackToCurrent,
+        Err(_) => TargetChargeAction::Retry,
+    }
+}
+
 /// Inserts `output` into the cache under `epoch`, which must be the value
 /// captured at enqueue (see
 /// [`Worker::enqueue_worker_invocation_with_effect`]).
@@ -1398,14 +1427,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// would attach the held charge to the wrong resident module and, if the
     /// target module is larger, under-reserve memory.
     ///
-    /// Resolving the target's module size is best-effort: if its metadata cannot
-    /// be fetched (most importantly when the target revision does not exist),
-    /// this falls back to the currently-loaded revision and size and proceeds,
-    /// rather than failing. `create_instance` is responsible for attempting the
-    /// update and, on a missing target, writing a `failed_update` and retrying
-    /// against the last known revision — a recovery path that must not be
-    /// pre-empted by an error here. Falling back keeps the worker startable
-    /// instead of wedged in `WaitingForPermit`.
+    /// The invariant is: if `create_instance` can still successfully load the
+    /// target revision, admission must charge the target revision. Resolving the
+    /// target's module size is therefore handled by error class:
+    ///
+    /// - `ComponentNotFound`: the target genuinely does not exist, so
+    ///   `create_instance` will write a `failed_update` and retry the *current*
+    ///   revision. Charge the current revision/size to match — falling back here
+    ///   keeps the worker startable instead of wedged, and `create_instance`
+    ///   drives the recovery.
+    /// - Any other (transient/runtime) error: `create_instance`'s later
+    ///   `component_service().get(target)` may still succeed and load the target,
+    ///   so we must not fall back to the current revision (that would under-reserve
+    ///   and mis-key the charge). Back off and retry resolving the target, exactly
+    ///   as the memory admission loop treats transient pressure, until it resolves
+    ///   to a definite answer.
     pub async fn startup_component_charge_requirement(
         &self,
     ) -> (ComponentId, ComponentRevision, u64) {
@@ -1425,24 +1461,40 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_revision = component_charge_revision(pending_target, current_revision);
 
         // The currently-loaded revision's module size is already recorded in the
-        // status; a pending-update target's size is resolved from its metadata.
-        // If that resolution fails, fall back to the current revision and size so
-        // the worker still starts and create_instance can drive (and recover
-        // from) the update.
+        // status; a pending-update target's size must be resolved from its
+        // metadata so the reservation matches the module create_instance loads.
         if component_revision == current_revision {
             return (component_id, current_revision, current_size);
         }
-        match self
-            .component_service()
-            .get_metadata(component_id, Some(component_revision))
-            .await
-        {
-            Ok(target) => (component_id, component_revision, target.component_size),
-            Err(err) => {
-                debug!(
-                    "Could not resolve pending-update target revision {component_revision} for charge sizing, charging against current revision and letting create_instance drive the update: {err}"
-                );
-                (component_id, current_revision, current_size)
+
+        let retry_delay = self.config().memory.acquire_retry_delay;
+        loop {
+            let result = self
+                .component_service()
+                .get_metadata(component_id, Some(component_revision))
+                .await
+                .map(|target| target.component_size);
+            match classify_target_charge(&result) {
+                TargetChargeAction::ChargeTarget { module_bytes } => {
+                    return (component_id, component_revision, module_bytes);
+                }
+                TargetChargeAction::FallBackToCurrent => {
+                    // The target revision does not exist; create_instance will fail
+                    // the update and load the current revision, so charge that.
+                    debug!(
+                        "Pending-update target revision {component_revision} does not exist; charging against current revision and letting create_instance fail the update and recover"
+                    );
+                    return (component_id, current_revision, current_size);
+                }
+                TargetChargeAction::Retry => {
+                    // Transient failure: create_instance may still load the target,
+                    // so do not fall back to the current revision (that would
+                    // under-reserve). Back off and retry resolving the target.
+                    debug!(
+                        "Transient failure resolving pending-update target revision {component_revision} for charge sizing, backing off and retrying"
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                }
             }
         }
     }
@@ -3258,10 +3310,11 @@ impl WaitingWorker {
                 // memory admission accounts for it). The module is charged once
                 // per resident component and shared by all its workers.
                 //
-                // Infallible: an unresolvable pending-update target falls back to
-                // the current revision and lets create_instance drive (and
-                // recover from) the update, rather than wedging the worker in
-                // WaitingForPermit with a leaked waiting-for-memory count.
+                // Charges the pending-update target revision when one is queued
+                // (matching what create_instance loads); only a non-existent
+                // target falls back to the current revision, and transient
+                // resolution failures are retried rather than wedging the worker
+                // in WaitingForPermit or under-reserving against the old revision.
                 let (component_id, component_revision, component_module_bytes) =
                     parent.startup_component_charge_requirement().await;
 
@@ -4042,6 +4095,37 @@ mod tests {
             component_charge_revision(Some(target), last_known),
             target,
             "at startup a queued pending update is applied by loading its target revision, so the charge must key to the target, not the last known revision"
+        );
+    }
+
+    #[test]
+    fn classify_target_charge_charges_resolved_target() {
+        assert_eq!(
+            classify_target_charge(&Ok(4096)),
+            TargetChargeAction::ChargeTarget { module_bytes: 4096 },
+            "a resolved target is charged with its own module size"
+        );
+    }
+
+    #[test]
+    fn classify_target_charge_falls_back_only_for_component_not_found() {
+        let not_found = Err(WorkerExecutorError::ComponentNotFound {
+            component_id: ComponentId(uuid::Uuid::new_v4()),
+        });
+        assert_eq!(
+            classify_target_charge(&not_found),
+            TargetChargeAction::FallBackToCurrent,
+            "a non-existent target falls back to the current revision (create_instance fails the update and recovers)"
+        );
+    }
+
+    #[test]
+    fn classify_target_charge_retries_on_transient_error() {
+        let transient = Err(WorkerExecutorError::runtime("registry unavailable"));
+        assert_eq!(
+            classify_target_charge(&transient),
+            TargetChargeAction::Retry,
+            "a transient resolution failure must retry, not fall back: create_instance may still load the target, so charging the current revision would under-reserve and mis-key the charge"
         );
     }
 }
