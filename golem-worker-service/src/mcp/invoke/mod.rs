@@ -20,155 +20,140 @@ pub mod resource;
 pub(crate) mod test_support;
 pub mod tool;
 
-use golem_common::base_model::agent::{
-    BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
-    TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
-};
-use golem_common::schema::adapters::{
-    analysed_type_to_schema_graph, schema_value_to_value, value_and_type_to_typed_schema_value,
-};
+use golem_common::schema::agent::{FieldSource, InputSchema};
 use golem_common::schema::canonical;
-use golem_common::schema::render::json_value::{from_json_value, to_json_value};
-use golem_wasm::Value;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, NamedFieldType, SchemaType, TextRestrictions,
+};
+use golem_common::schema::schema_value::SchemaValue;
 
-/// Parse the JSON of a single component-model element using the canonical
-/// schema-layer JSON value codec (`from_json_value`) rather than the legacy
-/// `golem_wasm::json::ValueAndTypeJsonExtensions` codec.
+/// Build the agent-id constructor parameters as a self-contained
+/// [`TypedSchemaValue`] from the user-supplied constructor fields and their
+/// already-extracted positional values.
 ///
-/// The MCP tool/resource JSON Schema is advertised by the same schema-layer
-/// renderer, so parsing through this codec keeps the advertised shape and the
-/// accepted shape in agreement (e.g. `char` as a one-character string,
-/// payload-less variants as a bare case name, `option<T>` record fields as
-/// required). The legacy `AnalysedType` is projected into the schema layer via
-/// [`analysed_type_to_schema_graph`]; the resulting [`SchemaValue`] is lowered
-/// back to a component-model [`Value`] for the (still legacy) worker boundary.
-pub(crate) fn parse_component_model_value(
-    json: &serde_json::Value,
-    element_type: &AnalysedType,
-) -> Result<Value, String> {
-    let graph = analysed_type_to_schema_graph(element_type)
-        .map_err(|e| format!("unsupported element type: {e}"))?;
-    let schema_value = from_json_value(&graph, &graph.root, json).map_err(|e| e.to_string())?;
-    schema_value_to_value(&graph, &graph.root, &schema_value).map_err(|e| e.to_string())
-}
-
-/// Render a component-model response value to JSON using the canonical
-/// schema-layer JSON value codec (`to_json_value`), so the produced JSON
-/// matches the advertised MCP output schema.
-pub(crate) fn component_model_value_to_json(
-    vat: &ValueAndType,
-) -> Result<serde_json::Value, String> {
-    let typed = value_and_type_to_typed_schema_value(vat).map_err(|e| e.to_string())?;
-    to_json_value(typed.graph(), typed.root_type(), typed.value()).map_err(|e| e.to_string())
+/// The record root is built over the **user-supplied** constructor fields only
+/// (auto-injected fields are filled in by the host and are not part of the MCP
+/// agent-id encoding), carrying the agent's `graph.defs` so any
+/// [`SchemaType::Ref`] in a field schema still resolves. `values` must be in the
+/// same user-supplied field order as
+/// [`extract_constructor_input_values`](constructor_param_extraction::extract_constructor_input_values).
+pub(crate) fn build_constructor_parameters(
+    graph: &SchemaGraph,
+    input: &InputSchema,
+    values: Vec<SchemaValue>,
+) -> TypedSchemaValue {
+    let fields = input
+        .fields()
+        .iter()
+        .filter(|f| matches!(f.source, FieldSource::UserSupplied))
+        .map(|f| NamedFieldType {
+            name: f.name.clone(),
+            body: f.schema.clone(),
+            metadata: f.metadata.clone(),
+        })
+        .collect();
+    let mut graph = graph.clone();
+    graph.root = SchemaType::record(fields);
+    TypedSchemaValue::new(graph, SchemaValue::Record { fields: values })
 }
 
 /// Parse an unstructured-text element from its canonical JSON envelope
-/// `{ "text": "...", "language"?: "..." }` and apply the descriptor's language
-/// restrictions.
+/// `{ "text": "...", "language"?: "..." }` directly into a [`SchemaValue::Text`]
+/// and apply the schema's language restrictions.
 ///
 /// The envelope shape is parsed by the shared `golem-common` canonical Text
-/// codec — the same shape advertised by the MCP tool/resource schema renderer
-/// — so the advertised schema and the accepted JSON stay in agreement.
-pub(crate) fn parse_unstructured_text(
+/// codec — the same shape advertised by the MCP tool/resource schema renderer —
+/// so the advertised schema and the accepted JSON stay in agreement.
+pub(crate) fn schema_text_value_from_json(
     value_json: &serde_json::Value,
-    descriptor: &TextDescriptor,
-) -> Result<TextReferenceValue, String> {
+    restrictions: &TextRestrictions,
+) -> Result<SchemaValue, String> {
     let payload = canonical::text::from_json(value_json).map_err(|e| e.to_string())?;
 
     if let Some(code) = &payload.language
-        && let Some(allowed) = &descriptor.restrictions
+        && let Some(allowed) = &restrictions.languages
         && !allowed.is_empty()
-        && !allowed.iter().any(|t| &t.language_code == code)
+        && !allowed.iter().any(|l| l == code)
     {
-        let expected: Vec<&str> = allowed.iter().map(|t| t.language_code.as_str()).collect();
         return Err(format!(
             "language code '{}' is not allowed. Expected one of: {}",
             code,
-            expected.join(", ")
+            allowed.join(", ")
         ));
     }
 
-    let text_type = payload
-        .language
-        .map(|language_code| TextType { language_code });
-    Ok(TextReferenceValue {
-        value: TextReference::Inline(TextSource {
-            data: payload.text,
-            text_type,
-        }),
-    })
+    Ok(SchemaValue::Text(payload))
 }
 
 /// Parse an unstructured-binary element from its canonical JSON envelope
-/// `{ "bytes": "<base64url-no-pad>", "mime_type"?: "..." }` and apply the
-/// descriptor's MIME restrictions.
+/// `{ "bytes": "<base64url-no-pad>", "mime_type"?: "..." }` directly into a
+/// [`SchemaValue::Binary`] and apply the schema's MIME restrictions.
 ///
 /// The envelope shape is parsed by the shared `golem-common` canonical Binary
-/// codec — the same shape advertised by the MCP tool/resource schema renderer
-/// — so the advertised schema and the accepted JSON stay in agreement. The
+/// codec — the same shape advertised by the MCP tool/resource schema renderer —
+/// so the advertised schema and the accepted JSON stay in agreement. The
 /// canonical encoding is URL-safe base64 without padding.
-pub(crate) fn parse_unstructured_binary(
+pub(crate) fn schema_binary_value_from_json(
     value_json: &serde_json::Value,
-    descriptor: &BinaryDescriptor,
-) -> Result<BinaryReferenceValue, String> {
+    restrictions: &BinaryRestrictions,
+) -> Result<SchemaValue, String> {
     let payload = canonical::binary::from_json(value_json).map_err(|e| e.to_string())?;
 
-    if let Some(allowed) = &descriptor.restrictions
+    if let Some(allowed) = &restrictions.mime_types
         && !allowed.is_empty()
     {
         match &payload.mime_type {
-            Some(mime) if allowed.iter().any(|t| &t.mime_type == mime) => {}
+            Some(mime) if allowed.iter().any(|m| m == mime) => {}
             Some(mime) => {
-                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
                 return Err(format!(
                     "MIME type '{}' is not allowed. Expected one of: {}",
                     mime,
-                    expected.join(", ")
+                    allowed.join(", ")
                 ));
             }
             None => {
-                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
                 return Err(format!(
                     "MIME type is required. Expected one of: {}",
-                    expected.join(", ")
+                    allowed.join(", ")
                 ));
             }
         }
     }
 
-    Ok(BinaryReferenceValue {
-        value: BinaryReference::Inline(BinarySource {
-            data: payload.bytes,
-            binary_type: BinaryType {
-                mime_type: payload.mime_type.unwrap_or_default(),
-            },
-        }),
-    })
+    Ok(SchemaValue::Binary(payload))
 }
 
 #[cfg(test)]
 mod codec_tests {
-    //! Regression tests for the MCP value codec swap: parsing and rendering of
+    //! Regression tests for the MCP value codec: parsing and rendering of
     //! component-model values must agree with the schema-layer JSON Schema the
     //! MCP tools advertise. These cover the three shapes where the old
     //! `ValueAndTypeJsonExtensions` codec disagreed with the advertised schema:
-    //! `char`, payload-less variants, and `option<T>` record fields.
+    //! `char`, payload-less variants, and `option<T>` record fields. They now
+    //! drive the shared schema-layer JSON codec (`from_json_value` /
+    //! `to_json_value`) directly, projecting the `AnalysedType` into a graph via
+    //! [`analysed_type_to_schema_graph`].
 
-    use super::{component_model_value_to_json, parse_component_model_value};
-    use golem_wasm::ValueAndType;
+    use golem_common::schema::adapters::analysed_type_to_schema_graph;
+    use golem_common::schema::render::json_value::{from_json_value, to_json_value};
     use golem_wasm::analysis::NameOptionTypePair;
     use golem_wasm::analysis::analysed_type::{chr, field, option, record, str, variant};
     use serde_json::json;
     use test_r::test;
 
     fn round_trip(ty: &golem_wasm::analysis::AnalysedType, json: serde_json::Value) {
-        let value = parse_component_model_value(&json, ty)
+        let graph = analysed_type_to_schema_graph(ty).expect("graph");
+        let value = from_json_value(&graph, &graph.root, &json)
             .unwrap_or_else(|e| panic!("parse failed for {json}: {e}"));
-        let back = component_model_value_to_json(&ValueAndType::new(value, ty.clone()))
+        let back = to_json_value(&graph, &graph.root, &value)
             .unwrap_or_else(|e| panic!("render failed: {e}"));
         assert_eq!(back, json, "round-trip changed the JSON shape");
+    }
+
+    fn parse_fails(ty: &golem_wasm::analysis::AnalysedType, json: serde_json::Value) -> bool {
+        let graph = analysed_type_to_schema_graph(ty).expect("graph");
+        from_json_value(&graph, &graph.root, &json).is_err()
     }
 
     #[test]
@@ -177,7 +162,7 @@ mod codec_tests {
         round_trip(&chr(), json!("A"));
         // The legacy code-point number form is now rejected.
         assert!(
-            parse_component_model_value(&json!(65), &chr()).is_err(),
+            parse_fails(&chr(), json!(65)),
             "numeric char code point must be rejected"
         );
     }
@@ -199,7 +184,7 @@ mod codec_tests {
         round_trip(&ty, json!({"some": "x"}));
         // The legacy `{ "none": null }` form is now rejected.
         assert!(
-            parse_component_model_value(&json!({"none": null}), &ty).is_err(),
+            parse_fails(&ty, json!({"none": null})),
             "tagged-null form for a payload-less case must be rejected"
         );
     }
@@ -213,7 +198,7 @@ mod codec_tests {
         round_trip(&ty, json!({"inner": "x"}));
         // Omitting the field is rejected (schema and runtime now agree).
         assert!(
-            parse_component_model_value(&json!({}), &ty).is_err(),
+            parse_fails(&ty, json!({})),
             "omitted option<T> record field must be rejected"
         );
     }

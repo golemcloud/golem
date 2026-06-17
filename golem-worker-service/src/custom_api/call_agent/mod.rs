@@ -20,10 +20,7 @@ use self::cache_headers::{
     add_vary_header, build_cache_control_value, build_etag_value, headers as cache_header,
     if_none_match_hits, parse_if_none_match_entries, supports_http_revalidation,
 };
-use self::parameter_parsing::{
-    parse_path_segment_value, parse_path_segment_value_to_component_model,
-    parse_query_or_header_value,
-};
+use self::parameter_parsing::{parse_path_segment_value, parse_query_or_header_value};
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
 use super::error::RequestHandlerError;
@@ -34,20 +31,14 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
-    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, ElementValues,
-    OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig, TextReference,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig,
 };
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
-use golem_common::schema::adapters::value_to_schema_value;
-use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload};
+use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
+    CallAgentBehaviour, ConstructorParameter, MethodParameter,
 };
-use golem_service_base::model::SafeIndex;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::{AnalysedType, TypeRecord};
 use http::{Method, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -98,7 +89,9 @@ impl CallAgentHandler {
 
         debug!("Invoking agent {agent_id}");
 
-        let method_params_value = method_params_to_schema_value(method_params)?;
+        let method_params_value = SchemaValue::Record {
+            fields: method_params,
+        };
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
             method_params_value.into();
@@ -276,12 +269,13 @@ impl CallAgentHandler {
         let CallAgentBehaviour {
             component_id,
             agent_type,
+            constructor_input,
             constructor_parameters,
             phantom,
             ..
         } = behaviour;
 
-        let mut values = Vec::with_capacity(constructor_parameters.len());
+        let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
             match param {
@@ -293,22 +287,23 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    let value = parse_path_segment_value_to_component_model(raw, parameter_type)?;
-
-                    values.push(ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType::new(value, parameter_type.into()),
-                    }));
+                    fields.push(parse_path_segment_value(raw, parameter_type)?);
                 }
             }
         }
 
-        let data_value = DataValue::Tuple(ElementValues { elements: values });
+        // The agent-id parameters travel as a self-contained `TypedSchemaValue`:
+        // the constructor's compiled `SchemaGraph` paired with the positional
+        // record of the (user-supplied) constructor parameters.
+        let parameters = TypedSchemaValue::new(
+            constructor_input.graph.clone(),
+            SchemaValue::Record { fields },
+        );
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id =
-            ParsedAgentId::from_legacy_parameters(agent_type.clone(), data_value, phantom_id)
-                .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
+        let agent_id = ParsedAgentId::try_new(agent_type.clone(), parameters, phantom_id)
+            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
             component_id: *component_id,
@@ -322,10 +317,14 @@ impl CallAgentHandler {
         request: &RichRequest,
         behaviour: &CallAgentBehaviour,
         mut body: ParsedRequestBody,
-    ) -> Result<Vec<ElementValue>, RequestHandlerError> {
+    ) -> Result<Vec<SchemaValue>, RequestHandlerError> {
         let query_params = request.query_params();
         let headers = request.headers();
 
+        // The producer emits `method_parameters` in user-supplied input
+        // declaration order, so iterating them in order builds the positional
+        // `SchemaValue::Record` the executor validates against (which excludes
+        // auto-injected fields like the principal).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
 
         for param in &behaviour.method_parameters {
@@ -338,9 +337,7 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: parse_path_segment_value(raw, parameter_type)?,
-                    })
+                    parse_path_segment_value(raw, parameter_type)?
                 }
 
                 MethodParameter::Query {
@@ -350,9 +347,7 @@ impl CallAgentHandler {
                     let empty = Vec::new();
                     let vals = query_params.get(query_parameter_name).unwrap_or(&empty);
 
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: parse_query_or_header_value(vals, parameter_type)?,
-                    })
+                    parse_query_or_header_value(vals, parameter_type)?
                 }
 
                 MethodParameter::Header {
@@ -371,22 +366,18 @@ impl CallAgentHandler {
                         })
                         .collect::<Result<Vec<_>, _>>()?;
 
-                    ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: parse_query_or_header_value(&vals, parameter_type)?,
-                    })
+                    parse_query_or_header_value(&vals, parameter_type)?
                 }
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
-                    ParsedRequestBody::JsonBody(golem_wasm::Value::Record(fields)) => {
-                        let field_type =
-                            json_body_field_type(&resolved_route.route.body, *field_index)?;
-                        ElementValue::ComponentModel(ComponentModelElementValue {
-                            value: ValueAndType::new(
-                                fields[usize::from(*field_index)].clone(),
-                                field_type,
-                            ),
-                        })
-                    }
+                    ParsedRequestBody::JsonBody(SchemaValue::Record { fields }) => fields
+                        .get(usize::from(*field_index))
+                        .cloned()
+                        .ok_or_else(|| {
+                            RequestHandlerError::invariant_violated(
+                                "JSON body field index out of range for parsed body",
+                            )
+                        })?,
 
                     ParsedRequestBody::JsonBody(_) => {
                         return Err(RequestHandlerError::invariant_violated(
@@ -409,9 +400,9 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                            value: BinaryReference::Inline(binary_source),
-                            descriptor: Default::default(),
+                        SchemaValue::Binary(BinaryValuePayload {
+                            bytes: binary_source.data,
+                            mime_type: Some(binary_source.binary_type.mime_type),
                         })
                     }
 
@@ -430,9 +421,9 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                            value: TextReference::Inline(text_source),
-                            descriptor: Default::default(),
+                        SchemaValue::Text(TextValuePayload {
+                            text: text_source.data,
+                            language: text_source.text_type.map(|text_type| text_type.language_code),
                         })
                     }
 
@@ -448,75 +439,6 @@ impl CallAgentHandler {
         }
 
         Ok(values)
-    }
-}
-
-fn method_params_to_schema_value(
-    method_params: Vec<ElementValue>,
-) -> Result<SchemaValue, RequestHandlerError> {
-    let fields = method_params
-        .into_iter()
-        .map(|param| match param {
-            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-                value_to_schema_value(&value.value, &value.typ).map_err(|err| {
-                    RequestHandlerError::InternalError(anyhow!(
-                        "Failed to convert method parameter: {err}"
-                    ))
-                })
-            }
-            ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                value: TextReference::Inline(source),
-                ..
-            }) => Ok(SchemaValue::Text(TextValuePayload {
-                text: source.data,
-                language: source.text_type.map(|text_type| text_type.language_code),
-            })),
-            ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                value: TextReference::Url(_),
-                ..
-            }) => Err(RequestHandlerError::invariant_violated(
-                "Unexpected unstructured text URL parameter",
-            )),
-            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                value: BinaryReference::Inline(source),
-                ..
-            }) => Ok(SchemaValue::Binary(BinaryValuePayload {
-                bytes: source.data,
-                mime_type: Some(source.binary_type.mime_type),
-            })),
-            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                value: BinaryReference::Url(_),
-                ..
-            }) => Err(RequestHandlerError::invariant_violated(
-                "Unexpected unstructured binary URL parameter",
-            )),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(SchemaValue::Record { fields })
-}
-
-/// Look up the [`AnalysedType`] of a JSON-object body field by index from the
-/// route's request body schema, used to type the corresponding component-model
-/// method parameter before lifting it into a schema-native value.
-fn json_body_field_type(
-    body: &RequestBodySchema,
-    field_index: SafeIndex,
-) -> Result<AnalysedType, RequestHandlerError> {
-    match body {
-        RequestBodySchema::JsonBody {
-            expected_type: AnalysedType::Record(TypeRecord { fields, .. }),
-        } => fields
-            .get(usize::from(field_index))
-            .map(|pair| pair.typ.clone())
-            .ok_or_else(|| {
-                RequestHandlerError::invariant_violated(
-                    "JSON body field index out of range for body schema",
-                )
-            }),
-        _ => Err(RequestHandlerError::invariant_violated(
-            "JSON field parameter but body schema is not a JSON record",
-        )),
     }
 }
 

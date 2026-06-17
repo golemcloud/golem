@@ -14,17 +14,23 @@
 
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::agent_method_input::get_agent_method_input;
+use crate::mcp::invoke::build_constructor_parameters;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
 use crate::mcp::schema::field_name_mapping;
 use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
-use golem_common::base_model::agent::*;
+use golem_common::base_model::agent::Principal;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::schema::SchemaValue;
 use golem_common::schema::adapters::{
-    schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
-    schema_output_value_to_legacy_data_value,
+    FALLBACK_OUTPUT_FIELD_NAME, multimodal_variant_cases, resolve_ref,
+};
+use golem_common::schema::agent::OutputSchema;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::render::json_value::to_json_value;
+use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::schema_value::{
+    BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use rmcp::ErrorData;
 use rmcp::model::{
@@ -39,24 +45,6 @@ pub async fn invoke_tool(
     mcp_tool: &AgentMcpTool,
     worker_service: &Arc<WorkerService>,
 ) -> Result<CallToolResult, ErrorData> {
-    // The MCP capability stores schema-layer constructor/method bodies. The
-    // invoke/runtime extraction code still operates on the legacy
-    // `DataSchema` / `DataValue` carriers, so convert at this boundary,
-    // resolving any `SchemaType::Ref` against the agent's schema graph.
-    let legacy_constructor = schema_agent_constructor_to_legacy(
-        &mcp_tool.schema_graph,
-        &mcp_tool.constructor,
-    )
-    .map_err(|e| {
-        tracing::error!("Failed to convert constructor schema: {}", e);
-        ErrorData::internal_error(format!("Failed to convert constructor schema: {}", e), None)
-    })?;
-    let legacy_method = schema_agent_method_to_legacy(&mcp_tool.schema_graph, &mcp_tool.method)
-        .map_err(|e| {
-            tracing::error!("Failed to convert method schema: {}", e);
-            ErrorData::internal_error(format!("Failed to convert method schema: {}", e), None)
-        })?;
-
     // The advertised tool schema disambiguates constructor/method parameter
     // names that collide (see `combined_input_schema`). Recompute the same
     // mapping here and translate the advertised argument names back to the
@@ -65,24 +53,25 @@ pub async fn invoke_tool(
     let constructor_args = field_names.rewrite_constructor_args(&args_map);
     let method_args = field_names.rewrite_method_args(&args_map);
 
-    let constructor_params =
-        extract_constructor_input_values(&constructor_args, &legacy_constructor.input_schema)
-            .map_err(|e| {
-                tracing::error!("Failed to extract constructor parameters: {}", e);
-                ErrorData::invalid_params(
-                    format!("Failed to extract constructor parameters: {}", e),
-                    None,
-                )
-            })?;
+    let constructor_values = extract_constructor_input_values(
+        &constructor_args,
+        &mcp_tool.schema_graph,
+        &mcp_tool.constructor.input_schema,
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to extract constructor parameters: {}", e);
+        ErrorData::invalid_params(format!("Failed to extract constructor parameters: {}", e), None)
+    })?;
 
-    let parsed_agent_id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+    let parameters = build_constructor_parameters(
+        &mcp_tool.schema_graph,
+        &mcp_tool.constructor.input_schema,
+        constructor_values,
+    );
+
+    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
         mcp_tool.agent_type_name.clone(),
-        DataValue::Tuple(ElementValues {
-            elements: constructor_params
-                .into_iter()
-                .map(ElementValue::ComponentModel)
-                .collect(),
-        }),
+        parameters,
         None,
         mcp_tool.agent_mode,
     )
@@ -91,11 +80,15 @@ pub async fn invoke_tool(
         ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
     })?;
 
-    let method_parameters = get_agent_method_input(&method_args, &legacy_method.input_schema)
-        .map_err(|e| {
-            tracing::error!("Failed to extract method parameters: {}", e);
-            ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
-        })?;
+    let method_parameters = get_agent_method_input(
+        &method_args,
+        &mcp_tool.schema_graph,
+        &mcp_tool.method.input_schema,
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to extract method parameters: {}", e);
+        ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
+    })?;
 
     let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
         method_parameters.into();
@@ -116,7 +109,7 @@ pub async fn invoke_tool(
     let agent_output = worker_service
         .invoke_agent(
             &agent_id,
-            Some(legacy_method.name.clone()),
+            Some(mcp_tool.method.name.clone()),
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
@@ -138,99 +131,98 @@ pub async fn invoke_tool(
     };
 
     match agent_result {
-        Some(schema_value) => {
-            map_agent_response_to_tool_result(schema_value, &legacy_method.output_schema)
-        }
+        Some(schema_value) => map_agent_response_to_tool_result(
+            &mcp_tool.schema_graph,
+            &mcp_tool.method.output_schema,
+            schema_value,
+        ),
         None => Ok(CallToolResult::success(vec![])),
     }
 }
 
+/// Map an agent method's [`SchemaValue`] response into an MCP tool result,
+/// typed by the method's [`OutputSchema`] (resolved against `graph`).
+///
+/// According to the MCP specification, a tool's advertised output schema must be
+/// a JSON object, so structured (component-model) single outputs are wrapped
+/// under the synthetic [`FALLBACK_OUTPUT_FIELD_NAME`] key (kept in sync with the
+/// schema exporter) and returned as `structured_content`. Unstructured
+/// (text/binary) and multimodal outputs have no advertised output schema (see
+/// `mcp_tool_schema`); they are returned as the MCP `content` array with
+/// `structured_content: None`.
 pub fn map_agent_response_to_tool_result(
+    graph: &SchemaGraph,
+    output: &OutputSchema,
     agent_response: SchemaValue,
-    expected_type: &DataSchema,
 ) -> Result<CallToolResult, ErrorData> {
-    let typed_value = schema_output_value_to_legacy_data_value(agent_response, expected_type)
-        .map_err(|error| {
-            ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
-        })?;
+    let Some(ty) = output.schema() else {
+        // Unit output carries no value.
+        return Ok(CallToolResult::success(vec![]));
+    };
 
-    // According to the MCP specification, a tool's advertised output schema must
-    // be a JSON object, so structured (component-model) single outputs are
-    // wrapped under the synthetic output key and returned as `structured_content`.
-    // Unstructured (text/binary) and multimodal outputs have no advertised output
-    // schema (see `mcp_tool_schema`); they are returned as the MCP `content` array
-    // with `structured_content: None`. See `convert_elem_value_to_mcp_tool_response`.
-    match typed_value {
-        DataValue::Tuple(ElementValues { elements }) => match elements.len() {
-            0 => Ok(CallToolResult::success(vec![])),
-            1 => {
-                let element_name = match expected_type {
-                    DataSchema::Tuple(NamedElementSchemas { elements: schemas }) => {
-                        schemas.first().map(|s| s.name.clone())
-                    }
-                    _ => None,
-                };
-
-                let element = elements.into_iter().next().unwrap();
-                let too_result = convert_elem_value_to_mcp_tool_response(&element)?;
-
-                match too_result {
-                    ToolResult::Default(value) => {
-                        let json_value = value;
-                        // Wrap in an object keyed by the schema element name to match the
-                        // advertised outputSchema (which must be type: object per MCP spec).
-                        let structured = match element_name {
-                            Some(name) => json!({ name: json_value }),
-                            None => json_value,
-                        };
-
-                        // Both contents and structured fields are populated here (apparently)
-                        Ok(CallToolResult::structured(structured))
-                    }
-                    ToolResult::Content(content) => {
-                        // For content results, we put the content in the "content" field of the tool result,
-                        // and still provide the structured JSON for the rest of the schema (if any).
-                        Ok(CallToolResult {
-                            content: vec![content],
-                            structured_content: None,
-                            is_error: Some(false),
-                            meta: None,
-                        })
-                    }
-                }
+    // Multimodal output: `list<variant<… Role::Multimodal>>`.
+    if let Some(cases) = multimodal_variant_cases(graph, ty).map_err(internal_error)? {
+        let elements = match agent_response {
+            SchemaValue::List { elements } => elements,
+            _ => {
+                return Err(ErrorData::internal_error(
+                    "Expected a multimodal list response".to_string(),
+                    None,
+                ));
             }
-            _ => Err(ErrorData::internal_error(
-                "Unexpected number of response tuple elements".to_string(),
-                None,
-            )),
-        },
+        };
 
-        // multimodal
-        DataValue::Multimodal(NamedElementValues { elements }) => {
-            let mut contents: Vec<Content> = vec![];
+        let mut contents: Vec<Content> = vec![];
+        for element in elements {
+            let SchemaValue::Variant(VariantValuePayload { case, payload }) = element else {
+                return Err(ErrorData::internal_error(
+                    "Expected a multimodal variant element".to_string(),
+                    None,
+                ));
+            };
+            let case_schema = cases
+                .get(case as usize)
+                .and_then(|c| c.payload.as_ref())
+                .ok_or_else(|| {
+                    ErrorData::internal_error(
+                        format!("Multimodal case index {case} out of range"),
+                        None,
+                    )
+                })?;
+            let payload = payload.ok_or_else(|| {
+                ErrorData::internal_error("Multimodal variant has no payload".to_string(), None)
+            })?;
 
-            for named in elements {
-                let tool_result = convert_elem_value_to_mcp_tool_response(&named.value)?;
-
-                match tool_result {
-                    ToolResult::Default(json_value) => {
-                        contents.push(Content::text(json_value.to_string()));
-                    }
-
-                    // Mostly multimodal is a collection of binary or unstructured text data
-                    ToolResult::Content(content) => {
-                        contents.push(content);
-                    }
+            match schema_value_to_tool_result(graph, case_schema, &payload)? {
+                ToolResult::Default(json_value) => {
+                    contents.push(Content::text(json_value.to_string()));
                 }
+                ToolResult::Content(content) => contents.push(content),
             }
-
-            Ok(CallToolResult {
-                content: contents,
-                structured_content: None,
-                is_error: Some(false),
-                meta: None,
-            })
         }
+
+        return Ok(CallToolResult {
+            content: contents,
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        });
+    }
+
+    match schema_value_to_tool_result(graph, ty, &agent_response)? {
+        ToolResult::Default(json_value) => {
+            // Wrap in an object keyed by the synthetic output name to match the
+            // advertised outputSchema (which must be type: object per MCP spec).
+            Ok(CallToolResult::structured(
+                json!({ FALLBACK_OUTPUT_FIELD_NAME: json_value }),
+            ))
+        }
+        ToolResult::Content(content) => Ok(CallToolResult {
+            content: vec![content],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        }),
     }
 }
 
@@ -245,98 +237,96 @@ pub enum ToolResult {
     Content(Content),
 }
 
-// Mapping from ElementValue to the JSON format expected by MCP clients
-// (based on the schema they learned from initialization)
-// This is used only for tools, and not for resources.
-// Any changes in this mapping should be carefully tested with actual MCP clients
-fn convert_elem_value_to_mcp_tool_response(
-    element: &ElementValue,
-) -> Result<ToolResult, ErrorData> {
-    match element {
-        ElementValue::ComponentModel(component_model_value) => {
-            crate::mcp::invoke::component_model_value_to_json(&component_model_value.value)
-                .map_err(|e| {
-                    ErrorData::internal_error(
-                        format!("Failed to serialize component model response: {e}"),
-                        None,
-                    )
-                })
-                .map(ToolResult::Default)
-        }
+fn internal_error(error: impl std::fmt::Display) -> ErrorData {
+    ErrorData::internal_error(error.to_string(), None)
+}
 
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Inline(TextSource { data, .. }) => Ok(ToolResult::Content(
-                RawContent::text(data.clone()).no_annotation(),
+/// Convert a single agent response value, typed by `ty` (resolved against
+/// `graph`), into the JSON format expected by MCP clients. Component-model
+/// values render through the shared schema-layer JSON codec; `Text` / `Binary`
+/// values map onto MCP content blocks. Any changes here must be carefully
+/// tested against real MCP clients.
+fn schema_value_to_tool_result(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+) -> Result<ToolResult, ErrorData> {
+    match resolve_ref(graph, ty) {
+        Ok(SchemaType::Text { .. }) => match value {
+            SchemaValue::Text(TextValuePayload { text, .. }) => Ok(ToolResult::Content(
+                RawContent::text(text.clone()).no_annotation(),
             )),
-            TextReference::Url(_) => Err(ErrorData::internal_error(
-                "A text reference URL can only be part of tool input and not output".to_string(),
+            _ => Err(ErrorData::internal_error(
+                "Expected a text value for a text output".to_string(),
                 None,
             )),
         },
-
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                    let mime_type = binary_type.mime_type.as_str();
-
-                    match mime_type {
-                        "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-
-                            Ok(ToolResult::Content(
-                                RawContent::image(b64, mime_type.to_string()).no_annotation(),
-                            ))
-                        }
-
-                        "audio/mpeg" | "audio/wav" | "audio/ogg" => {
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-
-                            Ok(ToolResult::Content(
-                                RawContent::Audio(RawAudioContent {
-                                    data: b64,
-                                    mime_type: mime_type.to_string(),
-                                })
-                                .no_annotation(),
-                            ))
-                        }
-
-                        "text/plain" | "text/csv" | "application/pdf" => {
-                            let data_str = String::from_utf8_lossy(data).to_string();
-                            Ok(ToolResult::Content(
-                                RawContent::Resource(RawEmbeddedResource {
-                                    meta: None,
-                                    resource: ResourceContents::TextResourceContents {
-                                        uri: "data:".to_string(),
-                                        mime_type: Some(mime_type.to_string()),
-                                        text: data_str,
-                                        meta: None,
-                                    },
-                                })
-                                .no_annotation(),
-                            ))
-                        }
-
-                        _ => Ok(ToolResult::Content(
-                            RawContent::Resource(RawEmbeddedResource {
-                                meta: None,
-                                resource: ResourceContents::BlobResourceContents {
-                                    uri: "data:".to_string(),
-                                    mime_type: Some(mime_type.to_string()),
-                                    blob: base64::engine::general_purpose::STANDARD.encode(data),
-                                    meta: None,
-                                },
-                            })
-                            .no_annotation(),
-                        )),
-                    }
-                }
-                BinaryReference::Url(_) => Err(ErrorData::internal_error(
-                    "A binary reference URL can only be part of tool input and not output"
-                        .to_string(),
-                    None,
-                )),
+        Ok(SchemaType::Binary { .. }) => match value {
+            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
+                Ok(binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")))
             }
+            _ => Err(ErrorData::internal_error(
+                "Expected a binary value for a binary output".to_string(),
+                None,
+            )),
+        },
+        _ => to_json_value(graph, ty, value)
+            .map_err(|e| {
+                ErrorData::internal_error(
+                    format!("Failed to serialize component model response: {e}"),
+                    None,
+                )
+            })
+            .map(ToolResult::Default),
+    }
+}
+
+fn binary_to_tool_content(data: &[u8], mime_type: &str) -> ToolResult {
+    match mime_type {
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+            ToolResult::Content(RawContent::image(b64, mime_type.to_string()).no_annotation())
         }
+
+        "audio/mpeg" | "audio/wav" | "audio/ogg" => {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+            ToolResult::Content(
+                RawContent::Audio(RawAudioContent {
+                    data: b64,
+                    mime_type: mime_type.to_string(),
+                })
+                .no_annotation(),
+            )
+        }
+
+        "text/plain" | "text/csv" | "application/pdf" => {
+            let data_str = String::from_utf8_lossy(data).to_string();
+            ToolResult::Content(
+                RawContent::Resource(RawEmbeddedResource {
+                    meta: None,
+                    resource: ResourceContents::TextResourceContents {
+                        uri: "data:".to_string(),
+                        mime_type: Some(mime_type.to_string()),
+                        text: data_str,
+                        meta: None,
+                    },
+                })
+                .no_annotation(),
+            )
+        }
+
+        _ => ToolResult::Content(
+            RawContent::Resource(RawEmbeddedResource {
+                meta: None,
+                resource: ResourceContents::BlobResourceContents {
+                    uri: "data:".to_string(),
+                    mime_type: Some(mime_type.to_string()),
+                    blob: base64::engine::general_purpose::STANDARD.encode(data),
+                    meta: None,
+                },
+            })
+            .no_annotation(),
+        ),
     }
 }
 
@@ -345,90 +335,86 @@ mod tests {
     use super::*;
     use crate::mcp::agent_mcp_tool::AgentMcpTool;
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
-    use golem_common::base_model::agent::{
-        AgentMode, AgentTypeName, BinaryDescriptor, ComponentModelElementSchema, DataSchema,
-        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, Url,
-    };
+    use golem_common::base_model::agent::{AgentMode, AgentTypeName};
     use golem_common::model::AgentInvocationOutput;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
     };
     use golem_common::schema::graph::SchemaGraph;
-    use golem_common::schema::schema_type::SchemaType;
-    use golem_common::schema::{
-        BinaryValuePayload, InputSchema, TextValuePayload, VariantValuePayload,
+    use golem_common::schema::metadata::Role;
+    use golem_common::schema::schema_type::{
+        BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
     };
-    use golem_wasm::analysis::{AnalysedType, TypeStr};
+    use golem_common::schema::{BinaryValuePayload, InputSchema, TextValuePayload};
     use rmcp::model::Tool;
     use serde_json::json;
     use std::borrow::Cow;
     use std::sync::Arc;
     use test_r::test;
 
-    fn str_output_schema() -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "result".to_string(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: AnalysedType::Str(TypeStr),
-                }),
-            }],
-        })
+    fn graph() -> SchemaGraph {
+        SchemaGraph::empty()
+    }
+
+    fn str_output() -> OutputSchema {
+        OutputSchema::Single(Box::new(SchemaType::string()))
+    }
+
+    fn multimodal_output(cases: Vec<(&str, SchemaType)>) -> OutputSchema {
+        let variant_cases = cases
+            .into_iter()
+            .map(|(name, ty)| VariantCaseType {
+                name: name.to_string(),
+                payload: Some(ty),
+                metadata: Default::default(),
+            })
+            .collect();
+        let mut variant = SchemaType::variant(variant_cases);
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        OutputSchema::Single(Box::new(SchemaType::list(variant)))
     }
 
     #[test]
     fn tuple_single_component_model_to_structured_json() {
         let response = SchemaValue::String("hello".to_string());
-        let result = map_agent_response_to_tool_result(response, &str_output_schema()).unwrap();
-        assert_eq!(result.structured_content, Some(json!({"result": "hello"})));
+        let result = map_agent_response_to_tool_result(&graph(), &str_output(), response).unwrap();
+        assert_eq!(result.structured_content, Some(json!({"value": "hello"})));
         assert_eq!(result.is_error, Some(false));
     }
 
     #[test]
     fn tuple_empty_returns_success() {
-        let schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
         let response = SchemaValue::Tuple { elements: vec![] };
-        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let result =
+            map_agent_response_to_tool_result(&graph(), &OutputSchema::Unit, response).unwrap();
         assert!(result.content.is_empty());
         assert_eq!(result.is_error, Some(false));
     }
 
     #[test]
     fn tuple_text_element_to_data_object() {
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "report".to_string(),
-                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-            }],
-        });
+        let output = OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default())));
         let response = SchemaValue::Text(TextValuePayload {
             text: "weather is sunny".to_string(),
             language: Some("en".to_string()),
         });
-        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
         let raw_content = &result.content[0].raw;
-
         assert_eq!(raw_content, &RawContent::text("weather is sunny"));
     }
 
     #[test]
     fn tuple_binary_element_to_base64_object() {
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "image".to_string(),
-                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
-            }],
-        });
-
+        let output =
+            OutputSchema::Single(Box::new(SchemaType::binary(BinaryRestrictions::default())));
         let response = SchemaValue::Binary(BinaryValuePayload {
             bytes: vec![1, 2, 3],
             mime_type: Some("image/png".to_string()),
         });
-        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
 
         let raw_content = &result.content[0].raw;
-
         assert_eq!(
             raw_content,
             &RawContent::image("AQID", "image/png".to_string())
@@ -437,20 +423,10 @@ mod tests {
 
     #[test]
     fn multimodal_response_to_parts_array() {
-        let schema = DataSchema::Multimodal(NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "desc".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-                },
-                NamedElementSchema {
-                    name: "photo".to_string(),
-                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                        restrictions: None,
-                    }),
-                },
-            ],
-        });
+        let output = multimodal_output(vec![
+            ("desc", SchemaType::text(TextRestrictions::default())),
+            ("photo", SchemaType::binary(BinaryRestrictions::default())),
+        ]);
         let response = SchemaValue::List {
             elements: vec![
                 SchemaValue::Variant(VariantValuePayload {
@@ -469,40 +445,15 @@ mod tests {
                 }),
             ],
         };
-        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
         let contents = &result.content;
 
         assert_eq!(contents.len(), 2);
-
         assert_eq!(&contents[0].raw, &RawContent::text("a photo"));
         assert_eq!(
             &contents[1].raw,
             &RawContent::image("AQID", "image/png".to_string())
         );
-    }
-
-    #[test]
-    fn error_on_text_url_reference() {
-        let elem = ElementValue::UnstructuredText(UnstructuredTextElementValue {
-            value: TextReference::Url(Url {
-                value: "https://example.com".to_string(),
-            }),
-            descriptor: TextDescriptor { restrictions: None },
-        });
-        let err = convert_elem_value_to_mcp_tool_response(&elem).unwrap_err();
-        assert!(err.message.contains("URL"), "got: {}", err.message);
-    }
-
-    #[test]
-    fn error_on_binary_url_reference() {
-        let elem = ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-            value: BinaryReference::Url(Url {
-                value: "https://example.com/img.png".to_string(),
-            }),
-            descriptor: BinaryDescriptor { restrictions: None },
-        });
-        let err = convert_elem_value_to_mcp_tool_response(&elem).unwrap_err();
-        assert!(err.message.contains("URL"), "got: {}", err.message);
     }
 
     #[test]

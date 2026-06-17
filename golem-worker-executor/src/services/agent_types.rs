@@ -168,7 +168,6 @@ mod grpc {
     use golem_common::SafeDisplay;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::schema::adapters::agent::agent_type_to_schema;
     use golem_common::schema::agent::RegisteredAgentTypeSchema;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -176,17 +175,14 @@ mod grpc {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use std::sync::Arc;
 
-    /// Up-convert a legacy [`RegisteredAgentType`] (decoded from the legacy
-    /// proto registry surface) into the schema-native model. This direction is
-    /// lossless: every legacy `AnalysedType` has a schema counterpart.
+    /// Re-wrap a [`RegisteredAgentType`] into the schema-native
+    /// [`RegisteredAgentTypeSchema`]. Both carry an `AgentTypeSchema` now, so
+    /// this only moves the fields across.
     fn registered_agent_type_to_schema(
         registered: RegisteredAgentType,
     ) -> Result<RegisteredAgentTypeSchema, WorkerExecutorError> {
-        let agent_type = agent_type_to_schema(&registered.agent_type).map_err(|err| {
-            WorkerExecutorError::runtime(format!("Invalid agent metadata: {err}"))
-        })?;
         Ok(RegisteredAgentTypeSchema {
-            agent_type,
+            agent_type: registered.agent_type,
             implemented_by: registered.implemented_by,
         })
     }

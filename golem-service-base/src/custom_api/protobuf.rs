@@ -18,9 +18,10 @@ use super::{
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
-    MethodParameter, OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
+    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy, MethodParameter,
+    OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
@@ -179,6 +180,10 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .try_into()?,
                 component_revision: call_agent.component_revision.try_into()?,
                 agent_type: AgentTypeName(call_agent.agent_type),
+                constructor_input: call_agent
+                    .constructor_input
+                    .ok_or("Missing constructor_input")?
+                    .try_into()?,
                 constructor_parameters: call_agent
                     .constructor_parameters
                     .into_iter()
@@ -186,6 +191,10 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .collect::<Result<_, _>>()?,
                 phantom: call_agent.phantom,
                 method_name: call_agent.method_name,
+                method_input: call_agent
+                    .method_input
+                    .ok_or("Missing method_input")?
+                    .try_into()?,
                 method_parameters: call_agent
                     .method_parameters
                     .into_iter()
@@ -261,9 +270,11 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 component_id,
                 component_revision,
                 agent_type,
+                constructor_input,
                 constructor_parameters,
                 phantom,
                 method_name,
+                method_input,
                 method_parameters,
                 expected_agent_response,
                 method_description,
@@ -274,12 +285,14 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         component_id: Some(component_id.into()),
                         component_revision: component_revision.into(),
                         agent_type: agent_type.0,
+                        constructor_input: Some(constructor_input.into()),
                         constructor_parameters: constructor_parameters
                             .into_iter()
                             .map(Into::into)
                             .collect(),
                         phantom,
                         method_name,
+                        method_input: Some(method_input.into()),
                         method_parameters: method_parameters.into_iter().map(Into::into).collect(),
                         expected_agent_response: Some(expected_agent_response.into()),
                         method_description,
@@ -535,6 +548,79 @@ impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
     }
 }
 
+impl TryFrom<proto::golem::customapi::CompiledSchema> for CompiledSchema {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::CompiledSchema) -> Result<Self, Self::Error> {
+        Ok(CompiledSchema {
+            graph: value
+                .graph
+                .ok_or("CompiledSchema.graph missing")?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<CompiledSchema> for proto::golem::customapi::CompiledSchema {
+    fn from(value: CompiledSchema) -> Self {
+        Self {
+            graph: Some(value.graph.into()),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::CompiledInputSchema> for CompiledInputSchema {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::CompiledInputSchema) -> Result<Self, Self::Error> {
+        Ok(CompiledInputSchema {
+            graph: value
+                .graph
+                .ok_or("CompiledInputSchema.graph missing")?
+                .try_into()?,
+            input_schema: value
+                .input_schema
+                .ok_or("CompiledInputSchema.input_schema missing")?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<CompiledInputSchema> for proto::golem::customapi::CompiledInputSchema {
+    fn from(value: CompiledInputSchema) -> Self {
+        Self {
+            graph: Some(value.graph.into()),
+            input_schema: Some(value.input_schema.into()),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::CompiledOutputSchema> for CompiledOutputSchema {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::CompiledOutputSchema) -> Result<Self, Self::Error> {
+        Ok(CompiledOutputSchema {
+            graph: value
+                .graph
+                .ok_or("CompiledOutputSchema.graph missing")?
+                .try_into()?,
+            output_schema: value
+                .output_schema
+                .ok_or("CompiledOutputSchema.output_schema missing")?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<CompiledOutputSchema> for proto::golem::customapi::CompiledOutputSchema {
+    fn from(value: CompiledOutputSchema) -> Self {
+        Self {
+            graph: Some(value.graph.into()),
+            output_schema: Some(value.output_schema.into()),
+        }
+    }
+}
+
 impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
     type Error = String;
 
@@ -545,20 +631,18 @@ impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
             Kind::Unused(_) => Ok(RequestBodySchema::Unused),
 
             Kind::JsonBody(body) => Ok(RequestBodySchema::JsonBody {
-                expected_type: (&body.expected_type.ok_or("JsonBody.expected_type missing")?)
+                expected: body.expected.ok_or("JsonBody.expected missing")?.try_into()?,
+            }),
+
+            Kind::BinaryBody(body) => Ok(RequestBodySchema::BinaryBody {
+                expected: body
+                    .expected
+                    .ok_or("BinaryBody.expected missing")?
                     .try_into()?,
             }),
 
-            Kind::UnrestrictedBinary(_) => Ok(RequestBodySchema::UnrestrictedBinary),
-
-            Kind::RestrictedBinary(body) => Ok(RequestBodySchema::RestrictedBinary {
-                allowed_mime_types: body.allowed_mime_types,
-            }),
-
-            Kind::UnrestrictedText(_) => Ok(RequestBodySchema::UnrestrictedText),
-
-            Kind::RestrictedText(body) => Ok(RequestBodySchema::RestrictedText {
-                allowed_language_codes: body.allowed_language_codes,
+            Kind::TextBody(body) => Ok(RequestBodySchema::TextBody {
+                expected: body.expected.ok_or("TextBody.expected missing")?.try_into()?,
             }),
         }
     }
@@ -575,40 +659,26 @@ impl From<RequestBodySchema> for proto::golem::customapi::RequestBodySchema {
                 )),
             },
 
-            RequestBodySchema::JsonBody { expected_type } => Self {
+            RequestBodySchema::JsonBody { expected } => Self {
                 kind: Some(Kind::JsonBody(
                     proto::golem::customapi::request_body_schema::JsonBody {
-                        expected_type: Some((&expected_type).into()),
+                        expected: Some(expected.into()),
                     },
                 )),
             },
 
-            RequestBodySchema::UnrestrictedBinary => Self {
-                kind: Some(Kind::UnrestrictedBinary(
-                    proto::golem::customapi::request_body_schema::UnrestrictedBinary {},
-                )),
-            },
-
-            RequestBodySchema::RestrictedBinary { allowed_mime_types } => Self {
-                kind: Some(Kind::RestrictedBinary(
-                    proto::golem::customapi::request_body_schema::RestrictedBinary {
-                        allowed_mime_types,
+            RequestBodySchema::BinaryBody { expected } => Self {
+                kind: Some(Kind::BinaryBody(
+                    proto::golem::customapi::request_body_schema::BinaryBody {
+                        expected: Some(expected.into()),
                     },
                 )),
             },
 
-            RequestBodySchema::UnrestrictedText => Self {
-                kind: Some(Kind::UnrestrictedText(
-                    proto::golem::customapi::request_body_schema::UnrestrictedText {},
-                )),
-            },
-
-            RequestBodySchema::RestrictedText {
-                allowed_language_codes,
-            } => Self {
-                kind: Some(Kind::RestrictedText(
-                    proto::golem::customapi::request_body_schema::RestrictedText {
-                        allowed_language_codes,
+            RequestBodySchema::TextBody { expected } => Self {
+                kind: Some(Kind::TextBody(
+                    proto::golem::customapi::request_body_schema::TextBody {
+                        expected: Some(expected.into()),
                     },
                 )),
             },

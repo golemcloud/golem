@@ -19,7 +19,8 @@ use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod, ReadOnlyConfig};
+use golem_common::model::agent::{AgentTypeName, HttpMethod, ReadOnlyConfig};
+use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -189,15 +190,47 @@ impl TryFrom<AnalysedType> for QueryOrHeaderType {
     }
 }
 
+/// A self-contained schema carrier persisted in a compiled route.
+///
+/// `graph.root` is the exact root being parsed/rendered/invoked and `graph.defs`
+/// carry the per-agent named-type definitions, so any `SchemaType::Ref` inside
+/// `root` resolves at runtime without an `AgentTypeSchema` lookup (the worker
+/// custom-API runtime has no access to the agent type after deployment).
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledSchema {
+    pub graph: SchemaGraph,
+}
+
+/// Self-contained constructor/method input schema persisted in a compiled route.
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledInputSchema {
+    pub graph: SchemaGraph,
+    pub input_schema: InputSchema,
+}
+
+/// Self-contained method output schema persisted in a compiled route.
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledOutputSchema {
+    pub graph: SchemaGraph,
+    pub output_schema: OutputSchema,
+}
+
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RequestBodySchema {
     Unused,
-    JsonBody { expected_type: AnalysedType },
-    UnrestrictedBinary,
-    RestrictedBinary { allowed_mime_types: Vec<String> },
-    UnrestrictedText,
-    RestrictedText { allowed_language_codes: Vec<String> },
+    /// JSON request body whose `expected.graph.root` is the record of the
+    /// remaining (non-path/query/header) input fields.
+    JsonBody { expected: CompiledSchema },
+    /// Raw binary request body; `expected.graph.root` resolves to
+    /// `SchemaType::Binary` (its restrictions carry the allowed MIME types).
+    BinaryBody { expected: CompiledSchema },
+    /// Raw text request body; `expected.graph.root` resolves to
+    /// `SchemaType::Text` (its restrictions carry the allowed languages).
+    TextBody { expected: CompiledSchema },
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -268,11 +301,20 @@ pub struct CallAgentBehaviour {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
+    /// Self-contained schema of the agent constructor input. Used by the runtime
+    /// to build the `TypedSchemaValue` for the agent id from the constructor
+    /// parameters.
+    pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
     pub phantom: bool,
     pub method_name: String,
+    /// Self-contained schema of the agent method input. Used by the runtime to
+    /// reconstruct the full positional `SchemaValue::Record` from the bound
+    /// HTTP method parameters, injecting auto-injected fields in declaration
+    /// order.
+    pub method_input: CompiledInputSchema,
     pub method_parameters: Vec<MethodParameter>,
-    pub expected_agent_response: DataSchema,
+    pub expected_agent_response: CompiledOutputSchema,
     #[desert(default)]
     pub method_description: Option<String>,
     /// The read-only configuration carried over from the `AgentMethod` this route

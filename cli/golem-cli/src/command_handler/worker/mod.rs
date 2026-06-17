@@ -65,7 +65,6 @@ use golem_client::model::{
 use golem_common::model::agent::{
     AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
     ElementSchema, ElementValues, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
-    UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -78,7 +77,12 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::{data_schema_to_input_schema, schema_agent_type_to_legacy};
+use golem_common::schema::adapters::{
+    data_schema_to_input_schema, input_schema_to_data_schema, json_data_value_to_legacy_data_value,
+    legacy_data_value_to_typed_schema_value, schema_agent_type_to_legacy,
+};
+use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::graph::TypedSchemaValue;
 use golem_wasm::analysis::AnalysedType;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -607,7 +611,7 @@ impl WorkerCommandHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let parameters: UntypedJsonDataValue = serde_json::from_str(&parameters)
+        let parameters: serde_json::Value = serde_json::from_str(&parameters)
             .with_context(|| "Failed to deserialize agent parameters".to_string())?;
 
         let Some(agent_type) = self
@@ -619,13 +623,20 @@ impl WorkerCommandHandler {
             bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        let typed_parameters = DataValue::try_from_untyped_json(
-            parameters,
-            agent_type.agent_type.constructor.input_schema.clone(),
+        // The Bridge SDK REPL still sends constructor parameters in the legacy
+        // `UntypedDataValue` JSON shape, so lift them through the legacy carrier
+        // before pairing them with the schema-native constructor input schema.
+        let data_schema = input_schema_to_data_schema(
+            &agent_type.agent_type.schema,
+            &agent_type.agent_type.constructor.input_schema,
         )
-        .map_err(|err| {
-            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
-        })?;
+        .map_err(|err| anyhow!("Failed to interpret agent constructor schema: {err}"))?;
+        let data_value =
+            json_data_value_to_legacy_data_value(parameters, &data_schema).map_err(|err| {
+                anyhow!("Failed to match agent type parameters to the current metadata: {err}")
+            })?;
+        let typed_parameters = legacy_data_value_to_typed_schema_value(&data_value)
+            .map_err(|err| anyhow!("Failed to adapt agent ID parameters: {err}"))?;
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
 
@@ -3108,14 +3119,13 @@ fn split_agent_name(agent_name: &str) -> Vec<&str> {
 }
 
 fn build_repl_agent_id(
-    agent_type: &AgentType,
-    typed_parameters: DataValue,
+    agent_type: &AgentTypeSchema,
+    typed_parameters: TypedSchemaValue,
     phantom_id: Option<Uuid>,
 ) -> anyhow::Result<ParsedAgentId> {
     ParsedAgentId::new_auto_phantom(
         agent_type.type_name.clone(),
-        golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(&typed_parameters)
-            .map_err(|e| anyhow!("Failed to adapt agent ID parameters: {e}"))?,
+        typed_parameters,
         phantom_id,
         agent_type.mode,
     )
@@ -3231,6 +3241,15 @@ mod tests {
         golem_common::model::agent::DataValue::Tuple(ElementValues { elements: vec![] })
     }
 
+    fn test_agent_type_schema(mode: AgentMode) -> golem_common::schema::agent::AgentTypeSchema {
+        golem_common::schema::adapters::agent_type_to_schema(&test_agent_type(mode)).unwrap()
+    }
+
+    fn empty_typed_parameters() -> golem_common::schema::graph::TypedSchemaValue {
+        golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(&empty_tuple())
+            .unwrap()
+    }
+
     #[test]
     fn test_split_agent_name() {
         assert_eq!(split_agent_name("a"), vec!["a"]);
@@ -3248,17 +3267,24 @@ mod tests {
 
     #[test]
     fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id =
-            build_repl_agent_id(&test_agent_type(AgentMode::Ephemeral), empty_tuple(), None)
-                .unwrap();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            None,
+        )
+        .unwrap();
 
         assert!(agent_id.phantom_id.is_some());
     }
 
     #[test]
     fn repl_agent_id_keeps_durable_agents_non_phantom() {
-        let agent_id =
-            build_repl_agent_id(&test_agent_type(AgentMode::Durable), empty_tuple(), None).unwrap();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Durable),
+            empty_typed_parameters(),
+            None,
+        )
+        .unwrap();
 
         assert!(agent_id.phantom_id.is_none());
     }
@@ -3267,8 +3293,8 @@ mod tests {
     fn repl_agent_id_preserves_explicit_phantom_id() {
         let explicit_phantom_id = Uuid::new_v4();
         let agent_id = build_repl_agent_id(
-            &test_agent_type(AgentMode::Ephemeral),
-            empty_tuple(),
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
             Some(explicit_phantom_id),
         )
         .unwrap();

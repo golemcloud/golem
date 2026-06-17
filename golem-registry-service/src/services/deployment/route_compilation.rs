@@ -22,8 +22,7 @@ use crate::model::api_definition::{
 };
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentMethod, AgentMode, AgentType, AgentTypeName, CachePolicy, DataSchema, ElementSchema,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, NamedElementSchemas,
+    AgentMode, AgentTypeName, CachePolicy, HttpEndpointDetails, HttpMethod, HttpMountDetails,
     RegisteredAgentTypeImplementer, SystemVariable,
 };
 use golem_common::model::deployment::{
@@ -34,24 +33,74 @@ use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
 };
+use golem_common::schema::adapters::is_multimodal_schema_type;
+use golem_common::schema::{
+    AgentMethodSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, NamedFieldType,
+    OutputSchema, SchemaGraph, SchemaType,
+};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
+    ConstructorParameter, CorsOptions, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment,
+    RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
 
+/// Build a self-contained [`SchemaGraph`] whose `root` is `root` and whose
+/// `defs` are the agent's shared named-type definitions, so any
+/// [`SchemaType::Ref`] inside `root` resolves at runtime without an
+/// `AgentTypeSchema` lookup.
+fn graph_with_agent_defs(agent: &AgentTypeSchema, root: SchemaType) -> SchemaGraph {
+    SchemaGraph {
+        defs: agent.schema.defs.clone(),
+        root,
+    }
+}
+
+/// The record root describing the full positional input of a constructor or
+/// method, including auto-injected fields (so the runtime can reconstruct the
+/// complete `SchemaValue::Record` in declaration order).
+fn input_record_root(input: &InputSchema) -> SchemaType {
+    let fields = input
+        .fields()
+        .iter()
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    SchemaType::record(fields)
+}
+
+fn compiled_input(agent: &AgentTypeSchema, input: &InputSchema) -> CompiledInputSchema {
+    CompiledInputSchema {
+        graph: graph_with_agent_defs(agent, input_record_root(input)),
+        input_schema: input.clone(),
+    }
+}
+
+fn compiled_output(agent: &AgentTypeSchema, output: &OutputSchema) -> CompiledOutputSchema {
+    let root = match output {
+        OutputSchema::Unit => SchemaType::record(Vec::new()),
+        OutputSchema::Single(ty) => (**ty).clone(),
+    };
+    CompiledOutputSchema {
+        graph: graph_with_agent_defs(agent, root),
+        output_schema: output.clone(),
+    }
+}
+
 pub fn add_agent_method_http_routes(
     environment: &Environment,
     deployment: &HttpApiDeployment,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     implementer: &RegisteredAgentTypeImplementer,
     http_mount: &HttpMountDetails,
-    agent_methods: &[AgentMethod],
+    agent_methods: &[AgentMethodSchema],
     constructor_parameters: Vec<ConstructorParameter>,
     deployment_agent_options: &HttpApiDeploymentAgentOptions,
     current_route_id: &mut i32,
@@ -59,6 +108,8 @@ pub fn add_agent_method_http_routes(
     errors: &mut Vec<DeployValidationError>,
     warnings: &mut Vec<DeployValidationWarning>,
 ) {
+    let constructor_input = compiled_input(agent, &agent.constructor.input_schema);
+
     for agent_method in agent_methods {
         collect_read_only_warnings(implementer, agent, http_mount, agent_method, warnings);
 
@@ -103,6 +154,7 @@ pub fn add_agent_method_http_routes(
 
             ok_or_continue!(
                 validate_http_method_agent_response_type(
+                    &agent.schema,
                     &agent_method.output_schema,
                     &make_route_validation_error
                 ),
@@ -113,6 +165,7 @@ pub fn add_agent_method_http_routes(
                 build_http_agent_method_parameters(
                     http_mount,
                     http_endpoint,
+                    &agent.schema,
                     &agent_method.input_schema,
                     &make_route_validation_error
                 ),
@@ -149,9 +202,11 @@ pub fn add_agent_method_http_routes(
                     agent_type: agent.type_name.clone(),
                     method_name: agent_method.name.clone(),
                     phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
+                    constructor_input: constructor_input.clone(),
                     constructor_parameters: constructor_parameters.clone(),
+                    method_input: compiled_input(agent, &agent_method.input_schema),
                     method_parameters,
-                    expected_agent_response: agent_method.output_schema.clone(),
+                    expected_agent_response: compiled_output(agent, &agent_method.output_schema),
                     method_description: Some(agent_method.description.clone()),
                     read_only: agent_method.read_only.clone(),
                 }),
@@ -172,9 +227,9 @@ pub fn add_agent_method_http_routes(
 ///   seconds (`max-age=0` would force revalidation every time).
 fn collect_read_only_warnings(
     implementer: &RegisteredAgentTypeImplementer,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     http_mount: &HttpMountDetails,
-    agent_method: &AgentMethod,
+    agent_method: &AgentMethodSchema,
     warnings: &mut Vec<DeployValidationWarning>,
 ) {
     let Some(read_only) = agent_method.read_only.as_ref() else {
@@ -370,7 +425,11 @@ pub fn add_webhook_callback_routes(
             domain: deployment.domain.clone(),
             method: HttpMethod::Post(Empty {}),
             path: typed_segments,
-            body: RequestBodySchema::UnrestrictedBinary,
+            body: RequestBodySchema::BinaryBody {
+                expected: CompiledSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
+                },
+            },
             behaviour: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: agent_type.implemented_by.component_id,
             }),
@@ -420,7 +479,7 @@ pub fn add_openapi_spec_routes(
 
 pub fn build_agent_http_api_deployment_details(
     agent_type_name: &AgentTypeName,
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     implementer: &RegisteredAgentTypeImplementer,
     http_api_deployments: &BTreeMap<Domain, HttpApiDeployment>,
 ) -> Result<Option<(Domain, Vec<String>)>, DeployValidationError> {
@@ -485,41 +544,24 @@ pub fn build_agent_http_api_deployment_details(
 }
 
 fn validate_http_method_agent_response_type(
-    schema: &DataSchema,
+    graph: &SchemaGraph,
+    schema: &OutputSchema,
     make_error: &impl Fn(String) -> DeployValidationError,
 ) -> Result<(), DeployValidationError> {
     match schema {
-        DataSchema::Multimodal(_) => Err(make_error(
-            "Multimodal responses are not supported in http apis".into(),
-        )),
-        DataSchema::Tuple(NamedElementSchemas { elements }) => {
-            match elements.len() {
-                0 => {
-                    // no-content response
-                    Ok(())
-                }
-                1 => {
-                    let element = elements.iter().next().unwrap();
-                    match element.schema {
-                        ElementSchema::ComponentModel(_) => {
-                            // Json body response
-                            Ok(())
-                        }
-
-                        ElementSchema::UnstructuredBinary(_) => {
-                            // Full body taken from agent response
-                            Ok(())
-                        }
-
-                        ElementSchema::UnstructuredText(_) => {
-                            // Full body taken from agent response
-                            Ok(())
-                        }
-                    }
-                }
-                n => Err(make_error(format!(
-                    "Agent method should have 0 or 1 return values, found {n}"
-                ))),
+        // no-content response
+        OutputSchema::Unit => Ok(()),
+        OutputSchema::Single(ty) => {
+            let multimodal = is_multimodal_schema_type(graph, ty)
+                .map_err(|e| make_error(format!("Invalid output schema: {e}")))?;
+            if multimodal {
+                Err(make_error(
+                    "Multimodal responses are not supported in http apis".into(),
+                ))
+            } else {
+                // Json body response, or a full body taken from the agent
+                // response (text/binary) — all handled by the runtime.
+                Ok(())
             }
         }
     }
@@ -529,8 +571,8 @@ fn make_invalid_agent_route_error_maker(
     deployment: &HttpApiDeployment,
     http_mount: &HttpMountDetails,
     http_endpoint: &HttpEndpointDetails,
-    agent: &AgentType,
-    agent_method: &AgentMethod,
+    agent: &AgentTypeSchema,
+    agent_method: &AgentMethodSchema,
 ) -> impl Fn(String) -> DeployValidationError {
     let rendered_method = render_http_method(&http_endpoint.http_method);
 
@@ -554,7 +596,7 @@ fn make_invalid_agent_route_error_maker(
 pub fn make_invalid_agent_mount_error_maker(
     deployment: &HttpApiDeployment,
     http_mount: &HttpMountDetails,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
 ) -> impl Fn(String) -> DeployValidationError {
     let rendered_path: String = render_agent_http_path(http_mount.path_prefix.iter());
     move |msg: String| DeployValidationError::HttpApiDeploymentAgentConstructorInvalid {
@@ -605,7 +647,7 @@ fn render_agent_http_path<'a>(
 }
 
 fn compile_agent_path_segment(
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     implementer: &RegisteredAgentTypeImplementer,
     path_segment: &golem_common::model::agent::PathSegment,
 ) -> PathSegment {
@@ -644,7 +686,7 @@ fn parse_literal_only_path_segments(input: &str) -> Vec<PathSegment> {
 fn resolve_route_security(
     environment: &Environment,
     deployment_agent_options: &HttpApiDeploymentAgentOptions,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     http_mount: &HttpMountDetails,
     http_endpoint: &HttpEndpointDetails,
 ) -> Result<UnboundRouteSecurity, DeployValidationError> {
@@ -720,8 +762,10 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, CorsOptions as AgentCorsOptions,
-        HttpMountDetails, LiteralSegment, Snapshotting,
+        AgentMode, CorsOptions as AgentCorsOptions, HttpMountDetails, LiteralSegment, Snapshotting,
+    };
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -736,6 +780,20 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
     use uuid::Uuid;
+
+    fn empty_compiled_input() -> CompiledInputSchema {
+        CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            input_schema: InputSchema::Parameters(vec![]),
+        }
+    }
+
+    fn empty_compiled_output() -> CompiledOutputSchema {
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            output_schema: OutputSchema::Unit,
+        }
+    }
 
     fn test_environment(environment_id: EnvironmentId) -> Environment {
         Environment {
@@ -754,23 +812,24 @@ mod tests {
         }
     }
 
-    fn test_agent(mode: AgentMode, phantom_agent: bool) -> AgentType {
-        AgentType {
+    fn test_agent(mode: AgentMode, phantom_agent: bool) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName("note-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            methods: vec![AgentMethod {
+            methods: vec![AgentMethodSchema {
                 name: "fetch".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![HttpEndpointDetails {
                     http_method: HttpMethod::Get(Empty {}),
                     path_suffix: vec![],
@@ -999,9 +1058,11 @@ mod tests {
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
                     agent_type: AgentTypeName("note-agent".to_string()),
+                    constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
                     phantom: false,
                     method_name: "list".to_string(),
+                    method_input: empty_compiled_input(),
                     method_parameters: vec![MethodParameter::Header {
                         header_name: "X-List-Token".to_string(),
                         parameter_type:
@@ -1009,7 +1070,7 @@ mod tests {
                                 golem_service_base::custom_api::PathSegmentType::Str,
                             ),
                     }],
-                    expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
+                    expected_agent_response: empty_compiled_output(),
                     method_description: None,
                     read_only: None,
                 }),
@@ -1024,18 +1085,22 @@ mod tests {
                 method: HttpMethod::Post(Empty {}),
                 path: path.clone(),
                 body: RequestBodySchema::JsonBody {
-                    expected_type: golem_wasm::analysis::analysed_type::str(),
+                    expected: CompiledSchema {
+                        graph: SchemaGraph::anonymous(SchemaType::string()),
+                    },
                 },
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
                     agent_type: AgentTypeName("note-agent".to_string()),
+                    constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
                     phantom: false,
                     method_name: "add".to_string(),
+                    method_input: empty_compiled_input(),
                     method_parameters: vec![],
-                    expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
+                    expected_agent_response: empty_compiled_output(),
                     method_description: None,
                     read_only: None,
                 }),
@@ -1104,7 +1169,7 @@ mod tests {
         assert!(compiled_phantom_flag(AgentMode::Durable, true));
     }
 
-    fn run_route_compilation_for_warnings(agent: AgentType) -> Vec<DeployValidationWarning> {
+    fn run_route_compilation_for_warnings(agent: AgentTypeSchema) -> Vec<DeployValidationWarning> {
         let environment_id = EnvironmentId(Uuid::new_v4());
         let environment = test_environment(environment_id);
         let deployment = test_deployment(environment_id);

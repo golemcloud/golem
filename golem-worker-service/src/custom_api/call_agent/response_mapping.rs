@@ -14,103 +14,106 @@
 
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::{ResponseBody, RouteExecutionResult};
-use golem_common::model::agent::{
-    BinaryReference, ComponentModelElementValue, DataSchema, DataValue, ElementValue,
-    ElementValues, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+use golem_common::model::agent::{BinarySource, BinaryType, TextSource, TextType};
+use golem_common::schema::adapters::{
+    is_multimodal_schema_type, resolve_ref, schema_type_to_analysed_type, schema_value_to_value,
 };
-use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::schema_output_value_to_legacy_data_value;
+use golem_common::schema::{BinaryValuePayload, SchemaType, SchemaValue, TextValuePayload};
+use golem_service_base::custom_api::CompiledOutputSchema;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use http::StatusCode;
 use std::collections::HashMap;
-use tracing::debug;
 
 pub fn interpret_agent_response(
     invoke_result: Option<SchemaValue>,
-    expected_type: &DataSchema,
+    expected: &CompiledOutputSchema,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     match invoke_result {
-        Some(schema_value) => {
-            let mapped_response = map_successful_agent_response(schema_value, expected_type)?;
-            Ok(mapped_response)
-        }
-        None => Ok(RouteExecutionResult {
-            status: StatusCode::NO_CONTENT,
-            headers: HashMap::new(),
-            body: ResponseBody::NoBody,
-        }),
+        Some(schema_value) => map_successful_agent_response(schema_value, expected),
+        None => Ok(no_content()),
+    }
+}
+
+fn no_content() -> RouteExecutionResult {
+    RouteExecutionResult {
+        status: StatusCode::NO_CONTENT,
+        headers: HashMap::new(),
+        body: ResponseBody::NoBody,
     }
 }
 
 fn map_successful_agent_response(
     agent_response: SchemaValue,
-    expected_type: &DataSchema,
+    expected: &CompiledOutputSchema,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    let typed_value = schema_output_value_to_legacy_data_value(agent_response, expected_type)
-        .map_err(|error| RequestHandlerError::AgentResponseTypeMismatch {
-            error: error.to_string(),
-        })?;
+    let graph = &expected.graph;
 
-    debug!("Received successful agent response: {typed_value:?}");
+    // A unit output produces no body.
+    let Some(output_type) = expected.output_schema.schema() else {
+        return Ok(no_content());
+    };
 
-    match typed_value {
-        DataValue::Tuple(ElementValues { elements }) => match elements.len() {
-            0 => Ok(RouteExecutionResult {
-                status: StatusCode::NO_CONTENT,
+    if is_multimodal_schema_type(graph, output_type).map_err(map_schema_error)? {
+        return Err(RequestHandlerError::invariant_violated(
+            "Unexpected multimodal response",
+        ));
+    }
+
+    let resolved = resolve_ref(graph, output_type).map_err(map_schema_error)?;
+
+    match resolved {
+        SchemaType::Text { .. } => match agent_response {
+            SchemaValue::Text(TextValuePayload { text, language }) => Ok(RouteExecutionResult {
+                status: StatusCode::OK,
                 headers: HashMap::new(),
-                body: ResponseBody::NoBody,
+                body: ResponseBody::UnstructuredTextBody {
+                    body: TextSource {
+                        data: text,
+                        text_type: language.map(|language_code| TextType { language_code }),
+                    },
+                },
             }),
-            1 => map_single_element_agent_response(elements.into_iter().next().unwrap()),
             _ => Err(RequestHandlerError::invariant_violated(
-                "Unexpected number of response tuple elements",
+                "Expected text response value for text output schema",
             )),
         },
-        DataValue::Multimodal(_) => Err(RequestHandlerError::invariant_violated(
-            "Unexpected multimodal response",
-        )),
+
+        SchemaType::Binary { .. } => match agent_response {
+            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
+                Ok(RouteExecutionResult {
+                    status: StatusCode::OK,
+                    headers: HashMap::new(),
+                    body: ResponseBody::UnstructuredBinaryBody {
+                        body: BinarySource {
+                            data: bytes,
+                            binary_type: BinaryType {
+                                mime_type: mime_type
+                                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+                            },
+                        },
+                    },
+                })
+            }
+            _ => Err(RequestHandlerError::invariant_violated(
+                "Expected binary response value for binary output schema",
+            )),
+        },
+
+        _ => {
+            let value = schema_value_to_value(graph, output_type, &agent_response)
+                .map_err(map_schema_error)?;
+            let typ = schema_type_to_analysed_type(graph, output_type).map_err(map_schema_error)?;
+            map_component_model_agent_response(ValueAndType { value, typ })
+        }
     }
 }
 
-fn map_single_element_agent_response(
-    element: ElementValue,
-) -> Result<RouteExecutionResult, RequestHandlerError> {
-    match element {
-        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-            map_component_model_agent_response(value)
-        }
-
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-            value: BinaryReference::Inline(binary),
-            ..
-        }) => Ok(RouteExecutionResult {
-            status: StatusCode::OK,
-            headers: HashMap::new(),
-            body: ResponseBody::UnstructuredBinaryBody { body: binary },
-        }),
-
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-            value: BinaryReference::Url(_),
-            ..
-        }) => Err(RequestHandlerError::invariant_violated(
-            "Unexpected unstructured binary URL response",
-        )),
-
-        ElementValue::UnstructuredText(UnstructuredTextElementValue {
-            value: TextReference::Inline(text),
-            ..
-        }) => Ok(RouteExecutionResult {
-            status: StatusCode::OK,
-            headers: HashMap::new(),
-            body: ResponseBody::UnstructuredTextBody { body: text },
-        }),
-
-        ElementValue::UnstructuredText(UnstructuredTextElementValue {
-            value: TextReference::Url(_),
-            ..
-        }) => Err(RequestHandlerError::invariant_violated(
-            "Unexpected unstructured text URL response",
-        )),
+fn map_schema_error(
+    error: golem_common::schema::adapters::SchemaAdapterError,
+) -> RequestHandlerError {
+    RequestHandlerError::AgentResponseTypeMismatch {
+        error: error.to_string(),
     }
 }
 
@@ -225,34 +228,37 @@ fn json_response_body(value: golem_wasm::Value, typ: AnalysedType) -> ResponseBo
 mod tests {
     use super::*;
     use assert2::let_assert;
-    use golem_common::model::agent::{
-        BinaryDescriptor, BinaryType, ElementSchema, NamedElementSchema, NamedElementSchemas,
-        TextDescriptor, TextType, Url,
-    };
-    use golem_common::schema::{BinaryValuePayload, TextValuePayload};
+    use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
+    use golem_common::schema::{BinaryValuePayload, OutputSchema, TextValuePayload};
     use test_r::test;
 
-    fn text_schema(restrictions: Option<Vec<TextType>>) -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "body".into(),
-                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions }),
-            }],
-        })
+    fn text_output() -> CompiledOutputSchema {
+        let ty = SchemaType::text(TextRestrictions::default());
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(ty.clone()),
+            output_schema: OutputSchema::Single(Box::new(ty)),
+        }
     }
 
-    fn binary_schema(restrictions: Option<Vec<BinaryType>>) -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "body".into(),
-                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions }),
-            }],
-        })
+    fn binary_output() -> CompiledOutputSchema {
+        let ty = SchemaType::binary(BinaryRestrictions::default());
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(ty.clone()),
+            output_schema: OutputSchema::Single(Box::new(ty)),
+        }
+    }
+
+    fn unit_output() -> CompiledOutputSchema {
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            output_schema: OutputSchema::Unit,
+        }
     }
 
     #[test]
     fn inline_text_response_returns_200_with_unstructured_text_body() {
-        let schema = text_schema(None);
+        let schema = text_output();
         let invoke_result = Some(SchemaValue::Text(TextValuePayload {
             text: "hello".to_string(),
             language: Some("en".to_string()),
@@ -269,7 +275,7 @@ mod tests {
 
     #[test]
     fn inline_text_response_without_language_returns_200() {
-        let schema = text_schema(None);
+        let schema = text_output();
         let invoke_result = Some(SchemaValue::Text(TextValuePayload {
             text: "hi".to_string(),
             language: None,
@@ -283,28 +289,9 @@ mod tests {
         assert!(body.text_type.is_none());
     }
 
-    // A bare `SchemaValue` (the executor's output carrier) cannot represent a
-    // URL text/binary reference, so the URL-reference invariant can only be
-    // exercised by feeding the legacy `ElementValue` directly into the
-    // defensive mapping branch.
-    #[test]
-    fn url_text_response_is_invariant_violation() {
-        let element = ElementValue::UnstructuredText(UnstructuredTextElementValue {
-            value: TextReference::Url(Url {
-                value: "https://example.com/text".into(),
-            }),
-            descriptor: TextDescriptor { restrictions: None },
-        });
-
-        let err = map_single_element_agent_response(element).unwrap_err();
-
-        let_assert!(RequestHandlerError::InvariantViolated { msg } = err);
-        assert!(msg.contains("text"));
-    }
-
     #[test]
     fn inline_binary_response_returns_200_with_unstructured_binary_body() {
-        let schema = binary_schema(None);
+        let schema = binary_output();
         let invoke_result = Some(SchemaValue::Binary(BinaryValuePayload {
             bytes: vec![0x01, 0x02, 0x03],
             mime_type: Some("application/octet-stream".into()),
@@ -319,24 +306,16 @@ mod tests {
     }
 
     #[test]
-    fn url_binary_response_is_invariant_violation() {
-        let element = ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-            value: BinaryReference::Url(Url {
-                value: "https://example.com/blob".into(),
-            }),
-            descriptor: BinaryDescriptor { restrictions: None },
-        });
-
-        let err = map_single_element_agent_response(element).unwrap_err();
-
-        let_assert!(RequestHandlerError::InvariantViolated { msg } = err);
-        assert!(msg.contains("binary"));
+    fn no_response_returns_204() {
+        let result = interpret_agent_response(None, &unit_output()).unwrap();
+        assert_eq!(result.status, StatusCode::NO_CONTENT);
+        let_assert!(ResponseBody::NoBody = result.body);
     }
 
     #[test]
-    fn no_response_returns_204() {
-        let schema = text_schema(None);
-        let result = interpret_agent_response(None, &schema).unwrap();
+    fn unit_output_with_value_returns_204() {
+        let invoke_result = Some(SchemaValue::Record { fields: vec![] });
+        let result = interpret_agent_response(invoke_result, &unit_output()).unwrap();
         assert_eq!(result.status, StatusCode::NO_CONTENT);
         let_assert!(ResponseBody::NoBody = result.body);
     }

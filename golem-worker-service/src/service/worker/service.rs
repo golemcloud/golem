@@ -45,9 +45,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
-use golem_common::schema::adapters::{
-    json_schema_value_to_input_value, json_schema_value_to_typed_schema_value,
-};
+use golem_common::schema::adapters::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::{SchemaType, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
@@ -880,8 +878,9 @@ impl WorkerService {
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
 
-        let constructor_parameters = json_schema_value_to_typed_schema_value(
+        let constructor_parameters = json_input_schema_value_to_typed_schema_value(
             request.parameters,
+            &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
         .map_err(|err| {
@@ -976,8 +975,9 @@ impl WorkerService {
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
 
-        let constructor_parameters = json_schema_value_to_typed_schema_value(
+        let constructor_parameters = json_input_schema_value_to_typed_schema_value(
             request.parameters,
+            &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
         .map_err(|err| {
@@ -1010,13 +1010,16 @@ impl WorkerService {
                 ))
             })?;
 
-        let method_parameters =
-            json_schema_value_to_input_value(request.method_parameters, &method.input_schema)
-                .map_err(|err| {
-                    WorkerServiceError::TypeChecker(format!(
-                        "Agent method parameters type error: {err}"
-                    ))
-                })?;
+        let method_parameters = json_input_schema_value_to_typed_schema_value(
+            request.method_parameters,
+            &agent_type.schema,
+            &method.input_schema,
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!("Agent method parameters type error: {err}"))
+        })?
+        .into_parts()
+        .1;
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
             method_parameters.into();
@@ -1143,9 +1146,12 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
-        HttpEndpointDetails, NamedElementSchemas, RegisteredAgentType,
+        AgentMode, AgentTypeName, HttpEndpointDetails, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+    };
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        SchemaGraph,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::AgentVerb;
@@ -1159,7 +1165,6 @@ mod tests {
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
-    use golem_common::schema::adapters::agent::agent_type_to_schema;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
@@ -1778,23 +1783,24 @@ mod tests {
         }
     }
 
-    fn test_agent_type(agent_type_name: AgentTypeName, mode: AgentMode) -> AgentType {
-        AgentType {
+    fn test_agent_type(agent_type_name: AgentTypeName, mode: AgentMode) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: agent_type_name,
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            methods: vec![AgentMethod {
+            methods: vec![AgentMethodSchema {
                 name: "run".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![HttpEndpointDetails {
                     http_method: golem_common::model::agent::HttpMethod::Get(Empty {}),
                     path_suffix: vec![],
@@ -1820,7 +1826,7 @@ mod tests {
         environment_id: EnvironmentId,
         account_id: AccountId,
         component_revision: ComponentRevision,
-        agent_type: AgentType,
+        agent_type: AgentTypeSchema,
     ) -> Component {
         Component {
             id: component_id,
@@ -1839,7 +1845,7 @@ mod tests {
                 vec![],
                 None,
                 None,
-                vec![agent_type_to_schema(&agent_type).unwrap()],
+                vec![agent_type],
                 BTreeMap::new(),
             ),
             created_at: Utc::now(),
@@ -1849,7 +1855,10 @@ mod tests {
     }
 
     fn empty_json_tuple() -> serde_json::Value {
-        serde_json::json!({ "type": "Tuple", "elements": [] })
+        // Schema-native `SchemaValue::Record { fields: [] }` (adjacently tagged
+        // `kind`/`value`), i.e. the empty parameter record the REST invoke path
+        // now expects.
+        serde_json::json!({ "kind": "record", "value": { "fields": [] } })
     }
 
     fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {

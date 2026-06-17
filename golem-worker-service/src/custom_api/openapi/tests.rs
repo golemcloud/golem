@@ -17,17 +17,18 @@
 
 use super::HttpApiOpenApiSpec;
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
-use golem_common::base_model::agent::{
-    BinaryDescriptor, BinaryType, ComponentModelElementSchema, DataSchema, ElementSchema,
-    NamedElementSchema, NamedElementSchemas, TextDescriptor, TextType,
-};
+use golem_common::base_model::agent::{BinaryType, TextType};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::schema::adapters::analysed_type_to_schema_graph;
+use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
+use golem_common::schema::{InputSchema, OutputSchema, Role, SchemaGraph, SchemaType};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
+    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema, CorsOptions,
+    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment, PathSegmentType,
+    QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
 };
 use golem_service_base::model::SafeIndex;
 use golem_wasm::analysis::AnalysedType;
@@ -44,40 +45,104 @@ fn agent_type_name(name: &str) -> golem_common::model::agent::AgentTypeName {
     golem_common::model::agent::AgentTypeName(name.to_string())
 }
 
-/// A single-element tuple response carrying a component-model type.
-fn cm_response(ty: AnalysedType) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "body".to_string(),
-            schema: ElementSchema::ComponentModel(ComponentModelElementSchema { element_type: ty }),
-        }],
-    })
+/// A single response carrying a component-model type. Named composites become
+/// `defs` + a `Ref` root, so the emitter renders them via `$ref`.
+fn cm_response(ty: AnalysedType) -> CompiledOutputSchema {
+    let graph = analysed_type_to_schema_graph(&ty).expect("lower response type");
+    let root = graph.root.clone();
+    CompiledOutputSchema {
+        graph,
+        output_schema: OutputSchema::Single(Box::new(root)),
+    }
 }
 
-fn unit_response() -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas { elements: vec![] })
+fn unit_response() -> CompiledOutputSchema {
+    CompiledOutputSchema {
+        graph: SchemaGraph::empty(),
+        output_schema: OutputSchema::Unit,
+    }
 }
 
-fn text_response(restrictions: Option<Vec<TextType>>) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "body".to_string(),
-            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions }),
-        }],
-    })
+fn text_response(restrictions: Option<Vec<TextType>>) -> CompiledOutputSchema {
+    let languages = restrictions.map(|r| r.into_iter().map(|t| t.language_code).collect());
+    let ty = SchemaType::text(TextRestrictions {
+        languages,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
 }
 
-fn binary_response(restrictions: Option<Vec<BinaryType>>) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "body".to_string(),
-            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions }),
-        }],
-    })
+fn binary_response(restrictions: Option<Vec<BinaryType>>) -> CompiledOutputSchema {
+    let mime_types = restrictions.map(|r| r.into_iter().map(|t| t.mime_type).collect());
+    let ty = SchemaType::binary(BinaryRestrictions {
+        mime_types,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
 }
 
-fn multimodal_response() -> DataSchema {
-    DataSchema::Multimodal(NamedElementSchemas { elements: vec![] })
+/// The structural multimodal form `list<variant<… Role::Multimodal>>`, which
+/// the emitter renders as an opaque binary response.
+fn multimodal_response() -> CompiledOutputSchema {
+    let mut variant = SchemaType::variant(vec![]);
+    variant.metadata_mut().role = Some(Role::Multimodal);
+    let ty = SchemaType::list(variant);
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+fn json_body(ty: AnalysedType) -> RequestBodySchema {
+    RequestBodySchema::JsonBody {
+        expected: CompiledSchema {
+            graph: analysed_type_to_schema_graph(&ty).expect("lower request body type"),
+        },
+    }
+}
+
+fn unrestricted_binary() -> RequestBodySchema {
+    RequestBodySchema::BinaryBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
+        },
+    }
+}
+
+fn restricted_binary(mime_types: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::BinaryBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions {
+                mime_types: Some(mime_types),
+                ..Default::default()
+            })),
+        },
+    }
+}
+
+fn unrestricted_text() -> RequestBodySchema {
+    RequestBodySchema::TextBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions::default())),
+        },
+    }
+}
+
+fn restricted_text(languages: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::TextBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+                languages: Some(languages),
+                ..Default::default()
+            })),
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -86,7 +151,7 @@ fn call_agent_route(
     path: Vec<PathSegment>,
     body: RequestBodySchema,
     method_parameters: Vec<MethodParameter>,
-    response: DataSchema,
+    response: CompiledOutputSchema,
     method_description: Option<String>,
 ) -> RichCompiledRoute {
     RichCompiledRoute {
@@ -101,9 +166,17 @@ fn call_agent_route(
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),
+            constructor_input: CompiledInputSchema {
+                graph: SchemaGraph::empty(),
+                input_schema: InputSchema::Parameters(vec![]),
+            },
             constructor_parameters: vec![],
             phantom: false,
             method_name: "test_method".to_string(),
+            method_input: CompiledInputSchema {
+                graph: SchemaGraph::empty(),
+                input_schema: InputSchema::Parameters(vec![]),
+            },
             method_parameters,
             expected_agent_response: response,
             method_description,
@@ -394,9 +467,7 @@ fn json_request_body_renders_application_json() {
             vec![PathSegment::Literal {
                 value: "json".to_string(),
             }],
-            RequestBodySchema::JsonBody {
-                expected_type: record(vec![field("name", str())]),
-            },
+            json_body(record(vec![field("name", str())])),
             vec![],
             unit_response(),
             None,
@@ -421,7 +492,7 @@ fn unrestricted_text_body_adds_content_language_parameter() {
             vec![PathSegment::Literal {
                 value: "txtbody".to_string(),
             }],
-            RequestBodySchema::UnrestrictedText,
+            unrestricted_text(),
             vec![],
             unit_response(),
             None,
@@ -450,9 +521,7 @@ fn restricted_binary_body_lists_each_mime_type() {
             vec![PathSegment::Literal {
                 value: "binbody".to_string(),
             }],
-            RequestBodySchema::RestrictedBinary {
-                allowed_mime_types: vec!["image/gif".to_string()],
-            },
+            restricted_binary(vec!["image/gif".to_string()]),
             vec![],
             unit_response(),
             None,
@@ -644,7 +713,7 @@ fn webhook_route_emits_204_404_and_promise_id_param() {
                     display_name: "promise-id".to_string(),
                 },
             ],
-            RequestBodySchema::UnrestrictedBinary,
+            unrestricted_binary(),
             RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: ComponentId::new(),
             }),
@@ -706,9 +775,7 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         vec![PathSegment::Literal {
             value: "a".to_string(),
         }],
-        RequestBodySchema::JsonBody {
-            expected_type: named.clone(),
-        },
+        json_body(named.clone()),
         vec![],
         unit_response(),
         None,
@@ -764,9 +831,7 @@ fn restricted_text_body_content_language_lists_languages() {
             vec![PathSegment::Literal {
                 value: "rtxt".to_string(),
             }],
-            RequestBodySchema::RestrictedText {
-                allowed_language_codes: vec!["en".to_string(), "hu".to_string()],
-            },
+            restricted_text(vec!["en".to_string(), "hu".to_string()]),
             vec![],
             unit_response(),
             None,
@@ -795,7 +860,7 @@ fn unrestricted_binary_body_uses_wildcard_media_type() {
             vec![PathSegment::Literal {
                 value: "ubin".to_string(),
             }],
-            RequestBodySchema::UnrestrictedBinary,
+            unrestricted_binary(),
             vec![],
             unit_response(),
             None,

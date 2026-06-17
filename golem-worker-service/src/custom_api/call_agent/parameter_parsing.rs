@@ -13,32 +13,22 @@
 // limitations under the License.
 
 use crate::custom_api::error::RequestHandlerError;
+use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType};
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
 
+/// Parse a single HTTP path segment (or query/header scalar) into a
+/// schema-native [`SchemaValue`] according to its declared scalar type.
 pub fn parse_path_segment_value(
     value: String,
     r#type: &PathSegmentType,
-) -> Result<ValueAndType, RequestHandlerError> {
-    let component_value = parse_path_segment_value_to_component_model(value, r#type)?;
-    Ok(ValueAndType::new(
-        component_value,
-        AnalysedType::from(r#type),
-    ))
-}
-
-pub fn parse_path_segment_value_to_component_model(
-    value: String,
-    r#type: &PathSegmentType,
-) -> Result<golem_wasm::Value, RequestHandlerError> {
+) -> Result<SchemaValue, RequestHandlerError> {
     match r#type {
-        PathSegmentType::Str => Ok(golem_wasm::Value::String(value)),
+        PathSegmentType::Str => Ok(SchemaValue::String(value)),
 
         PathSegmentType::Chr => {
             let mut chars = value.chars();
             match (chars.next(), chars.next()) {
-                (Some(c), None) => Ok(golem_wasm::Value::Char(c)),
+                (Some(c), None) => Ok(SchemaValue::Char(c)),
                 _ => Err(RequestHandlerError::ValueParsingFailed {
                     value,
                     expected: "char",
@@ -46,116 +36,140 @@ pub fn parse_path_segment_value_to_component_model(
             }
         }
 
-        PathSegmentType::F64 => value
-            .parse::<f64>()
-            .map(golem_wasm::Value::F64)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "f64",
-            }),
+        PathSegmentType::F64 => {
+            value
+                .parse::<f64>()
+                .map(SchemaValue::F64)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "f64",
+                })
+        }
 
-        PathSegmentType::F32 => value
-            .parse::<f32>()
-            .map(golem_wasm::Value::F32)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "f32",
-            }),
+        PathSegmentType::F32 => {
+            value
+                .parse::<f32>()
+                .map(SchemaValue::F32)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "f32",
+                })
+        }
 
-        PathSegmentType::U64 => value
-            .parse::<u64>()
-            .map(golem_wasm::Value::U64)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "u64",
-            }),
+        PathSegmentType::U64 => {
+            value
+                .parse::<u64>()
+                .map(SchemaValue::U64)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "u64",
+                })
+        }
 
-        PathSegmentType::S64 => value
-            .parse::<i64>()
-            .map(golem_wasm::Value::S64)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "i64",
-            }),
+        PathSegmentType::S64 => {
+            value
+                .parse::<i64>()
+                .map(SchemaValue::S64)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "i64",
+                })
+        }
 
-        PathSegmentType::U32 => value
-            .parse::<u32>()
-            .map(golem_wasm::Value::U32)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "u32",
-            }),
+        PathSegmentType::U32 => {
+            value
+                .parse::<u32>()
+                .map(SchemaValue::U32)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "u32",
+                })
+        }
 
-        PathSegmentType::S32 => value
-            .parse::<i32>()
-            .map(golem_wasm::Value::S32)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "i32",
-            }),
+        PathSegmentType::S32 => {
+            value
+                .parse::<i32>()
+                .map(SchemaValue::S32)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "i32",
+                })
+        }
 
-        PathSegmentType::U16 => value
-            .parse::<u16>()
-            .map(golem_wasm::Value::U16)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "u16",
-            }),
+        PathSegmentType::U16 => {
+            value
+                .parse::<u16>()
+                .map(SchemaValue::U16)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "u16",
+                })
+        }
 
-        PathSegmentType::S16 => value
-            .parse::<i16>()
-            .map(golem_wasm::Value::S16)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "i16",
-            }),
+        PathSegmentType::S16 => {
+            value
+                .parse::<i16>()
+                .map(SchemaValue::S16)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "i16",
+                })
+        }
 
-        PathSegmentType::U8 => value.parse::<u8>().map(golem_wasm::Value::U8).map_err(|_| {
-            RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "u8",
-            }
-        }),
+        PathSegmentType::U8 => {
+            value
+                .parse::<u8>()
+                .map(SchemaValue::U8)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "u8",
+                })
+        }
 
-        PathSegmentType::S8 => value.parse::<i8>().map(golem_wasm::Value::S8).map_err(|_| {
-            RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "i8",
-            }
-        }),
+        PathSegmentType::S8 => {
+            value
+                .parse::<i8>()
+                .map(SchemaValue::S8)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "i8",
+                })
+        }
 
-        PathSegmentType::Bool => value
-            .parse::<bool>()
-            .map(golem_wasm::Value::Bool)
-            .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                value,
-                expected: "bool",
-            }),
+        PathSegmentType::Bool => {
+            value
+                .parse::<bool>()
+                .map(SchemaValue::Bool)
+                .map_err(|_| RequestHandlerError::ValueParsingFailed {
+                    value,
+                    expected: "bool",
+                })
+        }
 
         PathSegmentType::Enum(inner) => {
-            let case_index = inner
-                .cases
-                .iter()
-                .position(|c| *c == value)
-                .ok_or_else(|| RequestHandlerError::ValueParsingFailed {
+            let case_index = inner.cases.iter().position(|c| *c == value).ok_or_else(|| {
+                RequestHandlerError::ValueParsingFailed {
                     value,
                     expected: "enum variant",
-                })?;
+                }
+            })?;
 
-            Ok(golem_wasm::Value::Enum(
-                case_index
+            Ok(SchemaValue::Enum {
+                case: case_index
                     .try_into()
                     .expect("could not convert usize to u32"),
-            ))
+            })
         }
     }
 }
 
+/// Parse the HTTP values bound to a query parameter or header into a
+/// schema-native [`SchemaValue`] according to its declared type.
 pub fn parse_query_or_header_value(
     values: &[String],
     r#type: &QueryOrHeaderType,
-) -> Result<ValueAndType, RequestHandlerError> {
-    let component_value = match r#type {
+) -> Result<SchemaValue, RequestHandlerError> {
+    match r#type {
         QueryOrHeaderType::Primitive(inner) => {
             if values.len() > 1 {
                 return Err(RequestHandlerError::TooManyValues {
@@ -170,45 +184,37 @@ pub fn parse_query_or_header_value(
                     expected: "single value",
                 })?;
 
-            parse_path_segment_value_to_component_model(value.clone(), inner)?
+            parse_path_segment_value(value.clone(), inner)
         }
 
         QueryOrHeaderType::Option { inner, .. } => match values.len() {
-            0 => golem_wasm::Value::Option(None),
+            0 => Ok(SchemaValue::Option { inner: None }),
 
             1 => {
-                let parsed = parse_path_segment_value_to_component_model(
-                    values.iter().next().unwrap().clone(),
-                    inner,
-                )?;
-                golem_wasm::Value::Option(Some(Box::new(parsed)))
+                let parsed =
+                    parse_path_segment_value(values.iter().next().unwrap().clone(), inner)?;
+                Ok(SchemaValue::Option {
+                    inner: Some(Box::new(parsed)),
+                })
             }
 
-            _ => {
-                return Err(RequestHandlerError::TooManyValues {
-                    expected: "zero or one value",
-                });
-            }
+            _ => Err(RequestHandlerError::TooManyValues {
+                expected: "zero or one value",
+            }),
         },
 
         QueryOrHeaderType::List { inner, .. } => {
             let mut parsed_values = Vec::with_capacity(values.len());
 
             for value in values {
-                parsed_values.push(parse_path_segment_value_to_component_model(
-                    value.clone(),
-                    inner,
-                )?);
+                parsed_values.push(parse_path_segment_value(value.clone(), inner)?);
             }
 
-            golem_wasm::Value::List(parsed_values)
+            Ok(SchemaValue::List {
+                elements: parsed_values,
+            })
         }
-    };
-
-    Ok(ValueAndType::new(
-        component_value,
-        AnalysedType::from(r#type.clone()),
-    ))
+    }
 }
 
 #[cfg(test)]
@@ -223,14 +229,14 @@ mod path_segment_tests {
     fn parse_string_path_segment() {
         let result = parse_path_segment_value("hello".to_string(), &PathSegmentType::Str).unwrap();
 
-        assert_eq!(result.value, golem_wasm::Value::String("hello".into()));
+        assert_eq!(result, SchemaValue::String("hello".into()));
     }
 
     #[test]
     fn parse_char_success() {
         let result = parse_path_segment_value("a".to_string(), &PathSegmentType::Chr).unwrap();
 
-        assert_eq!(result.value, golem_wasm::Value::Char('a'));
+        assert_eq!(result, SchemaValue::Char('a'));
     }
 
     #[test]
@@ -246,17 +252,16 @@ mod path_segment_tests {
     #[test]
     fn parse_numeric_success() {
         let cases = vec![
-            (PathSegmentType::U8, "12", golem_wasm::Value::U8(12)),
-            (PathSegmentType::S16, "-5", golem_wasm::Value::S16(-5)),
-            (PathSegmentType::U32, "42", golem_wasm::Value::U32(42)),
-            (PathSegmentType::S64, "-100", golem_wasm::Value::S64(-100)),
-            (PathSegmentType::F32, "1.5", golem_wasm::Value::F32(1.5)),
-            (PathSegmentType::F64, "2.25", golem_wasm::Value::F64(2.25)),
+            (PathSegmentType::U8, "12", SchemaValue::U8(12)),
+            (PathSegmentType::S16, "-5", SchemaValue::S16(-5)),
+            (PathSegmentType::U32, "42", SchemaValue::U32(42)),
+            (PathSegmentType::S64, "-100", SchemaValue::S64(-100)),
+            (PathSegmentType::F32, "1.5", SchemaValue::F32(1.5)),
+            (PathSegmentType::F64, "2.25", SchemaValue::F64(2.25)),
         ];
 
         for (ty, input, expected) in cases {
-            let value =
-                parse_path_segment_value_to_component_model(input.to_string(), &ty).unwrap();
+            let value = parse_path_segment_value(input.to_string(), &ty).unwrap();
 
             assert_eq!(value, expected);
         }
@@ -264,11 +269,8 @@ mod path_segment_tests {
 
     #[test]
     fn parse_numeric_failure() {
-        let err = parse_path_segment_value_to_component_model(
-            "not-a-number".to_string(),
-            &PathSegmentType::U32,
-        )
-        .unwrap_err();
+        let err =
+            parse_path_segment_value("not-a-number".to_string(), &PathSegmentType::U32).unwrap_err();
 
         assert!(let RequestHandlerError::ValueParsingFailed {
             expected: "u32",
@@ -279,10 +281,9 @@ mod path_segment_tests {
     #[test]
     fn parse_bool_success() {
         let value =
-            parse_path_segment_value_to_component_model("true".to_string(), &PathSegmentType::Bool)
-                .unwrap();
+            parse_path_segment_value("true".to_string(), &PathSegmentType::Bool).unwrap();
 
-        assert_eq!(value, golem_wasm::Value::Bool(true));
+        assert_eq!(value, SchemaValue::Bool(true));
     }
 
     #[test]
@@ -293,10 +294,9 @@ mod path_segment_tests {
             cases: vec!["red".into(), "green".into(), "blue".into()],
         });
 
-        let value =
-            parse_path_segment_value_to_component_model("green".to_string(), &enum_type).unwrap();
+        let value = parse_path_segment_value("green".to_string(), &enum_type).unwrap();
 
-        assert_eq!(value, golem_wasm::Value::Enum(1));
+        assert_eq!(value, SchemaValue::Enum { case: 1 });
     }
 
     #[test]
@@ -307,8 +307,7 @@ mod path_segment_tests {
             cases: vec!["a".into(), "b".into()],
         });
 
-        let err =
-            parse_path_segment_value_to_component_model("c".to_string(), &enum_type).unwrap_err();
+        let err = parse_path_segment_value("c".to_string(), &enum_type).unwrap_err();
 
         assert!(let             RequestHandlerError::ValueParsingFailed {
             expected: "enum variant",
@@ -334,7 +333,7 @@ mod query_or_header_tests {
         )
         .unwrap();
 
-        assert_eq!(result.value, golem_wasm::Value::U32(42));
+        assert_eq!(result, SchemaValue::U32(42));
     }
 
     #[test]
@@ -377,7 +376,7 @@ mod query_or_header_tests {
         )
         .unwrap();
 
-        assert_eq!(result.value, golem_wasm::Value::Option(None));
+        assert_eq!(result, SchemaValue::Option { inner: None });
     }
 
     #[test]
@@ -395,8 +394,10 @@ mod query_or_header_tests {
         .unwrap();
 
         assert_eq!(
-            result.value,
-            golem_wasm::Value::Option(Some(Box::new(golem_wasm::Value::Bool(true))))
+            result,
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::Bool(true)))
+            }
         );
     }
 
@@ -432,12 +433,10 @@ mod query_or_header_tests {
         .unwrap();
 
         assert_eq!(
-            result.value,
-            golem_wasm::Value::List(vec![
-                golem_wasm::Value::U8(1),
-                golem_wasm::Value::U8(2),
-                golem_wasm::Value::U8(3),
-            ])
+            result,
+            SchemaValue::List {
+                elements: vec![SchemaValue::U8(1), SchemaValue::U8(2), SchemaValue::U8(3),]
+            }
         );
     }
 }

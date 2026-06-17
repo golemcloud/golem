@@ -322,9 +322,18 @@ impl ComponentWriteService {
         let agent_types_changed = component_update.agent_types.is_some();
         let allow_incompatible_config = component_update.allow_incompatible_config;
 
-        let agent_types = component_update
-            .agent_types
-            .unwrap_or(component.metadata.agent_types().to_vec());
+        // TODO(B2-followup): legacy ingress seam. `component_update.agent_types`
+        // arrives as legacy `AgentType` over the component-admin API, and
+        // `analyse_component` / `check_config_entries_match` still consume the
+        // legacy form. When no update is supplied we fall back to the existing
+        // metadata, lowering the stored `AgentTypeSchema`s back to legacy.
+        let agent_types = match component_update.agent_types {
+            Some(agent_types) => agent_types,
+            None => component
+                .metadata
+                .legacy_agent_types()
+                .map_err(|err| ComponentError::InternalError(anyhow::anyhow!(err)))?,
+        };
 
         let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
         if agent_types_changed {

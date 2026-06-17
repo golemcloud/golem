@@ -29,9 +29,9 @@ use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
-    RegisteredAgentTypeImplementer,
+    AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
 };
+use golem_common::schema::AgentTypeSchema;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
@@ -42,9 +42,7 @@ use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_common::schema::adapters::analysed_type::{
-    analysed_type_to_schema_graph, schema_graph_to_analysed_type,
-};
+use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
 use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::SecuritySchemeDetails;
@@ -58,7 +56,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
     pub webhook_domain_and_segments: Option<(Domain, Vec<String>)>,
 }
@@ -197,6 +195,7 @@ impl DeploymentContext {
                 let constructor_parameters = ok_or_continue!(
                     build_http_agent_constructor_parameters(
                         http_mount,
+                        &registered_agent_type.agent_type.schema,
                         &registered_agent_type.agent_type.constructor.input_schema,
                         &make_mount_validation_error
                     ),
@@ -355,18 +354,13 @@ impl DeploymentContext {
                 let canonical_agent_secret_path =
                     CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
 
-                // Project the agent-type-declared value type (legacy
-                // `AnalysedType`) into the schema layer so all downstream
-                // structures live in the new model.
-                let config_secret_schema = ok_or_continue!(
-                    analysed_type_to_schema_graph(&config.value_type).map_err(|e| {
-                        DeployValidationError::AgentSecretDefaultTypeMismatch {
-                            path: canonical_agent_secret_path.clone(),
-                            errors: vec![format!("Invalid secret type declared by agent: {e}")],
-                        }
-                    }),
-                    errors
-                );
+                // The agent-type-declared secret value type is already a
+                // schema-native `SchemaType`; pair it with the agent's shared
+                // graph defs so any `SchemaType::Ref` inside resolves.
+                let config_secret_schema = SchemaGraph {
+                    defs: agent_type.agent_type.schema.defs.clone(),
+                    root: config.value_type.clone(),
+                };
 
                 match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {

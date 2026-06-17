@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
     OpenApiSpecFormat, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
@@ -155,7 +156,7 @@ impl fmt::Debug for ResponseBody {
 
 pub enum ParsedRequestBody {
     Unused,
-    JsonBody(golem_wasm::Value),
+    JsonBody(SchemaValue),
     // Always Some initially, will be None after being consumed by handler code
     UnstructuredBinary(Option<BinarySource>),
     // Always Some initially, will be None after being consumed by handler code

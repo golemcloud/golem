@@ -279,9 +279,10 @@ mod tests {
     use golem_common::base_model::application::ApplicationId;
     use golem_common::model::Empty;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
-        RegisteredAgentType, RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+        AgentMode, AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
+        ResolvedAgentType, Snapshotting,
     };
+    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
@@ -296,15 +297,16 @@ mod tests {
     fn make_resolved(env_id: EnvironmentId, rev: DeploymentRevision) -> ResolvedAgentType {
         ResolvedAgentType {
             registered_agent_type: RegisteredAgentType {
-                agent_type: AgentType {
+                agent_type: AgentTypeSchema {
                     type_name: AgentTypeName("test-agent".to_string()),
                     description: String::new(),
                     source_language: String::new(),
-                    constructor: AgentConstructor {
+                    schema: SchemaGraph::empty(),
+                    constructor: AgentConstructorSchema {
                         name: None,
                         description: String::new(),
                         prompt_hint: None,
-                        input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                        input_schema: InputSchema::Parameters(vec![]),
                     },
                     methods: vec![],
                     dependencies: vec![],

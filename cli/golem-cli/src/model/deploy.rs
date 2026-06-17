@@ -16,14 +16,15 @@ use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
 use crate::model::GuestLanguage;
-use crate::model::component::{render_agent_constructor, render_data_schema};
+use crate::model::component::{render_agent_constructor, render_input_schema, render_output_schema};
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::RawAgentId;
 use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
-    AgentConfigSource, AgentMethod, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    PathSegment,
+    AgentConfigSource, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
+use golem_common::schema::graph::SchemaGraph;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
@@ -51,7 +52,7 @@ pub struct DeploymentDisplayContext<'a> {
     pub mode: DeploymentDisplayMode,
     pub deployment: &'a diff::Deployment,
     pub diff: &'a diff::DeploymentDiff,
-    pub agent_types_by_component: &'a HashMap<String, Vec<AgentType>>,
+    pub agent_types_by_component: &'a HashMap<String, Vec<AgentTypeSchema>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -796,7 +797,7 @@ fn display_components(
 
 fn display_agent_type(
     show_sensitive: bool,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     component: Option<&diff::Component>,
 ) -> anyhow::Result<DeploymentDisplayAgentType> {
     let lang = SourceLanguage::from(agent.source_language.as_str());
@@ -830,7 +831,12 @@ fn display_agent_type(
         methods: agent
             .methods
             .iter()
-            .map(|method| (method.name.clone(), display_method(&lang, method)))
+            .map(|method| {
+                (
+                    method.name.clone(),
+                    display_method(&lang, &agent.schema, method),
+                )
+            })
             .collect(),
         dependencies: agent
             .dependencies
@@ -841,7 +847,7 @@ fn display_agent_type(
 }
 
 fn display_config_declarations(
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
 ) -> anyhow::Result<BTreeMap<String, DeploymentDisplayConfigDeclaration>> {
     let lang = SourceLanguage::from(agent.source_language.as_str());
 
@@ -849,16 +855,8 @@ fn display_config_declarations(
         .config
         .iter()
         .map(|config| {
-            // Adapt legacy AnalysedType at the boundary.
-            let value_type = match golem_common::schema::adapters::analysed_type_to_schema_graph(
-                &config.value_type,
-            ) {
-                Ok(graph) => {
-                    let root = graph.root.clone();
-                    render_type_for_language(&lang, &graph, &root, true)
-                }
-                Err(_) => "<unknown>".to_string(),
-            };
+            let value_type =
+                render_type_for_language(&lang, &agent.schema, &config.value_type, true);
             Ok((
                 config.path.join("."),
                 DeploymentDisplayConfigDeclaration {
@@ -872,7 +870,7 @@ fn display_config_declarations(
 
 fn display_config_defaults(
     show_sensitive: bool,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     provision_config: Option<&diff::AgentTypeProvisionConfig>,
 ) -> anyhow::Result<BTreeMap<String, serde_json::Value>> {
     let provision_values = provision_config
@@ -964,21 +962,17 @@ fn display_plugins(
         .collect()
 }
 
-fn display_method(lang: &SourceLanguage, method: &AgentMethod) -> DeploymentDisplayMethod {
-    let output = render_data_schema(&method.output_schema, lang, false);
+fn display_method(
+    lang: &SourceLanguage,
+    graph: &SchemaGraph,
+    method: &AgentMethodSchema,
+) -> DeploymentDisplayMethod {
+    let output = render_output_schema(graph, &method.output_schema, lang);
+    let input = render_input_schema(graph, &method.input_schema, lang, true);
     let signature = if output.is_empty() {
-        format!(
-            "{}({})",
-            method.name,
-            render_data_schema(&method.input_schema, lang, true)
-        )
+        format!("{}({})", method.name, input)
     } else {
-        format!(
-            "{}({}) -> {}",
-            method.name,
-            render_data_schema(&method.input_schema, lang, true),
-            output
-        )
+        format!("{}({}) -> {}", method.name, input, output)
     };
 
     DeploymentDisplayMethod {

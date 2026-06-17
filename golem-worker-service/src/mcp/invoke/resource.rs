@@ -13,16 +13,20 @@
 // limitations under the License.
 
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
+use crate::mcp::invoke::build_constructor_parameters;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
 use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
-use golem_common::base_model::agent::*;
+use golem_common::base_model::agent::Principal;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::{
-    schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
-    schema_output_value_to_legacy_data_value,
+use golem_common::schema::adapters::{multimodal_variant_cases, resolve_ref};
+use golem_common::schema::agent::OutputSchema;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::render::json_value::to_json_value;
+use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::schema_value::{
+    BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
@@ -34,28 +38,8 @@ pub async fn invoke_resource(
     uri: &str,
     extracted_params: Option<Vec<ConstructorParam>>,
 ) -> Result<ReadResourceResult, ErrorData> {
-    // The MCP capability stores schema-layer constructor/method bodies; the
-    // invoke/runtime extraction code still uses the legacy `DataSchema` /
-    // `DataValue` carriers, so convert at this boundary, resolving any
-    // `SchemaType::Ref` against the agent's schema graph.
-    let legacy_constructor =
-        schema_agent_constructor_to_legacy(&mcp_resource.schema_graph, &mcp_resource.constructor)
-            .map_err(|e| {
-            tracing::error!("Failed to convert constructor schema: {}", e);
-            ErrorData::internal_error(format!("Failed to convert constructor schema: {}", e), None)
-        })?;
-    let legacy_method =
-        schema_agent_method_to_legacy(&mcp_resource.schema_graph, &mcp_resource.method).map_err(
-            |e| {
-                tracing::error!("Failed to convert method schema: {}", e);
-                ErrorData::internal_error(format!("Failed to convert method schema: {}", e), None)
-            },
-        )?;
-
-    let constructor_params = match extracted_params {
-        None => {
-            vec![]
-        }
+    let constructor_values = match extracted_params {
+        None => Vec::new(),
         Some(params) => {
             let mut args_map = JsonObject::default();
             for param in &params {
@@ -64,26 +48,30 @@ pub async fn invoke_resource(
                     serde_json::Value::String(param.value.clone()),
                 );
             }
-            extract_constructor_input_values(&args_map, &legacy_constructor.input_schema).map_err(
-                |e| {
-                    tracing::error!("Failed to extract constructor parameters from URI: {}", e);
-                    ErrorData::invalid_params(
-                        format!("Failed to extract constructor parameters from URI: {}", e),
-                        None,
-                    )
-                },
-            )?
+            extract_constructor_input_values(
+                &args_map,
+                &mcp_resource.schema_graph,
+                &mcp_resource.constructor.input_schema,
+            )
+            .map_err(|e| {
+                tracing::error!("Failed to extract constructor parameters from URI: {}", e);
+                ErrorData::invalid_params(
+                    format!("Failed to extract constructor parameters from URI: {}", e),
+                    None,
+                )
+            })?
         }
     };
 
-    let parsed_agent_id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+    let parameters = build_constructor_parameters(
+        &mcp_resource.schema_graph,
+        &mcp_resource.constructor.input_schema,
+        constructor_values,
+    );
+
+    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
         mcp_resource.agent_type_name.clone(),
-        DataValue::Tuple(ElementValues {
-            elements: constructor_params
-                .into_iter()
-                .map(ElementValue::ComponentModel)
-                .collect(),
-        }),
+        parameters,
         None,
         mcp_resource.agent_mode,
     )
@@ -92,6 +80,7 @@ pub async fn invoke_resource(
         ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
     })?;
 
+    // A resource method has no user-supplied input parameters.
     let method_parameters = SchemaValue::Record { fields: vec![] };
 
     let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
@@ -113,7 +102,7 @@ pub async fn invoke_resource(
     let agent_output = worker_service
         .invoke_agent(
             &agent_id,
-            Some(legacy_method.name.clone()),
+            Some(mcp_resource.method.name.clone()),
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
@@ -137,117 +126,124 @@ pub async fn invoke_resource(
         _ => None,
     };
 
-    let contents =
-        map_agent_response_to_resource_contents(agent_result, &legacy_method.output_schema, uri)?;
+    let contents = map_agent_response_to_resource_contents(
+        &mcp_resource.schema_graph,
+        &mcp_resource.method.output_schema,
+        agent_result,
+        uri,
+    )?;
 
     Ok(ReadResourceResult { contents })
 }
 
 fn map_agent_response_to_resource_contents(
+    graph: &SchemaGraph,
+    output: &OutputSchema,
     invoke_result: Option<SchemaValue>,
-    expected_type: &DataSchema,
     uri: &str,
 ) -> Result<Vec<ResourceContents>, ErrorData> {
-    match invoke_result {
-        Some(schema_value) => {
-            let typed_value = schema_output_value_to_legacy_data_value(schema_value, expected_type)
-                .map_err(|error| {
+    let Some(value) = invoke_result else {
+        return Ok(vec![]);
+    };
+    let Some(ty) = output.schema() else {
+        // Unit output carries no value.
+        return Ok(vec![]);
+    };
+
+    // Multimodal output: `list<variant<… Role::Multimodal>>`.
+    if let Some(cases) = multimodal_variant_cases(graph, ty).map_err(internal_error)? {
+        let elements = match value {
+            SchemaValue::List { elements } => elements,
+            _ => {
+                return Err(ErrorData::internal_error(
+                    "Expected a multimodal list response".to_string(),
+                    None,
+                ));
+            }
+        };
+
+        return elements
+            .into_iter()
+            .map(|element| {
+                let SchemaValue::Variant(VariantValuePayload { case, payload }) = element else {
+                    return Err(ErrorData::internal_error(
+                        "Expected a multimodal variant element".to_string(),
+                        None,
+                    ));
+                };
+                let case_schema = cases
+                    .get(case as usize)
+                    .and_then(|c| c.payload.as_ref())
+                    .ok_or_else(|| {
+                        ErrorData::internal_error(
+                            format!("Multimodal case index {case} out of range"),
+                            None,
+                        )
+                    })?;
+                let payload = payload.ok_or_else(|| {
                     ErrorData::internal_error(
-                        format!("Agent response type mismatch: {error}"),
+                        "Multimodal variant has no payload".to_string(),
                         None,
                     )
                 })?;
-
-            data_value_to_resource_contents(typed_value, uri)
-        }
-        None => Ok(vec![]),
+                schema_value_to_resource_content(graph, case_schema, &payload, uri)
+            })
+            .collect();
     }
+
+    schema_value_to_resource_content(graph, ty, &value, uri).map(|c| vec![c])
 }
 
-fn data_value_to_resource_contents(
-    typed_value: DataValue,
+fn internal_error(error: impl std::fmt::Display) -> ErrorData {
+    ErrorData::internal_error(error.to_string(), None)
+}
+
+fn schema_value_to_resource_content(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
     uri: &str,
-) -> Result<Vec<ResourceContents>, ErrorData> {
-    match typed_value {
-        DataValue::Tuple(ElementValues { elements }) => match elements.len() {
-            0 => Ok(vec![]),
-            1 => {
-                let element = elements.into_iter().next().unwrap();
-                convert_to_resource_content(element, uri).map(|c| vec![c])
+) -> Result<ResourceContents, ErrorData> {
+    match resolve_ref(graph, ty) {
+        Ok(SchemaType::Text { .. }) => match value {
+            // Note that languageCode cannot be encoded in the output to MCP
+            // clients when they act as resources. `ResourceContents::text`
+            // takes (text, uri) in that order.
+            SchemaValue::Text(TextValuePayload { text, .. }) => {
+                Ok(ResourceContents::text(text.clone(), uri.to_string()))
             }
             _ => Err(ErrorData::internal_error(
-                "Unexpected number of response tuple elements".to_string(),
+                "Expected a text value for a text output".to_string(),
                 None,
             )),
         },
-        DataValue::Multimodal(NamedElementValues { elements }) => elements
-            .into_iter()
-            .map(|named| convert_to_resource_content(named.value, uri))
-            .collect(),
-    }
-}
-
-fn convert_to_resource_content(
-    element: ElementValue,
-    uri: &str,
-) -> Result<ResourceContents, ErrorData> {
-    match element {
-        ElementValue::ComponentModel(v) => {
-            let json_value =
-                crate::mcp::invoke::component_model_value_to_json(&v.value).map_err(|e| {
-                    ErrorData::internal_error(
-                        format!("Failed to serialize component model response: {e}"),
-                        None,
-                    )
-                })?;
+        Ok(SchemaType::Binary { .. }) => match value {
+            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
+                Ok(ResourceContents::BlobResourceContents {
+                    uri: uri.to_string(),
+                    mime_type: mime_type.clone(),
+                    blob: base64::engine::general_purpose::STANDARD.encode(bytes),
+                    meta: None,
+                })
+            }
+            _ => Err(ErrorData::internal_error(
+                "Expected a binary value for a binary output".to_string(),
+                None,
+            )),
+        },
+        _ => {
+            let json_value = to_json_value(graph, ty, value).map_err(|e| {
+                ErrorData::internal_error(
+                    format!("Failed to serialize component model response: {e}"),
+                    None,
+                )
+            })?;
             Ok(ResourceContents::TextResourceContents {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
                 text: json_value.to_string(),
                 meta: None,
             })
-        }
-
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
-            match value {
-                TextReference::Inline(TextSource { data, .. }) => {
-                    // Note that languageCode cannot be encoded in the output to MCP clients when they act as resources
-                    // ResourceContents::text(text, uri) — first param is text content, second is URI
-                    Ok(ResourceContents::text(data.to_string(), uri.to_string()))
-                }
-                TextReference::Url(url) => {
-                    // This cannot be possible according to MCP spec
-                    // A resource content must respond with either an actual text or blob
-                    // https://modelcontextprotocol.info/docs/concepts/resources/#reading-resources
-                    Err(ErrorData::internal_error(
-                        format!(
-                            "Received URL text reference, which cannot be part of resource output: {}",
-                            url.value
-                        ),
-                        None,
-                    ))
-                }
-            }
-        }
-
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-
-                    Ok(ResourceContents::BlobResourceContents {
-                        uri: uri.to_string(),
-                        mime_type: Some(binary_type.mime_type),
-                        blob: b64,
-                        meta: None,
-                    })
-                }
-                BinaryReference::Url(_) => Err(ErrorData::internal_error(
-                    "Received URL binary reference, which cannot be part of resource output"
-                        .to_string(),
-                    None,
-                )),
-            }
         }
     }
 }
@@ -257,39 +253,48 @@ mod tests {
     use super::*;
     use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
-    use golem_common::base_model::agent::{
-        AgentMode, AgentTypeName, BinaryDescriptor, ComponentModelElementSchema, DataSchema,
-        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, Url as AgentUrl,
-    };
+    use golem_common::base_model::agent::{AgentMode, AgentTypeName};
     use golem_common::model::AgentInvocationOutput;
     use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
     use golem_common::schema::graph::SchemaGraph;
-    use golem_common::schema::{
-        BinaryValuePayload, InputSchema, TextValuePayload, VariantValuePayload,
+    use golem_common::schema::metadata::Role;
+    use golem_common::schema::schema_type::{
+        BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
     };
-    use golem_wasm::analysis::analysed_type::str;
+    use golem_common::schema::{BinaryValuePayload, InputSchema, TextValuePayload};
     use rmcp::model::{Annotated, RawResource};
     use serde_json::json;
     use test_r::test;
 
     const TEST_URI: &str = "golem://Agent/resource";
 
-    fn str_output_schema() -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "result".to_string(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: str(),
-                }),
-            }],
-        })
+    fn graph() -> SchemaGraph {
+        SchemaGraph::empty()
+    }
+
+    fn str_output() -> OutputSchema {
+        OutputSchema::Single(Box::new(SchemaType::string()))
+    }
+
+    fn multimodal_output(cases: Vec<(&str, SchemaType)>) -> OutputSchema {
+        let variant_cases = cases
+            .into_iter()
+            .map(|(name, ty)| VariantCaseType {
+                name: name.to_string(),
+                payload: Some(ty),
+                metadata: Default::default(),
+            })
+            .collect();
+        let mut variant = SchemaType::variant(variant_cases);
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        OutputSchema::Single(Box::new(SchemaType::list(variant)))
     }
 
     #[test]
     fn component_model_to_text_resource_json() {
         let response = SchemaValue::String("sunny".to_string());
         let contents =
-            map_agent_response_to_resource_contents(Some(response), &str_output_schema(), TEST_URI)
+            map_agent_response_to_resource_contents(&graph(), &str_output(), Some(response), TEST_URI)
                 .unwrap();
         assert_eq!(contents.len(), 1);
         match &contents[0] {
@@ -310,18 +315,14 @@ mod tests {
 
     #[test]
     fn text_element_to_text_resource() {
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "report".to_string(),
-                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-            }],
-        });
+        let output = OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default())));
         let response = SchemaValue::Text(TextValuePayload {
             text: "rainy day".to_string(),
             language: None,
         });
         let contents =
-            map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
+            map_agent_response_to_resource_contents(&graph(), &output, Some(response), TEST_URI)
+                .unwrap();
         assert_eq!(contents.len(), 1);
         match &contents[0] {
             ResourceContents::TextResourceContents { text, .. } => {
@@ -333,18 +334,15 @@ mod tests {
 
     #[test]
     fn binary_element_to_blob_resource() {
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "image".to_string(),
-                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
-            }],
-        });
+        let output =
+            OutputSchema::Single(Box::new(SchemaType::binary(BinaryRestrictions::default())));
         let response = SchemaValue::Binary(BinaryValuePayload {
             bytes: vec![1, 2, 3],
             mime_type: Some("image/png".to_string()),
         });
         let contents =
-            map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
+            map_agent_response_to_resource_contents(&graph(), &output, Some(response), TEST_URI)
+                .unwrap();
         assert_eq!(contents.len(), 1);
         match &contents[0] {
             ResourceContents::BlobResourceContents {
@@ -360,26 +358,17 @@ mod tests {
     #[test]
     fn none_response_returns_empty() {
         let contents =
-            map_agent_response_to_resource_contents(None, &str_output_schema(), TEST_URI).unwrap();
+            map_agent_response_to_resource_contents(&graph(), &str_output(), None, TEST_URI)
+                .unwrap();
         assert!(contents.is_empty());
     }
 
     #[test]
     fn multimodal_returns_multiple_contents() {
-        let schema = DataSchema::Multimodal(NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "text".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-                },
-                NamedElementSchema {
-                    name: "img".to_string(),
-                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                        restrictions: None,
-                    }),
-                },
-            ],
-        });
+        let output = multimodal_output(vec![
+            ("text", SchemaType::text(TextRestrictions::default())),
+            ("img", SchemaType::binary(BinaryRestrictions::default())),
+        ]);
         let response = SchemaValue::List {
             elements: vec![
                 SchemaValue::Variant(VariantValuePayload {
@@ -399,7 +388,8 @@ mod tests {
             ],
         };
         let contents =
-            map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
+            map_agent_response_to_resource_contents(&graph(), &output, Some(response), TEST_URI)
+                .unwrap();
         assert_eq!(contents.len(), 2);
         assert!(
             matches!(&contents[0], ResourceContents::TextResourceContents { text, .. } if text == "snow report")
@@ -407,30 +397,6 @@ mod tests {
         assert!(
             matches!(&contents[1], ResourceContents::BlobResourceContents { blob, .. } if blob == "AQID")
         );
-    }
-
-    #[test]
-    fn error_on_text_url_reference() {
-        let elem = ElementValue::UnstructuredText(UnstructuredTextElementValue {
-            value: TextReference::Url(AgentUrl {
-                value: "https://example.com".to_string(),
-            }),
-            descriptor: TextDescriptor { restrictions: None },
-        });
-        let err = convert_to_resource_content(elem, TEST_URI).unwrap_err();
-        assert!(err.message.contains("URL"), "got: {}", err.message);
-    }
-
-    #[test]
-    fn error_on_binary_url_reference() {
-        let elem = ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-            value: BinaryReference::Url(AgentUrl {
-                value: "https://example.com/img.png".to_string(),
-            }),
-            descriptor: BinaryDescriptor { restrictions: None },
-        });
-        let err = convert_to_resource_content(elem, TEST_URI).unwrap_err();
-        assert!(err.message.contains("URL"), "got: {}", err.message);
     }
 
     #[test]

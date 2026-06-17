@@ -20,7 +20,8 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
-use golem_common::model::agent::AgentType;
+use golem_common::schema::adapters::agent_type_to_schema;
+use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
@@ -86,10 +87,10 @@ pub struct DeployDiff {
     pub current_deployment: Option<DeploymentSummary>,
     pub diffable_current_deployment: diff::Deployment,
     pub current_deployment_hash: diff::Hash,
-    pub current_agent_types: HashMap<String, Vec<AgentType>>,
+    pub current_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
     pub staged_deployment: DeploymentPlan,
     pub staged_deployment_hash: diff::Hash,
-    pub staged_agent_types: HashMap<String, Vec<AgentType>>,
+    pub staged_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
     pub diffable_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
@@ -142,9 +143,15 @@ impl DeployDiff {
             .deployable_components
             .iter()
             .map(|(component_name, component)| {
-                (component_name.0.clone(), component.agent_types.clone())
+                let schema_types = component
+                    .agent_types
+                    .iter()
+                    .map(agent_type_to_schema)
+                    .collect::<Result<Vec<AgentTypeSchema>, _>>()
+                    .map_err(anyhow::Error::msg)?;
+                Ok((component_name.0.clone(), schema_types))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<anyhow::Result<HashMap<_, _>>>()?;
 
         Ok(DeployUnifiedDiffs {
             display_diff_stage: self
@@ -442,10 +449,7 @@ impl DeployDiff {
                     .insert(component_name.0.clone(), component.to_diffable()?.into());
                 self.staged_agent_types.insert(
                     component_name.0,
-                    component
-                        .metadata
-                        .legacy_agent_types()
-                        .map_err(anyhow::Error::msg)?,
+                    component.metadata.agent_types().to_vec(),
                 );
             }
             DeployDiffKind::Current => {
@@ -454,10 +458,7 @@ impl DeployDiff {
                     .insert(component_name.0.clone(), component.to_diffable()?.into());
                 self.current_agent_types.insert(
                     component_name.0,
-                    component
-                        .metadata
-                        .legacy_agent_types()
-                        .map_err(anyhow::Error::msg)?,
+                    component.metadata.agent_types().to_vec(),
                 );
             }
         }
@@ -554,8 +555,8 @@ pub struct RollbackDiff {
     pub current_deployment: DeploymentSummary,
     pub diffable_target_deployment: diff::Deployment,
     pub diffable_current_deployment: diff::Deployment,
-    pub current_agent_types: HashMap<String, Vec<AgentType>>,
-    pub target_agent_types: HashMap<String, Vec<AgentType>>,
+    pub current_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
+    pub target_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
     pub diff: diff::DeploymentDiff,
 }
 
@@ -667,10 +668,7 @@ impl RollbackDiff {
             );
             self.target_agent_types.insert(
                 component_details.name.0.clone(),
-                component
-                    .metadata
-                    .legacy_agent_types()
-                    .map_err(anyhow::Error::msg)?,
+                component.metadata.agent_types().to_vec(),
             );
         }
         if let Some(component) = component_details.current {
@@ -680,10 +678,7 @@ impl RollbackDiff {
             );
             self.current_agent_types.insert(
                 component_details.name.0.clone(),
-                component
-                    .metadata
-                    .legacy_agent_types()
-                    .map_err(anyhow::Error::msg)?,
+                component.metadata.agent_types().to_vec(),
             );
         }
 

@@ -4,6 +4,8 @@ package golem.customapi;
 
 import "golem/component/component_id.proto";
 import "golem/component/agent.proto";
+import "golem/schema/schema.proto";
+import "golem/schema/agent.proto";
 import "golem/common/empty.proto";
 import "golem/common/uuid.proto";
 import "golem/common/account_id.proto";
@@ -84,33 +86,45 @@ message QueryOrHeaderType {
   }
 }
 
+// A self-contained schema carrier persisted in a compiled route. `graph.root`
+// is the exact root being parsed/rendered/invoked; `graph.defs` carry the
+// per-agent named-type definitions so `SchemaType::Ref`s resolve without an
+// `AgentTypeSchema` lookup at runtime.
+message CompiledSchema {
+  golem.schema.SchemaGraph graph = 1;
+}
+
+message CompiledInputSchema {
+  golem.schema.SchemaGraph graph = 1;
+  golem.schema.InputSchema input_schema = 2;
+}
+
+message CompiledOutputSchema {
+  golem.schema.SchemaGraph graph = 1;
+  golem.schema.OutputSchema output_schema = 2;
+}
+
 message RequestBodySchema {
   oneof kind {
     Unused unused = 1;
     JsonBody json_body = 2;
-    UnrestrictedBinary unrestricted_binary = 3;
-    RestrictedBinary restricted_binary = 4;
-    UnrestrictedText unrestricted_text = 5;
-    RestrictedText restricted_text = 6;
+    BinaryBody binary_body = 3;
+    TextBody text_body = 4;
   }
 
   message Unused {}
 
   message JsonBody {
-    wasm.rpc.Type expected_type = 1;
+    CompiledSchema expected = 1;
   }
 
-  message UnrestrictedBinary { };
+  message BinaryBody {
+    CompiledSchema expected = 1;
+  }
 
-  message RestrictedBinary {
-    repeated string allowed_mime_types = 1;
-  };
-
-  message UnrestrictedText { };
-
-  message RestrictedText {
-    repeated string allowed_language_codes = 1;
-  };
+  message TextBody {
+    CompiledSchema expected = 1;
+  }
 }
 
 message ConstructorParameter {
@@ -194,9 +208,11 @@ message RouteBehaviour {
     bool phantom = 5;
     string method_name = 6;
     repeated MethodParameter method_parameters = 7;
-    golem.component.DataSchema expected_agent_response = 8;
+    CompiledOutputSchema expected_agent_response = 8;
     optional string method_description = 9;
     optional golem.component.ReadOnlyConfig read_only = 10;
+    CompiledInputSchema constructor_input = 11;
+    CompiledInputSchema method_input = 12;
   }
 
   message CorsPreflight {

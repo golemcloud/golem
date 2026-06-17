@@ -12,30 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Schema-native HTTP parameter binding for compiled agent routes.
+//!
+//! Consumes the agent's per-agent [`SchemaGraph`] plus the constructor /
+//! method [`InputSchema`] (an ordered list of [`NamedField`]s) and produces
+//! the persisted [`ConstructorParameter`] / [`MethodParameter`] bindings plus
+//! the [`RequestBodySchema`] for a route.
+//!
+//! Auto-injected fields ([`FieldSource::AutoInjected`]) are never bound to
+//! HTTP and never appear in the request body — the host injects them at
+//! invocation time. They are still part of the method/constructor input record
+//! (carried in the compiled [`CompiledInputSchema`]); the worker-service
+//! runtime reconstructs the full positional record by iterating the
+//! [`InputSchema`] and inserting auto-injected fields in declaration order.
+
 use golem_common::model::agent::{
-    ComponentModelElementSchema, DataSchema, ElementSchema, HeaderVariable, HttpEndpointDetails,
-    HttpMountDetails, NamedElementSchema, NamedElementSchemas, PathSegment, QueryVariable,
+    HeaderVariable, HttpEndpointDetails, HttpMountDetails, PathSegment, QueryVariable,
+};
+use golem_common::schema::adapters::resolve_ref;
+use golem_common::schema::{
+    FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
 };
 use golem_service_base::custom_api::{
-    ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType, RequestBodySchema,
+    CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
+    RequestBodySchema,
 };
 use golem_service_base::model::SafeIndex;
-use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord};
+use golem_wasm::analysis::TypeEnum;
 use std::collections::HashMap;
 
 pub fn build_http_agent_constructor_parameters<E>(
     mount: &HttpMountDetails,
-    schema: &DataSchema,
+    graph: &SchemaGraph,
+    schema: &InputSchema,
     make_error: &impl Fn(String) -> E,
 ) -> Result<Vec<ConstructorParameter>, E> {
-    let elements = match schema {
-        DataSchema::Tuple(NamedElementSchemas { elements }) => elements,
-        _ => {
-            return Err(make_error(
-                "Only Tuple dataschemas are supported for http-bindable constructors".into(),
-            ));
-        }
-    };
+    let fields = schema.fields();
 
     let path_bindings = collect_path_bindings_from_segments(
         &mount.path_prefix,
@@ -43,10 +55,22 @@ pub fn build_http_agent_constructor_parameters<E>(
         make_error,
     )?;
 
-    let mut result = Vec::with_capacity(elements.len());
+    let mut result = Vec::with_capacity(fields.len());
 
-    for element in elements {
-        let name = &element.name;
+    for field in fields {
+        // Auto-injected fields are supplied by the host; they must not bind to
+        // HTTP path segments and they are not part of the caller-facing route.
+        if matches!(field.source, FieldSource::AutoInjected(_)) {
+            if path_bindings.contains_key(&field.name) {
+                return Err(make_error(format!(
+                    "Auto-injected field '{}' cannot be bound to a path variable",
+                    field.name
+                )));
+            }
+            continue;
+        }
+
+        let name = &field.name;
 
         let (path_index, segment) = path_bindings.get(name).ok_or_else(|| {
             make_error(format!(
@@ -55,7 +79,7 @@ pub fn build_http_agent_constructor_parameters<E>(
             ))
         })?;
 
-        let ty = element_schema_to_path_segment_type(&element.schema, &make_error)?;
+        let ty = schema_type_to_path_segment_type(graph, &field.schema, make_error)?;
 
         validate_path_segment_type(segment, &ty, make_error)?;
 
@@ -71,17 +95,11 @@ pub fn build_http_agent_constructor_parameters<E>(
 pub fn build_http_agent_method_parameters<E>(
     mount: &HttpMountDetails,
     endpoint: &HttpEndpointDetails,
-    schema: &DataSchema,
+    graph: &SchemaGraph,
+    schema: &InputSchema,
     make_error: &impl Fn(String) -> E,
 ) -> Result<(RequestBodySchema, Vec<MethodParameter>), E> {
-    let elements = match schema {
-        DataSchema::Tuple(NamedElementSchemas { elements }) => elements,
-        _ => {
-            return Err(make_error(
-                "Only Tuple dataschemas are supported for http-bindable agents".into(),
-            ));
-        }
-    };
+    let fields = schema.fields();
 
     let mut all_segments = Vec::new();
     all_segments.extend_from_slice(&mount.path_prefix);
@@ -97,19 +115,38 @@ pub fn build_http_agent_method_parameters<E>(
     let query_bindings = collect_query_bindings(endpoint);
     let header_bindings = collect_header_bindings(endpoint);
 
-    let mut consumed = vec![false; elements.len()];
-    let mut method_parameters = Vec::with_capacity(elements.len());
+    // Per-field binding slot. `None` for auto-injected fields (excluded from the
+    // invocation record) and for fields that still need body classification.
+    let mut per_field: Vec<Option<MethodParameter>> = vec![None; fields.len()];
+    let mut consumed = vec![false; fields.len()];
 
-    // First pass: path / query / header bindings
-    for (idx, element) in elements.iter().enumerate() {
-        let name = &element.name;
+    // First pass: classify path / query / header bindings (user-supplied fields
+    // only). Auto-injected fields are supplied by the host out-of-band, so they
+    // must not bind to HTTP and are excluded from the invocation record.
+    for (idx, field) in fields.iter().enumerate() {
+        let name = &field.name;
+
+        if matches!(field.source, FieldSource::AutoInjected(_)) {
+            if path_bindings.contains_key(name)
+                || query_bindings.contains_key(name)
+                || header_bindings.contains_key(name)
+            {
+                return Err(make_error(format!(
+                    "Auto-injected field '{}' cannot be bound to a path, query or header variable",
+                    name
+                )));
+            }
+            // mark consumed so it is excluded from the body record too
+            consumed[idx] = true;
+            continue;
+        }
 
         // 1. Path
         if let Some((path_index, segment_kind)) = path_bindings.get(name) {
-            let ty = element_schema_to_path_segment_type(&element.schema, make_error)?;
+            let ty = schema_type_to_path_segment_type(graph, &field.schema, make_error)?;
             validate_path_segment_type(segment_kind, &ty, make_error)?;
 
-            method_parameters.push(MethodParameter::Path {
+            per_field[idx] = Some(MethodParameter::Path {
                 path_segment_index: *path_index,
                 parameter_type: ty,
             });
@@ -119,9 +156,9 @@ pub fn build_http_agent_method_parameters<E>(
 
         // 2. Query
         if let Some(query_var) = query_bindings.get(name) {
-            let ty = element_schema_to_query_or_header_type(&element.schema, make_error)?;
+            let ty = schema_type_to_query_or_header_type(graph, &field.schema, make_error)?;
 
-            method_parameters.push(MethodParameter::Query {
+            per_field[idx] = Some(MethodParameter::Query {
                 query_parameter_name: query_var.query_param_name.clone(),
                 parameter_type: ty,
             });
@@ -131,9 +168,9 @@ pub fn build_http_agent_method_parameters<E>(
 
         // 3. Header
         if let Some(header_var) = header_bindings.get(name) {
-            let ty = element_schema_to_query_or_header_type(&element.schema, make_error)?;
+            let ty = schema_type_to_query_or_header_type(graph, &field.schema, make_error)?;
 
-            method_parameters.push(MethodParameter::Header {
+            per_field[idx] = Some(MethodParameter::Header {
                 header_name: header_var.header_name.clone(),
                 parameter_type: ty,
             });
@@ -142,23 +179,31 @@ pub fn build_http_agent_method_parameters<E>(
         }
     }
 
-    // Second pass: body handling
+    // Second pass: classify the remaining (body) fields into `per_field`.
     let body_schema =
-        handle_body_parameters(elements, &consumed, &mut method_parameters, make_error)?;
+        handle_body_parameters(graph, fields, &consumed, &mut per_field, make_error)?;
+
+    // Final pass: emit method parameters in user-supplied input declaration
+    // order. The worker-service runtime relies on this ordering to build the
+    // positional `SchemaValue::Record` the executor expects (which validates
+    // the record positionally against the user-supplied fields in declaration
+    // order).
+    let method_parameters: Vec<MethodParameter> = per_field.into_iter().flatten().collect();
 
     Ok((body_schema, method_parameters))
 }
 
 fn handle_body_parameters<E>(
-    elements: &[NamedElementSchema],
+    graph: &SchemaGraph,
+    fields: &[NamedField],
     consumed: &[bool],
-    out: &mut Vec<MethodParameter>,
+    per_field: &mut [Option<MethodParameter>],
     make_error: &impl Fn(String) -> E,
 ) -> Result<RequestBodySchema, E> {
-    let leftovers: Vec<(usize, &NamedElementSchema)> = elements
+    let leftovers: Vec<(usize, &NamedField)> = fields
         .iter()
         .enumerate()
-        .filter(|(i, _)| !consumed[*i])
+        .filter(|(i, field)| matches!(field.source, FieldSource::UserSupplied) && !consumed[*i])
         .collect();
 
     // No body
@@ -166,86 +211,78 @@ fn handle_body_parameters<E>(
         return Ok(RequestBodySchema::Unused);
     }
 
-    // JSON object body
-    if leftovers
-        .iter()
-        .all(|(_, e)| matches!(e.schema, ElementSchema::ComponentModel(_)))
-    {
-        let mut body_fields = Vec::new();
-        for (_, named_schema) in leftovers {
-            let ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) =
-                &named_schema.schema
-            else {
-                unreachable!();
-            };
-
-            let field_index = body_fields.len();
-            body_fields.push(NameTypePair {
-                name: named_schema.name.clone(),
-                typ: element_type.clone(),
-            });
-
-            out.push(MethodParameter::JsonObjectBodyField {
-                field_index: SafeIndex::try_from(field_index).map_err(make_error)?,
-            });
-        }
-
-        // synthethic record made out of all leftover parameters
-        let body_type = AnalysedType::Record(TypeRecord {
-            owner: None,
-            name: None,
-            fields: body_fields,
-        });
-
-        return Ok(RequestBodySchema::JsonBody {
-            expected_type: body_type,
-        });
-    }
-
     // binary body
     if leftovers.len() == 1
-        && let ElementSchema::UnstructuredBinary(descriptor) = &leftovers[0].1.schema
+        && let SchemaType::Binary { .. } =
+            resolve_ref(graph, &leftovers[0].1.schema).map_err(|e| make_error(e.to_string()))?
     {
-        out.push(MethodParameter::UnstructuredBinaryBody);
-        // Empty restrictions canonicalize to UnrestrictedBinary
-        let allowed_mime_types: Vec<String> = descriptor
-            .restrictions
-            .as_ref()
-            .map(|v| v.iter().map(|bt| bt.mime_type.clone()).collect())
-            .unwrap_or_default();
-        if allowed_mime_types.is_empty() {
-            return Ok(RequestBodySchema::UnrestrictedBinary);
-        } else {
-            return Ok(RequestBodySchema::RestrictedBinary { allowed_mime_types });
-        }
+        per_field[leftovers[0].0] = Some(MethodParameter::UnstructuredBinaryBody);
+        return Ok(RequestBodySchema::BinaryBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph {
+                    defs: graph.defs.clone(),
+                    root: leftovers[0].1.schema.clone(),
+                },
+            },
+        });
     }
 
     // text body
     if leftovers.len() == 1
-        && let ElementSchema::UnstructuredText(descriptor) = &leftovers[0].1.schema
+        && let SchemaType::Text { .. } =
+            resolve_ref(graph, &leftovers[0].1.schema).map_err(|e| make_error(e.to_string()))?
     {
-        out.push(MethodParameter::UnstructuredTextBody);
-        // Empty restrictions canonicalize to UnrestrictedText
-        let allowed_language_codes: Vec<String> = descriptor
-            .restrictions
-            .as_ref()
-            .map(|v| v.iter().map(|tt| tt.language_code.clone()).collect())
-            .unwrap_or_default();
-        if allowed_language_codes.is_empty() {
-            return Ok(RequestBodySchema::UnrestrictedText);
-        } else {
-            return Ok(RequestBodySchema::RestrictedText {
-                allowed_language_codes,
-            });
-        }
+        per_field[leftovers[0].0] = Some(MethodParameter::UnstructuredTextBody);
+        return Ok(RequestBodySchema::TextBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph {
+                    defs: graph.defs.clone(),
+                    root: leftovers[0].1.schema.clone(),
+                },
+            },
+        });
     }
 
-    Err(make_error(
-        "Invalid body parameters: expected either no body, \
-         all ComponentModel parameters, a single UnstructuredBinary parameter, \
-         or a single UnstructuredText parameter"
-            .into(),
-    ))
+    // JSON object body: every leftover field must be a structural component-model
+    // type (i.e. not a raw unstructured binary/text body). `field_index` indexes
+    // into the JSON body record (built here in leftover/declaration order), not
+    // into the input field list.
+    let mut body_fields = Vec::new();
+    for (input_index, field) in &leftovers {
+        let resolved =
+            resolve_ref(graph, &field.schema).map_err(|e| make_error(e.to_string()))?;
+        if matches!(
+            resolved,
+            SchemaType::Binary { .. } | SchemaType::Text { .. }
+        ) {
+            return Err(make_error(
+                "Invalid body parameters: expected either no body, \
+                 all structural parameters (JSON object body), a single binary parameter, \
+                 or a single text parameter"
+                    .into(),
+            ));
+        }
+
+        let field_index = body_fields.len();
+        body_fields.push(NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        });
+
+        per_field[*input_index] = Some(MethodParameter::JsonObjectBodyField {
+            field_index: SafeIndex::try_from(field_index).map_err(make_error)?,
+        });
+    }
+
+    Ok(RequestBodySchema::JsonBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph {
+                defs: graph.defs.clone(),
+                root: SchemaType::record(body_fields),
+            },
+        },
+    })
 }
 
 fn collect_path_bindings_from_segments<E>(
@@ -320,38 +357,63 @@ fn collect_header_bindings(endpoint: &HttpEndpointDetails) -> HashMap<String, He
         .collect()
 }
 
-fn element_schema_to_path_segment_type<E>(
-    schema: &ElementSchema,
+/// Classify a (possibly `Ref`) [`SchemaType`] as a scalar HTTP path-segment
+/// type. Refs are resolved against `graph` first.
+fn schema_type_to_path_segment_type<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<PathSegmentType, E> {
-    let cm = match schema {
-        ElementSchema::ComponentModel(cm) => cm,
-        _ => {
-            return Err(make_error(
-                "Only component model types can be bound to path segments".into(),
-            ));
-        }
-    };
-
-    let ty = PathSegmentType::try_from(cm.element_type.clone()).map_err(make_error)?;
-    Ok(ty)
+    let resolved = resolve_ref(graph, schema).map_err(|e| make_error(e.to_string()))?;
+    match resolved {
+        SchemaType::String { .. } => Ok(PathSegmentType::Str),
+        SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
+        SchemaType::F64 { .. } => Ok(PathSegmentType::F64),
+        SchemaType::F32 { .. } => Ok(PathSegmentType::F32),
+        SchemaType::U64 { .. } => Ok(PathSegmentType::U64),
+        SchemaType::S64 { .. } => Ok(PathSegmentType::S64),
+        SchemaType::U32 { .. } => Ok(PathSegmentType::U32),
+        SchemaType::S32 { .. } => Ok(PathSegmentType::S32),
+        SchemaType::U16 { .. } => Ok(PathSegmentType::U16),
+        SchemaType::S16 { .. } => Ok(PathSegmentType::S16),
+        SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
+        SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
+        SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
+        SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(TypeEnum {
+            owner: None,
+            name: None,
+            cases: cases.clone(),
+        })),
+        _ => Err(make_error(
+            "Only primitive or enum types can be bound to path segments".into(),
+        )),
+    }
 }
 
-fn element_schema_to_query_or_header_type<E>(
-    schema: &ElementSchema,
+/// Classify a (possibly `Ref`) [`SchemaType`] as a query/header parameter
+/// type: a scalar, or an `option`/`list` of a scalar. Refs are resolved
+/// against `graph` first.
+fn schema_type_to_query_or_header_type<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<QueryOrHeaderType, E> {
-    let cm = match schema {
-        ElementSchema::ComponentModel(cm) => cm,
-        _ => {
-            return Err(make_error(
-                "Only component model types can be bound to query or header parameters".into(),
-            ));
-        }
-    };
-
-    let ty = QueryOrHeaderType::try_from(cm.element_type.clone()).map_err(make_error)?;
-    Ok(ty)
+    let resolved = resolve_ref(graph, schema).map_err(|e| make_error(e.to_string()))?;
+    match resolved {
+        SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(schema_type_to_path_segment_type(graph, inner, make_error)?),
+        }),
+        SchemaType::List { element, .. } => Ok(QueryOrHeaderType::List {
+            name: None,
+            owner: None,
+            inner: Box::new(schema_type_to_path_segment_type(graph, element, make_error)?),
+        }),
+        other => Ok(QueryOrHeaderType::Primitive(
+            schema_type_to_path_segment_type(graph, other, make_error)?,
+        )),
+    }
 }
 
 fn validate_path_segment_type<E>(
@@ -372,12 +434,12 @@ fn validate_path_segment_type<E>(
 #[cfg(test)]
 mod test {
     use golem_common::model::agent::{
-        BinaryDescriptor, BinaryType, ComponentModelElementSchema, CorsOptions, DataSchema,
-        ElementSchema, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-        LiteralSegment, NamedElementSchema, NamedElementSchemas, PathSegment, PathVariable,
-        QueryVariable, TextDescriptor, TextType,
+        CorsOptions, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+        LiteralSegment, PathSegment, PathVariable, QueryVariable,
     };
-    use golem_wasm::analysis::{AnalysedType, analysed_type};
+    use golem_common::schema::{
+        BinaryRestrictions, InputSchema, NamedField, SchemaGraph, SchemaType, TextRestrictions,
+    };
     use test_r::test;
 
     use crate::services::deployment::http_parameter_conversion::{
@@ -389,6 +451,18 @@ mod test {
         ConstructorParameter, MethodParameter, PathSegmentType, RequestBodySchema,
     };
     use golem_service_base::model::SafeIndex;
+
+    fn empty_graph() -> SchemaGraph {
+        SchemaGraph::empty()
+    }
+
+    fn input(fields: Vec<NamedField>) -> InputSchema {
+        InputSchema::Parameters(fields)
+    }
+
+    fn str_field(name: &str) -> NamedField {
+        NamedField::user_supplied(name, SchemaType::string())
+    }
 
     #[test]
     fn constructor_binds_all_parameters_from_mount_path() {
@@ -409,16 +483,11 @@ mod test {
             webhook_suffix: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "agent_id".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("agent_id")]);
 
-        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+        let params =
+            build_http_agent_constructor_parameters(&mount, &empty_graph(), &schema, &|msg| msg)
+                .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(
@@ -444,16 +513,11 @@ mod test {
             webhook_suffix: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "missing".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("missing")]);
 
-        let err = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap_err();
+        let err =
+            build_http_agent_constructor_parameters(&mount, &empty_graph(), &schema, &|msg| msg)
+                .unwrap_err();
 
         assert!(err.contains("must bind to a path variable"));
     }
@@ -472,16 +536,11 @@ mod test {
             webhook_suffix: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "rest".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::u32(),
-                }),
-            }],
-        });
+        let schema = input(vec![NamedField::user_supplied("rest", SchemaType::u32())]);
 
-        let err = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap_err();
+        let err =
+            build_http_agent_constructor_parameters(&mount, &empty_graph(), &schema, &|msg| msg)
+                .unwrap_err();
 
         assert!(err.contains("Remaining path variables must be of type string"));
     }
@@ -513,17 +572,13 @@ mod test {
             header_vars: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "task_id".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("task_id")]);
 
         let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(
@@ -537,46 +592,19 @@ mod test {
 
     #[test]
     fn method_infers_json_body_from_component_model_parameters() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
 
-        let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
-            auth_details: None,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            path_suffix: vec![],
-            query_vars: vec![],
-            header_vars: vec![],
-        };
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "a".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::str(),
-                    }),
-                },
-                NamedElementSchema {
-                    name: "b".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::u32(),
-                    }),
-                },
-            ],
-        });
+        let schema = input(vec![
+            str_field("a"),
+            NamedField::user_supplied("b", SchemaType::u32()),
+        ]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
         assert!(let RequestBodySchema::JsonBody { .. } = body);
         assert_eq!(params.len(), 2);
@@ -590,128 +618,69 @@ mod test {
 
     #[test]
     fn method_accepts_unstructured_binary_body_unrestricted() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
 
-        let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
-            auth_details: None,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            path_suffix: vec![],
-            query_vars: vec![],
-            header_vars: vec![],
-        };
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "return-type".into(),
-                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
-            }],
-        });
+        let schema = input(vec![NamedField::user_supplied(
+            "return-type",
+            SchemaType::binary(BinaryRestrictions::default()),
+        )]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
-        assert!(matches!(body, RequestBodySchema::UnrestrictedBinary));
+        assert!(matches!(body, RequestBodySchema::BinaryBody { .. }));
         assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 
     #[test]
     fn method_accepts_unstructured_binary_body_restricted() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
 
-        let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
-            auth_details: None,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            path_suffix: vec![],
-            query_vars: vec![],
-            header_vars: vec![],
-        };
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "return-type".into(),
-                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                    restrictions: Some(vec![BinaryType {
-                        mime_type: "application/octet-stream".into(),
-                    }]),
-                }),
-            }],
-        });
+        let schema = input(vec![NamedField::user_supplied(
+            "return-type",
+            SchemaType::binary(BinaryRestrictions {
+                mime_types: Some(vec!["application/octet-stream".into()]),
+                min_bytes: None,
+                max_bytes: None,
+            }),
+        )]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
-        {
-            let_assert!(RequestBodySchema::RestrictedBinary { allowed_mime_types } = body);
-            assert!(allowed_mime_types == vec!["application/octet-stream"]);
-        }
+        let_assert!(RequestBodySchema::BinaryBody { expected } = body);
+        let_assert!(SchemaType::Binary { restrictions, .. } = expected.graph.root);
+        assert!(restrictions.mime_types == Some(vec!["application/octet-stream".to_string()]));
 
         assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 
     #[test]
     fn method_rejects_mixed_body_parameters() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
 
-        let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
-            auth_details: None,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            path_suffix: vec![],
-            query_vars: vec![],
-            header_vars: vec![],
-        };
+        let schema = input(vec![
+            str_field("a"),
+            NamedField::user_supplied("b", SchemaType::binary(BinaryRestrictions::default())),
+        ]);
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "a".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::str(),
-                    }),
-                },
-                NamedElementSchema {
-                    name: "b".into(),
-                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                        restrictions: None,
-                    }),
-                },
-            ],
-        });
-
-        let err =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap_err();
+        let err = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap_err();
 
         assert!(err.contains("Invalid body parameters"));
     }
@@ -735,16 +704,11 @@ mod test {
             webhook_suffix: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "user_name".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("user_name")]);
 
-        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+        let params =
+            build_http_agent_constructor_parameters(&mount, &empty_graph(), &schema, &|msg| msg)
+                .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(
@@ -775,16 +739,11 @@ mod test {
             webhook_suffix: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "userName".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("userName")]);
 
-        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+        let params =
+            build_http_agent_constructor_parameters(&mount, &empty_graph(), &schema, &|msg| msg)
+                .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(
@@ -798,15 +757,7 @@ mod test {
 
     #[test]
     fn method_binds_snake_case_query_variable() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
 
         let endpoint = HttpEndpointDetails {
             http_method: HttpMethod::Get(Empty {}),
@@ -822,17 +773,13 @@ mod test {
             header_vars: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "page_size".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("page_size")]);
 
         let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0], MethodParameter::Query { .. }));
@@ -840,15 +787,7 @@ mod test {
 
     #[test]
     fn method_binds_camel_case_query_variable() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
 
         let endpoint = HttpEndpointDetails {
             http_method: HttpMethod::Get(Empty {}),
@@ -864,17 +803,13 @@ mod test {
             header_vars: vec![],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "pageSize".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("pageSize")]);
 
         let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0], MethodParameter::Query { .. }));
@@ -882,15 +817,7 @@ mod test {
 
     #[test]
     fn method_binds_snake_case_header_variable() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
 
         let endpoint = HttpEndpointDetails {
             http_method: HttpMethod::Get(Empty {}),
@@ -906,17 +833,13 @@ mod test {
             }],
         };
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "x_api_key".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: analysed_type::str(),
-                }),
-            }],
-        });
+        let schema = input(vec![str_field("x_api_key")]);
 
         let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0], MethodParameter::Header { .. }));
@@ -924,114 +847,42 @@ mod test {
 
     #[test]
     fn method_json_body_preserves_snake_case_field_names() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
 
-        let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
-            auth_details: None,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            path_suffix: vec![],
-            query_vars: vec![],
-            header_vars: vec![],
-        };
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "first_name".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::str(),
-                    }),
-                },
-                NamedElementSchema {
-                    name: "last_name".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::str(),
-                    }),
-                },
-            ],
-        });
+        let schema = input(vec![str_field("first_name"), str_field("last_name")]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
-        if let RequestBodySchema::JsonBody { expected_type, .. } = body {
-            if let AnalysedType::Record(record) = expected_type {
-                assert_eq!(record.fields[0].name, "first_name");
-                assert_eq!(record.fields[1].name, "last_name");
-            } else {
-                panic!("Expected Record body type");
-            }
-        } else {
-            panic!("Expected JsonBody");
-        }
+        let_assert!(RequestBodySchema::JsonBody { expected } = body);
+        let_assert!(SchemaType::Record { fields, .. } = expected.graph.root);
+        assert!(fields[0].name == "first_name");
+        assert!(fields[1].name == "last_name");
 
         assert_eq!(params.len(), 2);
     }
 
     #[test]
     fn method_json_body_preserves_camel_case_field_names() {
-        let mount = HttpMountDetails {
-            path_prefix: vec![],
-            auth_details: None,
-            phantom_agent: false,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            webhook_suffix: vec![],
-        };
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
 
-        let endpoint = HttpEndpointDetails {
-            http_method: HttpMethod::Get(Empty {}),
-            auth_details: None,
-            cors_options: CorsOptions {
-                allowed_patterns: Vec::new(),
-            },
-            path_suffix: vec![],
-            query_vars: vec![],
-            header_vars: vec![],
-        };
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "firstName".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::str(),
-                    }),
-                },
-                NamedElementSchema {
-                    name: "lastName".into(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type::str(),
-                    }),
-                },
-            ],
-        });
+        let schema = input(vec![str_field("firstName"), str_field("lastName")]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
-        if let RequestBodySchema::JsonBody { expected_type, .. } = body {
-            if let AnalysedType::Record(record) = expected_type {
-                assert_eq!(record.fields[0].name, "firstName");
-                assert_eq!(record.fields[1].name, "lastName");
-            } else {
-                panic!("Expected Record body type");
-            }
-        } else {
-            panic!("Expected JsonBody");
-        }
+        let_assert!(RequestBodySchema::JsonBody { expected } = body);
+        let_assert!(SchemaType::Record { fields, .. } = expected.graph.root);
+        assert!(fields[0].name == "firstName");
+        assert!(fields[1].name == "lastName");
 
         assert_eq!(params.len(), 2);
     }
@@ -1066,17 +917,18 @@ mod test {
         let mount = empty_mount();
         let endpoint = empty_get_endpoint();
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "body".into(),
-                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-            }],
-        });
+        let schema = input(vec![NamedField::user_supplied(
+            "body",
+            SchemaType::text(TextRestrictions::default()),
+        )]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
-        assert!(matches!(body, RequestBodySchema::UnrestrictedText));
+        assert!(matches!(body, RequestBodySchema::TextBody { .. }));
         assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
     }
 
@@ -1085,76 +937,26 @@ mod test {
         let mount = empty_mount();
         let endpoint = empty_get_endpoint();
 
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "body".into(),
-                schema: ElementSchema::UnstructuredText(TextDescriptor {
-                    restrictions: Some(vec![
-                        TextType {
-                            language_code: "en".into(),
-                        },
-                        TextType {
-                            language_code: "de".into(),
-                        },
-                    ]),
-                }),
-            }],
-        });
+        let schema = input(vec![NamedField::user_supplied(
+            "body",
+            SchemaType::text(TextRestrictions {
+                languages: Some(vec!["en".into(), "de".into()]),
+                min_length: None,
+                max_length: None,
+                regex: None,
+            }),
+        )]);
 
         let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
+                msg
+            })
+            .unwrap();
 
-        {
-            let_assert!(
-                RequestBodySchema::RestrictedText {
-                    allowed_language_codes
-                } = body
-            );
-            assert!(allowed_language_codes == vec!["en".to_string(), "de".to_string()]);
-        }
+        let_assert!(RequestBodySchema::TextBody { expected } = body);
+        let_assert!(SchemaType::Text { restrictions, .. } = expected.graph.root);
+        assert!(restrictions.languages == Some(vec!["en".to_string(), "de".to_string()]));
 
         assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
-    }
-
-    #[test]
-    fn method_canonicalizes_empty_text_restrictions_to_unrestricted() {
-        let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "body".into(),
-                schema: ElementSchema::UnstructuredText(TextDescriptor {
-                    restrictions: Some(vec![]),
-                }),
-            }],
-        });
-
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
-
-        assert!(matches!(body, RequestBodySchema::UnrestrictedText));
-        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
-    }
-
-    #[test]
-    fn method_canonicalizes_empty_binary_restrictions_to_unrestricted() {
-        let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
-
-        let schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "body".into(),
-                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                    restrictions: Some(vec![]),
-                }),
-            }],
-        });
-
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
-
-        assert!(matches!(body, RequestBodySchema::UnrestrictedBinary));
-        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 }

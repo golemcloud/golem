@@ -16,15 +16,11 @@ use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::constructor_param_extraction::validate_constructor_schema_for_mcp;
 use crate::mcp::schema::{McpToolSchema, get_mcp_tool_schema};
-use anyhow::Context;
 use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::schema::adapters::{
-    is_multimodal_schema_type, resolve_ref, schema_agent_constructor_to_legacy,
-    schema_agent_method_to_legacy,
-};
+use golem_common::schema::adapters::{is_multimodal_schema_type, resolve_ref};
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, FieldSource, OutputSchema,
 };
@@ -44,13 +40,9 @@ impl McpAgentCapability {
     /// Build an MCP tool or resource capability for a single agent method.
     ///
     /// Performs export-time validation so we never advertise a capability that
-    /// would always fail at invoke time: the constructor and method schemas are
-    /// projected back to the legacy invoke carriers here (the same projection
-    /// the invoke path performs per call), which resolves every `SchemaType::Ref`
-    /// against `schema_graph` and rejects schema-only constructs. This also
-    /// guarantees that the (infallible) JSON Schema rendering below operates on
-    /// fully-resolvable refs, so the downstream `unwrap_or(false)` ref-classifier
-    /// calls cannot silently swallow a dangling/recursive ref.
+    /// would always fail at invoke time: the constructor schema is checked to be
+    /// supplyable via MCP (no multimodal / unstructured constructor parameters),
+    /// resolving `SchemaType::Ref`s against `schema_graph`.
     #[allow(clippy::too_many_arguments)]
     pub fn from_agent_method(
         account_id: &AccountId,
@@ -63,26 +55,15 @@ impl McpAgentCapability {
         constructor: &AgentConstructorSchema,
         component_id: ComponentId,
     ) -> anyhow::Result<Self> {
-        let legacy_constructor = schema_agent_constructor_to_legacy(&schema_graph, constructor)
-            .with_context(|| {
-                format!(
-                    "constructor of agent type {} is not projectable to the MCP invoke model",
-                    agent_type_name.0
+        validate_constructor_schema_for_mcp(&schema_graph, &constructor.input_schema).map_err(
+            |e| {
+                anyhow::anyhow!(
+                    "constructor of agent type {} cannot be supplied via MCP: {}",
+                    agent_type_name.0,
+                    e
                 )
-            })?;
-        schema_agent_method_to_legacy(&schema_graph, method).with_context(|| {
-            format!(
-                "method {} of agent type {} is not projectable to the MCP invoke model",
-                method.name, agent_type_name.0
-            )
-        })?;
-        validate_constructor_schema_for_mcp(&legacy_constructor.input_schema).map_err(|e| {
-            anyhow::anyhow!(
-                "constructor of agent type {} cannot be supplied via MCP: {}",
-                agent_type_name.0,
-                e
-            )
-        })?;
+            },
+        )?;
 
         let has_user_input = method
             .input_schema

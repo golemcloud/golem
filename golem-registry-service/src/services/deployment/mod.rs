@@ -16,7 +16,6 @@ mod deploy_validation_error;
 mod deployment_context;
 mod http_parameter_conversion;
 mod mcp;
-mod mirror;
 mod read;
 mod route_compilation;
 mod routes;
@@ -24,7 +23,6 @@ mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;
 pub use self::mcp::{DeployedMcpError, DeployedMcpService};
-pub use self::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};

@@ -1252,7 +1252,9 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         owner_account_id,
         owner_account_email: email.clone(),
         webhook_prefix_authority_and_path: None,
-        agent_type: Blob::new(agent_type),
+        agent_type: Blob::new(
+            golem_common::schema::adapters::agent::agent_type_to_schema(&agent_type).unwrap(),
+        ),
         canonical_agent_type_name: agent_type_name.to_kebab_case(),
     };
 
