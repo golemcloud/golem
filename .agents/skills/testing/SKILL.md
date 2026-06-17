@@ -44,7 +44,7 @@ cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples 
 ```
 
 If CLI JSON output field names, `$type` names, or invoke JSON unwrapping changed,
-also keep `golem-skill/skills` and tests under `golem-skills/tests` up to date.
+also keep `golem-skills/skills` and tests under `golem-skills/tests` up to date.
 
 ## Test Filtering Rules (test-r)
 
