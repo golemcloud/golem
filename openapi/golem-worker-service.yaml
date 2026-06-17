@@ -4435,7 +4435,9 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StartParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#EndParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
@@ -4446,8 +4448,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -4479,7 +4479,9 @@ components:
         propertyName: type
         mapping:
           Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-          HostCall: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
+          Start: '#/components/schemas/PublicOplogEntry_r#StartParams'
+          End: '#/components/schemas/PublicOplogEntry_r#EndParams'
+          Cancelled: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
@@ -4490,8 +4492,6 @@ components:
           Exited: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
           BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
           EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
-          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
-          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
           PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -4591,18 +4591,6 @@ components:
             - BeginRemoteTransaction
             example: BeginRemoteTransaction
       - $ref: '#/components/schemas/r#BeginRemoteTransactionParams'
-    PublicOplogEntry_r#BeginRemoteWriteParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - BeginRemoteWrite
-            example: BeginRemoteWrite
-      - $ref: '#/components/schemas/r#BeginRemoteWriteParams'
     PublicOplogEntry_r#CancelPendingInvocationParams:
       allOf:
       - type: object
@@ -4615,6 +4603,18 @@ components:
             - CancelPendingInvocation
             example: CancelPendingInvocation
       - $ref: '#/components/schemas/r#CancelPendingInvocationParams'
+    PublicOplogEntry_r#CancelledParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Cancelled
+            example: Cancelled
+      - $ref: '#/components/schemas/r#CancelledParams'
     PublicOplogEntry_r#ChangePersistenceLevelParams:
       allOf:
       - type: object
@@ -4699,7 +4699,7 @@ components:
             - EndAtomicRegion
             example: EndAtomicRegion
       - $ref: '#/components/schemas/r#EndAtomicRegionParams'
-    PublicOplogEntry_r#EndRemoteWriteParams:
+    PublicOplogEntry_r#EndParams:
       allOf:
       - type: object
         required:
@@ -4708,9 +4708,9 @@ components:
           type:
             type: string
             enum:
-            - EndRemoteWrite
-            example: EndRemoteWrite
-      - $ref: '#/components/schemas/r#EndRemoteWriteParams'
+            - End
+            example: End
+      - $ref: '#/components/schemas/r#EndParams'
     PublicOplogEntry_r#ErrorParams:
       allOf:
       - type: object
@@ -4783,18 +4783,6 @@ components:
             - GrowMemory
             example: GrowMemory
       - $ref: '#/components/schemas/r#GrowMemoryParams'
-    PublicOplogEntry_r#HostCallParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - HostCall
-            example: HostCall
-      - $ref: '#/components/schemas/r#HostCallParams'
     PublicOplogEntry_r#InterruptedParams:
       allOf:
       - type: object
@@ -4987,6 +4975,18 @@ components:
             - Snapshot
             example: Snapshot
       - $ref: '#/components/schemas/r#SnapshotParams'
+    PublicOplogEntry_r#StartParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Start
+            example: Start
+      - $ref: '#/components/schemas/r#StartParams'
     PublicOplogEntry_r#StartSpanParams:
       allOf:
       - type: object
@@ -6064,15 +6064,6 @@ components:
           format: date-time
         transactionId:
           type: string
-    r#BeginRemoteWriteParams:
-      type: object
-      title: r#BeginRemoteWriteParams
-      required:
-      - timestamp
-      properties:
-        timestamp:
-          type: string
-          format: date-time
     r#CancelPendingInvocationParams:
       type: object
       title: r#CancelPendingInvocationParams
@@ -6085,6 +6076,21 @@ components:
           format: date-time
         idempotencyKey:
           type: string
+    r#CancelledParams:
+      type: object
+      title: r#CancelledParams
+      required:
+      - timestamp
+      - startIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        startIndex:
+          type: integer
+          format: uint64
+        partial:
+          $ref: '#/components/schemas/ValueAndType'
     r#ChangePersistenceLevelParams:
       type: object
       title: r#ChangePersistenceLevelParams
@@ -6232,19 +6238,24 @@ components:
         beginIndex:
           type: integer
           format: uint64
-    r#EndRemoteWriteParams:
+    r#EndParams:
       type: object
-      title: r#EndRemoteWriteParams
+      title: r#EndParams
       required:
       - timestamp
-      - beginIndex
+      - startIndex
+      - forcedCommit
       properties:
         timestamp:
           type: string
           format: date-time
-        beginIndex:
+        startIndex:
           type: integer
           format: uint64
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        forcedCommit:
+          type: boolean
     r#ErrorParams:
       type: object
       title: r#ErrorParams
@@ -6328,27 +6339,6 @@ components:
         delta:
           type: integer
           format: uint64
-    r#HostCallParams:
-      type: object
-      title: r#HostCallParams
-      required:
-      - timestamp
-      - functionName
-      - request
-      - response
-      - durableFunctionType
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        functionName:
-          type: string
-        request:
-          $ref: '#/components/schemas/ValueAndType'
-        response:
-          $ref: '#/components/schemas/ValueAndType'
-        durableFunctionType:
-          $ref: '#/components/schemas/PublicDurableFunctionType'
     r#InterruptedParams:
       type: object
       title: r#InterruptedParams
@@ -6566,6 +6556,26 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+    r#StartParams:
+      type: object
+      title: r#StartParams
+      required:
+      - timestamp
+      - functionName
+      - durableFunctionType
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        parentStartIndex:
+          type: integer
+          format: uint64
+        functionName:
+          type: string
+        request:
+          $ref: '#/components/schemas/ValueAndType'
+        durableFunctionType:
+          $ref: '#/components/schemas/PublicDurableFunctionType'
     r#StartSpanParams:
       type: object
       title: r#StartSpanParams

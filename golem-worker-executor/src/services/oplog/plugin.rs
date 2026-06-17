@@ -956,6 +956,24 @@ impl Oplog for ForwardingOplog {
         self.inner.switch_persistence_level(mode).await;
     }
 
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        let mut state = self.state.lock().await;
+        // The `Start` will be appended at the next index; this wrapper tracks
+        // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
+        // index matches the one the inner oplog assigns.
+        let first_idx = state.last_oplog_idx.next();
+        let second = make_second(first_idx);
+        state.buffer.push_back(start.clone());
+        state.last_oplog_idx = state.last_oplog_idx.next();
+        state.buffer.push_back(second.clone());
+        state.last_oplog_idx = state.last_oplog_idx.next();
+        self.inner.add_pair(start, Box::new(move |_| second)).await
+    }
+
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
         Some(self.inner.clone())
     }

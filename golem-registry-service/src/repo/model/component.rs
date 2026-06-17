@@ -240,6 +240,44 @@ pub struct ComponentExtRevisionRecord {
     pub revision: ComponentRevisionRecord,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub component: ComponentExtRevisionRecord,
+
+    pub application_id: Uuid,
+    pub application_name: String,
+    pub owner_account_id: Uuid,
+    pub owner_account_email: String,
+    pub environment_name: String,
+    pub environment_revision_id: i64,
+    pub environment_compatibility_check: bool,
+    pub environment_version_check: bool,
+    pub environment_security_overrides: bool,
+}
+
+impl ComponentAuthExtRevisionRecord {
+    pub fn try_into_model(self) -> Result<Component, RepoError> {
+        let Self {
+            component,
+            application_id,
+            application_name,
+            owner_account_id,
+            owner_account_email,
+            environment_name,
+            ..
+        } = self;
+
+        component.try_into_model(
+            ApplicationId(application_id),
+            AccountId(owner_account_id),
+            AccountEmail::new(owner_account_email),
+            ApplicationName(application_name),
+            EnvironmentName(environment_name),
+        )
+    }
+}
+
 impl ComponentExtRevisionRecord {
     pub fn try_into_model(
         self,

@@ -163,6 +163,16 @@ pub struct ResourceDefinitionExtRevisionRecord {
     pub revision: ResourceDefinitionRevisionRecord,
 }
 
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct ResourceDefinitionAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub resource_definition: ResourceDefinitionExtRevisionRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<ResourceDefinitionExtRevisionRecord> for ResourceDefinition {
     type Error = ResourceDefinitionRepoError;
     fn try_from(value: ResourceDefinitionExtRevisionRecord) -> Result<Self, Self::Error> {

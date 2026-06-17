@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::model::agent_secrets::{
-    AgentSecretCreationRecord, AgentSecretExtRevisionRecord, AgentSecretRepoError,
-    AgentSecretRevisionRecord,
+    AgentSecretAuthExtRevisionRecord, AgentSecretCreationRecord, AgentSecretExtRevisionRecord,
+    AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use super::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
 use crate::repo::model::BindFields;
@@ -52,7 +52,7 @@ pub trait AgentSecretRepo: Send + Sync {
     async fn get_by_id(
         &self,
         agent_secret_id: Uuid,
-    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
+    ) -> Result<Option<AgentSecretAuthExtRevisionRecord>, AgentSecretRepoError>;
 
     async fn get_for_environment(
         &self,
@@ -112,7 +112,7 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     async fn get_by_id(
         &self,
         agent_secret_id: Uuid,
-    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+    ) -> Result<Option<AgentSecretAuthExtRevisionRecord>, AgentSecretRepoError> {
         self.repo
             .get_by_id(agent_secret_id)
             .instrument(Self::span_agent_secret_id(agent_secret_id))
@@ -329,14 +329,27 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         agent_secret_id: Uuid,
-    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
-        let result: Option<AgentSecretExtRevisionRecord> = self.with_ro("get_by_id")
+    ) -> Result<Option<AgentSecretAuthExtRevisionRecord>, AgentSecretRepoError> {
+        let result: Option<AgentSecretAuthExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM agent_secrets sec
+                    JOIN environments e ON e.environment_id = sec.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = sec.current_revision_id
-                    WHERE sec.agent_secret_id = $1 AND sec.deleted_at IS NULL
+                    WHERE sec.agent_secret_id = $1
+                        AND sec.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(agent_secret_id),
             )

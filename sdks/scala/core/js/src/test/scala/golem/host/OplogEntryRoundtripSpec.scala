@@ -403,6 +403,71 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         i.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
       )
     },
+    test("Start durable host-call marker from dynamic") {
+      val vatDyn = js.Dynamic.literal(
+        value = js.Dynamic.literal(nodes = js.Array(js.Dynamic.literal(tag = "prim-s32", `val` = 42))),
+        typ = js.Dynamic.literal(nodes =
+          js.Array(
+            js.Dynamic
+              .literal(name = js.undefined, owner = js.undefined, `type` = js.Dynamic.literal(tag = "prim-s32-type"))
+          )
+        )
+      )
+      val raw = wrapEntry(
+        "start",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          parentStartIndex = js.undefined,
+          functionName = "wasi:io/read",
+          request = vatDyn,
+          durableFunctionType = js.Dynamic.literal(tag = "read-remote")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val s      = parsed.asInstanceOf[OplogEntry.Start]
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.Start],
+        s.params.functionName == "wasi:io/read",
+        s.params.request.isDefined,
+        s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
+      )
+    },
+    test("End durable host-call marker from dynamic") {
+      val raw = wrapEntry(
+        "end",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          startIndex = js.BigInt("12"),
+          response = js.undefined,
+          forcedCommit = true
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val e      = parsed.asInstanceOf[OplogEntry.End]
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.End],
+        e.params.startIndex == BigInt(12),
+        e.params.response == None,
+        e.params.forcedCommit
+      )
+    },
+    test("Cancelled durable host-call marker from dynamic") {
+      val raw = wrapEntry(
+        "cancelled",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          startIndex = js.BigInt("13"),
+          partial = js.undefined
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val c      = parsed.asInstanceOf[OplogEntry.Cancelled]
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.Cancelled],
+        c.params.startIndex == BigInt(13),
+        c.params.partial == None
+      )
+    },
     test("CreateResource from dynamic") {
       val raw = wrapEntry(
         "create-resource",

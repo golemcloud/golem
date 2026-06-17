@@ -1058,6 +1058,16 @@ impl Oplog for MultiLayerOplog {
         self.primary.switch_persistence_level(mode).await;
     }
 
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        let (first_idx, second_idx) = self.primary.add_pair(start, make_second).await;
+        self.last_oplog_index.set(second_idx);
+        (first_idx, second_idx)
+    }
+
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
         Some(self.primary.clone())
     }

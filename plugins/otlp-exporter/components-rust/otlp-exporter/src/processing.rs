@@ -12,7 +12,7 @@ use golem_rust::bindings::golem::api::oplog::{
     FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters, LogLevel, LogParameters,
     OplogEntry, RawAgentInvocationFinishedParameters, RawAgentInvocationStartedParameters,
     RawCreateParameters, RawCreateResourceParameters, RawDropResourceParameters,
-    RawHostCallParameters, RawOplogProcessorCheckpointParameters, RawSnapshotParameters,
+    RawOplogProcessorCheckpointParameters, RawSnapshotParameters, RawStartParameters,
     RawSuccessfulUpdateParameters, RemoteTransactionParameters, SetSpanAttributeParameters,
     SpanData, StartSpanParameters,
 };
@@ -162,8 +162,8 @@ pub(crate) fn process_entries(
             OplogEntry::GrowMemory(params) => {
                 handle_grow_memory(state, params, &mut metrics);
             }
-            OplogEntry::HostCall(params) => {
-                handle_host_call(params, &mut metrics);
+            OplogEntry::Start(params) => {
+                handle_start(params, &mut metrics);
             }
             OplogEntry::PendingAgentInvocation(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp).to_string();
@@ -462,7 +462,15 @@ fn handle_grow_memory(
     ));
 }
 
-fn handle_host_call(params: RawHostCallParameters, metrics: &mut Vec<OtlpMetric>) {
+fn handle_start(params: RawStartParameters, metrics: &mut Vec<OtlpMetric>) {
+    // Phase 1 of the concurrent durability refactor: `Start` covers both real
+    // host calls and synthetic durable scope markers (e.g. batched-write
+    // scopes). Only real host calls carry a `request` payload, and scope
+    // markers use `<scope:...>` function names — exclude both so this metric
+    // stays semantically equivalent to the legacy `HostCall` counter.
+    if params.request.is_none() || params.function_name.starts_with("<scope:") {
+        return;
+    }
     let time_ns = datetime_to_nanos(&params.timestamp).to_string();
     let fn_type = wrapped_function_type_name(&params.durable_function_type);
     metrics.push(OtlpMetric {

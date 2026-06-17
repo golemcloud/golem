@@ -98,13 +98,34 @@ impl PublicOplogEntry {
             PublicOplogEntry::Create(_params) => {
                 Self::string_match("create", &[], query_path, query)
             }
-            PublicOplogEntry::HostCall(params) => {
-                Self::string_match("HostCall", &[], query_path, query)
-                    || Self::string_match("host-call", &[], query_path, query)
+            PublicOplogEntry::Start(params) => {
+                Self::string_match("Start", &[], query_path, query)
+                    || Self::string_match("start", &[], query_path, query)
                     || Self::string_match("imported-function", &[], query_path, query)
                     || Self::string_match(&params.function_name, &[], query_path, query)
-                    || Self::match_value(&params.request, &[], query_path, query)
-                    || Self::match_value(&params.response, &[], query_path, query)
+                    || params
+                        .request
+                        .as_ref()
+                        .map(|req| Self::match_value(req, &[], query_path, query))
+                        .unwrap_or(false)
+            }
+            PublicOplogEntry::End(params) => {
+                Self::string_match("End", &[], query_path, query)
+                    || Self::string_match("end", &[], query_path, query)
+                    || params
+                        .response
+                        .as_ref()
+                        .map(|resp| Self::match_value(resp, &[], query_path, query))
+                        .unwrap_or(false)
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                Self::string_match("Cancelled", &[], query_path, query)
+                    || Self::string_match("cancelled", &[], query_path, query)
+                    || params
+                        .partial
+                        .as_ref()
+                        .map(|partial| Self::match_value(partial, &[], query_path, query))
+                        .unwrap_or(false)
             }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 Self::string_match("agentinvocationstarted", &[], query_path, query)
@@ -187,14 +208,7 @@ impl PublicOplogEntry {
                 Self::string_match("endatomicregion", &[], query_path, query)
                     || Self::string_match("end-atomic-region", &[], query_path, query)
             }
-            PublicOplogEntry::BeginRemoteWrite(_params) => {
-                Self::string_match("beginremotewrite", &[], query_path, query)
-                    || Self::string_match("begin-remote-write", &[], query_path, query)
-            }
-            PublicOplogEntry::EndRemoteWrite(_params) => {
-                Self::string_match("endremotewrite", &[], query_path, query)
-                    || Self::string_match("end-remote-write", &[], query_path, query)
-            }
+
             PublicOplogEntry::PendingAgentInvocation(params) => {
                 Self::string_match("pendingagentinvocation", &[], query_path, query)
                     || Self::string_match("invoke", &[], query_path, query)

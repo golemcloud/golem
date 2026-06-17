@@ -101,6 +101,9 @@ This runs `rustfmt` and `clippy` with automatic fixes. Load `pre-pr-checklist` s
 
 - Follow existing code conventions in the file you're editing
 - Do not add unnecessary comments
+- Comments must describe the code as it is, for a reader who has no other context. Never reference
+  implementation plans, migration "phases", ticket/issue/PR numbers, or other transient process
+  artifacts in code comments — describe the actual invariant, behavior, or rationale instead.
 - Use existing libraries and utilities from the codebase
 - Security: Never expose or log secrets/keys
 

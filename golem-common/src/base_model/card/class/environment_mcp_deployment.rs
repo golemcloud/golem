@@ -115,7 +115,7 @@ fn parse_environment_mcp_deployment_identifier(value: &str) -> Result<String, St
     if chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         Ok(value.to_string())
     } else {

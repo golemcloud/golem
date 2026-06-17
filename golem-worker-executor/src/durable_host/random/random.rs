@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestRandomBytes, HostResponseRandomBytes,
@@ -23,47 +24,41 @@ use wasmtime_wasi::random::WasiRandomView as _;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_random_bytes(&mut self, length: u64) -> wasmtime::Result<Vec<u8>> {
-        let durability = Durability::<host_functions::RandomGetRandomBytes>::new(
+        let handle = CallHandle::<host_functions::RandomGetRandomBytes, NotCancellable>::start(
             self,
+            HostRequestRandomBytes { length },
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        let result = if durability.is_live() {
-            let bytes = {
-                let mut view = self.as_wasi_view();
-                Host::get_random_bytes(view.random(), length).await?
-            };
-            durability
-                .persist(
-                    self,
-                    HostRequestRandomBytes { length },
-                    HostResponseRandomBytes { bytes },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let bytes = {
+                    let mut view = ctx.as_wasi_view();
+                    Host::get_random_bytes(view.random(), length).await?
+                };
+                Ok(HostResponseRandomBytes { bytes })
+            })
+            .await?;
 
         Ok(result.bytes)
     }
 
     async fn get_random_u64(&mut self) -> wasmtime::Result<u64> {
-        let durability = Durability::<host_functions::RandomGetRandomU64>::new(
+        let handle = CallHandle::<host_functions::RandomGetRandomU64, NotCancellable>::start(
             self,
+            HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        let result = if durability.is_live() {
-            let value = {
-                let mut view = self.as_wasi_view();
-                Host::get_random_u64(view.random()).await?
-            };
-            durability
-                .persist(self, HostRequestNoInput {}, HostResponseRandomU64 { value })
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let value = {
+                    let mut view = ctx.as_wasi_view();
+                    Host::get_random_u64(view.random()).await?
+                };
+                Ok(HostResponseRandomU64 { value })
+            })
+            .await?;
 
         Ok(result.value)
     }

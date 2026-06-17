@@ -14,8 +14,9 @@
 
 use wasmtime::component::Resource;
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
 use golem_common::model::oplog::types::{SerializableIpAddresses, SerializableSocketError};
@@ -65,17 +66,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        let mut durability = Durability::<SocketsIpNameLookupResolveAddresses>::new(
+        // `ReadRemote` with a one-shot/loop in-function retry. The eager `Start` captures the
+        // request name; on replay a committed `Start` without its `End` is re-executable (read), so
+        // the live side effect runs from a single shared block for both the live and
+        // incomplete-replay paths.
+        let mut handle = CallHandle::<SocketsIpNameLookupResolveAddresses, NotCancellable>::start(
             self,
+            HostRequestSocketsResolveName { name: name.clone() },
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        let result = if durability.is_live() {
+        let result = 'resp: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'resp response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let network_borrow = Resource::new_borrow(network.rep());
                 let result = resolve_and_drain_addresses(self, network_borrow, name.clone()).await;
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |err| match err.downcast_ref() {
                         Some(
                             ErrorCode::NameUnresolvable
@@ -96,18 +109,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok(addresses) => Ok(SerializableIpAddresses::from(addresses)),
                 Err(error) => Err(SerializableSocketError::from(error)),
             };
-            durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestSocketsResolveName { name },
                     HostResponseSocketsResolveName {
                         result: serializable_result,
                     },
                 )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                .await?
+        };
 
         match result.result {
             Ok(addresses) => {

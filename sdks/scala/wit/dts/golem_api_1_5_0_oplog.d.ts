@@ -130,9 +130,10 @@ declare module 'golem:api/oplog@1.5.0' {
    * The side-effect manipulates external state through multiple invoked functions (for example
    * a HTTP request where reading the response involves multiple host function calls)
    * On the first invocation of the batch, the parameter should be `None` - this triggers
-   * writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
-   * this entry's index as the parameter. In batched remote writes it is the caller's responsibility
-   * to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+   * writing a scope `Start` entry in the oplog. Followup invocations should contain this
+   * entry's index as the parameter so their host-call `Start` entries can point back to the
+   * scope. In batched remote writes it is the caller's responsibility to manually write the
+   * matching scope `End` entry (using `end_function`) when the operation is completed.
    */
   {
     tag: 'write-remote-batched'
@@ -173,12 +174,23 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
-  export type HostCallParameters = {
+  export type StartParameters = {
     timestamp: Datetime;
+    parentStartIndex?: OplogIndex;
     functionName: string;
-    request: ValueAndType;
-    response: ValueAndType;
+    request?: ValueAndType;
     durableFunctionType: WrappedFunctionType;
+  };
+  export type EndParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    response?: ValueAndType;
+    forcedCommit: boolean;
+  };
+  export type CancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: ValueAndType;
   };
   export type LocalSpanData = {
     spanId: SpanId;
@@ -232,10 +244,6 @@ declare module 'golem:api/oplog@1.5.0' {
     name: string;
   };
   export type EndAtomicRegionParameters = {
-    timestamp: Datetime;
-    beginIndex: OplogIndex;
-  };
-  export type EndRemoteWriteParameters = {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
@@ -578,12 +586,23 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
-  export type RawHostCallParameters = {
+  export type RawStartParameters = {
     timestamp: Datetime;
+    parentStartIndex?: OplogIndex;
     functionName: string;
-    request: OplogPayload;
-    response: OplogPayload;
+    request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
+  };
+  export type RawEndParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    response?: OplogPayload;
+    forcedCommit: boolean;
+  };
+  export type RawCancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: OplogPayload;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -690,10 +709,23 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'create'
     val: RawCreateParameters
   } |
-  /** The agent invoked a host function */
+  /** Marks the start of a durable host call (or scope such as a batched-write). */
   {
-    tag: 'host-call'
-    val: RawHostCallParameters
+    tag: 'start'
+    val: RawStartParameters
+  } |
+  /** Marks the successful completion of a durable host call (or scope) started by a matching `Start`. */
+  {
+    tag: 'end'
+    val: RawEndParameters
+  } |
+  /**
+   * Marks that a durable host call started by a matching `Start` was cancelled
+   * (e.g. dropped from a `select!`) before producing a final response.
+   */
+  {
+    tag: 'cancelled'
+    val: RawCancelledParameters
   } |
   /** The agent has been invoked */
   {
@@ -762,20 +794,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'end-atomic-region'
     val: EndAtomicRegionParameters
-  } |
-  /**
-   * Begins a remote write operation. Only used when idempotence mode is off. In this case each
-   * remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-   * unfinished remote writes cannot be recovered.
-   */
-  {
-    tag: 'begin-remote-write'
-    val: Timestamp
-  } |
-  /** Marks the end of a remote write operation. Only used when idempotence mode is off. */
-  {
-    tag: 'end-remote-write'
-    val: EndRemoteWriteParameters
   } |
   /** An invocation request arrived while the agent was busy */
   {
@@ -918,10 +936,23 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'create'
     val: CreateParameters
   } |
-  /** The agent invoked a host function */
+  /** Marks the start of a durable host call (or scope such as a batched-write). */
   {
-    tag: 'host-call'
-    val: HostCallParameters
+    tag: 'start'
+    val: StartParameters
+  } |
+  /** Marks the successful completion of a durable host call (or scope) started by a matching `Start`. */
+  {
+    tag: 'end'
+    val: EndParameters
+  } |
+  /**
+   * Marks that a durable host call started by a matching `Start` was cancelled
+   * (e.g. dropped from a `select!`) before producing a final response.
+   */
+  {
+    tag: 'cancelled'
+    val: CancelledParameters
   } |
   /** The agent has been invoked */
   {
@@ -990,20 +1021,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'end-atomic-region'
     val: EndAtomicRegionParameters
-  } |
-  /**
-   * Begins a remote write operation. Only used when idempotence mode is off. In this case each
-   * remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-   * unfinished remote writes cannot be recovered.
-   */
-  {
-    tag: 'begin-remote-write'
-    val: Timestamp
-  } |
-  /** Marks the end of a remote write operation. Only used when idempotence mode is off. */
-  {
-    tag: 'end-remote-write'
-    val: EndRemoteWriteParameters
   } |
   /** An invocation request arrived while the agent was busy */
   {

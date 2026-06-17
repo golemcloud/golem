@@ -19,7 +19,6 @@ message RawOplogEntry {
   google.protobuf.Timestamp timestamp = 1;
   oneof entry {
     RawCreateParameters create = 2;
-    RawHostCallParameters host_call = 3;
     RawAgentInvocationStartedParameters agent_invocation_started = 4;
     RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
     RawTimestampOnly suspend = 6;
@@ -30,8 +29,6 @@ message RawOplogEntry {
     RawTimestampOnly exited = 11;
     RawTimestampOnly begin_atomic_region = 12;
     RawEndAtomicRegionParameters end_atomic_region = 13;
-    RawTimestampOnly begin_remote_write = 14;
-    RawEndRemoteWriteParameters end_remote_write = 15;
     RawPendingAgentInvocationParameters pending_agent_invocation = 16;
     RawPendingUpdateParameters pending_update = 17;
     RawSuccessfulUpdateParameters successful_update = 18;
@@ -59,6 +56,9 @@ message RawOplogEntry {
     RawOplogProcessorCheckpointParameters oplog_processor_checkpoint = 40;
     RawSetRetryPolicyParameters set_retry_policy = 41;
     RawRemoveRetryPolicyParameters remove_retry_policy = 42;
+    RawStartParameters start = 43;
+    RawEndParameters end = 44;
+    RawCancelledParameters cancelled = 45;
   }
 }
 
@@ -144,11 +144,22 @@ message RawCreateParameters {
   golem.component.AgentMode agent_mode = 13;
 }
 
-message RawHostCallParameters {
-  string function_name = 1;
-  RawOplogPayload request = 2;
-  RawOplogPayload response = 3;
-  WrappedFunctionType durable_function_type = 4;
+message RawStartParameters {
+  optional uint64 parent_start_index = 2;
+  string function_name = 3;
+  optional RawOplogPayload request = 4;
+  WrappedFunctionType durable_function_type = 5;
+}
+
+message RawEndParameters {
+  uint64 start_index = 1;
+  optional RawOplogPayload response = 2;
+  bool forced_commit = 3;
+}
+
+message RawCancelledParameters {
+  uint64 start_index = 1;
+  optional RawOplogPayload partial = 2;
 }
 
 message RawAgentInvocationStartedParameters {
@@ -177,10 +188,6 @@ message RawJumpParameters {
 }
 
 message RawEndAtomicRegionParameters {
-  uint64 begin_index = 1;
-}
-
-message RawEndRemoteWriteParameters {
   uint64 begin_index = 1;
 }
 

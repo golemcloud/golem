@@ -603,6 +603,9 @@ impl From<PermissionShareError> for ApiError {
             | PermissionShareError::InvalidRecipient { .. } => {
                 Self::bad_request(api::error_code::INVALID_PERMISSION_SHARE_GRANT, error)
             }
+            PermissionShareError::GrantNotDelegable(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
             PermissionShareError::Unauthorized(inner) => inner.into(),
             PermissionShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,

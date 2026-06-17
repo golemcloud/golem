@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::oplog::{
@@ -23,62 +24,55 @@ use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> wasmtime::Result<Datetime> {
-        let durability =
-            Durability::<host_functions::WallClockNow>::new(self, DurableFunctionType::ReadLocal)
-                .await?;
+        // Re-executable `ReadLocal`: the `CallHandle::run` combinator reads the clock on the live /
+        // incomplete-replay paths and replays a recorded value otherwise.
+        let handle = CallHandle::<host_functions::WallClockNow, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
-            let result = {
-                let mut view = self.as_wasi_view();
-                Host::now(&mut view.clocks()).await?
-            };
-
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseWallClock {
-                        time: SerializableDateTime {
-                            seconds: result.seconds,
-                            nanoseconds: result.nanoseconds,
-                        },
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let result = {
+                    let mut view = ctx.as_wasi_view();
+                    Host::now(&mut view.clocks()).await?
+                };
+                Ok(HostResponseWallClock {
+                    time: SerializableDateTime {
+                        seconds: result.seconds,
+                        nanoseconds: result.nanoseconds,
                     },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                })
+            })
+            .await?;
 
         Ok(result.time.into())
     }
 
     async fn resolution(&mut self) -> wasmtime::Result<Datetime> {
-        let durability = Durability::<host_functions::WallClockResolution>::new(
+        let handle = CallHandle::<host_functions::WallClockResolution, NotCancellable>::start(
             self,
+            HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
 
-        let result = if durability.is_live() {
-            let result = {
-                let mut view = self.as_wasi_view();
-                Host::resolution(&mut view.clocks()).await?
-            };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseWallClock {
-                        time: SerializableDateTime {
-                            seconds: result.seconds,
-                            nanoseconds: result.nanoseconds,
-                        },
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let result = {
+                    let mut view = ctx.as_wasi_view();
+                    Host::resolution(&mut view.clocks()).await?
+                };
+                Ok(HostResponseWallClock {
+                    time: SerializableDateTime {
+                        seconds: result.seconds,
+                        nanoseconds: result.nanoseconds,
                     },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+                })
+            })
+            .await?;
 
         Ok(result.time.into())
     }
