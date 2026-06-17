@@ -115,6 +115,19 @@ fn is_no_cache(policy: &CachePolicy) -> bool {
     }
 }
 
+/// The component revision a starting worker should be charged/admitted against.
+///
+/// When a pending update is queued, `create_instance` instantiates the update's
+/// `target_revision` rather than the last known revision, so admission must
+/// reserve and key the component charge against the target. With no pending
+/// update, the last known revision is the one that will be instantiated.
+fn component_charge_revision(
+    pending_target_revision: Option<ComponentRevision>,
+    last_known_revision: ComponentRevision,
+) -> ComponentRevision {
+    pending_target_revision.unwrap_or(last_known_revision)
+}
+
 /// Inserts `output` into the cache under `epoch`, which must be the value
 /// captured at enqueue (see
 /// [`Worker::enqueue_worker_invocation_with_effect`]).
@@ -1377,13 +1390,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Returns the component identity and compiled-module size used to charge
     /// the shared module memory once per resident component.
+    ///
+    /// This resolves the same component revision that [`Worker::create_instance`]
+    /// will instantiate: when a pending update is queued, the worker loads the
+    /// update's `target_revision`, not the last known revision, so the charge
+    /// must be keyed to — and sized from — the target revision. Charging against
+    /// the old revision would key the component-charge refcount to the wrong
+    /// resident module and, if the target module is larger, under-reserve memory.
     pub async fn component_charge_requirement(
         &self,
     ) -> Result<(ComponentId, ComponentRevision, u64), WorkerExecutorError> {
         let metadata = self.get_latest_worker_metadata().await;
         let component_id = self.owned_agent_id.component_id();
-        let component_revision = metadata.last_known_status.component_revision;
-        let component_module_bytes = metadata.last_known_status.component_size;
+
+        // Mirror create_instance: a queued pending update is applied by loading
+        // its target revision, so charge against that revision rather than the
+        // last known one.
+        let pending_target = metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .map(|update| update.target_revision);
+        let component_revision = component_charge_revision(
+            pending_target,
+            metadata.last_known_status.component_revision,
+        );
+
+        // When charging against the currently resident revision we can use the
+        // module size already recorded in the status; for a pending-update target
+        // revision we resolve the target's module size from its metadata, so the
+        // reservation matches the module create_instance will actually load.
+        let component_module_bytes =
+            if component_revision == metadata.last_known_status.component_revision {
+                metadata.last_known_status.component_size
+            } else {
+                self.component_service()
+                    .get_metadata(component_id, Some(component_revision))
+                    .await?
+                    .component_size
+            };
         Ok((component_id, component_revision, component_module_bytes))
     }
 
@@ -3946,6 +3991,27 @@ mod tests {
             }
             other => panic!("expected terminal lookup failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn component_charge_revision_uses_last_known_without_pending_update() {
+        let last_known = ComponentRevision::INITIAL.next().unwrap();
+        assert_eq!(
+            component_charge_revision(None, last_known),
+            last_known,
+            "with no pending update the worker instantiates the last known revision"
+        );
+    }
+
+    #[test]
+    fn component_charge_revision_uses_pending_update_target() {
+        let last_known = ComponentRevision::INITIAL;
+        let target = ComponentRevision::INITIAL.next().unwrap();
+        assert_eq!(
+            component_charge_revision(Some(target), last_known),
+            target,
+            "a queued pending update is applied by loading its target revision, so the charge must key to the target, not the last known revision"
+        );
     }
 }
 
