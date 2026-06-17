@@ -14573,6 +14573,8 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
+    AgentTypeSchema:
+      type: object
     Application:
       title: Application
       type: object
@@ -14775,7 +14777,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentType'
+            $ref: '#/components/schemas/AgentTypeSchema'
         agentTypeProvisionConfigs:
           description: |-
             Per-agent-type provisioning configuration: env, config, plugins, files.
@@ -14942,7 +14944,7 @@ components:
       type: object
       properties:
         agentType:
-          $ref: '#/components/schemas/AgentType'
+          $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
           $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
         webhookPrefixAuthorityAndPath:

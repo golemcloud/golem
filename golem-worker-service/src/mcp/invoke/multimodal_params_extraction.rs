@@ -35,18 +35,16 @@ pub fn extract_multimodal_element_value(
     let resolved = resolve_ref(graph, case_schema)
         .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))?;
     match resolved {
-        SchemaType::Text { restrictions, .. } => schema_text_value_from_json(value_json, restrictions)
-            .map_err(|e| format!("parts[{}] '{}': {}", index, name, e)),
+        SchemaType::Text { restrictions, .. } => {
+            schema_text_value_from_json(value_json, restrictions)
+                .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))
+        }
         SchemaType::Binary { restrictions, .. } => {
             schema_binary_value_from_json(value_json, restrictions)
                 .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))
         }
-        _ => from_json_value(graph, case_schema, value_json).map_err(|e| {
-            format!(
-                "parts[{}] '{}': failed to parse value: {}",
-                index, name, e
-            )
-        }),
+        _ => from_json_value(graph, case_schema, value_json)
+            .map_err(|e| format!("parts[{}] '{}': failed to parse value: {}", index, name, e)),
     }
 }
 
@@ -73,7 +71,8 @@ mod tests {
     fn extracts_text_without_language_code() {
         let schema = SchemaType::text(TextRestrictions::default());
         let value = json!({"text": "some text"});
-        let result = extract_multimodal_element_value("note", &value, &schema, &graph(), 0).unwrap();
+        let result =
+            extract_multimodal_element_value("note", &value, &schema, &graph(), 0).unwrap();
         match result {
             SchemaValue::Text(t) => {
                 assert_eq!(t.text, "some text");
@@ -87,7 +86,8 @@ mod tests {
     fn extracts_text_with_language_code() {
         let schema = SchemaType::text(TextRestrictions::default());
         let value = json!({"text": "bonjour", "language": "fr"});
-        let result = extract_multimodal_element_value("note", &value, &schema, &graph(), 0).unwrap();
+        let result =
+            extract_multimodal_element_value("note", &value, &schema, &graph(), 0).unwrap();
         match result {
             SchemaValue::Text(t) => {
                 assert_eq!(t.text, "bonjour");
@@ -104,7 +104,8 @@ mod tests {
             ..Default::default()
         });
         let value = json!({"text": "hola", "language": "es"});
-        let err = extract_multimodal_element_value("note", &value, &schema, &graph(), 1).unwrap_err();
+        let err =
+            extract_multimodal_element_value("note", &value, &schema, &graph(), 1).unwrap_err();
         assert!(
             err.contains("language code 'es' is not allowed"),
             "got: {err}"
@@ -132,7 +133,8 @@ mod tests {
             ..Default::default()
         });
         let value = json!({"bytes": "AQID", "mime_type": "image/jpeg"});
-        let err = extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
+        let err =
+            extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
         assert!(
             err.contains("MIME type 'image/jpeg' is not allowed"),
             "got: {err}"
@@ -143,7 +145,8 @@ mod tests {
     fn error_on_invalid_base64() {
         let schema = SchemaType::binary(BinaryRestrictions::default());
         let value = json!({"bytes": "!!!invalid!!!", "mime_type": "image/png"});
-        let err = extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
+        let err =
+            extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
         assert!(err.contains("base64"), "got: {err}");
     }
 
@@ -151,7 +154,8 @@ mod tests {
     fn error_on_missing_text_field() {
         let schema = SchemaType::text(TextRestrictions::default());
         let value = json!({"other": "stuff"});
-        let err = extract_multimodal_element_value("note", &value, &schema, &graph(), 0).unwrap_err();
+        let err =
+            extract_multimodal_element_value("note", &value, &schema, &graph(), 0).unwrap_err();
         assert!(err.contains("text"), "got: {err}");
     }
 
@@ -159,7 +163,8 @@ mod tests {
     fn error_on_missing_bytes_field() {
         let schema = SchemaType::binary(BinaryRestrictions::default());
         let value = json!({"mime_type": "image/png"});
-        let err = extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
+        let err =
+            extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
         assert!(err.contains("bytes"), "got: {err}");
     }
 }

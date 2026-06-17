@@ -60,7 +60,10 @@ pub async fn invoke_tool(
     )
     .map_err(|e| {
         tracing::error!("Failed to extract constructor parameters: {}", e);
-        ErrorData::invalid_params(format!("Failed to extract constructor parameters: {}", e), None)
+        ErrorData::invalid_params(
+            format!("Failed to extract constructor parameters: {}", e),
+            None,
+        )
     })?;
 
     let parameters = build_constructor_parameters(
@@ -262,9 +265,9 @@ fn schema_value_to_tool_result(
             )),
         },
         Ok(SchemaType::Binary { .. }) => match value {
-            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
-                Ok(binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")))
-            }
+            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => Ok(
+                binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")),
+            ),
             _ => Err(ErrorData::internal_error(
                 "Expected a binary value for a binary output".to_string(),
                 None,

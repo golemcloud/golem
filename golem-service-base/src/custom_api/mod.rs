@@ -20,12 +20,12 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentTypeName, HttpMethod, ReadOnlyConfig};
-use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_common::model::{AgentId, OplogIndex, PromiseId};
+use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
 use hmac::{Hmac, Mac};
@@ -224,13 +224,19 @@ pub enum RequestBodySchema {
     Unused,
     /// JSON request body whose `expected.graph.root` is the record of the
     /// remaining (non-path/query/header) input fields.
-    JsonBody { expected: CompiledSchema },
+    JsonBody {
+        expected: CompiledSchema,
+    },
     /// Raw binary request body; `expected.graph.root` resolves to
     /// `SchemaType::Binary` (its restrictions carry the allowed MIME types).
-    BinaryBody { expected: CompiledSchema },
+    BinaryBody {
+        expected: CompiledSchema,
+    },
     /// Raw text request body; `expected.graph.root` resolves to
     /// `SchemaType::Text` (its restrictions carry the allowed languages).
-    TextBody { expected: CompiledSchema },
+    TextBody {
+        expected: CompiledSchema,
+    },
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

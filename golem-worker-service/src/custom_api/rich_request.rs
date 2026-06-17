@@ -401,7 +401,8 @@ fn extract_request_attributes(
 /// (`None` = unrestricted). The producer guarantees the root resolves to
 /// [`SchemaType::Binary`].
 fn binary_mime_types(graph: &SchemaGraph) -> Result<Option<Vec<String>>, RequestHandlerError> {
-    match resolve_ref(graph, &graph.root).map_err(|err| anyhow!("Invalid binary body schema: {err}"))?
+    match resolve_ref(graph, &graph.root)
+        .map_err(|err| anyhow!("Invalid binary body schema: {err}"))?
     {
         SchemaType::Binary { restrictions, .. } => Ok(restrictions.mime_types.clone()),
         _ => Err(RequestHandlerError::invariant_violated(
@@ -414,7 +415,8 @@ fn binary_mime_types(graph: &SchemaGraph) -> Result<Option<Vec<String>>, Request
 /// (`None` = unrestricted). The producer guarantees the root resolves to
 /// [`SchemaType::Text`].
 fn text_languages(graph: &SchemaGraph) -> Result<Option<Vec<String>>, RequestHandlerError> {
-    match resolve_ref(graph, &graph.root).map_err(|err| anyhow!("Invalid text body schema: {err}"))?
+    match resolve_ref(graph, &graph.root)
+        .map_err(|err| anyhow!("Invalid text body schema: {err}"))?
     {
         SchemaType::Text { restrictions, .. } => Ok(restrictions.languages.clone()),
         _ => Err(RequestHandlerError::invariant_violated(
@@ -532,7 +534,10 @@ mod request_body_tests {
             "x": 1
         }));
 
-        let schema = json_body(SchemaType::record(vec![record_field("x", SchemaType::s32())]));
+        let schema = json_body(SchemaType::record(vec![record_field(
+            "x",
+            SchemaType::s32(),
+        )]));
 
         let result = request.parse_request_body(&schema).await.unwrap();
 
@@ -555,7 +560,10 @@ mod request_body_tests {
         // JSON is valid, but shape does not match expected type
         let mut request = json_request(json!("not a record"));
 
-        let schema = json_body(SchemaType::record(vec![record_field("x", SchemaType::s32())]));
+        let schema = json_body(SchemaType::record(vec![record_field(
+            "x",
+            SchemaType::s32(),
+        )]));
 
         let err = request.parse_request_body(&schema).await.unwrap_err();
 

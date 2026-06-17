@@ -35,7 +35,6 @@ use golem_common::error_forwarding;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
-use golem_common::schema::AgentTypeSchema;
 use golem_common::model::agent_secret::AgentSecretId;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
@@ -49,6 +48,7 @@ use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionI
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
+use golem_common::schema::AgentTypeSchema;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;

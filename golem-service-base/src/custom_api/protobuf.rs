@@ -631,7 +631,10 @@ impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
             Kind::Unused(_) => Ok(RequestBodySchema::Unused),
 
             Kind::JsonBody(body) => Ok(RequestBodySchema::JsonBody {
-                expected: body.expected.ok_or("JsonBody.expected missing")?.try_into()?,
+                expected: body
+                    .expected
+                    .ok_or("JsonBody.expected missing")?
+                    .try_into()?,
             }),
 
             Kind::BinaryBody(body) => Ok(RequestBodySchema::BinaryBody {
@@ -642,7 +645,10 @@ impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
             }),
 
             Kind::TextBody(body) => Ok(RequestBodySchema::TextBody {
-                expected: body.expected.ok_or("TextBody.expected missing")?.try_into()?,
+                expected: body
+                    .expected
+                    .ok_or("TextBody.expected missing")?
+                    .try_into()?,
             }),
         }
     }

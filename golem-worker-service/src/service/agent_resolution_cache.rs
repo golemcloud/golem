@@ -282,12 +282,12 @@ mod tests {
         AgentMode, AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
         ResolvedAgentType, Snapshotting,
     };
-    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
+    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use golem_service_base::clients::registry::RegistryServiceError;
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::atomic::{AtomicU64, Ordering};

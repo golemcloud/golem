@@ -30,14 +30,10 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
-use golem_common::model::agent::{
-    OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig,
-};
+use golem_common::model::agent::{OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig};
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
-use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, MethodParameter,
-};
+use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
 use std::collections::HashMap;
@@ -423,7 +419,9 @@ impl CallAgentHandler {
 
                         SchemaValue::Text(TextValuePayload {
                             text: text_source.data,
-                            language: text_source.text_type.map(|text_type| text_type.language_code),
+                            language: text_source
+                                .text_type
+                                .map(|text_type| text_type.language_code),
                         })
                     }
 

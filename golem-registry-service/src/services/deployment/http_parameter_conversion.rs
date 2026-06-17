@@ -180,8 +180,7 @@ pub fn build_http_agent_method_parameters<E>(
     }
 
     // Second pass: classify the remaining (body) fields into `per_field`.
-    let body_schema =
-        handle_body_parameters(graph, fields, &consumed, &mut per_field, make_error)?;
+    let body_schema = handle_body_parameters(graph, fields, &consumed, &mut per_field, make_error)?;
 
     // Final pass: emit method parameters in user-supplied input declaration
     // order. The worker-service runtime relies on this ordering to build the
@@ -249,8 +248,7 @@ fn handle_body_parameters<E>(
     // into the input field list.
     let mut body_fields = Vec::new();
     for (input_index, field) in &leftovers {
-        let resolved =
-            resolve_ref(graph, &field.schema).map_err(|e| make_error(e.to_string()))?;
+        let resolved = resolve_ref(graph, &field.schema).map_err(|e| make_error(e.to_string()))?;
         if matches!(
             resolved,
             SchemaType::Binary { .. } | SchemaType::Text { .. }
@@ -408,7 +406,9 @@ fn schema_type_to_query_or_header_type<E>(
         SchemaType::List { element, .. } => Ok(QueryOrHeaderType::List {
             name: None,
             owner: None,
-            inner: Box::new(schema_type_to_path_segment_type(graph, element, make_error)?),
+            inner: Box::new(schema_type_to_path_segment_type(
+                graph, element, make_error,
+            )?),
         }),
         other => Ok(QueryOrHeaderType::Primitive(
             schema_type_to_path_segment_type(graph, other, make_error)?,
@@ -574,11 +574,14 @@ mod test {
 
         let schema = input(vec![str_field("task_id")]);
 
-        let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (_body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(
@@ -600,11 +603,14 @@ mod test {
             NamedField::user_supplied("b", SchemaType::u32()),
         ]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert!(let RequestBodySchema::JsonBody { .. } = body);
         assert_eq!(params.len(), 2);
@@ -626,11 +632,14 @@ mod test {
             SchemaType::binary(BinaryRestrictions::default()),
         )]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert!(matches!(body, RequestBodySchema::BinaryBody { .. }));
         assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
@@ -650,11 +659,14 @@ mod test {
             }),
         )]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         let_assert!(RequestBodySchema::BinaryBody { expected } = body);
         let_assert!(SchemaType::Binary { restrictions, .. } = expected.graph.root);
@@ -775,11 +787,14 @@ mod test {
 
         let schema = input(vec![str_field("page_size")]);
 
-        let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (_body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0], MethodParameter::Query { .. }));
@@ -805,11 +820,14 @@ mod test {
 
         let schema = input(vec![str_field("pageSize")]);
 
-        let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (_body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0], MethodParameter::Query { .. }));
@@ -835,11 +853,14 @@ mod test {
 
         let schema = input(vec![str_field("x_api_key")]);
 
-        let (_body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (_body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(params[0], MethodParameter::Header { .. }));
@@ -852,11 +873,14 @@ mod test {
 
         let schema = input(vec![str_field("first_name"), str_field("last_name")]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         let_assert!(RequestBodySchema::JsonBody { expected } = body);
         let_assert!(SchemaType::Record { fields, .. } = expected.graph.root);
@@ -873,11 +897,14 @@ mod test {
 
         let schema = input(vec![str_field("firstName"), str_field("lastName")]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         let_assert!(RequestBodySchema::JsonBody { expected } = body);
         let_assert!(SchemaType::Record { fields, .. } = expected.graph.root);
@@ -922,11 +949,14 @@ mod test {
             SchemaType::text(TextRestrictions::default()),
         )]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         assert!(matches!(body, RequestBodySchema::TextBody { .. }));
         assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
@@ -947,11 +977,14 @@ mod test {
             }),
         )]);
 
-        let (body, params) =
-            build_http_agent_method_parameters(&mount, &endpoint, &empty_graph(), &schema, &|msg| {
-                msg
-            })
-            .unwrap();
+        let (body, params) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &schema,
+            &|msg| msg,
+        )
+        .unwrap();
 
         let_assert!(RequestBodySchema::TextBody { expected } = body);
         let_assert!(SchemaType::Text { restrictions, .. } = expected.graph.root);

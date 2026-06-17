@@ -181,10 +181,7 @@ fn map_agent_response_to_resource_contents(
                         )
                     })?;
                 let payload = payload.ok_or_else(|| {
-                    ErrorData::internal_error(
-                        "Multimodal variant has no payload".to_string(),
-                        None,
-                    )
+                    ErrorData::internal_error("Multimodal variant has no payload".to_string(), None)
                 })?;
                 schema_value_to_resource_content(graph, case_schema, &payload, uri)
             })
@@ -293,9 +290,13 @@ mod tests {
     #[test]
     fn component_model_to_text_resource_json() {
         let response = SchemaValue::String("sunny".to_string());
-        let contents =
-            map_agent_response_to_resource_contents(&graph(), &str_output(), Some(response), TEST_URI)
-                .unwrap();
+        let contents = map_agent_response_to_resource_contents(
+            &graph(),
+            &str_output(),
+            Some(response),
+            TEST_URI,
+        )
+        .unwrap();
         assert_eq!(contents.len(), 1);
         match &contents[0] {
             ResourceContents::TextResourceContents {

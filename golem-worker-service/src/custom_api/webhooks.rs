@@ -18,8 +18,8 @@ use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::custom_api::ResponseBody;
 use crate::service::worker::WorkerService;
-use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType};
 use golem_common::schema::SchemaGraph;
+use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType};
 use golem_service_base::custom_api::{
     AgentWebhookId, CompiledSchema, RequestBodySchema, WebhookCallbackBehaviour,
 };
@@ -76,7 +76,9 @@ impl WebhookCallbackHandler {
         let body = request
             .parse_request_body(&RequestBodySchema::BinaryBody {
                 expected: CompiledSchema {
-                    graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
+                    graph: SchemaGraph::anonymous(
+                        SchemaType::binary(BinaryRestrictions::default()),
+                    ),
                 },
             })
             .await?;

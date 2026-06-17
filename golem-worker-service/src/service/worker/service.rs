@@ -1149,10 +1149,6 @@ mod tests {
         AgentMode, AgentTypeName, HttpEndpointDetails, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
     };
-    use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
-        SchemaGraph,
-    };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::AgentVerb;
     use golem_common::model::component::{
@@ -1165,6 +1161,10 @@ mod tests {
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        SchemaGraph,
+    };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;

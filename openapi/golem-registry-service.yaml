@@ -8290,6 +8290,8 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
+    AgentTypeSchema:
+      type: object
     AnalysedResourceMode:
       type: string
       enum:
@@ -9441,7 +9443,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/AgentType'
+            $ref: '#/components/schemas/AgentTypeSchema'
         agentTypeProvisionConfigs:
           type: object
           description: |-
@@ -9608,7 +9610,7 @@ components:
       - implementedBy
       properties:
         agentType:
-          $ref: '#/components/schemas/AgentType'
+          $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
           $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
         webhookPrefixAuthorityAndPath:

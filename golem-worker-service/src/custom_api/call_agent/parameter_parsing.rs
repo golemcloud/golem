@@ -36,123 +36,92 @@ pub fn parse_path_segment_value(
             }
         }
 
-        PathSegmentType::F64 => {
-            value
-                .parse::<f64>()
-                .map(SchemaValue::F64)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "f64",
-                })
-        }
+        PathSegmentType::F64 => value.parse::<f64>().map(SchemaValue::F64).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "f64",
+            }
+        }),
 
-        PathSegmentType::F32 => {
-            value
-                .parse::<f32>()
-                .map(SchemaValue::F32)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "f32",
-                })
-        }
+        PathSegmentType::F32 => value.parse::<f32>().map(SchemaValue::F32).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "f32",
+            }
+        }),
 
-        PathSegmentType::U64 => {
-            value
-                .parse::<u64>()
-                .map(SchemaValue::U64)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "u64",
-                })
-        }
+        PathSegmentType::U64 => value.parse::<u64>().map(SchemaValue::U64).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "u64",
+            }
+        }),
 
-        PathSegmentType::S64 => {
-            value
-                .parse::<i64>()
-                .map(SchemaValue::S64)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "i64",
-                })
-        }
+        PathSegmentType::S64 => value.parse::<i64>().map(SchemaValue::S64).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "i64",
+            }
+        }),
 
-        PathSegmentType::U32 => {
-            value
-                .parse::<u32>()
-                .map(SchemaValue::U32)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "u32",
-                })
-        }
+        PathSegmentType::U32 => value.parse::<u32>().map(SchemaValue::U32).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "u32",
+            }
+        }),
 
-        PathSegmentType::S32 => {
-            value
-                .parse::<i32>()
-                .map(SchemaValue::S32)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "i32",
-                })
-        }
+        PathSegmentType::S32 => value.parse::<i32>().map(SchemaValue::S32).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "i32",
+            }
+        }),
 
-        PathSegmentType::U16 => {
-            value
-                .parse::<u16>()
-                .map(SchemaValue::U16)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "u16",
-                })
-        }
+        PathSegmentType::U16 => value.parse::<u16>().map(SchemaValue::U16).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "u16",
+            }
+        }),
 
-        PathSegmentType::S16 => {
-            value
-                .parse::<i16>()
-                .map(SchemaValue::S16)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "i16",
-                })
-        }
+        PathSegmentType::S16 => value.parse::<i16>().map(SchemaValue::S16).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "i16",
+            }
+        }),
 
-        PathSegmentType::U8 => {
-            value
-                .parse::<u8>()
-                .map(SchemaValue::U8)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "u8",
-                })
-        }
+        PathSegmentType::U8 => value.parse::<u8>().map(SchemaValue::U8).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "u8",
+            }
+        }),
 
-        PathSegmentType::S8 => {
-            value
-                .parse::<i8>()
-                .map(SchemaValue::S8)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "i8",
-                })
-        }
+        PathSegmentType::S8 => value.parse::<i8>().map(SchemaValue::S8).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "i8",
+            }
+        }),
 
-        PathSegmentType::Bool => {
-            value
-                .parse::<bool>()
-                .map(SchemaValue::Bool)
-                .map_err(|_| RequestHandlerError::ValueParsingFailed {
-                    value,
-                    expected: "bool",
-                })
-        }
+        PathSegmentType::Bool => value.parse::<bool>().map(SchemaValue::Bool).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "bool",
+            }
+        }),
 
         PathSegmentType::Enum(inner) => {
-            let case_index = inner.cases.iter().position(|c| *c == value).ok_or_else(|| {
-                RequestHandlerError::ValueParsingFailed {
+            let case_index = inner
+                .cases
+                .iter()
+                .position(|c| *c == value)
+                .ok_or_else(|| RequestHandlerError::ValueParsingFailed {
                     value,
                     expected: "enum variant",
-                }
-            })?;
+                })?;
 
             Ok(SchemaValue::Enum {
                 case: case_index
@@ -269,8 +238,8 @@ mod path_segment_tests {
 
     #[test]
     fn parse_numeric_failure() {
-        let err =
-            parse_path_segment_value("not-a-number".to_string(), &PathSegmentType::U32).unwrap_err();
+        let err = parse_path_segment_value("not-a-number".to_string(), &PathSegmentType::U32)
+            .unwrap_err();
 
         assert!(let RequestHandlerError::ValueParsingFailed {
             expected: "u32",
@@ -280,8 +249,7 @@ mod path_segment_tests {
 
     #[test]
     fn parse_bool_success() {
-        let value =
-            parse_path_segment_value("true".to_string(), &PathSegmentType::Bool).unwrap();
+        let value = parse_path_segment_value("true".to_string(), &PathSegmentType::Bool).unwrap();
 
         assert_eq!(value, SchemaValue::Bool(true));
     }

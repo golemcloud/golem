@@ -427,7 +427,9 @@ pub fn add_webhook_callback_routes(
             path: typed_segments,
             body: RequestBodySchema::BinaryBody {
                 expected: CompiledSchema {
-                    graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
+                    graph: SchemaGraph::anonymous(
+                        SchemaType::binary(BinaryRestrictions::default()),
+                    ),
                 },
             },
             behaviour: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
@@ -764,9 +766,6 @@ mod tests {
     use golem_common::model::agent::{
         AgentMode, CorsOptions as AgentCorsOptions, HttpMountDetails, LiteralSegment, Snapshotting,
     };
-    use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
-    };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
@@ -776,6 +775,9 @@ mod tests {
     };
     use golem_common::model::http_api_deployment::{
         HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentId,
+    };
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;

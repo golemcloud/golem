@@ -31,7 +31,6 @@ use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
 };
-use golem_common::schema::AgentTypeSchema;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
@@ -42,6 +41,7 @@ use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
 use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::schema::graph::SchemaGraph;
