@@ -168,13 +168,37 @@ pub struct ExecutorProbe {
     /// the connection-lost backstop instead.
     pub pod_name: Option<String>,
     pub namespace: String,
+    /// The pod's container restart count at cell start. The pod is long-lived
+    /// across cells, so its absolute restart count may already be non-zero;
+    /// only restarts beyond this baseline indicate a restart during the cell.
+    baseline_restart_count: u64,
 }
 
 impl ExecutorProbe {
-    /// Reads the executor pod's container restart count via `kubectl`. Returns
-    /// 0 on any failure (the connection-lost condition backstops a missed
-    /// restart). Cheap: called once per ramp step, not per invocation.
+    /// Builds a probe for the given pod, capturing the current restart count as
+    /// the baseline so `pod_restart_count` reports restarts during the cell.
+    pub async fn new(pod_name: Option<String>, namespace: String) -> Self {
+        let mut probe = Self {
+            pod_name,
+            namespace,
+            baseline_restart_count: 0,
+        };
+        probe.baseline_restart_count = probe.raw_restart_count().await;
+        probe
+    }
+
+    /// Restarts observed since cell start: the pod's current container restart
+    /// count minus the baseline captured at construction. Returns 0 on any
+    /// failure (the connection-lost condition backstops a missed restart).
+    /// Cheap: called once per ramp step, not per invocation.
     async fn pod_restart_count(&self) -> u64 {
+        self.raw_restart_count()
+            .await
+            .saturating_sub(self.baseline_restart_count)
+    }
+
+    /// Reads the executor pod's absolute container restart count via `kubectl`.
+    async fn raw_restart_count(&self) -> u64 {
         let Some(pod) = &self.pod_name else {
             return 0;
         };

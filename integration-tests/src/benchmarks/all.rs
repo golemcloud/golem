@@ -603,10 +603,7 @@ async fn run_density(
                 ramp,
             };
 
-            let probe = ExecutorProbe {
-                pod_name: executor_pod_name,
-                namespace: executor_namespace,
-            };
+            let probe = ExecutorProbe::new(executor_pod_name, executor_namespace).await;
 
             let result = integration_tests::benchmarks::density::agent::run_cell(
                 &config, &manifest, &deps, &probe,
