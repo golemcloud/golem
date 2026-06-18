@@ -11,7 +11,7 @@ LABEL cloud.golem.cpu.features=""
 FROM base AS platform-arm64
 
 ENV RUST_TARGET=aarch64-unknown-linux-gnu
-LABEL cloud.golem.cpu.target="armv8.2-a"
+LABEL cloud.golem.cpu.target="aarch64"
 LABEL cloud.golem.cpu.features="neon,crc,lse,aes,sha2,dotprod"
 
 FROM platform-${TARGETARCH} AS final
