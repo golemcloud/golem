@@ -333,6 +333,7 @@ opt-level = 1
 codegen-units = 256
 incremental = true
 debug = true
+lto = false
 
 [profile.dev-release-ci]
 inherits = "dev-release"
