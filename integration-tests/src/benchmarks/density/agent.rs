@@ -80,6 +80,13 @@ const BUSY_MILLIS: u32 = 500;
 /// driver's own connection pool from becoming the bottleneck.
 const CREATE_CONCURRENCY: usize = 100;
 
+/// Fraction of a ramp batch that must fail at the transport level (request
+/// could not be sent / no round-trip) before the batch is judged as the
+/// executor being unreachable. A single transient send failure must not end a
+/// cell; a wedged or restarting executor produces a flood of them, which this
+/// threshold catches so the catastrophic connection-lost condition fires.
+const TRANSPORT_FAILURE_RATIO: f64 = 0.5;
+
 /// Which density scenario a cell runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scenario {
@@ -257,6 +264,12 @@ impl AdaptiveTimeout {
 /// are the driver-local signal for the catastrophic connection-lost condition,
 /// which is the backstop for an OOM-killed pod even when the kubectl
 /// restart-count poll misses it.
+/// Heuristically classifies an invocation error as transport-level (the request
+/// never completed a round-trip) vs. an application error. Transport-level
+/// errors are the driver-local signal for the catastrophic connection-lost
+/// condition — they spike when the executor wedges and the gateway can no
+/// longer reach it. "error sending request" / reqwest-middleware errors mean
+/// the request could not even be sent, so they count as transport failures.
 fn is_connection_error(err: &anyhow::Error) -> bool {
     let msg = format!("{err:?}").to_lowercase();
     msg.contains("connection")
@@ -267,6 +280,10 @@ fn is_connection_error(err: &anyhow::Error) -> bool {
         || msg.contains("refused")
         || msg.contains("unavailable")
         || msg.contains("transport")
+        || msg.contains("error sending request")
+        || msg.contains("middleware error")
+        || msg.contains("dns")
+        || msg.contains("timed out")
 }
 
 /// Invokes one agent method, measuring wall-clock latency and classifying the
@@ -667,13 +684,29 @@ async fn run_ramp_cell(
 
         let mut ordered = attempts;
         ordered.sort_by_key(|(index, _)| *index);
+
+        // Batch-level transport verdict: only declare the connection lost when a
+        // large fraction of the batch failed to send, so a single transient
+        // send error does not end an otherwise-healthy cell, while a wedged or
+        // unreachable executor (a flood of send failures) trips catastrophic.
+        let transport_failures = ordered.iter().filter(|(_, a)| a.connection_lost).count();
+        let batch_connection_alive = ordered.is_empty()
+            || (transport_failures as f64) < (ordered.len() as f64 * TRANSPORT_FAILURE_RATIO);
+        if !batch_connection_alive {
+            warn!(
+                "Density-agent[{}]: {transport_failures}/{} invocations failed at transport level — treating executor as unreachable",
+                config.cell_name(),
+                ordered.len()
+            );
+        }
+
         for (index, attempt) in &ordered {
             outcome.invoke_latencies.push(attempt.latency);
             let sample = Sample {
                 latency: attempt.latency,
                 coord: SampleCoord::Agents(index + 1),
                 pod_restart_count,
-                connection_alive: !attempt.connection_lost,
+                connection_alive: batch_connection_alive,
                 snapshot: CrossAxisSnapshot::default(),
                 queue_depth: None,
             };
