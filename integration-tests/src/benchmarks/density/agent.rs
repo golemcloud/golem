@@ -50,6 +50,7 @@ use crate::benchmarks::density::ceiling::{
 };
 use crate::benchmarks::density::prep::PrepManifest;
 use crate::benchmarks::density::{AgentMode, ComponentSharing};
+use futures::StreamExt;
 use golem_common::agent_id;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
@@ -72,6 +73,12 @@ const EPHEMERAL_AGENT_TYPE: &str = "EphemeralCounter";
 
 /// CPU busy time per `busy_for` call defining an "active" agent.
 const BUSY_MILLIS: u32 = 500;
+
+/// Maximum number of agent-create invocations in flight at once while ramping a
+/// cell. The cost of a step is dominated by the round-trips for the new agents,
+/// so fanning them out cuts wall-clock from hours to minutes. The cap keeps the
+/// driver's own connection pool from becoming the bottleneck.
+const CREATE_CONCURRENCY: usize = 100;
 
 /// Which density scenario a cell runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -611,36 +618,54 @@ async fn run_ramp_cell(
             config.cell_name()
         );
 
-        // Create (first-invoke) the new agents from `created` to `target`,
-        // recording each create-path latency as a sample.
-        for index in created..target {
-            let (component, agent) = agent_for_index(config, index, components)?;
-            let outcome_attempt = timed_invoke(
-                user,
-                component,
-                &agent,
-                "increment",
-                data_value!(),
-                timeout.current,
-            )
+        // Create (first-invoke) the new agents from `created` to `target`
+        // concurrently with bounded in-flight count, then feed their latency
+        // samples to the detector in index order (the detector is sequential).
+        // Sequential creation made a 10000-agent step take hours; fanning the
+        // round-trips out is the dominant speedup.
+        let batch: Vec<u32> = (created..target).collect();
+        let timeout_current = timeout.current;
+        let attempts: Vec<(u32, AttemptOutcome)> = futures::stream::iter(batch)
+            .map(|index| {
+                let (component, agent) = agent_for_index(config, index, components)
+                    .expect("agent_for_index within ramp");
+                let component = component.clone();
+                async move {
+                    let outcome = timed_invoke(
+                        user,
+                        &component,
+                        &agent,
+                        "increment",
+                        data_value!(),
+                        timeout_current,
+                    )
+                    .await;
+                    (index, outcome)
+                }
+            })
+            .buffer_unordered(CREATE_CONCURRENCY)
+            .collect()
             .await;
 
-            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-            let pod_restart_count = probe.pod_restart_count().await;
-            let snapshot = CrossAxisSnapshot::default();
+        // One pod-restart poll for the whole batch (cheap; a mid-batch restart
+        // is also caught by the connection-lost signal on the affected calls).
+        let pod_restart_count = probe.pod_restart_count().await;
+        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+
+        let mut ordered = attempts;
+        ordered.sort_by_key(|(index, _)| *index);
+        for (index, attempt) in &ordered {
             let sample = Sample {
-                latency: outcome_attempt.latency,
+                latency: attempt.latency,
                 coord: SampleCoord::Agents(index + 1),
                 pod_restart_count,
-                connection_alive: !outcome_attempt.connection_lost,
-                snapshot,
+                connection_alive: !attempt.connection_lost,
+                snapshot: CrossAxisSnapshot::default(),
                 queue_depth: None,
             };
-
             for event in detector.observe(&sample) {
                 handle_event(event, &mut outcome, &mut timeout);
             }
-
             if detector.is_terminal() {
                 outcome.max_agents_reached = index + 1;
                 active.stop().await;
