@@ -328,6 +328,9 @@ mod keys {
     /// Highest agent count reached before the cell stopped.
     pub const MAX_AGENTS_REACHED: &str = "max-agents-reached";
 
+    /// Invoke-latency distribution key (create/invoke round-trip times).
+    pub const INVOKE_LATENCY: &str = "invoke-latency";
+
     // Scenario-4 (resume-under-saturation) latencies, in milliseconds.
     pub const RESUME_EXISTING_P50_MS: &str = "resume-existing-p50-ms";
     pub const RESUME_EXISTING_P99_MS: &str = "resume-existing-p99-ms";
@@ -345,6 +348,9 @@ struct CellOutcome {
     catastrophic_ceiling_agents: Option<u32>,
     terminated_reason: TerminatedReason,
     max_agents_reached: u32,
+    /// Every create/invoke latency the cell measured, surfaced as an
+    /// invoke-latency percentile distribution (avg/min/max/p50/p90/p95/p99).
+    invoke_latencies: Vec<Duration>,
     /// Scenario-4 resume/create latency samples (milliseconds).
     resume_existing_ms: Vec<f64>,
     create_fresh_ms: Vec<f64>,
@@ -361,6 +367,7 @@ impl Default for CellOutcome {
             // sharing-mode upper bound.
             terminated_reason: TerminatedReason::UpperBoundHit,
             max_agents_reached: 0,
+            invoke_latencies: Vec::new(),
             resume_existing_ms: Vec::new(),
             create_fresh_ms: Vec::new(),
         }
@@ -402,6 +409,12 @@ impl CellOutcome {
             &ResultKey::primary(keys::MAX_AGENTS_REACHED),
             self.max_agents_reached as u64,
         );
+
+        // Invoke-latency distribution across every create/invoke the cell made,
+        // rendered as the same avg/min/max/p50/p90/p95/p99 table as cloud-perf.
+        for latency in &self.invoke_latencies {
+            recorder.duration(&ResultKey::primary(keys::INVOKE_LATENCY), *latency);
+        }
 
         if !self.resume_existing_ms.is_empty() {
             recorder.count(
@@ -655,6 +668,7 @@ async fn run_ramp_cell(
         let mut ordered = attempts;
         ordered.sort_by_key(|(index, _)| *index);
         for (index, attempt) in &ordered {
+            outcome.invoke_latencies.push(attempt.latency);
             let sample = Sample {
                 latency: attempt.latency,
                 coord: SampleCoord::Agents(index + 1),
@@ -701,6 +715,7 @@ async fn run_ramp_cell(
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
             let pod_restart_count = probe.pod_restart_count().await;
             let snapshot = CrossAxisSnapshot::default();
+            outcome.invoke_latencies.push(attempt.latency);
             let sample = Sample {
                 latency: attempt.latency,
                 coord: SampleCoord::Agents(target),
@@ -806,6 +821,7 @@ async fn run_resume_cell(
 
         detector.set_elapsed_secs(started.elapsed().as_secs_f64());
         let pod_restart_count = probe.pod_restart_count().await;
+        outcome.invoke_latencies.push(attempt.latency);
         let sample = Sample {
             latency: attempt.latency,
             coord: SampleCoord::Agents(index + 1),
@@ -860,6 +876,7 @@ async fn run_resume_cell(
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
             let pod_restart_count = probe.pod_restart_count().await;
             let snapshot = CrossAxisSnapshot::default();
+            outcome.invoke_latencies.push(resume.latency);
             let sample = Sample {
                 latency: resume.latency,
                 coord: SampleCoord::Agents(target),
@@ -893,6 +910,7 @@ async fn run_resume_cell(
             outcome.max_agents_reached = next_fresh;
 
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+            outcome.invoke_latencies.push(create.latency);
             let sample = Sample {
                 latency: create.latency,
                 coord: SampleCoord::Agents(target),
