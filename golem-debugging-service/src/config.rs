@@ -101,7 +101,6 @@ impl DebugConfig {
             max_in_function_retry_delay: std::time::Duration::from_secs(20),
             max_websocket_connections: 100,
             quota_service: QuotaServiceConfig::default(),
-            runtime_metrics_sampling_interval: std::time::Duration::from_secs(5),
         }
     }
 }

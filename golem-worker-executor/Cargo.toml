@@ -73,8 +73,6 @@ lazy_static = { workspace = true }
 log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
-metrics = { workspace = true }
-metrics-exporter-prometheus = { workspace = true }
 metrohash = { workspace = true }
 nonempty-collections = { workspace = true }
 nonzero_ext = { workspace = true }
@@ -94,7 +92,6 @@ sqlx-core = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-tokio-metrics = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }

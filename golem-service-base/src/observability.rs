@@ -18,17 +18,13 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use http::Response;
 use prometheus::{Encoder, Registry, TextEncoder};
-use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, ToSocketAddrs};
+use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
-/// A callback that renders additional metrics in Prometheus text exposition
-/// format, appended to the output of the `prometheus`-crate registry on the
-/// `/metrics` endpoint. Used to surface metrics from a second metrics façade
-/// (e.g. the `metrics`-crate recorder driving tokio-metrics) on the same
-/// scrape endpoint.
-pub type ExtraMetrics = Arc<dyn Fn() -> String + Send + Sync>;
+const RUNTIME_METRICS_SAMPLING_INTERVAL: Duration = Duration::from_secs(5);
 
 pub async fn start_health_and_metrics_server(
     addr: impl ToSocketAddrs,
@@ -36,24 +32,13 @@ pub async fn start_health_and_metrics_server(
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
-    start_health_and_metrics_server_with_extra(addr, registry, None, body_message, join_set).await
-}
+    install_runtime_metrics(Handle::current(), registry.clone(), join_set);
 
-pub async fn start_health_and_metrics_server_with_extra(
-    addr: impl ToSocketAddrs,
-    registry: Registry,
-    extra: Option<ExtraMetrics>,
-    body_message: &'static str,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<u16, anyhow::Error> {
     let app = Router::new()
         .route("/healthcheck", get(move || async move { body_message }))
         .route(
             "/metrics",
-            get(move || {
-                let extra = extra.clone();
-                async move { prometheus_metrics(registry.clone(), extra) }
-            }),
+            get(move || async move { prometheus_metrics(registry.clone()) }),
         );
 
     let listener = TcpListener::bind(addr).await?;
@@ -72,19 +57,46 @@ pub async fn start_health_and_metrics_server_with_extra(
     Ok(local_addr.port())
 }
 
-pub fn prometheus_metrics(registry: Registry, extra: Option<ExtraMetrics>) -> impl IntoResponse {
+pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let mut buffer = Vec::new();
 
     let metric_families = registry.gather();
     encoder.encode(&metric_families, &mut buffer).unwrap();
 
-    if let Some(extra) = extra {
-        buffer.extend_from_slice(extra().as_bytes());
-    }
-
     Response::builder()
         .header("Content-Type", encoder.format_type())
         .body(Body::from(buffer))
         .unwrap()
+}
+
+fn install_runtime_metrics(
+    runtime: Handle,
+    registry: Registry,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) {
+    let recorder = match metrics_prometheus::Recorder::builder()
+        .with_registry(registry)
+        .try_build_and_install()
+    {
+        Ok(recorder) => recorder,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to install tokio runtime metrics recorder, runtime metrics will not be exported: {err}"
+            );
+            return;
+        }
+    };
+
+    let reporter = tokio_metrics::RuntimeMetricsReporterBuilder::default()
+        .with_interval(RUNTIME_METRICS_SAMPLING_INTERVAL);
+
+    join_set.spawn_on(
+        async move {
+            reporter.describe_and_run().await;
+            drop(recorder);
+            Ok(())
+        },
+        &runtime,
+    );
 }

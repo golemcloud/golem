@@ -157,7 +157,7 @@ mac_address = "1.1.8"
 mappable-rc = "0.1.1"
 md5 = "0.7.0"
 metrics = "0.24.2"
-metrics-exporter-prometheus = { version = "0.16.2", default-features = false }
+metrics-prometheus = "0.11.1"
 metrohash = "1.0.7"
 miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
