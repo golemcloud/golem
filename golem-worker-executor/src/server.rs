@@ -122,11 +122,12 @@ fn spawn_task_dump_on_signal(handle: tokio::runtime::Handle) {
             // obvious; `BTreeMap<count-of-tasks>` is built then printed
             // largest-first.
             let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            let mut total = 0usize;
             for task in dump.tasks().iter() {
+                total += 1;
                 let trace = format!("{}", task.trace());
                 groups.entry(trace).or_default().push(task.id().to_string());
             }
-            let total = dump.tasks().len();
             let mut ranked: Vec<(usize, &String, &Vec<String>)> = groups
                 .iter()
                 .map(|(trace, ids)| (ids.len(), trace, ids))
