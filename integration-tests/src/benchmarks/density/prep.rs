@@ -191,7 +191,7 @@ pub async fn run_prep(
     };
     let user_client = deps.registry_service().client(&manifest_token).await;
 
-    // 2. Application.
+    // 2. Application (one app holds all the density environments).
     info!("Density-prep: creating application {account_base}-app");
     let app = user_client
         .create_application(
@@ -203,42 +203,29 @@ pub async fn run_prep(
         .await
         .map_err(|e| anyhow::anyhow!("create_application failed: {e:?}"))?;
 
-    // 3. Environment.
-    info!("Density-prep: creating environment {account_base}-env");
-    let env = user_client
-        .create_environment(
-            &app.id.0,
-            &EnvironmentCreation {
-                name: EnvironmentName(format!("{account_base}-env")),
-                compatibility_check: false,
-                version_check: false,
-                security_overrides: false,
-            },
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("create_environment failed: {e:?}"))?;
+    // 3. Shared environment holding the single shared component.
+    info!("Density-prep: creating shared environment {account_base}-env");
+    let shared_env = create_env(&user_client, &app.id.0, &format!("{account_base}-env")).await?;
 
-    // 4. Upload the section's components.
+    // 4. Upload the shared component into the shared environment and deploy it.
+    //    The per-agent distinct components each get their own environment (one
+    //    component per env) so their identical agent type names do not collide —
+    //    the deployment requires each agent type name to resolve to a single
+    //    component within an environment.
     let (uniform_component_id, distinct_component_ids) =
-        upload_components(&user, &env.id, section).await?;
-
-    // 5. Deploy the environment, pinning every uploaded component.
-    info!("Density-prep: deploying environment");
-    user.deploy_environment(env.id)
-        .await
-        .context("deploy_environment failed")?;
+        upload_components(&user, &user_client, &app.id.0, &shared_env.id, section).await?;
 
     let manifest = PrepManifest {
         section: section.as_str().to_string(),
         run_id,
         token: manifest_token,
-        environment_id: env.id,
+        environment_id: shared_env.id,
         uniform_component_id,
         distinct_component_ids,
     };
 
     info!(
-        "Density-prep complete for section {section}: env={}, uniform={:?}, distinct={}",
+        "Density-prep complete for section {section}: shared_env={}, uniform={:?}, distinct={}",
         manifest.environment_id.0,
         manifest.uniform_component_id.as_ref().map(|c| c.0),
         manifest.distinct_component_ids.len()
@@ -247,11 +234,37 @@ pub async fn run_prep(
     Ok(manifest)
 }
 
-/// Uploads the components for `section`, returning `(shared_component_id,
+/// Creates one environment under `app_id` with checks disabled.
+async fn create_env(
+    client: &golem_client::api::RegistryServiceClientLive,
+    app_id: &uuid::Uuid,
+    name: &str,
+) -> anyhow::Result<golem_common::model::environment::Environment> {
+    client
+        .create_environment(
+            app_id,
+            &EnvironmentCreation {
+                name: EnvironmentName(name.to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("create_environment failed: {e:?}"))
+}
+
+/// Uploads the section's components, returning `(shared_component_id,
 /// per_agent_component_ids)`.
+///
+/// The shared component is uploaded into `shared_env` and that env is deployed.
+/// Each per-agent distinct component gets its own freshly-created environment
+/// under `app_id` (one component per env), and each such env is deployed.
 async fn upload_components(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    env_id: &EnvironmentId,
+    client: &golem_client::api::RegistryServiceClientLive,
+    app_id: &uuid::Uuid,
+    shared_env: &EnvironmentId,
     section: DensitySection,
 ) -> anyhow::Result<(Option<ComponentId>, Vec<ComponentId>)> {
     match section {
@@ -259,27 +272,37 @@ async fn upload_components(
             // The single shared component used by shared-component cells.
             info!("Density-prep: uploading shared component {UNIFORM_COMPONENT_NAME}");
             let uniform = user
-                .component(env_id, AGENT_COUNTERS_WASM)
+                .component(shared_env, AGENT_COUNTERS_WASM)
                 .name(UNIFORM_COMPONENT_NAME)
                 .store()
                 .await
                 .context("uploading shared component")?;
+            user.deploy_environment(*shared_env)
+                .await
+                .context("deploying shared environment")?;
 
-            // The per-agent distinct components: PER_AGENT_COMPONENT_COUNT
-            // byte-identical uploads under distinct names. `.unique()` is not
-            // needed — distinct names mint distinct component_ids on their own.
+            // Each per-agent distinct component goes into its own environment so
+            // the identical agent type names exported by the byte-identical WASM
+            // do not collide at deploy time. This also models distinct users
+            // each uploading their own component.
             info!(
-                "Density-prep: uploading {PER_AGENT_COMPONENT_COUNT} per-agent distinct components"
+                "Density-prep: uploading {PER_AGENT_COMPONENT_COUNT} per-agent distinct components, one per environment"
             );
             let mut distinct = Vec::with_capacity(PER_AGENT_COMPONENT_COUNT as usize);
             for i in 1..=PER_AGENT_COMPONENT_COUNT {
                 let name = distinct_component_name(i);
+                let env = create_env(client, app_id, &format!("{name}-env"))
+                    .await
+                    .with_context(|| format!("creating environment for {name}"))?;
                 let component = user
-                    .component(env_id, AGENT_COUNTERS_WASM)
+                    .component(&env.id, AGENT_COUNTERS_WASM)
                     .name(&name)
                     .store()
                     .await
                     .with_context(|| format!("uploading per-agent component {name}"))?;
+                user.deploy_environment(env.id)
+                    .await
+                    .with_context(|| format!("deploying environment for {name}"))?;
                 distinct.push(component.id);
                 if i % 200 == 0 {
                     info!(
