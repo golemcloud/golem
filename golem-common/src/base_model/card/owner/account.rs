@@ -38,8 +38,7 @@ impl AccountOwnerPattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAccountOwnerPattern {
     Concrete(AccountOwnerPattern),
-    Env,
-    Self_,
+    Account,
 }
 
 impl OwnerPattern for AccountOwnerPattern {
@@ -50,11 +49,13 @@ impl OwnerPattern for AccountOwnerPattern {
     }
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        parse_prefix_owner_slot(value, Self::parse).map(|slot| match slot {
-            PrefixOwnerSlot::Concrete(owner) => PolymorphicAccountOwnerPattern::Concrete(owner),
-            PrefixOwnerSlot::Env => PolymorphicAccountOwnerPattern::Env,
-            PrefixOwnerSlot::Self_ => PolymorphicAccountOwnerPattern::Self_,
-        })
+        match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.is_empty() => {
+                Ok(PolymorphicAccountOwnerPattern::Account)
+            }
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicAccountOwnerPattern::Concrete),
+        }
     }
 
     fn subsumes(&self, other: &Self) -> bool {

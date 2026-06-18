@@ -84,8 +84,19 @@ impl EnvironmentOwnerPattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentOwnerPattern {
     Concrete(EnvironmentOwnerPattern),
+    AccountEnvironments,
+    AccountApplicationEnvironments {
+        application: ApplicationName,
+    },
+    AccountEnvironment {
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    ApplicationEnvironments,
+    ApplicationEnvironment {
+        environment: EnvironmentName,
+    },
     Env,
-    Self_,
 }
 
 impl OwnerPattern for EnvironmentOwnerPattern {
@@ -96,11 +107,33 @@ impl OwnerPattern for EnvironmentOwnerPattern {
     }
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        parse_prefix_owner_slot(value, Self::parse).map(|slot| match slot {
-            PrefixOwnerSlot::Concrete(owner) => PolymorphicEnvironmentOwnerPattern::Concrete(owner),
-            PrefixOwnerSlot::Env => PolymorphicEnvironmentOwnerPattern::Env,
-            PrefixOwnerSlot::Self_ => PolymorphicEnvironmentOwnerPattern::Self_,
-        })
+        match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*"] => {
+                Ok(PolymorphicEnvironmentOwnerPattern::AccountEnvironments)
+            }
+            Some(("?account", rest)) if rest.len() == 2 && rest[1] == "*" => Ok(
+                PolymorphicEnvironmentOwnerPattern::AccountApplicationEnvironments {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                },
+            ),
+            Some(("?account", rest)) if rest.len() == 2 => {
+                Ok(PolymorphicEnvironmentOwnerPattern::AccountEnvironment {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                })
+            }
+            Some(("?app", rest)) if rest.as_slice() == ["*"] => {
+                Ok(PolymorphicEnvironmentOwnerPattern::ApplicationEnvironments)
+            }
+            Some(("?app", rest)) if rest.len() == 1 => {
+                Ok(PolymorphicEnvironmentOwnerPattern::ApplicationEnvironment {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?env", rest)) if rest.is_empty() => Ok(PolymorphicEnvironmentOwnerPattern::Env),
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicEnvironmentOwnerPattern::Concrete),
+        }
     }
 
     fn subsumes(&self, other: &Self) -> bool {

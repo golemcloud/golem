@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::component::ComponentName;
+use super::environment::EnvironmentName;
 pub use super::parsed_function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
@@ -23,6 +25,16 @@ use crate::component_introspection::metadata::Producers as IntrospectionProducer
 use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
 use crate::model::agent::{AgentType, AgentTypeName};
+use crate::model::card::owner::{
+    PolymorphicAgentOwnerPattern, PolymorphicComponentOwnerPattern,
+    PolymorphicEnvironmentOwnerPattern,
+};
+use crate::model::card::recipient::RecipientPattern;
+use crate::model::card::{
+    AgentResourcePattern, AgentVerb, ComponentResourcePattern, ComponentVerb,
+    EnvironmentResourcePattern, EnvironmentVerb, PolymorphicClassPermissionPattern,
+    PolymorphicPermissionPattern,
+};
 use crate::model::component::InstalledPlugin;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -57,6 +69,7 @@ impl ComponentMetadata {
                 root_package_version,
                 agent_types,
                 agent_type_provision_configs,
+                agent_type_initial_permissions: std::collections::BTreeMap::new(),
             }),
         }
     }
@@ -78,6 +91,26 @@ impl ComponentMetadata {
                 root_package_version: data.root_package_version.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_type_provision_configs,
+                agent_type_initial_permissions: data.agent_type_initial_permissions.clone(),
+            }),
+        }
+    }
+
+    pub fn with_agent_initial_permissions(
+        &self,
+        agent_type_initial_permissions: BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>,
+    ) -> Self {
+        let data = self.data.as_ref();
+        Self {
+            data: Arc::new(ComponentMetadataInnerData {
+                known_exports: data.known_exports.clone(),
+                producers: data.producers.clone(),
+                memories: data.memories.clone(),
+                root_package_name: data.root_package_name.clone(),
+                root_package_version: data.root_package_version.clone(),
+                agent_types: data.agent_types.clone(),
+                agent_type_provision_configs: data.agent_type_provision_configs.clone(),
+                agent_type_initial_permissions,
             }),
         }
     }
@@ -117,6 +150,13 @@ impl ComponentMetadata {
         name: &AgentTypeName,
     ) -> Option<&AgentTypeProvisionConfig> {
         self.data.agent_type_provision_configs.get(name)
+    }
+
+    pub fn agent_type_initial_permission_template(
+        &self,
+        name: &AgentTypeName,
+    ) -> Option<&AgentInitialPermissionTemplate> {
+        self.data.agent_type_initial_permissions.get(name)
     }
 
     pub fn agent_type_env(&self, name: &AgentTypeName) -> Option<&BTreeMap<String, String>> {
@@ -432,8 +472,50 @@ impl RawComponentMetadata {
             root_package_version: self.root_package_version,
             agent_types,
             agent_type_provision_configs,
+            agent_type_initial_permissions: BTreeMap::new(),
         }
     }
+}
+
+impl AgentInitialPermissionTemplate {
+    pub fn default_for(
+        _environment_name: &EnvironmentName,
+        _component_name: &ComponentName,
+    ) -> Self {
+        let recipient = RecipientPattern::Any;
+        Self {
+            lower_positive: vec![
+                PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
+                    owner: PolymorphicEnvironmentOwnerPattern::Env,
+                    recipient: recipient.clone(),
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }),
+                PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
+                    owner: PolymorphicComponentOwnerPattern::Component,
+                    recipient: recipient.clone(),
+                    verb: Some(ComponentVerb::View),
+                    resource: ComponentResourcePattern::Any,
+                }),
+                agent_permission(AgentVerb::View, recipient.clone()),
+                agent_permission(AgentVerb::Invoke, recipient.clone()),
+                agent_permission(AgentVerb::Resume, recipient.clone()),
+                agent_permission(AgentVerb::UpdateRevision, recipient),
+            ],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }
+    }
+}
+
+fn agent_permission(verb: AgentVerb, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
+    PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
+        owner: PolymorphicAgentOwnerPattern::EnvAgents,
+        recipient,
+        verb: Some(verb),
+        resource: AgentResourcePattern::Any,
+    })
 }
 
 impl From<crate::component_introspection::metadata::Producers> for Producers {
@@ -652,6 +734,7 @@ mod protobuf {
                             .map(|config| (AgentTypeName(k), config))
                     })
                     .collect::<Result<_, _>>()?,
+                agent_type_initial_permissions: std::collections::BTreeMap::new(),
             })
         }
     }

@@ -266,12 +266,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match self
                     .state
                     .worker_proxy
-                    .complete_promise(
-                        promise_id.clone(),
-                        data,
-                        self.created_by(),
-                        self.created_by_email(),
-                    )
+                    .complete_promise(promise_id.clone(), data, &self.agent_auth_ctx())
                     .await
                 {
                     Ok(completed) => completed,
@@ -637,8 +632,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         target_revision,
                         mode,
                         false,
-                        self.created_by(),
-                        self.created_by_email(),
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -772,8 +766,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        self.created_by(),
-                        self.created_by_email(),
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -828,12 +821,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = loop {
                 let result = self
                     .worker_proxy()
-                    .revert(
-                        &agent_id,
-                        target.clone(),
-                        self.created_by(),
-                        self.created_by_email(),
-                    )
+                    .revert(&agent_id, target.clone(), &self.agent_auth_ctx())
                     .await;
                 match handle
                     .try_trigger_retry_or_loop_with_properties(
@@ -1039,19 +1027,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await;
 
             let created_by = self.created_by();
-            let created_by_email = self.created_by_email().clone();
             let fork_result = loop {
                 let fork_result = self
                     .state
                     .worker_fork
                     .fork_and_write_fork_result(
                         created_by,
-                        &created_by_email,
                         &self.owned_agent_id,
                         &target_agent_id,
                         oplog_index_cut_off,
                         copied_scope_start,
                         forked_phantom_id,
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle

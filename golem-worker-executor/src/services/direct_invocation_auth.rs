@@ -17,7 +17,7 @@ use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::OwnedAgentId;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
@@ -46,10 +46,10 @@ pub trait DirectInvocationAuthService: Send + Sync {
     async fn check(
         &self,
         caller_account_id: AccountId,
-        caller_account_email: &AccountEmail,
         owned_agent_id: &OwnedAgentId,
         verb: AgentVerb,
         resource: AgentResourcePattern,
+        auth_ctx: &AuthCtx,
     ) -> Result<EnvironmentOwnerAccountId, RpcError>;
 }
 
@@ -121,11 +121,11 @@ impl DefaultDirectInvocationAuthService {
 impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
     async fn check(
         &self,
-        caller_account_id: AccountId,
-        caller_account_email: &AccountEmail,
+        _caller_account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
         verb: AgentVerb,
         resource: AgentResourcePattern,
+        auth_ctx: &AuthCtx,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         let component = self
             .get_component(owned_agent_id.component_id())
@@ -133,8 +133,6 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
             .ok_or_else(|| RpcError::Denied {
                 details: format!("Component {} not found", owned_agent_id.component_id()),
             })?;
-
-        let auth_ctx = AuthCtx::agent(caller_account_id, caller_account_email.clone());
 
         auth_ctx
             .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
@@ -166,10 +164,10 @@ impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
     async fn check(
         &self,
         caller_account_id: AccountId,
-        _caller_account_email: &AccountEmail,
         _owned_agent_id: &OwnedAgentId,
         _verb: AgentVerb,
         _resource: AgentResourcePattern,
+        _auth_ctx: &AuthCtx,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         Ok(EnvironmentOwnerAccountId(caller_account_id))
     }

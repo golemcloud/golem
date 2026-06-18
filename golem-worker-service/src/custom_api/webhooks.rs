@@ -81,10 +81,7 @@ impl WebhookCallbackHandler {
 
         let body_binary = body_data.take().map(|bs| bs.data).unwrap_or_default();
 
-        let auth_ctx = AuthCtx::agent(
-            resolved_route.route.account_id,
-            resolved_route.route.account_email.clone(),
-        );
+        let auth_ctx = AuthCtx::System;
 
         tracing::debug!("Completing promise due to webhook_callback: {promise_id}");
         self.worker_service

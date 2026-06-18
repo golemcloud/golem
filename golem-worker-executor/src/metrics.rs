@@ -69,18 +69,26 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 11] = &[
     0.001, 0.01, 0.1, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
 ];
 
-const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
-    1024.0,
-    4096.0,
-    16384.0,
-    65536.0,
-    262144.0,
-    1048576.0,
-    4194304.0,
-    16777216.0,
-    67108864.0,
-    268435456.0,
-    1073741824.0,
+/// Buckets for the size of a single `memory.grow` allocation. Deliberately
+/// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
+/// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
+const MEMORY_SIZE_BUCKETS: &[f64; 16] = &[
+    65536.0,      // 64 KiB
+    262144.0,     // 256 KiB
+    1048576.0,    // 1 MiB
+    2097152.0,    // 2 MiB
+    4194304.0,    // 4 MiB
+    6291456.0,    // 6 MiB
+    8388608.0,    // 8 MiB
+    12582912.0,   // 12 MiB
+    16777216.0,   // 16 MiB
+    25165824.0,   // 24 MiB
+    33554432.0,   // 32 MiB
+    67108864.0,   // 64 MiB
+    134217728.0,  // 128 MiB
+    268435456.0,  // 256 MiB
+    536870912.0,  // 512 MiB
+    1073741824.0, // 1 GiB
 ];
 
 pub mod component {
@@ -175,11 +183,41 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_worker_store_alive_count",
+            "Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted",
+            &["executor_id"]
+        )
+        .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "worker_kv_cache_value_size_bytes",
             "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
             &["executor_id"],
             crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_total_bytes",
+            "Usable memory ceiling (usable_ratio * measured limit) the admission gate admits against on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_used_bytes",
+            "Total linear memory granted to live workers and reserved by the admission gate on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_ADMISSION_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_admission_rss_bytes",
+            "Measured resident memory (probe snapshot) the admission gate last read on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_worker_memory_grow_rejected_total",
+            "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
+            &["executor_id"]
         )
         .unwrap();
         static ref AGENT_STATUS_FLUSH_TOTAL: CounterVec = register_counter_vec!(
@@ -218,6 +256,37 @@ pub mod workers {
         WORKER_EXECUTOR_CALL_TOTAL
             .with_label_values(&[api_name])
             .inc();
+    }
+
+    /// Counts one invocation interrupted because a linear-memory grow was
+    /// refused by the admission gate (the worker traps out-of-memory and is
+    /// restarted to reacquire memory).
+    pub fn record_worker_memory_grow_rejected() {
+        WORKER_MEMORY_GROW_REJECTED_TOTAL
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    /// Sets the gate's usable memory ceiling gauge.
+    pub fn record_worker_memory_ceiling(bytes: u64) {
+        WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
+    }
+
+    /// Sets the gauge of total memory granted to live workers (the gate's
+    /// reservation).
+    pub fn record_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
+    }
+
+    /// Sets the gauge of measured resident memory last read by the gate.
+    pub fn record_worker_admission_rss(bytes: u64) {
+        WORKER_ADMISSION_RSS_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(bytes as f64);
     }
 
     pub fn record_agent_status_flush(reason: &'static str) {
@@ -279,6 +348,10 @@ pub mod workers {
         WORKER_WAITING_FOR_MEMORY_COUNT
             .with_label_values(&[id])
             .set(0.0);
+        WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        WORKER_MEMORY_GROW_REJECTED_TOTAL
+            .with_label_values(&[id])
+            .inc_by(0.0);
     }
 
     pub fn inc_worker_memory_resident() {
@@ -289,6 +362,23 @@ pub mod workers {
 
     pub fn dec_worker_memory_resident() {
         WORKER_MEMORY_RESIDENT_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    /// Incremented when a worker's wasmtime `Store` context is constructed.
+    /// Paired with [`dec_worker_store_alive`] from a guard dropped with the
+    /// `Store` itself, so the gauge tracks the `Store`'s true lifetime rather
+    /// than the owning worker's accounting.
+    pub fn inc_worker_store_alive() {
+        WORKER_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    /// Decremented when a worker's wasmtime `Store` context is dropped.
+    pub fn dec_worker_store_alive() {
+        WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
     }
@@ -350,18 +440,6 @@ pub mod workers {
 
     pub fn inc_filesystem_semaphore_available(permits: u64) {
         WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
-    }
-
-    /// Records acquisition of `bytes` from the worker-memory pool.
-    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
-    pub fn record_memory_permit_acquired(bytes: usize) {
-        crate::metrics::storage::record_worker_memory_pool_acquired(bytes as u64);
-    }
-
-    /// Records release of `bytes` back to the worker-memory pool.
-    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
-    pub fn record_memory_permit_released(bytes: usize) {
-        crate::metrics::storage::record_worker_memory_pool_released(bytes as u64);
     }
 
     pub fn record_worker_kv_cache_value_size(bytes: usize) {
@@ -562,7 +640,13 @@ pub mod wasm {
         .unwrap();
         static ref ALLOCATED_MEMORY_BYTES: Histogram = register_histogram!(
             "allocated_memory_bytes",
-            "Amount of memory allocated by a single memory.grow instruction",
+            "Worker's total linear memory size after a memory.grow, sampled at each grow",
+            crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
+            "worker_resident_linear_memory_bytes",
+            "Per-worker cumulative linear-memory grant (total_linear_memory_size = sum of memory.grow deltas) sampled when the worker is admitted. This is the linear memory the admission gate reserves for the worker; it is an upper bound on resident RSS, not measured resident memory, since grown pages are largely demand-paged. Compare to container_memory_working_set_bytes for the gap.",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
@@ -637,6 +721,10 @@ pub mod wasm {
 
     pub fn record_allocated_memory(amount: usize) {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
+    }
+
+    pub fn record_worker_resident_linear_memory(bytes: u64) {
+        WORKER_RESIDENT_LINEAR_MEMORY_BYTES.observe(bytes as f64);
     }
 }
 
@@ -793,18 +881,6 @@ pub mod storage {
             &["executor_id"]
         )
         .unwrap();
-        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_worker_memory_pool_total_bytes",
-            "Configured worker-memory semaphore size in bytes for this executor",
-            &["executor_id"]
-        )
-        .unwrap();
-        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_worker_memory_pool_used_bytes",
-            "Bytes currently acquired from the worker-memory semaphore on this executor",
-            &["executor_id"]
-        )
-        .unwrap();
     }
 
     pub fn record_filesystem_pool_total(bytes: u64) {
@@ -821,24 +897,6 @@ pub mod storage {
 
     pub fn record_filesystem_pool_released(bytes: u64) {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .sub(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_total(bytes: u64) {
-        WORKER_MEMORY_POOL_TOTAL_BYTES
-            .with_label_values(&[executor_id()])
-            .set(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_acquired(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .add(bytes as f64);
-    }
-
-    pub fn record_worker_memory_pool_released(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
     }

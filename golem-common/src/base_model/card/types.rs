@@ -35,6 +35,7 @@ pub enum CardManagedBy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct Card {
     pub card_id: CardId,
     pub parent_ids: Vec<CardId>,

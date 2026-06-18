@@ -61,7 +61,7 @@ pub enum PolymorphicAgentRecipientPattern {
     EnvironmentAgent { component: String, agent: String },
     ComponentAgents,
     ComponentAgent { agent: String },
-    Self_,
+    Agent,
 }
 
 impl RecipientPattern {
@@ -201,8 +201,8 @@ impl PolymorphicRecipientPattern {
                     agent: rest[0].to_string(),
                 }),
             ),
-            Some(("?self", rest)) if rest.is_empty() => {
-                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Self_))
+            Some(("?agent", rest)) if rest.is_empty() => {
+                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Agent))
             }
             Some(_) => Err(value.to_string()),
             None => RecipientPattern::parse(value).map(Self::Concrete),
