@@ -20,11 +20,6 @@
 // that shared types are deduplicated to a single `ref`; everything else is
 // inlined.
 
-import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from '../../../newTypes/either';
-import { TypeScope } from './scope';
-import { typeMapper } from './typeMapperImpl';
-import { analysedToResolved } from './analysedToResolved';
 import { ResolvedGraph, ResolvedType } from './resolvedType';
 import {
   field as schemaField,
@@ -269,18 +264,4 @@ export function resolvedGraphToSchemaType(graph: ResolvedGraph): SchemaGraphMapp
 
   const root = toSchema(graph.root);
   return { graph: builder.buildGraph(root), root, resolvedGraph: graph };
-}
-
-/**
- * Map a reflected TypeScript type to a self-contained schema graph plus its
- * (hint-carrying) `ResolvedType`. The `resolved` value is what the runtime value
- * codec uses; the `graph`/`root` are the wire schema.
- */
-export function fromTsType(
-  type: CoreType.Type,
-  scope: TypeScope | undefined,
-): Either.Either<SchemaTypeMapping, string> {
-  return Either.map(typeMapper(type, scope), (analysed) =>
-    resolvedToSchemaType(analysedToResolved(analysed)),
-  );
 }

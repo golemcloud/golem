@@ -26,11 +26,7 @@ import { AgentConstructorParamRegistry } from './registry/agentConstructorParamR
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { RuntimeOutput, RuntimeParam } from './typeInfoInternal';
 import { decodeOutput, encodeInputRecord } from './mapping/values/boundaryValue';
-import {
-  schemaValueFromWit,
-  schemaValueToWit,
-  typedSchemaValueToWit,
-} from './schema-model';
+import { schemaValueFromWit, schemaValueToWit, typedSchemaValueToWit } from './schema-model';
 import { mapTsTypeToResolvedGraph } from './mapping/types/resolvedMapper';
 import { resolvedGraphToSchemaType } from './mapping/types/schemaType';
 import { serializeGraph } from './mapping/values/schemaValue';
@@ -174,7 +170,9 @@ class WasmRpcProxyHandlerShared {
       : userParams.length;
 
     if (args.length > expectedArgs) {
-      throw new Error(`Received more args than expected (got ${args.length}, expected ${expectedArgs})`);
+      throw new Error(
+        `Received more args than expected (got ${args.length}, expected ${expectedArgs})`,
+      );
     }
 
     const userArgs = args.slice(0, userParams.length);
@@ -409,10 +407,7 @@ function serializeArgs(userParams: RuntimeParam[], fnArgs: any[]): SchemaValueTr
   return schemaValueToWit(encodeInputRecord(fnArgs, userParams));
 }
 
-function deserializeRpcResult(
-  resultTree: SchemaValueTree | undefined,
-  output: RuntimeOutput,
-): any {
+function deserializeRpcResult(resultTree: SchemaValueTree | undefined, output: RuntimeOutput): any {
   const value = resultTree === undefined ? undefined : schemaValueFromWit(resultTree);
   return decodeOutput(value, output);
 }

@@ -23,7 +23,6 @@ use crate::base_model::{
     AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
 };
 use crate::{declare_enums, declare_structs, declare_unions};
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{HashMap, HashSet};
 
@@ -197,14 +196,18 @@ impl From<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
     }
 }
 
+#[cfg(feature = "full")]
 impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
     fn from(value: TypedAgentConfigEntry) -> Self {
+        let typed = crate::schema::adapters::value_and_type_to_typed_schema_value(&value.value)
+            .expect(
+                "ValueAndType in TypedAgentConfigEntry must be representable as a schema value",
+            );
+        let (_graph, schema_value) = typed.into_parts();
         Self {
             path: value.path,
-            value: value
-                .value
-                .to_json_value()
-                .expect("ValueAndType in TypedAgentConfigEntry must be valid JSON")
+            value: serde_json::to_value(&schema_value)
+                .expect("SchemaValue in TypedAgentConfigEntry must serialize to JSON")
                 .into(),
         }
     }

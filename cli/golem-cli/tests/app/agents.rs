@@ -740,6 +740,17 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function with a simple object
     run_and_assert(&ctx, "funObjectType", &[r#"{a: "foo", b: 42, c: true}"#]).await;
 
+    // recursive type (a tree referencing itself) — proves recursion is supported end-to-end
+    // over the real REST path (D5)
+    run_and_assert(
+        &ctx,
+        "funRecursive",
+        &[
+            r#"{label: "root", children: [{label: "a", children: []}, {label: "b", children: [{label: "c", children: []}]}]}"#,
+        ],
+    )
+    .await;
+
     // function with a very complex object
     let argument = r#"
       {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}

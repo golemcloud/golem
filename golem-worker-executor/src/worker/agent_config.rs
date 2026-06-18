@@ -15,16 +15,17 @@
 use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::adapters::analysed_type::{
     schema_graph_to_analysed_type, schema_type_to_analysed_type,
 };
+use golem_common::schema::adapters::typed_schema_value_to_value_and_type;
+use golem_common::schema::validation::validate_value;
+use golem_common::schema::{AgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::HashMap;
 
 pub fn ensure_required_agent_secrets_are_configured(
@@ -127,23 +128,39 @@ pub fn parse_worker_creation_agent_config(
                 ))
             })?;
 
-        let config_declaration_type =
-            schema_type_to_analysed_type(&agent_type.schema, &config_declaration.value_type)
-                .map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Declared config type for {} is not representable as AnalysedType: {e}",
+        let schema_value: SchemaValue =
+            serde_json::from_value(entry.value.0.clone()).map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "config value for path {} is not a valid schema value: {err}",
+                    entry.path.join(".")
+                ))
+            })?;
+
+        let graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: config_declaration.value_type.clone(),
+        };
+
+        validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
+            WorkerExecutorError::invalid_request(format!(
+                "config value for path {} does not match expected schema: [{}]",
+                entry.path.join("."),
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+
+        let parsed_value =
+            typed_schema_value_to_value_and_type(&TypedSchemaValue::new(graph, schema_value))
+                .map_err(|err| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "config value for path {} cannot be converted to a value: {err}",
                         entry.path.join(".")
                     ))
                 })?;
-
-        let parsed_value = ValueAndType::parse_with_type(&entry.value.0, &config_declaration_type)
-            .map_err(|err| {
-                WorkerExecutorError::invalid_request(format!(
-                    "config value for path {} does not match expected schema: [{}]",
-                    entry.path.join("."),
-                    err.join(", ")
-                ))
-            })?;
 
         initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,

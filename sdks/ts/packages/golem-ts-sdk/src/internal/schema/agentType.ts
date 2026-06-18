@@ -143,7 +143,9 @@ export function runtimeTypeInfoToSchemaGraph(type: RuntimeTypeInfo): SchemaGraph
         graph: runtimeTypeInfoToSchemaGraph(c.type),
       }));
       const defs = mergeGraphDefs(caseGraphs.map((c) => c.graph));
-      const root = multimodalSchemaType(caseGraphs.map((c) => ({ name: c.name, root: c.graph.root })));
+      const root = multimodalSchemaType(
+        caseGraphs.map((c) => ({ name: c.name, root: c.graph.root })),
+      );
       return { defs, root };
     }
     case 'principal':

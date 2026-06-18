@@ -61,10 +61,7 @@ import {
 } from '../src';
 import { SchemaValue } from '../src/internal/schema-model';
 import { RuntimeParam } from '../src/internal/typeInfoInternal';
-import {
-  decodeOutput,
-  encodeInputRecord,
-} from '../src/internal/mapping/values/boundaryValue';
+import { decodeOutput, encodeInputRecord } from '../src/internal/mapping/values/boundaryValue';
 import { TextOrImage } from './validAgents';
 
 test('BarAgent can be successfully initiated', () => {
@@ -283,13 +280,28 @@ test('An agent can be successfully initiated and all of its methods can be invok
         );
 
         // Invoking with result type
-        await testInvoke('fun11', [['param', resultTypeExactBoth]], resolvedAgent, resultTypeExactBoth);
+        await testInvoke(
+          'fun11',
+          [['param', resultTypeExactBoth]],
+          resolvedAgent,
+          resultTypeExactBoth,
+        );
 
         // invoking with result-like type
-        await testInvoke('fun12', [['param', resultTypeNonExact]], resolvedAgent, resultTypeNonExact);
+        await testInvoke(
+          'fun12',
+          [['param', resultTypeNonExact]],
+          resolvedAgent,
+          resultTypeNonExact,
+        );
 
         // invoking with another result-like type
-        await testInvoke('fun13', [['param', resultTypeNonExact2]], resolvedAgent, resultTypeNonExact2);
+        await testInvoke(
+          'fun13',
+          [['param', resultTypeNonExact2]],
+          resolvedAgent,
+          resultTypeNonExact2,
+        );
 
         // Invoking with unstructured text
         await testInvoke('fun15', [['param', unstructuredText]], resolvedAgent, unstructuredText);
@@ -323,7 +335,12 @@ test('Invoke function that takes and returns inbuilt result type', async () => {
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  await testInvoke('fun30', [['param', Result.err('message')]], resolvedAgent, Result.err('message'));
+  await testInvoke(
+    'fun30',
+    [['param', Result.err('message')]],
+    resolvedAgent,
+    Result.err('message'),
+  );
 
   await testInvoke('fun30', [['param', Result.ok(true)]], resolvedAgent, Result.ok(true));
 
@@ -355,19 +372,15 @@ test('Invoke function that takes and returns custom result type with void', asyn
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  await testInvoke(
-    'fun43',
-    [['param', { tag: 'ok', okValue: undefined }]],
-    resolvedAgent,
-    { tag: 'ok', okValue: undefined },
-  );
+  await testInvoke('fun43', [['param', { tag: 'ok', okValue: undefined }]], resolvedAgent, {
+    tag: 'ok',
+    okValue: undefined,
+  });
 
-  await testInvoke(
-    'fun43',
-    [['param', { tag: 'err', errValue: undefined }]],
-    resolvedAgent,
-    { tag: 'err', errValue: undefined },
-  );
+  await testInvoke('fun43', [['param', { tag: 'err', errValue: undefined }]], resolvedAgent, {
+    tag: 'err',
+    errValue: undefined,
+  });
 });
 
 test('Invoke function that takes and returns inbuilt result type with void', async () => {
@@ -381,7 +394,12 @@ test('Invoke function that takes and returns inbuilt result type with void', asy
 
   await testInvoke('fun44', [['param', Result.ok(undefined)]], resolvedAgent, Result.ok(undefined));
 
-  await testInvoke('fun44', [['param', Result.err(undefined)]], resolvedAgent, Result.err(undefined));
+  await testInvoke(
+    'fun44',
+    [['param', Result.err(undefined)]],
+    resolvedAgent,
+    Result.err(undefined),
+  );
 });
 
 test('Invoke function that takes and returns inbuilt result type with undefined', async () => {
@@ -629,7 +647,12 @@ test('Invoke function that takes unstructured-text and returns unstructured-text
     languageCode: 'de',
   };
 
-  await testInvoke('fun16', [['param', validUnstructuredText]], resolvedAgent, validUnstructuredText);
+  await testInvoke(
+    'fun16',
+    [['param', validUnstructuredText]],
+    resolvedAgent,
+    validUnstructuredText,
+  );
 
   // fun16 doesn't support language code `pl`. We dynamically invoke with it to see
   // if the error is properly thrown.
@@ -733,7 +756,10 @@ function buildMethodInput(
  * parameters do not consume a record field; every other constructor parameter
  * does, in declaration order.
  */
-function buildConstructorInput(agentClassName: string, valuesByName: Map<string, any>): SchemaValue {
+function buildConstructorInput(
+  agentClassName: string,
+  valuesByName: Map<string, any>,
+): SchemaValue {
   const classMeta = AgentConstructorParamRegistry.get(agentClassName);
   if (!classMeta) {
     throw new Error(`Constructor metadata for ${agentClassName} not found`);

@@ -15,12 +15,12 @@
 // Interface type indirectly tests primitive types, union, list etc
 
 import { describe, expect } from 'vitest';
-import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import * as AnalysedType from '../src/internal/mapping/types/analysedType';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { TypeScope } from '../src/internal/mapping/types/scope';
 import * as Either from '../src/newTypes/either';
 import { agent, ParsedAgentId, BaseAgent } from '../src';
-import { typeMapper } from '../src/internal/mapping/types/typeMapperImpl';
+import { mapTsTypeToResolvedGraph } from '../src/internal/mapping/types/resolvedMapper';
+import { ResolvedGraph } from '../src/internal/mapping/types/resolvedType';
 import { validateAgentHttpConfig } from '../src/internal/http/validation';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src/agentClassName';
@@ -135,21 +135,19 @@ describe('Invalid types in agents', () => {
     const fun11ReturnType = invalidAgent?.methods.get('fun11')?.returnType;
     const fun12ReturnType = invalidAgent?.methods.get('fun12')?.returnType;
     const fun13ReturnType = invalidAgent?.methods.get('fun13')?.returnType;
-    const fun14ReturnType = invalidAgent?.methods.get('fun14')?.returnType;
 
-    const fun2Type = typeMapper(fun2ReturnType!, undefined);
-    const fun3Type = typeMapper(fun3ReturnType!, undefined);
-    const fun4Type = typeMapper(fun4ReturnType!, undefined);
-    const fun5Type = typeMapper(fun5ReturnType!, undefined);
-    const fun6Type = typeMapper(fun6ReturnType!, undefined);
-    const fun7Type = typeMapper(fun7ReturnType!, undefined);
-    const fun8Type = typeMapper(fun8ReturnType!, undefined);
-    const fun9Type = typeMapper(fun9ReturnType!, undefined);
-    const fun10Type = typeMapper(fun10ReturnType!, undefined);
-    const fun11Type = typeMapper(fun11ReturnType!, undefined);
-    const fun12Type = typeMapper(fun12ReturnType!, undefined);
-    const fun13Type = typeMapper(fun13ReturnType!, undefined);
-    const fun14Type = typeMapper(fun14ReturnType!, undefined);
+    const fun2Type = mapTsTypeToResolvedGraph(fun2ReturnType!, undefined);
+    const fun3Type = mapTsTypeToResolvedGraph(fun3ReturnType!, undefined);
+    const fun4Type = mapTsTypeToResolvedGraph(fun4ReturnType!, undefined);
+    const fun5Type = mapTsTypeToResolvedGraph(fun5ReturnType!, undefined);
+    const fun6Type = mapTsTypeToResolvedGraph(fun6ReturnType!, undefined);
+    const fun7Type = mapTsTypeToResolvedGraph(fun7ReturnType!, undefined);
+    const fun8Type = mapTsTypeToResolvedGraph(fun8ReturnType!, undefined);
+    const fun9Type = mapTsTypeToResolvedGraph(fun9ReturnType!, undefined);
+    const fun10Type = mapTsTypeToResolvedGraph(fun10ReturnType!, undefined);
+    const fun11Type = mapTsTypeToResolvedGraph(fun11ReturnType!, undefined);
+    const fun12Type = mapTsTypeToResolvedGraph(fun12ReturnType!, undefined);
+    const fun13Type = mapTsTypeToResolvedGraph(fun13ReturnType!, undefined);
 
     expect(fun2Type.val).toBe('Unsupported type `Date`. Use a `string` if possible');
 
@@ -175,9 +173,9 @@ describe('Invalid types in agents', () => {
 
     expect(fun13Type.val).toBe('Unsupported type `Object`');
 
-    expect(fun14Type.val).toBe(
-      '`RecursiveType` is recursive.\nRecursive types are not supported yet.\nHelp: Avoid recursion in this type (e.g. using index-based node lists) and try again.',
-    );
+    // Note: `fun14` returns a recursive type. Recursion is now natively
+    // supported by the schema model (see `tests/schema-mapping/recursion.test.ts`),
+    // so it is no longer an invalid-type case.
   });
 });
 
@@ -324,7 +322,10 @@ test('Config type used as a field inside another Config produces a helpful error
     properties: [],
     requiredMembers: [],
   };
-  const result = typeMapper(configType, TypeScope.object('myConfig', 'nested', false));
+  const result = mapTsTypeToResolvedGraph(
+    configType,
+    TypeScope.object('myConfig', 'nested', false),
+  );
   expect(Either.isLeft(result)).toBe(true);
   assert(Either.isLeft(result));
   expect(result.val).toBe(
@@ -332,11 +333,9 @@ test('Config type used as a field inside another Config produces a helpful error
   );
 });
 
-function getAnalysedTypeInFun1(
-  parameterName: string,
-): Either.Either<AnalysedType.AnalysedType, string> {
+function getAnalysedTypeInFun1(parameterName: string): Either.Either<ResolvedGraph, string> {
   const type = fun1Params?.get(parameterName)!;
-  return typeMapper(type, TypeScope.method('fun1', parameterName, type.optional));
+  return mapTsTypeToResolvedGraph(type, TypeScope.method('fun1', parameterName, type.optional));
 }
 
 export class UndecoratedAgent extends BaseAgent {

@@ -323,9 +323,8 @@ function mapTuple(type: Extract<TsType, { kind: 'tuple' }>, state: MapperState):
   if (!type.elements.length) {
     return Either.left('Empty tuple types are not supported');
   }
-  return Either.map(
-    Either.all(type.elements.map((el) => mapType(el, undefined, state))),
-    (items) => r.tuple(items),
+  return Either.map(Either.all(type.elements.map((el) => mapType(el, undefined, state))), (items) =>
+    r.tuple(items),
   );
 }
 
@@ -604,7 +603,11 @@ function convertTaggedToVariant(
         } else {
           const payload = mapType(meta.valueType[1], undefined, state);
           if (Either.isLeft(payload)) return payload;
-          cases.push({ name: meta.tagLiteralName, payload: payload.val, valueKey: meta.valueType[0] });
+          cases.push({
+            name: meta.tagLiteralName,
+            payload: payload.val,
+            valueKey: meta.valueType[0],
+          });
         }
       }
       return Either.right(r.variant(true, cases, typeName, typeOwner));
@@ -833,10 +836,7 @@ function mapPrincipal(state: MapperState): EitherR {
     () =>
       Either.right(
         r.record(
-          [
-            resolvedField('componentId', componentIdR.val),
-            resolvedField('agentId', r.string()),
-          ],
+          [resolvedField('componentId', componentIdR.val), resolvedField('agentId', r.string())],
           'AgentId',
         ),
       ),
@@ -877,7 +877,8 @@ function mapPrincipal(state: MapperState): EitherR {
 
   const golemUserR = registerComposite(
     'GolemUserPrincipal',
-    () => Either.right(r.record([resolvedField('accountId', accountIdR.val)], 'GolemUserPrincipal')),
+    () =>
+      Either.right(r.record([resolvedField('accountId', accountIdR.val)], 'GolemUserPrincipal')),
     state,
   );
   if (Either.isLeft(golemUserR)) return golemUserR;

@@ -102,7 +102,9 @@ export function unstructuredTextFromValue(
   if (value.caseIndex === INLINE_CASE) {
     const payload = value.payload;
     if (!payload || payload.tag !== 'text') {
-      throw new Error(`Expected inline text payload for unstructured-text parameter ${parameterName}`);
+      throw new Error(
+        `Expected inline text payload for unstructured-text parameter ${parameterName}`,
+      );
     }
 
     if (allowedCodes.length > 0) {
@@ -162,7 +164,10 @@ export function unstructuredBinaryFromValue(
         `Expected inline binary payload for unstructured-binary parameter ${parameterName}`,
       );
     }
-    if (allowedMimeTypes.length > 0 && (!payload.mimeType || !allowedMimeTypes.includes(payload.mimeType))) {
+    if (
+      allowedMimeTypes.length > 0 &&
+      (!payload.mimeType || !allowedMimeTypes.includes(payload.mimeType))
+    ) {
       throw new Error(
         `Invalid value for parameter ${parameterName}. Mime type \`${payload.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
       );

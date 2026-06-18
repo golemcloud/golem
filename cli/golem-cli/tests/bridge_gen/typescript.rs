@@ -23,17 +23,10 @@ use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentMethod, AgentMode, AgentType,
-    AgentTypeName, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
-    ComponentModelElementSchema, DataSchema, ElementSchema, JsonComponentModelValue,
-    NamedElementSchema, NamedElementSchemas, Snapshotting, TextReference, TextReferenceValue,
-    TextSource, UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues,
-    UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
+    AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+    NamedElementSchemas, Snapshotting,
 };
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{bool, f64, field, list, option, record, s32, str};
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::analysis::analysed_type::{f64, field, list, option, record, s32, str};
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
@@ -43,7 +36,6 @@ use test_r::{test, test_dep};
 
 struct GeneratedPackage {
     pub dir: TempDir,
-    pub agent_type: AgentType,
 }
 
 impl GeneratedPackage {
@@ -51,102 +43,12 @@ impl GeneratedPackage {
         let dir = TempDir::new().unwrap();
         let target_dir = Utf8Path::from_path(dir.path()).unwrap();
         std::fs::remove_dir_all(target_dir).ok();
-        generate_and_compile(agent_type.clone(), target_dir);
-        GeneratedPackage { dir, agent_type }
+        generate_and_compile(agent_type, target_dir);
+        GeneratedPackage { dir }
     }
 
     pub fn target_dir(&self) -> &Utf8Path {
         Utf8Path::from_path(self.dir.path()).unwrap()
-    }
-
-    pub fn input_element_type_by_name(&self, method_name: &str, name: &str) -> AnalysedType {
-        self.element_type_by_name_in_schema(
-            method_name,
-            "input",
-            name,
-            &self.method_by_name(method_name).input_schema,
-        )
-        .clone()
-    }
-
-    pub fn output_element_type_by_name(&self, method_name: &str, name: &str) -> AnalysedType {
-        self.element_type_by_name_in_schema(
-            method_name,
-            "output",
-            name,
-            &self.method_by_name(method_name).output_schema,
-        )
-        .clone()
-    }
-
-    fn method_by_name(&self, method_name: &str) -> &AgentMethod {
-        self.agent_type
-            .methods
-            .iter()
-            .find(|m| m.name == method_name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Method {} not found in agent {}",
-                    self.agent_type.type_name, method_name
-                )
-            })
-    }
-
-    fn element_type_by_name_in_schema<'a>(
-        &self,
-        method_name: &str,
-        kind: &str,
-        name: &str,
-        schema: &'a DataSchema,
-    ) -> &'a AnalysedType {
-        match schema {
-            DataSchema::Tuple(tuple) => {
-                let element = tuple
-                    .elements
-                    .iter()
-                    .find(|e| e.name == name)
-                    .map(|e| &e.schema)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Input {} not found in method {} of agent {}",
-                            name,
-                            method_name,
-                            self.agent_type.type_name.as_str()
-                        )
-                    });
-
-                match element {
-                    ElementSchema::ComponentModel(component_model) => &component_model.element_type,
-                    ElementSchema::UnstructuredText(_) => {
-                        panic!(
-                            "Expected component model {} schema while searching for {}.{}.{}",
-                            kind,
-                            self.agent_type.type_name.as_str(),
-                            method_name,
-                            name
-                        )
-                    }
-                    ElementSchema::UnstructuredBinary(_) => {
-                        panic!(
-                            "Expected component model {} schema while searching for {}.{}.{}",
-                            kind,
-                            self.agent_type.type_name.as_str(),
-                            method_name,
-                            name
-                        )
-                    }
-                }
-            }
-            DataSchema::Multimodal(_) => {
-                panic!(
-                    "Expected tuple {} schema while searching for {}.{}.{}",
-                    kind,
-                    self.agent_type.type_name.as_str(),
-                    method_name,
-                    name
-                )
-            }
-        }
     }
 }
 
@@ -425,19 +327,7 @@ fn bridge_tests_optional_q_mark(
                 null
             ]
         },
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: "value1".into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "value1"}, {"kind": "option", "value": {"inner": {"kind": "f64", "value": 10}}}, {"kind": "option", "value": {}}]}}),
     );
 }
 
@@ -455,77 +345,7 @@ fn bridge_tests_optional(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
             "optional",
             null
         ]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Option(Some(Box::new(Value::Variant {
-                            case_idx: 0,
-                            case_value: Some(Box::new(Value::String("value".to_string()))),
-                        }))),
-                        pkg.input_element_type_by_name("funOptional", "param1"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![Value::Option(Some(Box::new(Value::String(
-                            "nested".to_string(),
-                        ))))]),
-                        pkg.input_element_type_by_name("funOptional", "param2"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![Value::Option(Some(Box::new(Value::Variant {
-                            case_idx: 0,
-                            case_value: Some(Box::new(Value::String("value".to_string()))),
-                        })))]),
-                        pkg.input_element_type_by_name("funOptional", "param3"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![Value::Option(Some(Box::new(Value::Variant {
-                            case_idx: 0,
-                            case_value: Some(Box::new(Value::String("value".to_string()))),
-                        })))]),
-                        pkg.input_element_type_by_name("funOptional", "param4"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![Value::Option(Some(Box::new(Value::String(
-                            "nested".to_string(),
-                        ))))]),
-                        pkg.input_element_type_by_name("funOptional", "param5"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: Some("optional".to_string())
-                        .into_value_and_type()
-                        .to_json_value()
-                        .unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Option(None),
-                        pkg.input_element_type_by_name("funOptional", "param7"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                }),
-            ],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "option", "value": {"inner": {"kind": "variant", "value": {"case": 0, "payload": {"kind": "string", "value": "value"}}}}}, {"kind": "record", "value": {"fields": [{"kind": "option", "value": {"inner": {"kind": "string", "value": "nested"}}}]}}, {"kind": "record", "value": {"fields": [{"kind": "option", "value": {"inner": {"kind": "variant", "value": {"case": 0, "payload": {"kind": "string", "value": "value"}}}}}]}}, {"kind": "record", "value": {"fields": [{"kind": "option", "value": {"inner": {"kind": "variant", "value": {"case": 0, "payload": {"kind": "string", "value": "value"}}}}}]}}, {"kind": "record", "value": {"fields": [{"kind": "option", "value": {"inner": {"kind": "string", "value": "nested"}}}]}}, {"kind": "option", "value": {"inner": {"kind": "string", "value": "optional"}}}, {"kind": "option", "value": {}}]}}),
     );
 }
 
@@ -535,13 +355,7 @@ fn bridge_tests_number(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &Ge
         pkg.target_dir(),
         "FunNumber",
         json!([42]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: 42i32.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "f64", "value": 42}]}}),
     );
 }
 
@@ -551,13 +365,7 @@ fn bridge_tests_string(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &Ge
         pkg.target_dir(),
         "FunString",
         json!(["hello"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "hello".into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "hello"}]}}),
     );
 }
 
@@ -567,13 +375,7 @@ fn bridge_tests_boolean(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &G
         pkg.target_dir(),
         "FunBoolean",
         json!([true]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: true.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "bool", "value": true}]}}),
     );
 }
 
@@ -584,32 +386,7 @@ fn bridge_tests_tuple_complex_type_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunTupleComplexType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json! {
-                        [
-                            "hello".into_value_and_type().to_json_value().unwrap(),
-                            100i32.into_value_and_type().to_json_value().unwrap(),
-                            ValueAndType::new(
-                                Value::Record(vec![
-                                    Value::String("x".to_string()),
-                                    Value::S32(200),
-                                    Value::Bool(true),
-                                ]),
-                                record(vec![
-                                    field("a", str()),
-                                    field("b", s32()),
-                                    field("c", bool()),
-                                ]),
-                            )
-                            .to_json_value()
-                            .unwrap()
-                        ]
-                    },
-                },
-            )],
-        }),
+        json!({"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "hello"}, {"kind": "f64", "value": 100}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "x"}, {"kind": "f64", "value": 200}, {"kind": "bool", "value": true}]}}]}}),
         json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
     );
 }
@@ -628,19 +405,7 @@ fn bridge_tests_optionalqmark(
                 null
             ]
         },
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: "value1".into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: Some(10i32).into_value_and_type().to_json_value().unwrap(),
-                }),
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: None::<i32>.into_value_and_type().to_json_value().unwrap(),
-                }),
-            ],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "value1"}, {"kind": "option", "value": {"inner": {"kind": "f64", "value": 10}}}, {"kind": "option", "value": {}}]}}),
     );
 }
 
@@ -667,53 +432,7 @@ fn bridge_tests_objectcomplextype(
             "i": ["str", 2.2, {"a": "obj", "b": 1.1, "c": true}],
             "j": [],
             "k": {"n": 1.1}}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::String("test".to_string()),
-                            Value::F64(1.1),
-                            Value::Bool(true),
-                            Value::Record(vec![
-                                Value::String("nested".to_string()),
-                                Value::F64(2.2),
-                                Value::Bool(false),
-                            ]),
-                            Value::Variant {
-                                case_idx: 0,
-                                case_value: Some(Box::new(Value::F64(5.5))),
-                            },
-                            Value::List(vec![Value::String("item".to_string())]),
-                            Value::List(vec![Value::Record(vec![
-                                Value::String("obj".to_string()),
-                                Value::F64(1.1),
-                                Value::Bool(true),
-                            ])]),
-                            Value::Tuple(vec![
-                                Value::String("str".to_string()),
-                                Value::F64(2.2),
-                                Value::Bool(false),
-                            ]),
-                            Value::Tuple(vec![
-                                Value::String("str".to_string()),
-                                Value::F64(2.2),
-                                Value::Record(vec![
-                                    Value::String("obj".to_string()),
-                                    Value::F64(1.1),
-                                    Value::Bool(true),
-                                ]),
-                            ]),
-                            Value::List(vec![]),
-                            Value::Record(vec![Value::F64(1.1)]),
-                        ]),
-                        pkg.input_element_type_by_name("funObjectComplexType", "text"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "record", "value": {"fields": [{"kind": "string", "value": "test"}, {"kind": "f64", "value": 1.1}, {"kind": "bool", "value": true}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "nested"}, {"kind": "f64", "value": 2.2}, {"kind": "bool", "value": false}]}}, {"kind": "variant", "value": {"case": 0, "payload": {"kind": "f64", "value": 5.5}}}, {"kind": "list", "value": {"elements": [{"kind": "string", "value": "item"}]}}, {"kind": "list", "value": {"elements": [{"kind": "record", "value": {"fields": [{"kind": "string", "value": "obj"}, {"kind": "f64", "value": 1.1}, {"kind": "bool", "value": true}]}}]}}, {"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "str"}, {"kind": "f64", "value": 2.2}, {"kind": "bool", "value": false}]}}, {"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "str"}, {"kind": "f64", "value": 2.2}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "obj"}, {"kind": "f64", "value": 1.1}, {"kind": "bool", "value": true}]}}]}}, {"kind": "list", "value": {"elements": []}}, {"kind": "record", "value": {"fields": [{"kind": "f64", "value": 1.1}]}}]}}]}}),
     );
 }
 
@@ -723,21 +442,7 @@ fn bridge_tests_uniontype(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: 
         pkg.target_dir(),
         "FunUnionType",
         json!([{ "tag": "UnionType3", "val": true }]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 2,
-                            case_value: Some(Box::new(Value::Bool(true))),
-                        },
-                        pkg.input_element_type_by_name("funUnionType", "unionType"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 2, "payload": {"kind": "bool", "value": true}}}]}}),
     );
 }
 
@@ -749,21 +454,7 @@ fn bridge_tests_unioncomplextype(
         pkg.target_dir(),
         "FunUnionComplexType",
         json!([{ "tag": "UnionComplexType8", "val": { "n": 1.2 } }]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 7,
-                            case_value: Some(Box::new(Value::Record(vec![Value::F64(1.2)]))),
-                        },
-                        pkg.input_element_type_by_name("funUnionComplexType", "unionComplexType"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 7, "payload": {"kind": "record", "value": {"fields": [{"kind": "f64", "value": 1.2}]}}}}]}}),
     );
 }
 
@@ -773,18 +464,7 @@ fn bridge_tests_map(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &Gener
         pkg.target_dir(),
         "FunMap",
         json!([[["key1", 10]]]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: vec![("key1".to_string(), 10i32)]
-                        .into_iter()
-                        .collect::<std::collections::BTreeMap<_, _>>()
-                        .into_value_and_type()
-                        .to_json_value()
-                        .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "list", "value": {"elements": [{"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "key1"}, {"kind": "f64", "value": 10}]}}]}}]}}),
     );
 }
 
@@ -796,25 +476,7 @@ fn bridge_tests_taggedunion(
         pkg.target_dir(),
         "FunTaggedUnion",
         json!([{"tag": "e", "val": {"a": "x", "b": 200.1, "c": true }}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 4,
-                            case_value: Some(Box::new(Value::Record(vec![
-                                Value::String("x".to_string()),
-                                Value::F64(200.1),
-                                Value::Bool(true),
-                            ]))),
-                        },
-                        pkg.input_element_type_by_name("funTaggedUnion", "taggedUnionType"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 4, "payload": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "x"}, {"kind": "f64", "value": 200.1}, {"kind": "bool", "value": true}]}}}}]}}),
     );
 }
 
@@ -826,26 +488,7 @@ fn bridge_tests_tuplecomplextype(
         pkg.target_dir(),
         "FunTupleComplexType",
         json!([["hello", 100.1, {"a": "x", "b": 200.2, "c": true}]]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Tuple(vec![
-                            Value::String("hello".to_string()),
-                            Value::F64(100.1),
-                            Value::Record(vec![
-                                Value::String("x".to_string()),
-                                Value::F64(200.2),
-                                Value::Bool(true),
-                            ]),
-                        ]),
-                        pkg.input_element_type_by_name("funTupleComplexType", "complexType"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "hello"}, {"kind": "f64", "value": 100.1}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "x"}, {"kind": "f64", "value": 200.2}, {"kind": "bool", "value": true}]}}]}}]}}),
     );
 }
 
@@ -855,16 +498,7 @@ fn bridge_tests_tupletype(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: 
         pkg.target_dir(),
         "FunTupleType",
         json!([["item", 42, false]]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ("item".to_string(), 42, false)
-                        .into_value_and_type()
-                        .to_json_value()
-                        .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "item"}, {"kind": "f64", "value": 42}, {"kind": "bool", "value": false}]}}]}}),
     );
 }
 
@@ -876,29 +510,7 @@ fn bridge_tests_listcomplextype(
         pkg.target_dir(),
         "FunListComplexType",
         json!([[{"a": "item1", "b": 1.1, "c": true}, {"a": "item2", "b": 2.2, "c": false}]]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::List(vec![
-                            Value::Record(vec![
-                                Value::String("item1".to_string()),
-                                Value::F64(1.1),
-                                Value::Bool(true),
-                            ]),
-                            Value::Record(vec![
-                                Value::String("item2".to_string()),
-                                Value::F64(2.2),
-                                Value::Bool(false),
-                            ]),
-                        ]),
-                        pkg.input_element_type_by_name("funListComplexType", "listComplexType"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "list", "value": {"elements": [{"kind": "record", "value": {"fields": [{"kind": "string", "value": "item1"}, {"kind": "f64", "value": 1.1}, {"kind": "bool", "value": true}]}}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "item2"}, {"kind": "f64", "value": 2.2}, {"kind": "bool", "value": false}]}}]}}]}}),
     );
 }
 
@@ -910,22 +522,7 @@ fn bridge_tests_objecttype(
         pkg.target_dir(),
         "FunObjectType",
         json!([{"a": "test", "b": 123.4, "c": true}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::String("test".to_string()),
-                            Value::F64(123.4),
-                            Value::Bool(true),
-                        ]),
-                        pkg.input_element_type_by_name("funObjectType", "objectType"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "record", "value": {"fields": [{"kind": "string", "value": "test"}, {"kind": "f64", "value": 123.4}, {"kind": "bool", "value": true}]}}]}}),
     );
 }
 
@@ -937,21 +534,7 @@ fn bridge_tests_unionwithliterals(
         pkg.target_dir(),
         "FunUnionWithLiterals",
         json!([{"tag": "lit1"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 0,
-                            case_value: None,
-                        },
-                        pkg.input_element_type_by_name("funUnionWithLiterals", "unionWithLiterals"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 0}}]}}),
     );
 }
 
@@ -963,21 +546,7 @@ fn bridge_tests_unionwithliterals_with_value(
         pkg.target_dir(),
         "FunUnionWithLiterals",
         json!([{"tag": "UnionWithLiterals1", "val": true}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 3,
-                            case_value: Some(Box::new(Value::Bool(true))),
-                        },
-                        pkg.input_element_type_by_name("funUnionWithLiterals", "unionWithLiterals"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 3, "payload": {"kind": "bool", "value": true}}}]}}),
     );
 }
 
@@ -989,21 +558,7 @@ fn bridge_tests_unionwithonlyliterals(
         pkg.target_dir(),
         "FunUnionWithOnlyLiterals",
         json!(["bar"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Enum(1),
-                        pkg.input_element_type_by_name(
-                            "funUnionWithOnlyLiterals",
-                            "unionWithLiterals",
-                        ),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "enum", "value": {"case": 1}}]}}),
     );
 }
 
@@ -1036,16 +591,7 @@ fn bridge_tests_unstructuredtext(
         pkg.target_dir(),
         "FunUnstructuredText",
         json!([{ "tag": "inline", "val": "plain text"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::UnstructuredText(
-                TextReferenceValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "plain text".to_string(),
-                        text_type: None,
-                    }),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "text", "value": {"text": "plain text"}}]}}),
     );
 }
 
@@ -1057,18 +603,7 @@ fn bridge_tests_unstructuredbinary(
         pkg.target_dir(),
         "FunUnstructuredBinary",
         json!([{ "tag": "inline", "mimeType": "application/json", "val": [0,1,2,3]}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::UnstructuredBinary(
-                BinaryReferenceValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        binary_type: BinaryType {
-                            mime_type: "application/json".to_string(),
-                        },
-                        data: vec![0, 1, 2, 3],
-                    }),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "binary", "value": {"bytes": [0, 1, 2, 3], "mime_type": "application/json"}}]}}),
     );
 }
 
@@ -1080,17 +615,7 @@ fn bridge_tests_multimodal(
         pkg.target_dir(),
         "FunMultimodal",
         json!([[{"type": "text", "value": {"tag": "inline", "val": "hello"}}]]),
-        UntypedJsonDataValue::Multimodal(UntypedJsonNamedElementValues {
-            elements: vec![UntypedJsonNamedElementValue {
-                name: "text".to_string(),
-                value: UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "hello".to_string(),
-                        text_type: None,
-                    }),
-                }),
-            }],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "list", "value": {"elements": [{"kind": "variant", "value": {"case": 0, "payload": {"kind": "text", "value": {"text": "hello"}}}}]}}]}}),
     );
 }
 
@@ -1102,14 +627,7 @@ fn bridge_tests_multimodaladvanced(
         pkg.target_dir(),
         "FunMultimodalAdvanced",
         json!([[{"type": "text", "value": "input"}]]),
-        UntypedJsonDataValue::Multimodal(UntypedJsonNamedElementValues {
-            elements: vec![UntypedJsonNamedElementValue {
-                name: "text".to_string(),
-                value: UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: "input".into_value_and_type().to_json_value().unwrap(),
-                }),
-            }],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "list", "value": {"elements": [{"kind": "variant", "value": {"case": 1, "payload": {"kind": "string", "value": "input"}}}]}}]}}),
     );
 }
 
@@ -1121,13 +639,7 @@ fn bridge_tests_eitheroptional(
         pkg.target_dir(),
         "FunEitherOptional",
         json!([{"ok": "value"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"ok": "value", "err": null}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "record", "value": {"fields": [{"kind": "option", "value": {"inner": {"kind": "string", "value": "value"}}}, {"kind": "option", "value": {}}]}}]}}),
     );
 }
 
@@ -1139,13 +651,7 @@ fn bridge_tests_resultexact(
         pkg.target_dir(),
         "FunResultExact",
         json!([{"ok": "value"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"ok": "value"}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "ok", "value": {"kind": "string", "value": "value"}}}]}}),
     );
 }
 
@@ -1157,13 +663,7 @@ fn bridge_tests_resultlike(
         pkg.target_dir(),
         "FunResultLike",
         json!([{"tag": "okay", "val": "value"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"okay": "value"}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 0, "payload": {"kind": "string", "value": "value"}}}]}}),
     );
 }
 
@@ -1175,11 +675,7 @@ fn bridge_tests_resultlikewithvoid(
         pkg.target_dir(),
         "FunResultLikeWithVoid",
         json!([{}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue { value: json!({}) },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "err"}}]}}),
     );
 }
 
@@ -1191,11 +687,7 @@ fn bridge_tests_builtinresultvs_ok(
         pkg.target_dir(),
         "FunBuiltinResultVS",
         json!([{}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue { value: json!({}) },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "err", "value": {"kind": "string"}}}]}}),
     );
 }
 
@@ -1207,13 +699,7 @@ fn bridge_tests_builtinresultvs_err(
         pkg.target_dir(),
         "FunBuiltinResultVS",
         json!([{"err": "hello"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"err": "hello"}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "err", "value": {"kind": "string", "value": "hello"}}}]}}),
     );
 }
 
@@ -1225,13 +711,7 @@ fn bridge_tests_builtinresultsv_ok(
         pkg.target_dir(),
         "FunBuiltinResultSV",
         json!([{"ok": "hello"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"ok": "hello"}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "ok", "value": {"kind": "string", "value": "hello"}}}]}}),
     );
 }
 
@@ -1243,11 +723,7 @@ fn bridge_tests_builtinresultsv_err(
         pkg.target_dir(),
         "FunBuiltinResultSV",
         json!([{}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue { value: json!({}) },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "err"}}]}}),
     );
 }
 
@@ -1259,13 +735,7 @@ fn bridge_tests_builtinresultsn_ok(
         pkg.target_dir(),
         "FunBuiltinResultSN",
         json!([{"ok": "hello"}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"ok": "hello"}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "ok", "value": {"kind": "string", "value": "hello"}}}]}}),
     );
 }
 
@@ -1277,13 +747,7 @@ fn bridge_tests_builtinresultsn_number(
         pkg.target_dir(),
         "FunBuiltinResultSN",
         json!([{"err": 123.4}]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json!({"err": 123.4}),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "result", "value": {"tag": "err", "value": {"kind": "f64", "value": 123.4}}}]}}),
     );
 }
 
@@ -1293,13 +757,7 @@ fn bridge_tests_noreturn(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &
         pkg.target_dir(),
         "FunNoReturn",
         json!(["test"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "test".into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "test"}]}}),
     );
 }
 
@@ -1309,13 +767,7 @@ fn bridge_tests_arrowsync(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: 
         pkg.target_dir(),
         "FunArrowSync",
         json!(["test"]),
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "test".into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "test"}]}}),
     );
 }
 
@@ -1326,33 +778,7 @@ fn bridge_tests_tuplecomplextype_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunTupleComplexType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                // single return value containing a tuple
-                JsonComponentModelValue {
-                    value: json! {
-                        [
-                            "hello".into_value_and_type().to_json_value().unwrap(),
-                            100i32.into_value_and_type().to_json_value().unwrap(),
-                            ValueAndType::new(
-                                Value::Record(vec![
-                                    Value::String("x".to_string()),
-                                    Value::S32(200),
-                                    Value::Bool(true),
-                                ]),
-                                record(vec![
-                                    field("a", str()),
-                                    field("b", s32()),
-                                    field("c", bool()),
-                                ]),
-                            )
-                            .to_json_value()
-                            .unwrap()
-                        ]
-                    },
-                },
-            )],
-        }),
+        json!({"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "hello"}, {"kind": "f64", "value": 100}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "x"}, {"kind": "f64", "value": 200}, {"kind": "bool", "value": true}]}}]}}),
         json!(["hello", 100, { "a": "x", "b": 200, "c": true }]),
     );
 }
@@ -1361,24 +787,10 @@ fn bridge_tests_tuplecomplextype_output(
 fn bridge_tests_tupletype_output(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
-    let bool_val: bool = false;
-
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunTupleType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: json! {
-                        [
-                            "item".into_value_and_type().to_json_value().unwrap(),
-                            42i32.into_value_and_type().to_json_value().unwrap(),
-                            bool_val.into_value_and_type().to_json_value().unwrap(),
-                        ]
-                    },
-                },
-            )],
-        }),
+        json!({"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "item"}, {"kind": "f64", "value": 42}, {"kind": "bool", "value": false}]}}),
         json!(["item", 42, false]),
     );
 }
@@ -1390,29 +802,7 @@ fn bridge_tests_listcomplextype_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunListComplexType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::List(vec![
-                            Value::Record(vec![
-                                Value::String("item1".to_string()),
-                                Value::F64(1.1),
-                                Value::Bool(true),
-                            ]),
-                            Value::Record(vec![
-                                Value::String("item2".to_string()),
-                                Value::F64(2.1),
-                                Value::Bool(false),
-                            ]),
-                        ]),
-                        pkg.output_element_type_by_name("funListComplexType", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "list", "value": {"elements": [{"kind": "record", "value": {"fields": [{"kind": "string", "value": "item1"}, {"kind": "f64", "value": 1.1}, {"kind": "bool", "value": true}]}}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "item2"}, {"kind": "f64", "value": 2.1}, {"kind": "bool", "value": false}]}}]}}),
         json!([{"a": "item1", "b": 1.1, "c": true}, {"a": "item2", "b": 2.1, "c": false}]),
     );
 }
@@ -1424,22 +814,7 @@ fn bridge_tests_objecttype_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunObjectType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::String("test".to_string()),
-                            Value::F64(123.4),
-                            Value::Bool(true),
-                        ]),
-                        pkg.output_element_type_by_name("funObjectType", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "test"}, {"kind": "f64", "value": 123.4}, {"kind": "bool", "value": true}]}}),
         json!({"a": "test", "b": 123.4, "c": true}),
     );
 }
@@ -1451,59 +826,7 @@ fn bridge_tests_objectcomplextype_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunObjectComplexType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::String("foo".to_string()),
-                            Value::F64(42.1),
-                            Value::Bool(false),
-                            Value::Record(vec![
-                                Value::String("nested".to_string()),
-                                Value::F64(10.1),
-                                Value::Bool(true),
-                            ]),
-                            Value::Variant {
-                                case_idx: 1,
-                                case_value: Some(Box::new(Value::String("hello".to_string()))),
-                            },
-                            Value::List(vec![
-                                Value::String("str1".to_string()),
-                                Value::String("str2".to_string()),
-                            ]),
-                            Value::List(vec![Value::Record(vec![
-                                Value::String("item1".to_string()),
-                                Value::F64(1.1),
-                                Value::Bool(true),
-                            ])]),
-                            Value::Tuple(vec![
-                                Value::String("t1".to_string()),
-                                Value::F64(100.1),
-                                Value::Bool(false),
-                            ]),
-                            Value::Tuple(vec![
-                                Value::String("t2".to_string()),
-                                Value::F64(200.1),
-                                Value::Record(vec![
-                                    Value::String("t_nested".to_string()),
-                                    Value::F64(20.1),
-                                    Value::Bool(true),
-                                ]),
-                            ]),
-                            Value::List(vec![Value::Tuple(vec![
-                                Value::String("k1".to_string()),
-                                Value::F64(1.1),
-                            ])]),
-                            Value::Record(vec![Value::F64(5.1)]),
-                        ]),
-                        pkg.output_element_type_by_name("funObjectComplexType", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "record", "value": {"fields": [{"kind": "string", "value": "foo"}, {"kind": "f64", "value": 42.1}, {"kind": "bool", "value": false}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "nested"}, {"kind": "f64", "value": 10.1}, {"kind": "bool", "value": true}]}}, {"kind": "variant", "value": {"case": 1, "payload": {"kind": "string", "value": "hello"}}}, {"kind": "list", "value": {"elements": [{"kind": "string", "value": "str1"}, {"kind": "string", "value": "str2"}]}}, {"kind": "list", "value": {"elements": [{"kind": "record", "value": {"fields": [{"kind": "string", "value": "item1"}, {"kind": "f64", "value": 1.1}, {"kind": "bool", "value": true}]}}]}}, {"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "t1"}, {"kind": "f64", "value": 100.1}, {"kind": "bool", "value": false}]}}, {"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "t2"}, {"kind": "f64", "value": 200.1}, {"kind": "record", "value": {"fields": [{"kind": "string", "value": "t_nested"}, {"kind": "f64", "value": 20.1}, {"kind": "bool", "value": true}]}}]}}, {"kind": "list", "value": {"elements": [{"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "k1"}, {"kind": "f64", "value": 1.1}]}}]}}, {"kind": "record", "value": {"fields": [{"kind": "f64", "value": 5.1}]}}]}}),
         json!({
             "a": "foo",
             "b": 42.1,
@@ -1527,21 +850,7 @@ fn bridge_tests_uniontype_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunUnionType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 2,
-                            case_value: Some(Box::new(Value::Bool(true))),
-                        },
-                        pkg.output_element_type_by_name("funUnionType", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "variant", "value": {"case": 2, "payload": {"kind": "bool", "value": true}}}),
         json!({"tag": "UnionType3", "val": true}),
     );
 }
@@ -1553,21 +862,7 @@ fn bridge_tests_unioncomplextype_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunUnionComplexType",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 0,
-                            case_value: Some(Box::new(Value::F64(123.4))),
-                        },
-                        pkg.output_element_type_by_name("funUnionComplexType", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "variant", "value": {"case": 0, "payload": {"kind": "f64", "value": 123.4}}}),
         json!({"tag": "UnionComplexType1", "val": 123.4}),
     );
 }
@@ -1579,25 +874,7 @@ fn bridge_tests_taggedunion_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunTaggedUnion",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 4,
-                            case_value: Some(Box::new(Value::Record(vec![
-                                Value::String("x".to_string()),
-                                Value::F64(200.2),
-                                Value::Bool(true),
-                            ]))),
-                        },
-                        pkg.output_element_type_by_name("funTaggedUnion", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "variant", "value": {"case": 4, "payload": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "x"}, {"kind": "f64", "value": 200.2}, {"kind": "bool", "value": true}]}}}}),
         json!({"tag": "e", "val": {"a": "x", "b": 200.2, "c": true}}),
     );
 }
@@ -1609,21 +886,7 @@ fn bridge_tests_unionwithliterals_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunUnionWithLiterals",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Variant {
-                            case_idx: 0,
-                            case_value: None,
-                        },
-                        pkg.output_element_type_by_name("funUnionWithLiterals", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "variant", "value": {"case": 0}}),
         json!({"tag": "lit1"}),
     );
 }
@@ -1635,18 +898,7 @@ fn bridge_tests_unionwithonlyliterals_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunUnionWithOnlyLiterals",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: ValueAndType::new(
-                        Value::Enum(1),
-                        pkg.output_element_type_by_name("funUnionWithOnlyLiterals", "returnValue"),
-                    )
-                    .to_json_value()
-                    .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "enum", "value": {"case": 1}}),
         json!("bar"),
     );
 }
@@ -1658,13 +910,7 @@ fn bridge_tests_number_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunNumber",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: 42i32.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "f64", "value": 42}),
         json!(42),
     );
 }
@@ -1676,17 +922,7 @@ fn bridge_tests_string_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunString",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: "hello world"
-                        .to_string()
-                        .into_value_and_type()
-                        .to_json_value()
-                        .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "string", "value": "hello world"}),
         json!("hello world"),
     );
 }
@@ -1698,13 +934,7 @@ fn bridge_tests_boolean_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunBoolean",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: true.into_value_and_type().to_json_value().unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "bool", "value": true}),
         json!(true),
     );
 }
@@ -1716,18 +946,7 @@ fn bridge_tests_map_output(
     assert_function_output_decoding(
         pkg.target_dir(),
         "FunMap",
-        UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-            elements: vec![UntypedJsonElementValue::ComponentModel(
-                JsonComponentModelValue {
-                    value: vec![("key1", 10i32)]
-                        .into_iter()
-                        .collect::<std::collections::BTreeMap<_, _>>()
-                        .into_value_and_type()
-                        .to_json_value()
-                        .unwrap(),
-                },
-            )],
-        }),
+        json!({"kind": "list", "value": {"elements": [{"kind": "tuple", "value": {"elements": [{"kind": "string", "value": "key1"}, {"kind": "f64", "value": 10}]}}]}}),
         json!([["key1", 10]]),
     );
 }
@@ -1790,10 +1009,10 @@ fn assert_function_input_encoding(
     target_dir: &Utf8Path,
     function_name: &str,
     input_json: serde_json::Value,
-    expected: UntypedJsonDataValue,
+    expected: serde_json::Value,
 ) {
     // In this test we pass a JSON representing an array of function parameters as it is passed to our client method,
-    // and we expect the encoding to be an UntypedDataValue matching the DataSchema of the function's input.
+    // and we expect the encoding to be a schema-native SchemaValue JSON matching the DataSchema of the function's input.
 
     let mut child = std::process::Command::new("npm")
         .arg("run")
@@ -1831,14 +1050,9 @@ fn assert_function_input_encoding(
         panic!("Failed to parse JSON output from encode function:\n{result_str}")
     });
 
-    let result_data_value: UntypedJsonDataValue =
-        serde_json::from_value(result).unwrap_or_else(|_| {
-            panic!("Failed to deserialize output to UntypedDataValue:\n{result_str}")
-        });
-
     // Verify the output structure
     assert_eq!(
-        result_data_value, expected,
+        result, expected,
         "Encoded data value does not match expected:\nInput:\n{input_json}\nOutput:\n{result_str}"
     );
 }
@@ -1846,10 +1060,10 @@ fn assert_function_input_encoding(
 fn assert_function_output_decoding(
     target_dir: &Utf8Path,
     function_name: &str,
-    output: UntypedJsonDataValue,
+    output: serde_json::Value,
     expected: serde_json::Value,
 ) {
-    // In this test we pass a JSON representing an UntypedDataValue as it is returned from our REST API,
+    // In this test we pass a JSON representing a schema-native SchemaValue as it is returned from our REST API,
     // and we expect the output to be a JSON value representing the method's return value
 
     let mut child = std::process::Command::new("npm")

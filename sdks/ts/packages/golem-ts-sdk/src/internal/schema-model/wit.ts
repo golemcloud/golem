@@ -230,7 +230,10 @@ export class GraphEncoder {
    * the real root indices via {@link GraphEncoder.encodeType}.
    */
   finish(): WitSchemaGraph {
-    const root = this.encodeType({ body: { tag: 'record', fields: [] }, metadata: emptyMetadata() });
+    const root = this.encodeType({
+      body: { tag: 'record', fields: [] },
+      metadata: emptyMetadata(),
+    });
     return { typeNodes: this.typeNodes, defs: this.witDefs, root };
   }
 }
