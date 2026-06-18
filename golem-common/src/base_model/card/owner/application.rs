@@ -58,8 +58,9 @@ impl ApplicationOwnerPattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicApplicationOwnerPattern {
     Concrete(ApplicationOwnerPattern),
-    Env,
-    Self_,
+    AccountApplications,
+    AccountApplication { application: ApplicationName },
+    App,
 }
 
 impl OwnerPattern for ApplicationOwnerPattern {
@@ -70,11 +71,19 @@ impl OwnerPattern for ApplicationOwnerPattern {
     }
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        parse_prefix_owner_slot(value, Self::parse).map(|slot| match slot {
-            PrefixOwnerSlot::Concrete(owner) => PolymorphicApplicationOwnerPattern::Concrete(owner),
-            PrefixOwnerSlot::Env => PolymorphicApplicationOwnerPattern::Env,
-            PrefixOwnerSlot::Self_ => PolymorphicApplicationOwnerPattern::Self_,
-        })
+        match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.as_slice() == ["*"] => {
+                Ok(PolymorphicApplicationOwnerPattern::AccountApplications)
+            }
+            Some(("?account", rest)) if rest.len() == 1 => {
+                Ok(PolymorphicApplicationOwnerPattern::AccountApplication {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?app", rest)) if rest.is_empty() => Ok(PolymorphicApplicationOwnerPattern::App),
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicApplicationOwnerPattern::Concrete),
+        }
     }
 
     fn subsumes(&self, other: &Self) -> bool {

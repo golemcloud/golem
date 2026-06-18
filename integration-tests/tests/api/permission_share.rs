@@ -48,7 +48,7 @@ async fn create_list_update_and_delete_permission_share(
         target_account_email: target.account_email.clone(),
         name: PermissionShareName("team-access".to_string()),
         data: share_data(&format!(
-            "application({}) @ {} : view : shop",
+            "application({}/shop) @ {} : view :",
             owner.account_email.as_str(),
             target.account_email.as_str()
         )),
@@ -95,7 +95,7 @@ async fn create_list_update_and_delete_permission_share(
         current_revision: share.revision,
         name: PermissionShareName("team-access-renamed".to_string()),
         data: share_data(&format!(
-            "application({}) @ * : create : *",
+            "application({}/*) @ * : create : *",
             owner.account_email.as_str()
         )),
     };
@@ -142,7 +142,7 @@ async fn permission_share_names_are_unique_per_owner(
         target_account_email: target_1.account_email.clone(),
         name: PermissionShareName("shared-name".to_string()),
         data: share_data(&format!(
-            "application({}) @ * : view : shop",
+            "application({}/shop) @ * : view :",
             owner.account_email.as_str()
         )),
     };
@@ -155,7 +155,7 @@ async fn permission_share_names_are_unique_per_owner(
         target_account_email: target_2.account_email.clone(),
         name: creation.name.clone(),
         data: share_data(&format!(
-            "application({}) @ * : create : *",
+            "application({}/*) @ * : create : *",
             owner.account_email.as_str()
         )),
     };
@@ -188,7 +188,7 @@ async fn permission_share_rejects_third_party_recipient(
         target_account_email: target.account_email.clone(),
         name: PermissionShareName("bad-recipient".to_string()),
         data: share_data(&format!(
-            "application({}) @ {} : view : shop",
+            "application({}/shop) @ {} : view :",
             owner.account_email.as_str(),
             third_party.account_email.as_str()
         )),
@@ -223,7 +223,7 @@ async fn permission_share_rejects_non_derivable_grant(
         target_account_email: target.account_email.clone(),
         name: PermissionShareName("bad-owner".to_string()),
         data: share_data(&format!(
-            "application({}) @ {} : view : shop",
+            "application({}/shop) @ {} : view :",
             other_owner.account_email.as_str(),
             target.account_email.as_str()
         )),

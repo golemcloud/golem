@@ -195,19 +195,19 @@ fn add_account_grants(
         }),
         PermissionPattern::Application(ClassPermissionPattern {
             verb: None,
-            owner: account_owner.clone(),
+            owner: application_owner,
             recipient: RecipientPattern::Any,
-            resource: ApplicationResourcePattern::Any,
+            resource: ApplicationResourcePattern,
         }),
         PermissionPattern::Environment(ClassPermissionPattern {
             verb: None,
-            owner: application_owner,
+            owner: environment_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: EnvironmentResourcePattern::Any,
         }),
         PermissionPattern::Component(ClassPermissionPattern {
             verb: None,
-            owner: environment_owner.clone(),
+            owner: component_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: ComponentResourcePattern::Any,
         }),

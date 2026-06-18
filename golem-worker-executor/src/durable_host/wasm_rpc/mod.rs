@@ -28,7 +28,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMethod, AgentType, DataSchema, LegacyParsedAgentId, UntypedDataValue,
 };
@@ -75,6 +75,7 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
@@ -299,8 +300,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .create_await_interrupt_signal();
                     let rpc = self.rpc();
                     let created_by = self.created_by();
-                    let created_by_email = self.created_by_email().clone();
                     let agent_id = self.agent_id().clone();
+                    let auth_ctx = self.agent_auth_ctx();
 
                     let either_result = futures::future::select(
                         rpc.invoke_and_await(
@@ -309,10 +310,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             method_name.clone(),
                             input_untyped.clone(),
                             created_by,
-                            &created_by_email,
                             &agent_id,
                             &env,
                             stack,
+                            &auth_ctx,
                         ),
                         interrupt_signal,
                     )
@@ -488,10 +489,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         method_name.clone(),
                         input_untyped.clone(),
                         self.created_by(),
-                        self.created_by_email(),
                         self.agent_id(),
                         &env,
                         stack,
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -615,7 +616,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let agent_id = self.agent_id().clone();
         let created_by = self.created_by();
-        let created_by_email = self.created_by_email().clone();
         let request = HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
@@ -668,11 +668,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 input_typed.clone(),
                 output_schema.clone(),
                 created_by,
-                created_by_email,
                 agent_id,
                 env,
                 stack,
                 retry_params,
+                self.agent_auth_ctx(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -687,12 +687,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })?;
             Ok(fut)
         } else {
+            let auth_ctx = self.agent_auth_ctx();
             let fut = self.table().push(FutureInvokeResultEntry {
                 payload: Box::new(FutureInvokeResultState::Deferred {
                     remote_agent_id,
                     self_agent_id: agent_id,
                     self_created_by: created_by,
-                    self_created_by_email: created_by_email,
                     env,
                     method_name,
                     method_parameters: input_typed,
@@ -700,6 +700,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     idempotency_key,
                     span_id: span.span_id().clone(),
                     begin_index,
+                    auth_ctx,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1287,21 +1288,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if should_attempt_remote_cancel {
-                let caller_account_id = self.created_by();
-                let caller_account_email = self.created_by_email();
-                if let Err(err) = self
+            if should_attempt_remote_cancel
+                && let Err(err) = self
                     .worker_proxy()
-                    .cancel_invocation(
-                        &remote_agent_id,
-                        idempotency_key,
-                        caller_account_id,
-                        caller_account_email,
-                    )
+                    .cancel_invocation(&remote_agent_id, idempotency_key, &self.agent_auth_ctx())
                     .await
-                {
-                    tracing::info!(err=%err, "Best-effort cancel_invocation failed");
-                }
+            {
+                tracing::info!(err=%err, "Best-effort cancel_invocation failed");
             }
 
             handle.complete(self, HostResponseGolemRpcUnit {}).await?;
@@ -1480,11 +1473,11 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .create_demand(
             &remote_agent_id,
             ctx.created_by(),
-            ctx.created_by_email(),
             ctx.agent_id(),
             env,
             stack,
             config,
+            &ctx.agent_auth_ctx(),
         )
         .await
     {
@@ -1562,11 +1555,11 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     input: TypedRpcInput,
     output_schema: DataSchema,
     created_by: AccountId,
-    created_by_email: AccountEmail,
     agent_id: AgentId,
     env: Vec<(String, String)>,
     stack: InvocationContextStack,
     retry_params: Option<TaskRetryParams<Ctx>>,
+    auth_ctx: AuthCtx,
 ) -> AbortOnDropJoinHandle<Result<Result<TypedSchemaValue, InternalRpcError>, Error>> {
     let invoke = move || {
         let rpc = rpc.clone();
@@ -1575,11 +1568,10 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let method_name = method_name.clone();
         let input = input.clone();
         let output_schema = output_schema.clone();
-        let created_by = created_by;
-        let created_by_email = created_by_email.clone();
         let agent_id = agent_id.clone();
         let env = env.clone();
         let stack = stack.clone();
+        let auth_ctx = auth_ctx.clone();
         async move {
             // Convert typed → untyped only at the legacy `Rpc::*`
             // boundary.
@@ -1594,10 +1586,10 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     method_name,
                     input_untyped,
                     created_by,
-                    &created_by_email,
                     &agent_id,
                     &env,
                     stack,
+                    &auth_ctx,
                 )
                 .await?;
             // Re-type the legacy reply against the declared output
@@ -1786,13 +1778,13 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         remote_agent_id,
         self_agent_id,
         self_created_by,
-        self_created_by_email,
         env,
         method_name,
         method_parameters,
         output_schema,
         idempotency_key,
         span_id,
+        auth_ctx,
         ..
     } = &*entry
     else {
@@ -1842,11 +1834,11 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         method_parameters.clone(),
         output_schema.clone(),
         *self_created_by,
-        self_created_by_email.clone(),
         self_agent_id.clone(),
         env.clone(),
         stack,
         retry_params,
+        auth_ctx.clone(),
     );
 
     let span_id = span_id.clone();
@@ -2068,7 +2060,6 @@ enum FutureInvokeResultState {
         remote_agent_id: OwnedAgentId,
         self_agent_id: AgentId,
         self_created_by: AccountId,
-        self_created_by_email: AccountEmail,
         env: Vec<(String, String)>,
         method_name: String,
         method_parameters: TypedRpcInput,
@@ -2079,6 +2070,7 @@ enum FutureInvokeResultState {
         idempotency_key: IdempotencyKey,
         span_id: SpanId,
         begin_index: OplogIndex,
+        auth_ctx: AuthCtx,
     },
     Cancelled {
         request: HostRequestGolemRpcInvoke,

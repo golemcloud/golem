@@ -27,10 +27,10 @@ use crate::repo::plugin::PluginRepo;
 use crate::services::application::ApplicationError;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::card::owner::ApplicationOwnerPattern;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, EffectiveSurface, EnvironmentName as CardEnvironmentName,
-    EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
+    ClassPermissionTarget, EffectiveSurface, EnvironmentResourcePattern, EnvironmentVerb,
+    PermissionTarget,
 };
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
@@ -144,8 +144,8 @@ impl EnvironmentService {
             auth,
             &application.account_email,
             &application.name,
+            &data.name,
             EnvironmentVerb::Create,
-            EnvironmentResourcePattern::Environment(CardEnvironmentName(data.name.0.clone())),
         )?;
 
         self.account_usage_service
@@ -314,8 +314,8 @@ impl EnvironmentService {
             auth,
             &application.account_email,
             &application.name,
+            name,
             EnvironmentVerb::View,
-            EnvironmentResourcePattern::Environment(CardEnvironmentName(name.0.clone())),
         )
         .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
 
@@ -439,30 +439,33 @@ fn visible_environment_scope_from_target(
         return None;
     }
 
-    let env_name = match &target.resource {
-        EnvironmentResourcePattern::Any => None,
-        EnvironmentResourcePattern::Environment(environment)
-        | EnvironmentResourcePattern::Revision { environment, .. } => Some(environment.0.clone()),
-    };
-
     match &target.owner {
-        ApplicationOwnerPattern::AnyApplications => {
-            Some(EnvironmentVisibilityScope::any_owner(env_name))
+        EnvironmentOwnerPattern::AnyEnvironments => {
+            Some(EnvironmentVisibilityScope::any_owner(None))
         }
-        ApplicationOwnerPattern::AccountApplications { account } => {
+        EnvironmentOwnerPattern::AccountEnvironments { account } => {
             Some(EnvironmentVisibilityScope {
                 account_email: Some(account.as_str().to_string()),
                 app_name: None,
-                env_name,
+                env_name: None,
             })
         }
-        ApplicationOwnerPattern::Application {
+        EnvironmentOwnerPattern::ApplicationEnvironments {
             account,
             application,
         } => Some(EnvironmentVisibilityScope::application(
             account.as_str(),
             application.0.clone(),
-            env_name,
+            None,
+        )),
+        EnvironmentOwnerPattern::Environment {
+            account,
+            application,
+            environment,
+        } => Some(EnvironmentVisibilityScope::application(
+            account.as_str(),
+            application.0.clone(),
+            Some(environment.0.clone()),
         )),
     }
 }
@@ -471,16 +474,17 @@ fn authorize_environment_permission(
     auth: &AuthCtx,
     account_email: &AccountEmail,
     application_name: &ApplicationName,
+    environment_name: &EnvironmentName,
     verb: EnvironmentVerb,
-    resource: EnvironmentResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
-        owner: ApplicationOwnerPattern::Application {
+        owner: EnvironmentOwnerPattern::Environment {
             account: account_email.clone(),
             application: application_name.clone(),
+            environment: environment_name.clone(),
         },
-        resource,
+        resource: EnvironmentResourcePattern::Any,
     }))
 }
 
@@ -493,8 +497,8 @@ fn authorize_environment_model(
         auth,
         &environment.owner_account_email,
         &environment.application_name,
+        &environment.name,
         verb,
-        EnvironmentResourcePattern::Environment(CardEnvironmentName(environment.name.0.clone())),
     )
 }
 
@@ -507,10 +511,8 @@ fn authorize_environment_details(
         auth,
         &environment.account.email,
         &environment.application.name,
+        &environment.environment.name,
         verb,
-        EnvironmentResourcePattern::Environment(CardEnvironmentName(
-            environment.environment.name.0.clone(),
-        )),
     )
 }
 
@@ -523,14 +525,16 @@ mod tests {
     fn environment_target(
         account: &str,
         application: &str,
+        environment: &str,
         verb: Option<EnvironmentVerb>,
         resource: EnvironmentResourcePattern,
     ) -> PermissionTarget {
         PermissionTarget::Environment(ClassPermissionTarget {
             verb,
-            owner: ApplicationOwnerPattern::Application {
+            owner: EnvironmentOwnerPattern::Environment {
                 account: AccountEmail::new(account),
                 application: ApplicationName(application.to_string()),
+                environment: EnvironmentName(environment.to_string()),
             },
             resource,
         })
@@ -544,7 +548,7 @@ mod tests {
                 positive: vec![
                     PermissionTarget::Environment(ClassPermissionTarget {
                         verb: Some(EnvironmentVerb::View),
-                        owner: ApplicationOwnerPattern::AccountApplications {
+                        owner: EnvironmentOwnerPattern::AccountEnvironments {
                             account: AccountEmail::new("owner@golem"),
                         },
                         resource: EnvironmentResourcePattern::Any,
@@ -552,22 +556,21 @@ mod tests {
                     environment_target(
                         "owner@golem",
                         "narrower-app",
+                        "narrower-env",
                         Some(EnvironmentVerb::View),
-                        EnvironmentResourcePattern::Environment(CardEnvironmentName(
-                            "narrower-env".to_string(),
-                        )),
+                        EnvironmentResourcePattern::Any,
                     ),
                     environment_target(
                         "shared@golem",
                         "shared-app",
+                        "shared-env",
                         Some(EnvironmentVerb::View),
-                        EnvironmentResourcePattern::Environment(CardEnvironmentName(
-                            "shared-env".to_string(),
-                        )),
+                        EnvironmentResourcePattern::Any,
                     ),
                     environment_target(
                         "ignored@golem",
                         "ignored-app",
+                        "ignored-env",
                         Some(EnvironmentVerb::Deploy),
                         EnvironmentResourcePattern::Any,
                     ),
@@ -575,6 +578,7 @@ mod tests {
                 negative: vec![environment_target(
                     "owner@golem",
                     "negative-app",
+                    "negative-env",
                     Some(EnvironmentVerb::View),
                     EnvironmentResourcePattern::Any,
                 )],

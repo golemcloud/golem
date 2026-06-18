@@ -27,14 +27,15 @@ use crate::services::environment_plugin_grant::{
 };
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
+};
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
-    ComponentVerb, PermissionTarget,
+    ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -46,7 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -215,6 +216,12 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
+        let component_metadata =
+            component_metadata.with_agent_initial_permissions(default_initial_permissions(
+                component_metadata.agent_types(),
+                &environment.name,
+                &component_creation.component_name,
+            ));
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
@@ -400,12 +407,18 @@ impl ComponentWriteService {
 
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 new_wasm.clone(),
                 final_provision_configs,
             )
             .await?;
+            component.metadata =
+                metadata.with_agent_initial_permissions(default_initial_permissions(
+                    metadata.agent_types(),
+                    &environment.name,
+                    &component.component_name,
+                ));
         } else if agent_types_changed {
             // TODO: skip the download here
             let old_data = self
@@ -413,12 +426,18 @@ impl ComponentWriteService {
                 .get(environment_id, &component.object_store_key)
                 .await?;
 
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 Arc::from(old_data),
                 final_provision_configs,
             )
             .await?;
+            component.metadata =
+                metadata.with_agent_initial_permissions(default_initial_permissions(
+                    metadata.agent_types(),
+                    &environment.name,
+                    &component_name,
+                ));
         } else if provision_configs_changed {
             component.metadata = component
                 .metadata
@@ -935,6 +954,22 @@ fn provision_configs_for_agent_types(
         .collect()
 }
 
+fn default_initial_permissions(
+    agent_types: &[AgentType],
+    environment_name: &EnvironmentName,
+    component_name: &ComponentName,
+) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
+    agent_types
+        .iter()
+        .map(|agent_type| {
+            (
+                agent_type.type_name.clone(),
+                AgentInitialPermissionTemplate::default_for(environment_name, component_name),
+            )
+        })
+        .collect()
+}
+
 fn validate_component_metadata_invariants(
     metadata: &ComponentMetadata,
 ) -> Result<(), ComponentError> {
@@ -967,12 +1002,13 @@ fn authorize_component_permission(
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
-        owner: EnvironmentOwnerPattern::Environment {
+        owner: ComponentOwnerPattern::Component {
             account: environment.owner_account_email.clone(),
             application: environment.application_name.clone(),
             environment: environment.name.clone(),
+            component: component_name.clone(),
         },
-        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+        resource: ComponentResourcePattern::Any,
     }))
 }
 
