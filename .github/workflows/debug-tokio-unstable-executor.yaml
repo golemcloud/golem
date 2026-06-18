@@ -82,8 +82,12 @@ jobs:
       - name: Package target binary
         run: |
           mkdir -p package
+          # Tar paths are relative to `target/` (note `-C target`) so that the
+          # publish job, which extracts after `cd target`, restores the layout
+          # `target/<target>/release/worker-executor` that the Dockerfile's
+          # `COPY /target/$RUST_TARGET/release/worker-executor` expects.
           tar cvf package/${{ matrix.platform.target }}.tar \
-            target/${{ matrix.platform.target }}/release/worker-executor
+            -C target ${{ matrix.platform.target }}/release/worker-executor
       - uses: actions/upload-artifact@v6
         with:
           name: debug-build-${{ env.PLATFORM_PAIR }}
