@@ -271,6 +271,27 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    _store_alive_guard: StoreAliveGuard,
+}
+
+/// Increments the live-`Store` gauge on construction and decrements it on drop.
+/// Held as a field of [`DurableWorkerCtx`], which is the data of the wasmtime
+/// `Store`, so the gauge follows the `Store`'s true lifetime regardless of which
+/// reference keeps it alive. A persistent gap above the resident-worker count
+/// indicates `Store`s retained after their worker was deleted.
+struct StoreAliveGuard;
+
+impl StoreAliveGuard {
+    fn new() -> Self {
+        crate::metrics::workers::inc_worker_store_alive();
+        StoreAliveGuard
+    }
+}
+
+impl Drop for StoreAliveGuard {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_store_alive();
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -499,6 +520,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            _store_alive_guard: StoreAliveGuard::new(),
         })
     }
 
