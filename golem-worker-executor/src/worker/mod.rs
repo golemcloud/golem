@@ -2637,7 +2637,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id.as_ref(),
                     &component,
                 )?;
-
                 // Store only the per-worker env overrides. Agent-type defaults are applied
                 // at runtime in get_environment
                 let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();

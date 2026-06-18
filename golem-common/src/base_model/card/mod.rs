@@ -14,6 +14,7 @@
 
 mod algebra;
 mod class;
+mod monomorphization;
 pub mod owner;
 mod parsing;
 mod pattern;
@@ -31,6 +32,7 @@ mod tests;
 
 pub use algebra::*;
 pub use class::*;
+pub use monomorphization::*;
 pub use parsing::*;
 pub use pattern::*;
 pub use types::*;

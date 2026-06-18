@@ -460,26 +460,12 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test_gen]
 fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
-    let application_cases = [
-        (
-            "application_any_subsumes_named",
-            ApplicationResourcePattern::Any,
-            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
-            true,
-        ),
-        (
-            "application_named_does_not_subsume_any",
-            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
-            ApplicationResourcePattern::Any,
-            false,
-        ),
-        (
-            "application_named_requires_same_name",
-            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
-            ApplicationResourcePattern::Application(ApplicationName("admin".to_string())),
-            false,
-        ),
-    ];
+    let application_cases = [(
+        "application_unit_subsumes_unit",
+        ApplicationResourcePattern,
+        ApplicationResourcePattern,
+        true,
+    )];
 
     for (name, left, right, expected) in application_cases {
         let left = std::sync::Arc::new(left);
@@ -493,40 +479,19 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "environment_any_subsumes_revision",
             EnvironmentResourcePattern::Any,
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
+            EnvironmentResourcePattern::Revision { revision: 42 },
             true,
         ),
         (
-            "environment_name_subsumes_own_revision",
-            EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
-            true,
-        ),
-        (
-            "environment_revision_does_not_subsume_name",
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
-            EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
+            "environment_revision_does_not_subsume_any",
+            EnvironmentResourcePattern::Revision { revision: 42 },
+            EnvironmentResourcePattern::Any,
             false,
         ),
         (
             "environment_revision_requires_same_revision",
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 42,
-            },
-            EnvironmentResourcePattern::Revision {
-                environment: EnvironmentName("prod".to_string()),
-                revision: 43,
-            },
+            EnvironmentResourcePattern::Revision { revision: 42 },
+            EnvironmentResourcePattern::Revision { revision: 43 },
             false,
         ),
     ];
@@ -543,37 +508,19 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "component_any_subsumes_revision",
             ComponentResourcePattern::Any,
-            ComponentResourcePattern::Revision {
-                component: ComponentName("cart-svc".to_string()),
-                revision: 42,
-            },
+            ComponentResourcePattern::Revision { revision: 42 },
             true,
         ),
         (
-            "component_name_subsumes_own_revision",
-            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
-            ComponentResourcePattern::Revision {
-                component: ComponentName("cart-svc".to_string()),
-                revision: 42,
-            },
-            true,
-        ),
-        (
-            "component_revision_does_not_subsume_name",
-            ComponentResourcePattern::Revision {
-                component: ComponentName("cart-svc".to_string()),
-                revision: 42,
-            },
-            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
+            "component_revision_does_not_subsume_any",
+            ComponentResourcePattern::Revision { revision: 42 },
+            ComponentResourcePattern::Any,
             false,
         ),
         (
-            "component_name_requires_same_name",
-            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
-            ComponentResourcePattern::Revision {
-                component: ComponentName("checkout-svc".to_string()),
-                revision: 42,
-            },
+            "component_revision_requires_same_revision",
+            ComponentResourcePattern::Revision { revision: 42 },
+            ComponentResourcePattern::Revision { revision: 43 },
             false,
         ),
     ];
