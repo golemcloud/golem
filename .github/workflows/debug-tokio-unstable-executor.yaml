@@ -1,0 +1,150 @@
+name: debug-tokio-unstable-executor
+
+# Manually-triggered build of a worker-executor Docker image compiled with
+# `--cfg tokio_unstable`. This unlocks the SIGUSR1 task-dump handler in
+# `golem-worker-executor/src/server.rs` so a wedged executor can be dumped with
+# `kubectl exec <pod> -- kill -USR1 1` and the per-task async backtraces read
+# straight from `kubectl logs`.
+#
+# It is intentionally separate from the release pipeline in `ci.yaml`: it never
+# runs automatically, only builds the executor, and publishes under a distinct
+# `*-tokio-debug` tag so it can never overwrite a real release image.
+on:
+  # `workflow_dispatch` cannot be used while this file lives only on a feature
+  # branch (GitHub only registers dispatchable workflows from the default
+  # branch). To trigger it without merging, it also runs on push to the
+  # investigation branch below. Remove the `push:` block (and keep
+  # `workflow_dispatch`) once this is on the default branch.
+  push:
+    branches:
+      - 1.5.x-cloud-benchmarks
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: 'Docker Hub image name'
+        required: true
+        default: 'golemservices/golem-worker-executor'
+      tag_suffix:
+        description: 'Suffix appended to the <short-sha> image tag'
+        required: true
+        default: 'tokio-debug'
+
+jobs:
+  build:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            target_cpu_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            target_cpu: "-C target-cpu=x86-64-v3"
+          - name: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            target_cpu_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            target_cpu: "-C target-cpu=neoverse-n1"
+    name: build (${{ matrix.platform.name }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: ${{ matrix.platform.target }}
+
+      - name: Prepare rustflags (with tokio_unstable)
+        run: |
+          platform=${{ matrix.platform.name }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          # Same target-scoped rustflags as the release build, plus the
+          # tokio_unstable cfg so console-subscriber and Handle::dump() work.
+          # The CARGO_TARGET_*_RUSTFLAGS form is required because plain RUSTFLAGS
+          # is ignored under cross-compilation.
+          echo "${{ matrix.platform.target_cpu_env }}=${{ matrix.platform.target_cpu }} --cfg tokio_unstable" >> $GITHUB_ENV
+
+      - run: cargo install cross
+        if: ${{ matrix.platform.cross }}
+
+      - name: Build worker-executor
+        env:
+          PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
+        run: |
+          if [ "${{ matrix.platform.cross }}" == "true" ]; then
+            cross build -p golem-worker-executor --features taskdump --release --target ${{ matrix.platform.target }}
+          else
+            cargo build -p golem-worker-executor --features taskdump --release --target ${{ matrix.platform.target }}
+          fi
+
+      - name: Package target binary
+        run: |
+          mkdir -p package
+          tar cvf package/${{ matrix.platform.target }}.tar \
+            target/${{ matrix.platform.target }}/release/worker-executor
+      - uses: actions/upload-artifact@v6
+        with:
+          name: debug-build-${{ env.PLATFORM_PAIR }}
+          path: package/${{ matrix.platform.target }}.tar
+
+  publish:
+    runs-on: blacksmith
+    needs:
+      - build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Download targets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: debug-build-*
+          path: target
+          merge-multiple: true
+      - name: Extract targets
+        run: |
+          ls -R target
+          cd target
+          for f in *.tar; do tar xvf "$f"; done
+          # The release Dockerfile copies from target/$RUST_TARGET/release/, but
+          # the tar already carries that path, so extraction restores the layout.
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Compute image name and tag
+        env:
+          # Empty under the `push` trigger; the shell fallbacks supply defaults.
+          INPUT_IMAGE_NAME: ${{ github.event.inputs.image_name }}
+          INPUT_TAG_SUFFIX: ${{ github.event.inputs.tag_suffix }}
+        run: |
+          SHORT=$(git rev-parse --short=7 HEAD)
+          IMAGE_NAME="${INPUT_IMAGE_NAME:-golemservices/golem-worker-executor}"
+          TAG_SUFFIX="${INPUT_TAG_SUFFIX:-tokio-debug}"
+          echo "IMAGE_NAME=${IMAGE_NAME}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${SHORT}-${TAG_SUFFIX}" >> $GITHUB_ENV
+
+      - name: Build and push debug image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./golem-worker-executor/docker/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
+      - name: Report
+        run: |
+          echo "Pushed ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          echo "Deploy this tag, set GOLEM__TRACING__CONSOLE=true (optional, for tokio-console),"
+          echo "reproduce the hang, then: kubectl exec <pod> -- kill -USR1 1 and read kubectl logs."

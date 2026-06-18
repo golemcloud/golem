@@ -26,6 +26,13 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
+[features]
+# Enables the SIGUSR1 async task-dump handler in `src/server.rs` for diagnosing
+# hangs. Pulls in tokio's `taskdump`, which additionally requires the binary to
+# be compiled with `--cfg tokio_unstable` and only works on Linux. Off by
+# default; enabled only by the debug-image CI build.
+taskdump = ["tokio/taskdump"]
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
