@@ -23,10 +23,7 @@ wasmtime::component::bindgen!({
     anyhow: true,
     wasmtime_crate: ::wasmtime,
     with: {
-        "wasi:io/streams.input-stream": InputStream,
-        "wasi:io/streams.output-stream": OutputStream,
         "wasi:blobstore/container.container": super::durable_host::blobstore::types::ContainerEntry,
-        "wasi:blobstore/container.stream-object-names": super::durable_host::blobstore::types::StreamObjectNamesEntry,
         "wasi:blobstore/types.incoming-value": super::durable_host::blobstore::types::IncomingValueEntry,
         "wasi:blobstore/types.outgoing-value": super::durable_host::blobstore::types::OutgoingValueEntry,
         "wasi:keyvalue/wasi-keyvalue-error.error": super::durable_host::keyvalue::error::ErrorEntry,
@@ -41,14 +38,12 @@ wasmtime::component::bindgen!({
         "golem:api/host.get-promise-result": super::durable_host::golem::v1x::GetPromiseResultEntry,
         "golem:api/oplog.get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog.search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
-        "golem:durability/durability.lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
         "golem:core": golem_wasm::golem_core_1_5_x,
         "golem:agent/host.wasm-rpc": golem_wasm::WasmRpcEntry,
         "golem:agent/host.future-invoke-result": golem_wasm::FutureInvokeResultEntry,
         "golem:agent/host.cancellation-token": golem_wasm::CancellationTokenEntry,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
-        "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
-        "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
+        "wasi:clocks/system-clock": wasmtime_wasi::p3::bindings::clocks::system_clock,
         "golem:rdbms/ignite2.db-connection": super::durable_host::rdbms::ignite::Ignite2DbConnection,
         "golem:rdbms/ignite2.db-result-stream": super::durable_host::rdbms::ignite::DbResultStreamEntry,
         "golem:rdbms/ignite2.db-transaction": super::durable_host::rdbms::ignite::DbTransactionEntry,
@@ -65,11 +60,6 @@ wasmtime::component::bindgen!({
         "golem:quota/types.reservation": super::durable_host::quota::types::ReservationEntry,
     },
 });
-
-pub type InputStream = wasmtime_wasi::DynInputStream;
-pub type OutputStream = wasmtime_wasi::DynOutputStream;
-
-pub type Pollable = wasmtime_wasi::p2::bindings::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
 pub use self::golem::api1_5_0 as golem_api_1_x;

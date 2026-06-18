@@ -24,8 +24,7 @@ use wasmtime::component::{
 };
 use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::cli::StdoutStream;
-use wasmtime_wasi::p2::pipe;
-use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{IoCtx, WasiCtx, WasiCtxView, WasiView};
 const INTERFACE_NAME: &str = "golem:agent/guest@1.5.0";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
@@ -41,6 +40,8 @@ pub async fn extract_agent_types_with_streams(
     let mut config = wasmtime::Config::default();
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_error_context(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
@@ -59,6 +60,7 @@ pub async fn extract_agent_types_with_streams(
         &mut linker,
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
 
     let mut builder = WasiCtx::builder();
 
@@ -162,8 +164,8 @@ pub async fn extract_agent_types(
 ) -> anyhow::Result<Vec<AgentType>> {
     extract_agent_types_with_streams(
         wasm_path,
-        None::<pipe::MemoryOutputPipe>,
-        None::<pipe::MemoryOutputPipe>,
+        None::<wasmtime_wasi::cli::AsyncStdoutStream>,
+        None::<wasmtime_wasi::cli::AsyncStdoutStream>,
         fail_on_missing_discover_method,
         enable_fs_cache,
     )
@@ -183,35 +185,6 @@ struct Host {
     pub table: Arc<Mutex<ResourceTable>>,
     pub wasi: Arc<Mutex<WasiCtx>>,
     pub io: Arc<Mutex<IoCtx>>,
-}
-
-impl IoView for Host {
-    fn table(&mut self) -> &mut ResourceTable {
-        Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail")
-    }
-
-    fn io_ctx(&mut self) -> &mut IoCtx {
-        Arc::get_mut(&mut self.io)
-            .expect("IoCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("IoCtx mutex must never fail")
-    }
-
-    fn io_data(&mut self) -> IoData<'_> {
-        IoData {
-            table: Arc::get_mut(&mut self.table)
-                .expect("ResourceTable is shared and cannot be borrowed mutably")
-                .get_mut()
-                .expect("ResourceTable mutex must never fail"),
-            io_ctx: Arc::get_mut(&mut self.io)
-                .expect("IoCtx is shared and cannot be borrowed mutably")
-                .get_mut()
-                .expect("IoCtx mutex must never fail"),
-        }
-    }
 }
 
 impl WasiView for Host {
@@ -260,6 +233,7 @@ fn dynamic_import(
                 ComponentItem::ComponentFunc(fun) => {
                     let param_types: Vec<Type> = fun.params().map(|(_, t)| t).collect();
                     let result_types: Vec<Type> = fun.results().collect();
+                    let is_async = fun.async_();
 
                     let function_name = ParsedFunctionName::parse(format!(
                         "{name}.{{{inner_name}}}"
@@ -270,6 +244,7 @@ fn dynamic_import(
                         name: function_name,
                         params: param_types,
                         results: result_types,
+                        is_async,
                     });
                 }
                 ComponentItem::CoreFunc(_) => {}
@@ -297,20 +272,40 @@ fn dynamic_import(
         }
 
         for function in functions {
-            instance.func_new_async(
-                &function.name.function.function_name(),
-                move |_store, _func_type, _params, _results| {
-                    let function_name = function.name.clone();
-                    Box::new(async move {
-                        error!(
-                            "External function called in get-agent-definitions: {function_name}",
-                        );
-                        Err(wasmtime::Error::msg(format!(
-                            "External function called in get-agent-definitions: {function_name}"
-                        )))
-                    })
-                },
-            )?;
+            if function.is_async {
+                // P3 concurrent `async func` imports cannot be represented by
+                // `func_new_async` (which only models sync-typed imports backed
+                // by an async host fn); they require `func_new_concurrent`.
+                instance.func_new_concurrent(
+                    &function.name.function.function_name(),
+                    move |_accessor, _func_type, _params, _results| {
+                        let function_name = function.name.clone();
+                        Box::pin(async move {
+                            error!(
+                                "External function called in get-agent-definitions: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called in get-agent-definitions: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            } else {
+                instance.func_new_async(
+                    &function.name.function.function_name(),
+                    move |_store, _func_type, _params, _results| {
+                        let function_name = function.name.clone();
+                        Box::new(async move {
+                            error!(
+                                "External function called in get-agent-definitions: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called in get-agent-definitions: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            }
         }
 
         Ok(())
@@ -329,6 +324,7 @@ struct FunctionInfo {
     name: ParsedFunctionName,
     params: Vec<Type>,
     results: Vec<Type>,
+    is_async: bool,
 }
 
 struct ResourceEntry;

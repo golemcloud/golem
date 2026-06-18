@@ -2,11 +2,11 @@ package golem:api@1.5.0;
 
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
-    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
     use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
-    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+    use wasi:clocks/types@0.3.0-rc-2026-03-15.{duration};
 
     /// Whether an agent is durable (persistent oplog) or ephemeral.
     /// This mirrors the agent-mode enum in golem:agent/common@1.5.0; it is duplicated here to avoid

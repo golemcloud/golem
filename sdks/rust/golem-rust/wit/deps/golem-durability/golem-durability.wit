@@ -3,8 +3,7 @@ package golem:durability@1.5.0;
 interface durability {
     use golem:api/host@1.5.0.{persistence-level};
     use golem:api/oplog@1.5.0.{oplog-index, wrapped-function-type};
-    use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use wasi:io/poll@0.2.3.{pollable};
+    use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
     use golem:core/types@1.5.0.{value-and-type};
 
     type durable-function-type = wrapped-function-type;
@@ -77,16 +76,14 @@ interface durability {
     /// Reads the next persisted durable function invocation from the oplog during replay
     read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation;
 
-    /// A pollable which can be later attached to a real `pollable`, but it can be subscribed to even
-    /// before that.
-    resource lazy-initialized-pollable {
-        /// Creates a `pollable` that is never ready until it gets attached to a real `pollable` implementation
-        /// using `set-lazy-initialized-pollable`.
-        constructor();
-
-        /// Sets the underlying `pollable` for a pollable created with `create-lazy-initialized-pollable`.
-        set: func(pollable: pollable);
-
-        subscribe: func() -> pollable;
-    }
+    // TODO(p3): redesign `lazy-initialized-pollable` for WASI p3.
+    // The original resource exposed a host pollable that could be re-attached to a real
+    // pollable during replay. Pollables no longer exist in p3; this needs to be modelled
+    // as a host-resolvable `future<T>` (or similar) before durable async operations work.
+    //
+    // resource lazy-initialized-pollable {
+    //     constructor();
+    //     set: func(pollable: pollable);
+    //     subscribe: func() -> pollable;
+    // }
 }

@@ -50,10 +50,10 @@ impl WebsocketConnection {
 
     /// Receive the next message asynchronously.
     /// Yields the current task until a message is available.
+    // TODO(p3): WIT no longer exposes a `subscribe()` pollable; needs a p3-native
+    // async `receive` host function (blocked on concurrent durability support).
     pub async fn receive(&self) -> Result<Message, Error> {
-        let pollable = self.inner.subscribe();
-        wstd::io::AsyncPollable::new(pollable).wait_for().await;
-        self.inner.receive()
+        unimplemented!("async websocket receive not yet supported on p3")
     }
 
     /// Send a close frame with optional code and reason.

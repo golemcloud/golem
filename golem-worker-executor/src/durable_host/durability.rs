@@ -48,8 +48,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
-use wasmtime::component::Resource;
-use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
 /// Classification of host function failures for semantic retry decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -653,52 +651,7 @@ impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFu
     }
 }
 
-impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCtx<Ctx> {
-    async fn new(&mut self) -> anyhow::Result<Resource<LazyInitializedPollableEntry>> {
-        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "new");
-        let lazy_pollable = self.table().push(LazyInitializedPollableEntry::Empty)?;
-        Ok(lazy_pollable)
-    }
-
-    async fn set(
-        &mut self,
-        self_: Resource<LazyInitializedPollableEntry>,
-        pollable: Resource<DynPollable>,
-    ) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "set");
-        let entry = self.table().get_mut(&self_)?;
-        *entry = LazyInitializedPollableEntry::Subscribed { pollable };
-        Ok(())
-    }
-
-    async fn subscribe(
-        &mut self,
-        self_: Resource<LazyInitializedPollableEntry>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
-        DurabilityHost::observe_function_call(
-            self,
-            "durability::lazy_initialized_pollable",
-            "subscribe",
-        );
-
-        Ok(dynamic_subscribe(self.table(), self_, None)?)
-    }
-
-    async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(
-            self,
-            "durability::lazy_initialized_pollable",
-            "drop",
-        );
-
-        let entry = self.table().delete(rep)?;
-        if let LazyInitializedPollableEntry::Subscribed { pollable } = entry {
-            let _ = self.table().delete(pollable)?;
-        }
-
-        Ok(())
-    }
-}
+// TODO(p3): re-implement LazyInitializedPollable when the WIT resource is redesigned for p3.
 
 impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn observe_function_call(
@@ -1531,34 +1484,6 @@ where
                     }
                 }
             }
-        }
-    }
-}
-
-pub enum LazyInitializedPollableEntry {
-    Empty,
-    Subscribed { pollable: Resource<DynPollable> },
-}
-
-#[async_trait]
-impl Pollable for LazyInitializedPollableEntry {
-    async fn ready(&mut self) {
-        match self {
-            LazyInitializedPollableEntry::Empty => {
-                // Empty pollable is always ready
-            }
-            LazyInitializedPollableEntry::Subscribed { .. } => {
-                unreachable!("The dynamic pollable override should prevent this from being called")
-            }
-        }
-    }
-}
-
-impl DynamicPollable for LazyInitializedPollableEntry {
-    fn override_index(&self) -> Option<u32> {
-        match self {
-            LazyInitializedPollableEntry::Empty => None,
-            LazyInitializedPollableEntry::Subscribed { pollable } => Some(pollable.rep()),
         }
     }
 }

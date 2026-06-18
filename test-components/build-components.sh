@@ -114,7 +114,21 @@ if [ "$check_only" = true ] && ([ "$clean_only" = true ] || [ "$rebuild" = true 
   exit 1
 fi
 
-GOLEM_CLI="${TEST_COMP_DIR:-$(pwd)}/../target/debug/golem-cli"
+# Locate the golem-cli binary produced by `cargo make build`. The workspace
+# target directory can be redirected (via CARGO_TARGET_DIR, a cargo config, or a
+# cargo wrapper script), so ask cargo for its actual location instead of
+# assuming the default ../target. Fall back to ../target if cargo metadata is
+# unavailable.
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  target_dir="$CARGO_TARGET_DIR"
+else
+  target_dir="$(cd "${TEST_COMP_DIR:-$(pwd)}/.." && cargo metadata --no-deps --format-version=1 2>/dev/null \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
+  if [ -z "$target_dir" ]; then
+    target_dir="${TEST_COMP_DIR:-$(pwd)}/../target"
+  fi
+fi
+GOLEM_CLI="${target_dir}/debug/golem-cli"
 
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]

@@ -27,9 +27,7 @@ use serde::de::DeserializeOwned;
 pub fn blocking_await_promise_json<T: DeserializeOwned>(
     promise_id: &PromiseId,
 ) -> Result<T, serde_json::Error> {
-    let promise = crate::bindings::golem::api::host::get_promise(promise_id);
-    promise.subscribe().block();
-    let bytes = promise.get().unwrap();
+    let bytes = crate::blocking_await_promise(promise_id);
     serde_json::from_slice(&bytes)
 }
 

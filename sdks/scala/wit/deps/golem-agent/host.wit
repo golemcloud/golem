@@ -2,8 +2,7 @@ package golem:agent@1.5.0;
 
 interface host {
     use golem:core/types@1.5.0.{component-id, uuid, promise-id, wit-value, wit-type};
-    use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use wasi:io/poll@0.2.3.{pollable};
+    use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
     use common.{agent-error, agent-type, data-value, registered-agent-type, typed-agent-config-value};
 
     /// Gets all the registered agent types
@@ -67,12 +66,10 @@ interface host {
       schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: data-value) -> cancellation-token;
     }
 
-    /// Represents a pollable invocation result
+    /// Represents an asynchronous invocation result
     resource future-invoke-result {
-      /// Subscribes to the result of the invocation
-      subscribe: func() -> pollable;
-      /// Poll for the invocation. If the invocation has not completed yet, returns `none`.
-      get: func() -> option<result<data-value, rpc-error>>;
+      /// Awaits the result of the invocation.
+      get: async func() -> result<data-value, rpc-error>;
       /// Best-effort attempt to cancel the remote invocation by idempotency key.
       /// If the invocation has already started or completed, this is a no-op.
       cancel: func();

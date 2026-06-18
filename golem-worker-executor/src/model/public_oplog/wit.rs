@@ -666,9 +666,9 @@ impl From<Timestamp> for oplog::Timestamp {
 }
 
 fn timestamp_from_datetime(
-    dt: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+    dt: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
 ) -> Timestamp {
-    Timestamp::from(dt.seconds * 1000 + (dt.nanoseconds / 1_000_000) as u64)
+    Timestamp::from(dt.seconds.max(0) as u64 * 1000 + (dt.nanoseconds / 1_000_000) as u64)
 }
 
 fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq>(

@@ -27,6 +27,7 @@ pub mod http;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub mod p3;
 pub mod quota;
 mod random;
 pub mod rdbms;
@@ -255,7 +256,6 @@ pub enum InvocationStrictness {
     /// trap immediately with [`AgentError::ReadOnlyViolation`].
     ReadOnly,
 }
-
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -626,6 +626,35 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiView(self)
     }
 
+    pub fn wasi_ctx_view(&mut self) -> WasiCtxView<'_> {
+        let inner = &mut *self;
+        let ctx = Arc::get_mut(&mut inner.wasi)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail");
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        WasiCtxView { ctx, table, io_ctx }
+    }
+
+    /// Reads the worker's WASI environment variables synchronously by going
+    /// through the p3 `cli::environment` Host implementation provided by
+    /// wasmtime-wasi. Replaces the previous `wasmtime_wasi::p2::bindings::cli::
+    /// environment::Host::get_environment(self).await` call sites that no
+    /// longer exist after the p2 durable wrappers were removed.
+    pub fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+        use wasmtime_wasi::cli::WasiCliView;
+        let mut view = self.as_wasi_view();
+        let mut cli_view = WasiCliView::cli(&mut view);
+        wasmtime_wasi::p3::bindings::cli::environment::Host::get_environment(&mut cli_view)
+    }
+
     pub fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_> {
         // Sync the replay flag observed by `WasiHttpHooks::send_request` with
         // the current durable execution state before exposing the view to
@@ -643,6 +672,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ctx: &mut inner.wasi_http,
             table,
             hooks: &mut inner.http_hooks,
+        }
+    }
+
+    pub fn as_wasi_http_view_p3(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        let inner = &mut *self;
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        wasmtime_wasi_http::p3::WasiHttpCtxView {
+            ctx: &mut inner.wasi_http,
+            table,
+            hooks: wasmtime_wasi_http::p3::default_hooks(),
         }
     }
 
@@ -5148,6 +5190,12 @@ impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
 impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         self.as_wasi_http_view()
+    }
+}
+
+impl<Ctx: WorkerCtx> wasmtime_wasi_http::p3::WasiHttpView for DurableWorkerCtx<Ctx> {
+    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        self.as_wasi_http_view_p3()
     }
 }
 

@@ -65,6 +65,7 @@ use wasmtime::component::Instance;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
+use wasmtime_wasi_http::p3::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -82,6 +83,8 @@ pub trait WorkerCtx:
     + FileSystemReading
     + InvocationContextManagement
     + DurableWorkerCtxView<Self>
+    + WasiView
+    + WasiHttpView
     + Send
     + Sync
     + Sized

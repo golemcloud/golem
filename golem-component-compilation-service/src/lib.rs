@@ -171,6 +171,11 @@ fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Con
 
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    // Must match the executor's enabled wasm features so that components
+    // pre-compiled here are accepted at runtime. WASI p3 components use the
+    // async ABI (stream<T>, future<T>, async lift/lower, error-context).
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_error_context(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(WasmBacktraceDetails::Enable);

@@ -4,7 +4,7 @@ interface common {
   use golem:core/types@1.5.0.{value-and-type, wit-type, wit-value, agent-id, account-id, component-id,
     text-type, text-reference, binary-type, binary-reference,
     text-descriptor, binary-descriptor, element-schema, element-value, data-schema, data-value};
-  use wasi:clocks/monotonic-clock@0.2.3.{duration};
+  use wasi:clocks/types@0.3.0-rc-2026-03-15.{duration};
 
   enum agent-mode {
     durable,
