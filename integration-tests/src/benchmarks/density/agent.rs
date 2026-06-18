@@ -54,6 +54,7 @@ use futures::StreamExt;
 use golem_common::agent_id;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::data_value;
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
@@ -579,7 +580,56 @@ pub async fn run_cell(
         _ => run_ramp_cell(config, &user, &components, probe).await?,
     };
 
+    cleanup_cell_agents(config, &user, &components, &outcome).await;
+
     Ok(outcome.into_benchmark_result(config))
+}
+
+/// Deletes every agent this cell created so the next cell starts from a clean
+/// executor.
+///
+/// Deletion goes through the platform's `delete_worker` API, which removes the
+/// agent from the executor's `running-workers` set that the startup recovery
+/// scan reads.
+///
+/// Created agents occupy indices `0..max_agents_reached` (the same indices the
+/// ramp and prefill loops use via `agent_for_index`). Deletes are fanned out
+/// with the same bounded concurrency as creation so a cell with thousands of
+/// agents cleans up in minutes rather than hours.
+async fn cleanup_cell_agents(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    outcome: &CellOutcome,
+) {
+    let count = outcome.max_agents_reached;
+    if count == 0 {
+        return;
+    }
+    info!(
+        "Density-agent[{}]: cleaning up {count} created agents",
+        config.cell_name()
+    );
+
+    let agent_ids: Vec<AgentId> = (0..count)
+        .filter_map(|index| {
+            let (component, parsed) = agent_for_index(config, index, components).ok()?;
+            AgentId::from_agent_id(component.id, &parsed).ok()
+        })
+        .collect();
+
+    futures::stream::iter(agent_ids)
+        .for_each_concurrent(CREATE_CONCURRENCY, |agent_id| async move {
+            if let Err(err) = user.delete_worker(&agent_id).await {
+                warn!("Density-agent: failed to delete agent {agent_id}: {err:?}");
+            }
+        })
+        .await;
+
+    info!(
+        "Density-agent[{}]: cleanup of {count} agents complete",
+        config.cell_name()
+    );
 }
 
 /// Resolves the `ComponentDto`s this cell needs from the manifest's stored ids.
