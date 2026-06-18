@@ -59,7 +59,7 @@ async fn create_permission_share(
 }
 
 fn environment_view_grant(owner: &str, app_name: &str, env_name: &str, recipient: &str) -> String {
-    format!("environment({owner}/{app_name}) @ {recipient} : view : {env_name}")
+    format!("environment({owner}/{app_name}/{env_name}) @ {recipient} : view :")
 }
 
 fn environment_plugin_grant_grant(

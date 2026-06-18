@@ -42,7 +42,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -55,6 +55,7 @@ use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use uuid::Uuid;
@@ -66,22 +67,22 @@ pub trait WorkerForkService: Send + Sync {
     async fn fork(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -709,10 +710,10 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
@@ -730,7 +731,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_agent_id, true, fork_account_id, fork_account_email)
+            .resume(target_agent_id, true, auth_ctx)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
@@ -742,12 +743,12 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
@@ -818,7 +819,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_agent_id, true, fork_account_id, fork_account_email)
+            .resume(target_agent_id, true, auth_ctx)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())

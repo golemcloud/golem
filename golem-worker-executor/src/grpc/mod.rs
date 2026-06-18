@@ -51,7 +51,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal, UntypedDataValue};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
@@ -492,6 +492,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ForkWorkerRequest,
     ) -> Result<ForkWorkerResponse, WorkerExecutorError> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+
         let account_id_proto = request
             .component_owner_account_id
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
@@ -529,16 +535,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, &source_agent_id);
 
-        let account_email = AccountEmail::new(request.component_owner_account_email);
-
         self.services
             .worker_fork_service()
             .fork(
                 account_id,
-                &account_email,
                 &owned_source_agent_id,
                 &owned_target_agent_id.agent_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
+                &auth_ctx,
             )
             .await?;
 

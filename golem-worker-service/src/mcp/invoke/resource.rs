@@ -103,10 +103,7 @@ pub async fn invoke_resource(
         agent_id: parsed_agent_id.to_string(),
     };
 
-    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent(
-        mcp_resource.account_id,
-        mcp_resource.account_email.clone(),
-    );
+    let auth_ctx = golem_service_base::model::auth::AuthCtx::System;
 
     let agent_output = worker_service
         .invoke_agent(

@@ -208,6 +208,38 @@ impl AgentOwnerPattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAgentOwnerPattern {
     Concrete(AgentOwnerPattern),
+    AccountAgents,
+    AccountApplicationAgents {
+        application: ApplicationName,
+    },
+    AccountEnvironmentAgents {
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    AccountComponentAgents {
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
+    AccountAgent {
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+        agent: AgentOwnerLeafPattern,
+    },
+    ApplicationAgents,
+    ApplicationEnvironmentAgents {
+        environment: EnvironmentName,
+    },
+    ApplicationComponentAgents {
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
+    ApplicationAgent {
+        environment: EnvironmentName,
+        component: ComponentName,
+        agent: AgentOwnerLeafPattern,
+    },
     EnvAgents,
     EnvComponentAgents {
         component: ComponentName,
@@ -216,7 +248,11 @@ pub enum PolymorphicAgentOwnerPattern {
         component: ComponentName,
         agent: AgentOwnerLeafPattern,
     },
-    Self_,
+    ComponentAgents,
+    ComponentAgent {
+        agent: AgentOwnerLeafPattern,
+    },
+    Agent,
 }
 
 impl OwnerPattern for AgentOwnerPattern {
@@ -228,6 +264,58 @@ impl OwnerPattern for AgentOwnerPattern {
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
         match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*", "*", "*"] => {
+                Ok(PolymorphicAgentOwnerPattern::AccountAgents)
+            }
+            Some(("?account", rest))
+                if rest.len() == 4 && rest[1] == "*" && rest[2] == "*" && rest[3] == "*" =>
+            {
+                Ok(PolymorphicAgentOwnerPattern::AccountApplicationAgents {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?account", rest)) if rest.len() == 4 && rest[2] == "*" && rest[3] == "*" => {
+                Ok(PolymorphicAgentOwnerPattern::AccountEnvironmentAgents {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                })
+            }
+            Some(("?account", rest)) if rest.len() == 4 && rest[3] == "*" => {
+                Ok(PolymorphicAgentOwnerPattern::AccountComponentAgents {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[2])?.to_string()),
+                })
+            }
+            Some(("?account", rest)) if rest.len() == 4 => {
+                Ok(PolymorphicAgentOwnerPattern::AccountAgent {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[2])?.to_string()),
+                    agent: AgentOwnerLeafPattern::parse(rest[3])?,
+                })
+            }
+            Some(("?app", rest)) if rest.as_slice() == ["*", "*", "*"] => {
+                Ok(PolymorphicAgentOwnerPattern::ApplicationAgents)
+            }
+            Some(("?app", rest)) if rest.len() == 3 && rest[1] == "*" && rest[2] == "*" => {
+                Ok(PolymorphicAgentOwnerPattern::ApplicationEnvironmentAgents {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                })
+            }
+            Some(("?app", rest)) if rest.len() == 3 && rest[2] == "*" => {
+                Ok(PolymorphicAgentOwnerPattern::ApplicationComponentAgents {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[1])?.to_string()),
+                })
+            }
+            Some(("?app", rest)) if rest.len() == 3 => {
+                Ok(PolymorphicAgentOwnerPattern::ApplicationAgent {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[1])?.to_string()),
+                    agent: AgentOwnerLeafPattern::parse(rest[2])?,
+                })
+            }
             Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => {
                 Ok(PolymorphicAgentOwnerPattern::EnvAgents)
             }
@@ -240,7 +328,15 @@ impl OwnerPattern for AgentOwnerPattern {
                 component: ComponentName(parse_concrete_segment(rest[0])?.to_string()),
                 agent: AgentOwnerLeafPattern::parse(rest[1])?,
             }),
-            Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicAgentOwnerPattern::Self_),
+            Some(("?component", rest)) if rest.as_slice() == ["*"] => {
+                Ok(PolymorphicAgentOwnerPattern::ComponentAgents)
+            }
+            Some(("?component", rest)) if rest.len() == 1 => {
+                Ok(PolymorphicAgentOwnerPattern::ComponentAgent {
+                    agent: AgentOwnerLeafPattern::parse(rest[0])?,
+                })
+            }
+            Some(("?agent", rest)) if rest.is_empty() => Ok(PolymorphicAgentOwnerPattern::Agent),
             Some(_) => Err(value.to_string()),
             None => Self::parse(value).map(PolymorphicAgentOwnerPattern::Concrete),
         }

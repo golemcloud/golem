@@ -168,6 +168,7 @@ impl Drop for WorkerDir {
 }
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_service_base::model::auth::AuthCtx;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
@@ -270,6 +271,27 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    _store_alive_guard: StoreAliveGuard,
+}
+
+/// Increments the live-`Store` gauge on construction and decrements it on drop.
+/// Held as a field of [`DurableWorkerCtx`], which is the data of the wasmtime
+/// `Store`, so the gauge follows the `Store`'s true lifetime regardless of which
+/// reference keeps it alive. A persistent gap above the resident-worker count
+/// indicates `Store`s retained after their worker was deleted.
+struct StoreAliveGuard;
+
+impl StoreAliveGuard {
+    fn new() -> Self {
+        crate::metrics::workers::inc_worker_store_alive();
+        StoreAliveGuard
+    }
+}
+
+impl Drop for StoreAliveGuard {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_store_alive();
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -498,6 +520,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            _store_alive_guard: StoreAliveGuard::new(),
         })
     }
 
@@ -593,6 +616,63 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn created_by_email(&self) -> &AccountEmail {
         &self.state.created_by_email
+    }
+
+    pub fn agent_effective_surface(&self) -> golem_common::model::card::EffectiveSurface {
+        let Some(agent_id) = &self.state.agent_id else {
+            return golem_common::model::card::EffectiveSurface::default();
+        };
+
+        let component = &self.state.component_metadata;
+        let template = component
+            .metadata
+            .agent_type_initial_permission_template(&agent_id.agent_type)
+            .cloned()
+            .unwrap_or_else(|| {
+                golem_common::model::component_metadata::AgentInitialPermissionTemplate::default_for(
+                    &component.environment_name,
+                    &component.component_name,
+                )
+            });
+
+        let context = golem_common::model::card::AgentPermissionMonomorphizationContext {
+            account: component.account_email.clone(),
+            application: component.application_name.clone(),
+            environment: component.environment_name.clone(),
+            component: component.component_name.clone(),
+            agent_name: self.owned_agent_id.agent_id.agent_id.clone(),
+            agent_type: agent_id.agent_type.clone(),
+        };
+
+        let Ok(card) = golem_common::model::card::monomorphize_agent_initial_card(
+            &template.lower_positive,
+            &template.lower_negative,
+            &template.upper_positive,
+            &template.upper_negative,
+            &context,
+        ) else {
+            return golem_common::model::card::EffectiveSurface::default();
+        };
+
+        golem_common::model::card::EffectiveSurface::from_cards(
+            std::slice::from_ref(&card),
+            &golem_common::model::card::recipient::RecipientPattern::Agent {
+                account: component.account_email.as_str().to_string(),
+                application: component.application_name.0.clone(),
+                environment: component.environment_name.0.clone(),
+                component: component.component_name.0.clone(),
+                agent: self.owned_agent_id.agent_id.agent_id.clone(),
+            },
+        )
+        .unwrap_or_default()
+    }
+
+    pub fn agent_auth_ctx(&self) -> AuthCtx {
+        AuthCtx::agent_with_effective_surface(
+            self.created_by(),
+            self.created_by_email().clone(),
+            self.agent_effective_surface(),
+        )
     }
 
     pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {

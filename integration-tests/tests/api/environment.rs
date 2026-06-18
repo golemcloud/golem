@@ -326,17 +326,17 @@ async fn list_visible_environments_shows_owned_and_shared(
                 data: PermissionShareData {
                     lower_positive: vec![
                         format!(
-                            "application({}) @ {} : view : {}",
+                            "application({}/{}) @ {} : view :",
                             owner.account_email.as_str(),
-                            grantee.account_email.as_str(),
                             app_1.name.0,
+                            grantee.account_email.as_str(),
                         ),
                         format!(
-                            "environment({}/{}) @ {} : view : {}",
+                            "environment({}/{}/{}) @ {} : view :",
                             owner.account_email.as_str(),
                             app_1.name.0,
-                            grantee.account_email.as_str(),
                             env_1b.name.0,
+                            grantee.account_email.as_str(),
                         ),
                     ],
                     lower_negative: Vec::new(),
@@ -476,11 +476,11 @@ async fn deleted_account_hides_shared_environments_from_grantee(
                 name: PermissionShareName("deleted-account-shared-environment".to_string()),
                 data: PermissionShareData {
                     lower_positive: vec![format!(
-                        "environment({}/{}) @ {} : view : {}",
+                        "environment({}/{}/{}) @ {} : view :",
                         owner.account_email.as_str(),
                         env.application_name.0,
-                        grantee.account_email.as_str(),
                         env.name.0,
+                        grantee.account_email.as_str(),
                     )],
                     lower_negative: Vec::new(),
                     upper_positive: Vec::new(),
