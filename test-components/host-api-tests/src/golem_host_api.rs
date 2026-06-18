@@ -5,12 +5,12 @@ use golem_rust::bindings::golem::api::host::{
 };
 use golem_rust::{
     agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
-    atomically, atomically_async, get_promise, fork, oplog_commit,
+    atomically, atomically_async, fork, oplog_commit,
     fallible_transaction, infallible_transaction,
     use_idempotence_mode, use_persistence_level,
     with_persistence_level, with_persistence_level_async,
     Checkpoint, CheckpointResultExt, PersistenceLevel,
-    ForkResult, PromiseId, Transaction, Uuid,
+    ForkResult, Transaction, Uuid,
 };
 use golem_rust::retry::{
     get_retry_policies, get_retry_policy_by_name, set_retry_policy, remove_retry_policy,
@@ -35,9 +35,10 @@ pub trait GolemHostApi {
 
     fn resolve_component(&self) -> ResolveComponentResult;
 
-    fn create_promise(&self) -> PromiseId;
-    fn await_promise(&self, promise_id: PromiseId) -> Vec<u8>;
-    fn poll_promise(&self, promise_id: PromiseId) -> Option<Vec<u8>>;
+    // TODO: temporarily disabled during WASI P3 migration (promise get() is now async)
+    // fn create_promise(&self) -> PromiseId;
+    // fn await_promise(&self, promise_id: PromiseId) -> Vec<u8>;
+    // fn poll_promise(&self, promise_id: PromiseId) -> Option<Vec<u8>>;
 
     fn fail_with_custom_max_retries(&self, max_retries: u64);
     fn explicit_commit(&self, replicas: u8);
@@ -100,17 +101,18 @@ impl GolemHostApi for GolemHostApiImpl {
         }
     }
 
-    fn create_promise(&self) -> PromiseId {
-        golem_rust::create_promise()
-    }
-
-    fn await_promise(&self, promise_id: PromiseId) -> Vec<u8> {
-        golem_rust::blocking_await_promise(&promise_id)
-    }
-
-    fn poll_promise(&self, promise_id: PromiseId) -> Option<Vec<u8>> {
-        get_promise(&promise_id).get()
-    }
+    // TODO: temporarily disabled during WASI P3 migration (promise get() is now async)
+    // fn create_promise(&self) -> PromiseId {
+    //     golem_rust::create_promise()
+    // }
+    //
+    // fn await_promise(&self, promise_id: PromiseId) -> Vec<u8> {
+    //     golem_rust::blocking_await_promise(&promise_id)
+    // }
+    //
+    // fn poll_promise(&self, promise_id: PromiseId) -> Option<Vec<u8>> {
+    //     get_promise(&promise_id).get()
+    // }
 
     fn fail_with_custom_max_retries(&self, max_retries: u64) {
         let policy = NamedRetryPolicy {

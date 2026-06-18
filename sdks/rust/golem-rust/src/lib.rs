@@ -16,6 +16,9 @@
 test_r::enable!();
 
 pub use uuid::Uuid;
+
+pub use wasip2;
+pub use wstd;
 pub use wasip3;
 
 pub mod bindings {

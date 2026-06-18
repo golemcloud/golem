@@ -478,7 +478,18 @@ async fn call_exported_function<Ctx: WorkerCtx>(
         .map(|_| Val::Bool(false))
         .collect();
 
-    let result = function.call_async(&mut store, &params, &mut results).await;
+    // Drive the component-model event loop until the guest task is fully
+    // quiescent rather than only until it returns its result via `task.return`.
+    // This ensures any tail work the guest keeps running afterwards (e.g.
+    // `wit_bindgen::spawn`ed futures) finishes -- and records its durable
+    // effects -- before the next invocation starts.
+    let result = store
+        .as_context_mut()
+        .run_concurrent_and_drain(async |accessor| {
+            function.call_concurrent(accessor, &params, &mut results).await
+        })
+        .await
+        .and_then(|inner| inner);
 
     let consumed_fuel_for_call =
         finish_invocation_and_get_fuel_consumption(&mut store, display_name).await?;

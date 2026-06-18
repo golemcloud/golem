@@ -233,6 +233,7 @@ fn dynamic_import(
                 ComponentItem::ComponentFunc(fun) => {
                     let param_types: Vec<Type> = fun.params().map(|(_, t)| t).collect();
                     let result_types: Vec<Type> = fun.results().collect();
+                    let is_async = fun.async_();
 
                     let function_name = ParsedFunctionName::parse(format!(
                         "{name}.{{{inner_name}}}"
@@ -243,6 +244,7 @@ fn dynamic_import(
                         name: function_name,
                         params: param_types,
                         results: result_types,
+                        is_async,
                     });
                 }
                 ComponentItem::CoreFunc(_) => {}
@@ -270,20 +272,40 @@ fn dynamic_import(
         }
 
         for function in functions {
-            instance.func_new_async(
-                &function.name.function.function_name(),
-                move |_store, _func_type, _params, _results| {
-                    let function_name = function.name.clone();
-                    Box::new(async move {
-                        error!(
-                            "External function called in get-agent-definitions: {function_name}",
-                        );
-                        Err(wasmtime::Error::msg(format!(
-                            "External function called in get-agent-definitions: {function_name}"
-                        )))
-                    })
-                },
-            )?;
+            if function.is_async {
+                // P3 concurrent `async func` imports cannot be represented by
+                // `func_new_async` (which only models sync-typed imports backed
+                // by an async host fn); they require `func_new_concurrent`.
+                instance.func_new_concurrent(
+                    &function.name.function.function_name(),
+                    move |_accessor, _func_type, _params, _results| {
+                        let function_name = function.name.clone();
+                        Box::pin(async move {
+                            error!(
+                                "External function called in get-agent-definitions: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called in get-agent-definitions: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            } else {
+                instance.func_new_async(
+                    &function.name.function.function_name(),
+                    move |_store, _func_type, _params, _results| {
+                        let function_name = function.name.clone();
+                        Box::new(async move {
+                            error!(
+                                "External function called in get-agent-definitions: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called in get-agent-definitions: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            }
         }
 
         Ok(())
@@ -302,6 +324,7 @@ struct FunctionInfo {
     name: ParsedFunctionName,
     params: Vec<Type>,
     results: Vec<Type>,
+    is_async: bool,
 }
 
 struct ResourceEntry;
