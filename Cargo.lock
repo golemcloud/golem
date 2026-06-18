@@ -3858,6 +3858,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "http 1.4.0",
+ "humantime-serde",
  "lazy_static",
  "prometheus",
  "rustls 0.23.37",

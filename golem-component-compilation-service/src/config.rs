@@ -48,6 +48,8 @@ pub struct ServerConfig {
     // Metrics and healthcheck
     pub http_host: String,
     pub http_port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
 }
 
 impl SafeDisplay for ServerConfig {
@@ -88,6 +90,11 @@ impl SafeDisplay for ServerConfig {
 
         let _ = writeln!(&mut result, "HTTP host: {}", self.http_host);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
         result
     }
 }
@@ -111,6 +118,7 @@ impl Default for ServerConfig {
             engine: EngineConfig::default(),
             http_host: "0.0.0.0".to_string(),
             http_port: 8084,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
     }
 }

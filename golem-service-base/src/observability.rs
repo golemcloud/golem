@@ -24,15 +24,19 @@ use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
-const RUNTIME_METRICS_SAMPLING_INTERVAL: Duration = Duration::from_secs(5);
-
 pub async fn start_health_and_metrics_server(
     addr: impl ToSocketAddrs,
     registry: Registry,
+    runtime_metrics_sampling_interval: Duration,
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
-    install_runtime_metrics(Handle::current(), registry.clone(), join_set);
+    install_runtime_metrics(
+        Handle::current(),
+        registry.clone(),
+        runtime_metrics_sampling_interval,
+        join_set,
+    );
 
     let app = Router::new()
         .route("/healthcheck", get(move || async move { body_message }))
@@ -73,6 +77,7 @@ pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
 fn install_runtime_metrics(
     runtime: Handle,
     registry: Registry,
+    sampling_interval: Duration,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) {
     let recorder = match metrics_prometheus::Recorder::builder()
@@ -88,8 +93,8 @@ fn install_runtime_metrics(
         }
     };
 
-    let reporter = tokio_metrics::RuntimeMetricsReporterBuilder::default()
-        .with_interval(RUNTIME_METRICS_SAMPLING_INTERVAL);
+    let reporter =
+        tokio_metrics::RuntimeMetricsReporterBuilder::default().with_interval(sampling_interval);
 
     join_set.spawn_on(
         async move {
