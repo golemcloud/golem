@@ -40,11 +40,20 @@ name: cloud-density-agent
 section: agent
 
 # Agent-count ramp every cell walks unless it overrides `ramp` below. This is a
-# stress test: tune these freely. Resolution is concentrated around the
-# ~500-1500 per-pod knee observed in cloud-perf (halved for single-pod), then
-# coarsens. A cell stops at the first catastrophic ceiling or when the ramp is
-# exhausted (recorded as terminatedReason=upper_bound_hit).
-defaultRamp: [100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 10000]
+# stress test: tune these freely. A cell stops at the first catastrophic ceiling
+# or when the ramp is exhausted (recorded as terminatedReason=upper_bound_hit).
+#
+# `defaultRamp` is used by the shared-component cells, which exercise pure
+# resident-agent capacity (one shared component, no component-cache pressure) and
+# can climb high. Resolution is concentrated around the ~500-1500 per-pod knee
+# observed in cloud-perf (halved for single-pod), then coarsens.
+defaultRamp: &defaultRamp [100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 10000]
+
+# The per-agent-component cells give each agent its own component, thrashing the
+# executor's compiled-component cache (default 32 entries). The knee is expected
+# in the low hundreds, and density-prep only uploads 999 distinct components, so
+# this ramp caps at 1000 with fine low-end resolution.
+perAgentRamp: &perAgentRamp [50, 100, 150, 200, 300, 400, 500, 650, 800, 1000]
 
 cells:
   # Scenario 1 — create-only: create N idle agents, each invoked once then left
@@ -57,6 +66,7 @@ cells:
     scenario: create-only
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
   - name: create-only-ephemeral-shared-component
     scenario: create-only
     agentMode: ephemeral
@@ -65,6 +75,7 @@ cells:
     scenario: create-only
     agentMode: ephemeral
     sharing: per-agent
+    ramp: *perAgentRamp
 
   # Scenario 2 — create-with-active-fraction: like scenario 1, but a fraction of
   # the agents are kept active (one in-flight busy_for(500ms) call each,
@@ -88,16 +99,19 @@ cells:
     scenario: create-with-active
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
     activeFraction: 25
   - name: create-with-active-durable-per-agent-component-active-50pct
     scenario: create-with-active
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
     activeFraction: 50
   - name: create-with-active-durable-per-agent-component-active-75pct
     scenario: create-with-active
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
     activeFraction: 75
   - name: create-with-active-ephemeral-shared-component-active-25pct
     scenario: create-with-active
@@ -118,16 +132,19 @@ cells:
     scenario: create-with-active
     agentMode: ephemeral
     sharing: per-agent
+    ramp: *perAgentRamp
     activeFraction: 25
   - name: create-with-active-ephemeral-per-agent-component-active-50pct
     scenario: create-with-active
     agentMode: ephemeral
     sharing: per-agent
+    ramp: *perAgentRamp
     activeFraction: 50
   - name: create-with-active-ephemeral-per-agent-component-active-75pct
     scenario: create-with-active
     agentMode: ephemeral
     sharing: per-agent
+    ramp: *perAgentRamp
     activeFraction: 75
 
   # Scenario 3 — concurrent-active: all N agents kept active concurrently.
@@ -140,6 +157,7 @@ cells:
     scenario: concurrent-active
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
   - name: concurrent-active-ephemeral-shared-component
     scenario: concurrent-active
     agentMode: ephemeral
@@ -148,6 +166,7 @@ cells:
     scenario: concurrent-active
     agentMode: ephemeral
     sharing: per-agent
+    ramp: *perAgentRamp
 
   # Scenario 4 — resume-under-saturation (durable-only): pre-fill N idle agents
   # to force eviction, then measure resume-vs-create latency under memory
@@ -171,14 +190,17 @@ cells:
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
     prefill: 500
   - name: resume-under-saturation-durable-per-agent-component-prefill-1000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
     prefill: 1000
   - name: resume-under-saturation-durable-per-agent-component-prefill-2000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
+    ramp: *perAgentRamp
     prefill: 2000
