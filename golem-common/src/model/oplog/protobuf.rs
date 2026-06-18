@@ -37,19 +37,6 @@ use crate::model::oplog::payload::host_functions::{
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams,
-    CancelPendingInvocationParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    StartParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams, CancelledParams
-};
-use crate::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,

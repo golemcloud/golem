@@ -17,22 +17,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
-    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams,
-    ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,CardRevokedParams
-};
-use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
