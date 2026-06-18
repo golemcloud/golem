@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 #[schema(named = "schema-type")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum SchemaType {
     /// Reference to a named definition in the enclosing
     /// [`super::SchemaGraph`].
@@ -532,6 +533,7 @@ impl SchemaType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct NamedFieldType {
     pub name: String,
     pub body: SchemaType,
@@ -542,6 +544,7 @@ pub struct NamedFieldType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct VariantCaseType {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -553,6 +556,7 @@ pub struct VariantCaseType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct ResultSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok: Option<Box<SchemaType>>,
@@ -565,6 +569,7 @@ pub struct ResultSpec {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct TextRestrictions {
     /// Optional set of allowed BCP-47 language codes. `None` = unrestricted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -580,6 +585,7 @@ pub struct TextRestrictions {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct BinaryRestrictions {
     /// Optional set of allowed MIME types. `None` = unrestricted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -596,6 +602,7 @@ pub struct BinaryRestrictions {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum PathDirection {
     Input,
     Output,
@@ -606,6 +613,7 @@ pub enum PathDirection {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum PathKind {
     File,
     Directory,
@@ -615,6 +623,7 @@ pub enum PathKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct PathSpec {
     pub direction: PathDirection,
     pub kind: PathKind,
@@ -636,6 +645,7 @@ pub struct PathSpec {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct UrlRestrictions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_schemes: Option<Vec<String>>,
@@ -660,6 +670,7 @@ pub struct UrlRestrictions {
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct QuantityValue {
     pub mantissa: i64,
     pub scale: i32,
@@ -669,6 +680,7 @@ pub struct QuantityValue {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct QuantitySpec {
     /// Canonical base unit (e.g., `"kg"`, `"m"`, `"s"`, `"B"`).
     pub base_unit: String,
@@ -687,6 +699,7 @@ pub struct QuantitySpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct UnionSpec {
     pub branches: Vec<UnionBranch>,
 }
@@ -694,6 +707,7 @@ pub struct UnionSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct UnionBranch {
     /// Logical branch name carried in
     /// [`super::UnionValuePayload::tag`] after the decoder resolves the
@@ -713,6 +727,7 @@ pub struct UnionBranch {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "rule", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum DiscriminatorRule {
     /// String value starts with this prefix.
     Prefix { prefix: String },
@@ -732,6 +747,7 @@ pub enum DiscriminatorRule {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct FieldDiscriminator {
     pub field_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -743,6 +759,7 @@ pub struct FieldDiscriminator {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SecretSpec {
     /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -752,6 +769,7 @@ pub struct SecretSpec {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct QuotaTokenSpec {
     /// Resource name this token covers (declared in the agent manifest).
     /// `None` = any resource permitted.

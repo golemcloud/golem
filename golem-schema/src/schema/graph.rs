@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[schema(named = "schema-graph")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SchemaGraph {
     /// Named type definitions in this graph. The defining set is exactly the
     /// types reachable from `root` (directly or transitively) that need to be
@@ -100,6 +101,7 @@ impl SchemaGraph {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[schema(named = "schema-type-def")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SchemaTypeDef {
     /// Stable identifier; unique within the enclosing graph.
     pub id: TypeId,
@@ -120,6 +122,7 @@ pub struct SchemaTypeDef {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[schema(named = "typed-schema-value")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct TypedSchemaValue {
     graph: SchemaGraph,
     value: SchemaValue,

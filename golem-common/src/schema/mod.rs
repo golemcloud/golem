@@ -24,8 +24,6 @@ pub mod adapters;
 pub mod agent;
 mod common_impls;
 #[cfg(feature = "full")]
-pub mod poem;
-#[cfg(feature = "full")]
 pub mod protobuf;
 pub mod render;
 pub mod validation;

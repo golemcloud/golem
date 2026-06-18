@@ -39,6 +39,7 @@ use std::fmt::{Display, Formatter};
 #[cfg_attr(feature = "full", desert(transparent))]
 #[serde(transparent)]
 #[schema(transparent)]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct TypeId(pub String);
 
 impl TypeId {
@@ -77,6 +78,7 @@ impl From<&str> for TypeId {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[schema(named = "metadata-envelope")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct MetadataEnvelope {
     /// Free-form documentation string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +117,7 @@ impl MetadataEnvelope {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
 #[schema(named = "role")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum Role {
     Multimodal,
     Other(String),

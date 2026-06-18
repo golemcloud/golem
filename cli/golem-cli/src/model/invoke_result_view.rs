@@ -108,9 +108,6 @@ impl InvokeResultView {
             return Ok((false, None));
         };
 
-        let typed = serde_json::from_value(typed.0.clone())
-            .map_err(|e| anyhow!("Failed to parse typed agent result: {e}"))?;
-
-        Ok((false, Some(typed)))
+        Ok((false, Some(typed.clone())))
     }
 }

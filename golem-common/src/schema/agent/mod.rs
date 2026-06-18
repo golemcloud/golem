@@ -51,6 +51,7 @@ use uuid::Uuid;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum InputSchema {
     Parameters(Vec<NamedField>),
 }
@@ -79,6 +80,7 @@ impl InputSchema {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum OutputSchema {
     /// Method returns no value.
     Unit,
@@ -100,6 +102,7 @@ impl OutputSchema {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct NamedField {
     /// Field name in the input parameter list. Unique within the enclosing
     /// [`InputSchema::Parameters`].
@@ -147,6 +150,7 @@ impl NamedField {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum FieldSource {
     /// The caller provides the value when invoking the constructor or method.
     #[default]
@@ -164,6 +168,7 @@ pub enum FieldSource {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum AutoInjectedKind {
     /// The authenticated principal of the calling identity.
     Principal,
@@ -254,6 +259,7 @@ pub fn build_input_record(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentConstructorSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -273,6 +279,7 @@ pub struct AgentConstructorSchema {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentMethodSchema {
     pub name: String,
     pub description: String,
@@ -295,6 +302,7 @@ pub struct AgentMethodSchema {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentDependencySchema {
     pub type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -327,6 +335,7 @@ pub struct AgentDependencySchema {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentTypeSchema {
     pub type_name: AgentTypeName,
     pub description: String,
@@ -364,6 +373,7 @@ pub struct AgentTypeSchema {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentConfigDeclarationSchema {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
@@ -376,6 +386,7 @@ pub struct AgentConfigDeclarationSchema {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct RegisteredAgentTypeSchema {
     pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,

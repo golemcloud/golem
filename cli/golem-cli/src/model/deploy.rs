@@ -16,20 +16,22 @@ use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
 use crate::model::GuestLanguage;
-use crate::model::component::{render_agent_constructor, render_input_schema, render_output_schema};
+use crate::model::component::{
+    render_agent_constructor, render_input_schema, render_output_schema,
+};
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::RawAgentId;
 use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
-use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
-use golem_common::schema::graph::SchemaGraph;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
+use golem_common::schema::graph::SchemaGraph;
 use golem_wasm::analysis::AnalysedType as LegacyAnalysedType;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};

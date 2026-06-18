@@ -19,8 +19,6 @@ use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::AgentType;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
-use golem_common::schema::graph::SchemaGraph;
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
 };
@@ -29,6 +27,8 @@ use golem_common::model::component::{
     PluginInstallation,
 };
 use golem_common::model::component::{AgentFilePermissions, ComponentName};
+use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
+use golem_common::schema::graph::SchemaGraph;
 
 use crate::agent_id_display::render_type_for_language;
 use crate::model::app_raw;
@@ -276,7 +276,11 @@ pub(crate) fn render_input_schema(
         .map(|field| {
             let rendered_type = render_type_for_language(lang, graph, &field.schema, true);
             if show_param_names {
-                format!("{}: {}", render_param_name(&field.name, lang), rendered_type)
+                format!(
+                    "{}: {}",
+                    render_param_name(&field.name, lang),
+                    rendered_type
+                )
             } else {
                 rendered_type
             }

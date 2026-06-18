@@ -472,11 +472,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(typed_output) => {
-                let typed: TypedSchemaValue =
-                    serde_json::from_value(typed_output.0).map_err(|err| {
-                        anyhow!("Failed to decode typed schema value from response: {err}")
-                    })?;
-                let (_graph, value) = typed.into_parts();
+                let (_graph, value) = typed_output.into_parts();
                 Ok(AgentResult::new(Some(value)))
             }
             None => Ok(AgentResult::new(None)),

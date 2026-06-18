@@ -385,6 +385,96 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_wasm::json::OptionallyValueAndTypeJson",
             ),
             ("ValueAndType", "golem_wasm::ValueAndType"),
+            // schema model (the OpenAPI spec exposes these for 3rd-party
+            // consumers; golem-client must alias them to the real Rust types
+            // rather than regenerate structs from the typed schemas)
+            (
+                "AgentTypeSchema",
+                "golem_common::schema::AgentTypeSchema",
+            ),
+            (
+                "RegisteredAgentTypeSchema",
+                "golem_common::schema::RegisteredAgentTypeSchema",
+            ),
+            (
+                "AgentConstructorSchema",
+                "golem_common::schema::AgentConstructorSchema",
+            ),
+            (
+                "AgentMethodSchema",
+                "golem_common::schema::AgentMethodSchema",
+            ),
+            (
+                "AgentDependencySchema",
+                "golem_common::schema::AgentDependencySchema",
+            ),
+            (
+                "AgentConfigDeclarationSchema",
+                "golem_common::schema::agent::AgentConfigDeclarationSchema",
+            ),
+            ("InputSchema", "golem_common::schema::InputSchema"),
+            ("OutputSchema", "golem_common::schema::OutputSchema"),
+            ("NamedField", "golem_common::schema::NamedField"),
+            ("FieldSource", "golem_common::schema::FieldSource"),
+            (
+                "AutoInjectedKind",
+                "golem_common::schema::AutoInjectedKind",
+            ),
+            ("SchemaGraph", "golem_common::schema::SchemaGraph"),
+            ("SchemaTypeDef", "golem_common::schema::SchemaTypeDef"),
+            (
+                "TypedSchemaValue",
+                "golem_common::schema::TypedSchemaValue",
+            ),
+            ("SchemaValue", "golem_common::schema::SchemaValue"),
+            ("SchemaType", "golem_common::schema::SchemaType"),
+            (
+                "NamedFieldType",
+                "golem_common::schema::NamedFieldType",
+            ),
+            (
+                "VariantCaseType",
+                "golem_common::schema::VariantCaseType",
+            ),
+            ("ResultSpec", "golem_common::schema::ResultSpec"),
+            (
+                "TextRestrictions",
+                "golem_common::schema::TextRestrictions",
+            ),
+            (
+                "BinaryRestrictions",
+                "golem_common::schema::BinaryRestrictions",
+            ),
+            ("PathDirection", "golem_common::schema::PathDirection"),
+            ("PathKind", "golem_common::schema::PathKind"),
+            ("PathSpec", "golem_common::schema::PathSpec"),
+            (
+                "UrlRestrictions",
+                "golem_common::schema::UrlRestrictions",
+            ),
+            ("QuantityValue", "golem_common::schema::QuantityValue"),
+            ("QuantitySpec", "golem_common::schema::QuantitySpec"),
+            ("UnionSpec", "golem_common::schema::UnionSpec"),
+            ("UnionBranch", "golem_common::schema::UnionBranch"),
+            (
+                "DiscriminatorRule",
+                "golem_common::schema::DiscriminatorRule",
+            ),
+            (
+                "FieldDiscriminator",
+                "golem_common::schema::FieldDiscriminator",
+            ),
+            ("SecretSpec", "golem_common::schema::SecretSpec"),
+            (
+                "QuotaTokenSpec",
+                "golem_common::schema::QuotaTokenSpec",
+            ),
+            (
+                "MetadataEnvelope",
+                "golem_common::schema::MetadataEnvelope",
+            ),
+            ("Role", "golem_common::schema::Role"),
+            ("TypeId", "golem_common::schema::TypeId"),
         ],
         &[
             "/v1/components/{component_id}/workers/{agent_name}/connect",

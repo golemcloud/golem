@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod r#enum;
-pub mod helpers;
-pub mod poem;
-pub mod primitives;
-pub mod r#struct;
-pub mod union;
+use golem_schema_derive::PoemSchema;
+
+#[derive(PoemSchema)]
+#[serde(tag = "kind", content = "value", rename_all_fields = "camelCase")]
+enum Bad {
+    A { some_field: u32 },
+}
+
+fn main() {}

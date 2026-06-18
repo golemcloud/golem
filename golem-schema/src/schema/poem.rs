@@ -14,7 +14,7 @@
 
 //! `poem_openapi` support for the schema-native value carriers.
 
-use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+use crate::schema::SchemaValue;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
 use serde_json::Value;
@@ -68,7 +68,8 @@ macro_rules! impl_json_backed_poem_type {
     };
 }
 
-impl_json_backed_poem_type!(SchemaGraph, "SchemaGraph");
-impl_json_backed_poem_type!(SchemaType, "SchemaType");
+// The schema "type side" (`SchemaGraph`, `SchemaType`, `TypedSchemaValue`, …)
+// derives `PoemSchema`, which renders a structured OpenAPI schema. Only the
+// data-dependent value side stays opaque here: a `SchemaValue`'s real schema
+// is determined by its accompanying graph and cannot be statically typed.
 impl_json_backed_poem_type!(SchemaValue, "SchemaValue");
-impl_json_backed_poem_type!(TypedSchemaValue, "TypedSchemaValue");

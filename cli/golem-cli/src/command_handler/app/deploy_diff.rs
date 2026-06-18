@@ -20,8 +20,6 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
-use golem_common::schema::adapters::agent_type_to_schema;
-use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
@@ -32,6 +30,8 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
+use golem_common::schema::adapters::agent_type_to_schema;
+use golem_common::schema::agent::AgentTypeSchema;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
 
@@ -447,19 +447,15 @@ impl DeployDiff {
                 self.diffable_staged_deployment
                     .components
                     .insert(component_name.0.clone(), component.to_diffable()?.into());
-                self.staged_agent_types.insert(
-                    component_name.0,
-                    component.metadata.agent_types().to_vec(),
-                );
+                self.staged_agent_types
+                    .insert(component_name.0, component.metadata.agent_types().to_vec());
             }
             DeployDiffKind::Current => {
                 self.diffable_current_deployment
                     .components
                     .insert(component_name.0.clone(), component.to_diffable()?.into());
-                self.current_agent_types.insert(
-                    component_name.0,
-                    component.metadata.agent_types().to_vec(),
-                );
+                self.current_agent_types
+                    .insert(component_name.0, component.metadata.agent_types().to_vec());
             }
         }
 
