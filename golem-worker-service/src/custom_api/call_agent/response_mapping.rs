@@ -409,7 +409,9 @@ mod tests {
     #[test]
     fn url_binary_response_returns_307_redirect() {
         let schema = binary_output();
-        let invoke_result = Some(unstructured_url_value("https://example.com/blob.bin".into()));
+        let invoke_result = Some(unstructured_url_value(
+            "https://example.com/blob.bin".into(),
+        ));
 
         let result = interpret_agent_response(invoke_result, &schema).unwrap();
 

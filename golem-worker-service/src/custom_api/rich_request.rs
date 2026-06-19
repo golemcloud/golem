@@ -21,9 +21,9 @@ use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, TraceId,
 };
 use golem_common::model::{IdempotencyKey, invocation_context};
+use golem_common::schema::SchemaGraph;
 use golem_common::schema::adapters::{binary_body_restrictions, text_body_restrictions};
 use golem_common::schema::render::from_json_value;
-use golem_common::schema::SchemaGraph;
 use golem_service_base::custom_api::RequestBodySchema;
 use golem_service_base::headers::TraceContextHeaders;
 use http::HeaderMap;

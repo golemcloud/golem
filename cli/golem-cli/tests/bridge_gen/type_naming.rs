@@ -29,9 +29,11 @@ pub(crate) fn test_type_naming<TN: TypeName>(language: GuestLanguage, agent_name
 
 #[test]
 fn test_type_naming_reserved_names_are_not_used() {
-    let agent_type =
-        agent_type_to_schema(&code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"))
-            .expect("Failed to convert fixture agent type to schema");
+    let agent_type = agent_type_to_schema(&code_first_snippets_agent_type(
+        GuestLanguage::Rust,
+        "FooAgent",
+    ))
+    .expect("Failed to convert fixture agent type to schema");
 
     let without_reserved = TypeNaming::<RustTypeName>::new(&agent_type, false).unwrap();
     let without_reserved_names = without_reserved

@@ -288,9 +288,9 @@ fn value_to_tool_content(value: &SchemaValue) -> Option<ToolResult> {
         SchemaValue::Text(TextValuePayload { text, .. }) => Some(ToolResult::Content(
             RawContent::text(text.clone()).no_annotation(),
         )),
-        SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
-            Some(binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")))
-        }
+        SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => Some(
+            binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")),
+        ),
         _ => None,
     }
 }

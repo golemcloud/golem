@@ -388,10 +388,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // schema model (the OpenAPI spec exposes these for 3rd-party
             // consumers; golem-client must alias them to the real Rust types
             // rather than regenerate structs from the typed schemas)
-            (
-                "AgentTypeSchema",
-                "golem_common::schema::AgentTypeSchema",
-            ),
+            ("AgentTypeSchema", "golem_common::schema::AgentTypeSchema"),
             (
                 "RegisteredAgentTypeSchema",
                 "golem_common::schema::RegisteredAgentTypeSchema",
@@ -416,31 +413,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("OutputSchema", "golem_common::schema::OutputSchema"),
             ("NamedField", "golem_common::schema::NamedField"),
             ("FieldSource", "golem_common::schema::FieldSource"),
-            (
-                "AutoInjectedKind",
-                "golem_common::schema::AutoInjectedKind",
-            ),
+            ("AutoInjectedKind", "golem_common::schema::AutoInjectedKind"),
             ("SchemaGraph", "golem_common::schema::SchemaGraph"),
             ("SchemaTypeDef", "golem_common::schema::SchemaTypeDef"),
-            (
-                "TypedSchemaValue",
-                "golem_common::schema::TypedSchemaValue",
-            ),
+            ("TypedSchemaValue", "golem_common::schema::TypedSchemaValue"),
             ("SchemaValue", "golem_common::schema::SchemaValue"),
             ("SchemaType", "golem_common::schema::SchemaType"),
-            (
-                "NamedFieldType",
-                "golem_common::schema::NamedFieldType",
-            ),
-            (
-                "VariantCaseType",
-                "golem_common::schema::VariantCaseType",
-            ),
+            ("NamedFieldType", "golem_common::schema::NamedFieldType"),
+            ("VariantCaseType", "golem_common::schema::VariantCaseType"),
             ("ResultSpec", "golem_common::schema::ResultSpec"),
-            (
-                "TextRestrictions",
-                "golem_common::schema::TextRestrictions",
-            ),
+            ("TextRestrictions", "golem_common::schema::TextRestrictions"),
             (
                 "BinaryRestrictions",
                 "golem_common::schema::BinaryRestrictions",
@@ -448,10 +430,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("PathDirection", "golem_common::schema::PathDirection"),
             ("PathKind", "golem_common::schema::PathKind"),
             ("PathSpec", "golem_common::schema::PathSpec"),
-            (
-                "UrlRestrictions",
-                "golem_common::schema::UrlRestrictions",
-            ),
+            ("UrlRestrictions", "golem_common::schema::UrlRestrictions"),
             ("QuantityValue", "golem_common::schema::QuantityValue"),
             ("QuantitySpec", "golem_common::schema::QuantitySpec"),
             ("UnionSpec", "golem_common::schema::UnionSpec"),
@@ -465,14 +444,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::schema::FieldDiscriminator",
             ),
             ("SecretSpec", "golem_common::schema::SecretSpec"),
-            (
-                "QuotaTokenSpec",
-                "golem_common::schema::QuotaTokenSpec",
-            ),
-            (
-                "MetadataEnvelope",
-                "golem_common::schema::MetadataEnvelope",
-            ),
+            ("QuotaTokenSpec", "golem_common::schema::QuotaTokenSpec"),
+            ("MetadataEnvelope", "golem_common::schema::MetadataEnvelope"),
             ("Role", "golem_common::schema::Role"),
             ("TypeId", "golem_common::schema::TypeId"),
         ],

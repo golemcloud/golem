@@ -557,7 +557,11 @@ fn unstructured_text_restrictions_ignores_unmarked_variant() {
         },
     ]);
     let graph = SchemaGraph::anonymous(ty.clone());
-    assert!(unstructured_text_restrictions(&graph, &ty).unwrap().is_none());
+    assert!(
+        unstructured_text_restrictions(&graph, &ty)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

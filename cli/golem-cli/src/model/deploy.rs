@@ -32,7 +32,6 @@ use golem_common::model::diff::{self, Hashable};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
-use golem_wasm::analysis::AnalysedType as LegacyAnalysedType;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -140,7 +139,7 @@ mod tests {
     };
     use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
     use golem_common::schema::schema_type::SchemaType;
-    use golem_wasm::analysis::analysed_type::str as analysed_str;
+    use golem_common::schema::{SchemaGraph, SchemaValue};
     use uuid::Uuid;
 
     fn schema_str() -> SchemaType {
@@ -149,8 +148,8 @@ mod tests {
 
     fn secret_dto(
         path: &[&str],
-        secret_type: golem_wasm::analysis::AnalysedType,
-        value: Option<serde_json::Value>,
+        secret_type: SchemaGraph,
+        value: Option<SchemaValue>,
     ) -> AgentSecretDto {
         AgentSecretDto {
             id: AgentSecretId(Uuid::nil()),
@@ -217,8 +216,8 @@ mod tests {
             Vec::new(),
             vec![secret_dto(
                 &["superSecret"],
-                analysed_str(),
-                Some(serde_json::json!("same-value")),
+                SchemaGraph::anonymous(SchemaType::string()),
+                Some(SchemaValue::String("same-value".to_string())),
             )],
             Vec::new(),
             Vec::new(),
@@ -256,8 +255,8 @@ mod tests {
             Vec::new(),
             vec![secret_dto(
                 &["existingSecret"],
-                analysed_str(),
-                Some(serde_json::json!("env")),
+                SchemaGraph::anonymous(SchemaType::string()),
+                Some(SchemaValue::String("env".to_string())),
             )],
             Vec::new(),
             Vec::new(),
@@ -435,9 +434,11 @@ pub fn build_environment_setup_plan(
             Ok((
                 secret.path.to_string(),
                 EnvironmentSetupSecretValueDisplay {
-                    secret_type: render_legacy_type_for_language(
+                    secret_type: render_type_for_language(
                         source_language,
                         &secret.secret_type,
+                        &secret.secret_type.root,
+                        true,
                     ),
                     value,
                 },
@@ -1316,21 +1317,6 @@ pub enum UpdateStagedComponentError {
 }
 
 pub type UpdateStagedComponentResult<T> = Result<T, UpdateStagedComponentError>;
-
-/// Boundary helper: render a legacy [`LegacyAnalysedType`] via the schema-typed
-/// type renderer by first adapting it into a [`golem_common::schema::SchemaGraph`].
-fn render_legacy_type_for_language(
-    source_language: &SourceLanguage,
-    typ: &LegacyAnalysedType,
-) -> String {
-    match golem_common::schema::adapters::analysed_type_to_schema_graph(typ) {
-        Ok(graph) => {
-            let root = graph.root.clone();
-            render_type_for_language(source_language, &graph, &root, true)
-        }
-        Err(_) => "<unknown>".to_string(),
-    }
-}
 
 /// Render a schema-native [`SchemaType`](golem_common::schema::schema_type::SchemaType)
 /// for the given language. Config secret value types are inline (no graph

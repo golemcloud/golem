@@ -38,8 +38,8 @@ pub mod analysed_type;
 pub mod data_schema;
 pub mod element_schema;
 pub mod error;
-pub mod untyped;
 pub mod unstructured;
+pub mod untyped;
 pub mod value;
 
 pub use agent::{

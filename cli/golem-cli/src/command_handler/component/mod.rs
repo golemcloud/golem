@@ -52,7 +52,6 @@ use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
-use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
@@ -60,6 +59,7 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::schema::agent::AgentTypeSchema;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;

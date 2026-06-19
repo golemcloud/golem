@@ -27,7 +27,6 @@ use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::component::{
     AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, ArchiveFilePath, PluginInstallation, PluginInstallationAction,
@@ -35,6 +34,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDiff};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::schema::agent::AgentTypeSchema;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;

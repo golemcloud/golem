@@ -30,7 +30,6 @@ use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::schema::AgentTypeSchema;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::deployment::DeploymentRetryPolicyDefault;
@@ -38,6 +37,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
+use golem_common::schema::AgentTypeSchema;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,

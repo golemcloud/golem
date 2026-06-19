@@ -95,13 +95,15 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
             SchemaValue::Variant(VariantValuePayload { case: 1, payload }) => {
                 match payload.map(|payload| *payload) {
                     Some(SchemaValue::Url { url }) => Ok(UnstructuredText::Url(url)),
-                    Some(other) => {
-                        Err(format!("Expected UnstructuredText URL payload, got: {other:?}"))
-                    }
+                    Some(other) => Err(format!(
+                        "Expected UnstructuredText URL payload, got: {other:?}"
+                    )),
                     None => Err("Missing UnstructuredText URL payload".to_string()),
                 }
             }
-            other => Err(format!("Expected UnstructuredText schema value, got: {other:?}")),
+            other => Err(format!(
+                "Expected UnstructuredText schema value, got: {other:?}"
+            )),
         }
     }
 

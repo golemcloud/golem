@@ -227,11 +227,10 @@ fn schema_value_to_resource_content(
                 text: url.to_string(),
                 meta: None,
             }),
-            UnstructuredOutput::Inline(inline) => {
-                value_to_resource_content(inline, uri).ok_or_else(|| {
+            UnstructuredOutput::Inline(inline) => value_to_resource_content(inline, uri)
+                .ok_or_else(|| {
                     internal_error("unstructured `inline` value must be a text or binary value")
-                })
-            }
+                }),
         };
     }
 

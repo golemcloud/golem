@@ -42,15 +42,12 @@ use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation,
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
-use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::render;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
@@ -562,9 +559,11 @@ impl DeploymentContext {
 /// [`DeployValidationError::AgentSecretDefaultTypeMismatch`] when the JSON
 /// payload cannot be decoded into a [`SchemaValue`] for the given graph.
 ///
-/// The deployment request DTO carries legacy-shaped JSON, so parsing goes
-/// through `ValueAndType::parse_with_type` and the result is promoted to
-/// the schema layer via [`value_to_schema_value`].
+/// The deployment request DTO carries ergonomic, human-shaped JSON (raw
+/// scalars, field-named record objects). It is decoded directly into a
+/// schema-native [`SchemaValue`] via [`render::from_json_value`], which both
+/// type-checks the payload against the agent-declared schema and produces the
+/// value in one step.
 fn parse_default_secret_value(
     path: &CanonicalAgentSecretPath,
     default: Option<&&DeploymentAgentSecretDefault>,
@@ -572,26 +571,10 @@ fn parse_default_secret_value(
 ) -> Result<Option<golem_common::schema::schema_value::SchemaValue>, DeployValidationError> {
     default
         .map(|sd| {
-            let legacy_type = schema_graph_to_analysed_type(schema).map_err(|e| {
+            render::from_json_value(schema, &schema.root, &sd.secret_value).map_err(|e| {
                 DeployValidationError::AgentSecretDefaultTypeMismatch {
                     path: path.clone(),
-                    errors: vec![format!(
-                        "Failed to project secret schema to AnalysedType: {e}"
-                    )],
-                }
-            })?;
-            let vat = ValueAndType::parse_with_type(&sd.secret_value, &legacy_type).map_err(
-                |errors| DeployValidationError::AgentSecretDefaultTypeMismatch {
-                    path: path.clone(),
-                    errors,
-                },
-            )?;
-            value_to_schema_value(&vat.value, &legacy_type).map_err(|e| {
-                DeployValidationError::AgentSecretDefaultTypeMismatch {
-                    path: path.clone(),
-                    errors: vec![format!(
-                        "Failed to promote secret value to schema layer: {e}"
-                    )],
+                    errors: vec![e.to_string()],
                 }
             })
         })

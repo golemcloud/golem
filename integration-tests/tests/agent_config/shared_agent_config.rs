@@ -20,11 +20,10 @@ use golem_client::api::{RegistryServiceClient, WorkerError};
 use golem_client::model::AgentSecretCreation;
 use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::analysis::analysed_type;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
 use serde_json::json;
@@ -132,7 +131,7 @@ async fn agent_reads_secret_updated_from_default(
             &env.id.0,
             &AgentSecretCreation {
                 path: AgentSecretPath(vec!["secret".into()]),
-                secret_type: analysed_type::str(),
+                secret_type: SchemaGraph::anonymous(SchemaType::string()),
                 secret_value: None,
             },
         )

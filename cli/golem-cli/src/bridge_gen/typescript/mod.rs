@@ -408,7 +408,11 @@ impl TypeScriptBridgeGenerator {
         } else {
             encode_output.write_line("const __json = await readStdin();");
             encode_output.write_line("const __result: base.SchemaValue =");
-            self.write_encode_output_value(&mut encode_output, &method_def.output_schema, "__json")?;
+            self.write_encode_output_value(
+                &mut encode_output,
+                &method_def.output_schema,
+                "__json",
+            )?;
             encode_output.write_line("console.log(JSON.stringify(__result));");
         }
         Ok(())
@@ -1434,7 +1438,8 @@ impl TypeScriptBridgeGenerator {
                 Self::text_restriction_codes(restrictions)
             ));
         }
-        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)? {
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
             return Ok(format!(
                 "base.UnstructuredBinary.fromSchemaValue('value', {value}, [{}])",
                 Self::binary_restriction_mimes(restrictions)
@@ -1597,7 +1602,9 @@ impl TypeScriptBridgeGenerator {
                     )
                 }
             }
-            SchemaType::Map { key, value: val, .. } => {
+            SchemaType::Map {
+                key, value: val, ..
+            } => {
                 let key_decode = self.decode_schema_value("entry[0]", key)?;
                 let val_decode = self.decode_schema_value("entry[1]", val)?;
                 format!(
@@ -1809,7 +1816,9 @@ impl TypeScriptBridgeGenerator {
                     "{{ kind: 'fixed-list', value: {{ elements: Array.from({value} as Iterable<any>).map((item: any) => ({inner_encode})) }} }}"
                 )
             }
-            SchemaType::Map { key, value: val, .. } => {
+            SchemaType::Map {
+                key, value: val, ..
+            } => {
                 let key_encode = self.encode_schema_value("entry[0]", key)?;
                 let val_encode = self.encode_schema_value("entry[1]", val)?;
                 format!(

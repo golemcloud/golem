@@ -219,7 +219,8 @@ impl RustBridgeGenerator {
                 .iter()
                 .map(|s| quote! { #s.to_string() })
                 .collect();
-            let value_encode = self.emit_encode_expr(quote! { value }, &config.value_type, false, 0)?;
+            let value_encode =
+                self.emit_encode_expr(quote! { value }, &config.value_type, false, 0)?;
             config_encode_stmts.push(quote! {
                 if let Some(value) = #param_name {
                     let __config_value: golem_common::schema::SchemaValue = (|| -> Result<golem_common::schema::SchemaValue, String> {
@@ -442,8 +443,8 @@ impl RustBridgeGenerator {
     fn rust_input(&self, input: &InputSchema) -> anyhow::Result<RustInput> {
         let fields = user_supplied_fields(input);
         if let [field] = fields.as_slice() {
-            if let Some(cases) =
-                multimodal_variant_cases(self.type_naming.graph(), &field.schema)?.map(|c| c.to_vec())
+            if let Some(cases) = multimodal_variant_cases(self.type_naming.graph(), &field.schema)?
+                .map(|c| c.to_vec())
             {
                 return Ok(RustInput::Multimodal(self.multimodal_pairs(&cases)?));
             }
@@ -720,7 +721,9 @@ impl RustBridgeGenerator {
     fn output_decode_expr(&mut self, output: &OutputSchema) -> anyhow::Result<TokenStream> {
         match self.rust_output(output)? {
             RustOutput::Unit => Ok(quote! { Ok(()) }),
-            RustOutput::Single(schema) => self.emit_decode_expr(quote! { __value }, &schema, false, 0),
+            RustOutput::Single(schema) => {
+                self.emit_decode_expr(quote! { __value }, &schema, false, 0)
+            }
             RustOutput::Multimodal(cases) => {
                 let decode = self.multimodal_list_decode(&cases, quote! { __value })?;
                 Ok(decode)
@@ -1320,7 +1323,9 @@ impl RustBridgeGenerator {
                         .map(|__elems| golem_common::schema::SchemaValue::List { elements: __elems })
                 }
             }
-            SchemaType::FixedList { element, length, .. } => {
+            SchemaType::FixedList {
+                element, length, ..
+            } => {
                 let inner_enc = self.emit_encode_expr(quote! { #e }, element, false, next)?;
                 let len = *length as usize;
                 quote! {
@@ -1524,7 +1529,9 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::FixedList { element, length, .. } => {
+            SchemaType::FixedList {
+                element, length, ..
+            } => {
                 let inner_dec = self.emit_decode_expr(quote! { #e }, element, false, next)?;
                 let len = *length as usize;
                 quote! {
@@ -1814,7 +1821,8 @@ impl RustBridgeGenerator {
             name.clone()
         } else {
             let name = format!("Languages{}", self.generated_language_enums.len());
-            self.generated_language_enums.push((languages, name.clone()));
+            self.generated_language_enums
+                .push((languages, name.clone()));
             name
         };
         let ident = Ident::new(&name, Span::call_site());
@@ -1831,7 +1839,8 @@ impl RustBridgeGenerator {
             name.clone()
         } else {
             let name = format!("Mimetypes{}", self.generated_mimetypes_enums.len());
-            self.generated_mimetypes_enums.push((mime_types, name.clone()));
+            self.generated_mimetypes_enums
+                .push((mime_types, name.clone()));
             name
         };
         let ident = Ident::new(&name, Span::call_site());

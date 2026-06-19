@@ -175,7 +175,8 @@ pub fn unstructured_binary_restrictions<'a>(
     };
     let [inline, url] = cases.as_slice() else {
         return Err(SchemaAdapterError::LossySchemaType(
-            "Role::UnstructuredBinary variant must have exactly an `inline` and a `url` case".into(),
+            "Role::UnstructuredBinary variant must have exactly an `inline` and a `url` case"
+                .into(),
         ));
     };
     if inline.name != INLINE_CASE_NAME || url.name != URL_CASE_NAME {

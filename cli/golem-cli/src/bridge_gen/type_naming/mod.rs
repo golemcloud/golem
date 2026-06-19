@@ -262,9 +262,7 @@ impl<TN: TypeName> TypeNaming<TN> {
         // A ref to a def already on the current DFS path closes a cycle:
         // record it as recursive, register its name, and stop — descending
         // again would loop forever.
-        let is_back_edge = ref_id
-            .as_ref()
-            .is_some_and(|id| self.visiting.contains(id));
+        let is_back_edge = ref_id.as_ref().is_some_and(|id| self.visiting.contains(id));
 
         let (display_name, display_owner, resolved) = self.resolve_for_walk_owned(typ)?;
         let resolved = &resolved;
