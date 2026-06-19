@@ -79,6 +79,7 @@ use golem_test_framework::benchmark::{
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -289,6 +290,9 @@ struct AttemptOutcome {
     /// a normal application error or a timeout), which the ceiling detector
     /// treats as the catastrophic connection-lost condition.
     connection_lost: bool,
+    /// True if the attempt was rejected with an overloaded (HTTP 503) response.
+    /// A sustained run of these is the catastrophic overloaded condition.
+    overloaded: bool,
 }
 
 /// Per-attempt client timeout. Starts at 30s (the hard-ceiling threshold);
@@ -337,6 +341,15 @@ fn is_connection_error(err: &anyhow::Error) -> bool {
         || msg.contains("timed out")
 }
 
+/// Classifies an invocation error as an overloaded (HTTP 503) response: the
+/// executor accepted the connection but rejected the request because it cannot
+/// admit more work. A handful are tolerable; a sustained run is the
+/// catastrophic overloaded condition.
+fn is_overloaded_error(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:?}").to_lowercase();
+    msg.contains("status 503") || msg.contains("503 service unavailable")
+}
+
 /// Invokes one agent method, measuring wall-clock latency and classifying the
 /// outcome. Unlike the cloud-perf `invoke_and_await_agent` helper this does not
 /// retry — the ceiling detector, not a retry loop, decides when a cell is done.
@@ -360,15 +373,18 @@ async fn timed_invoke(
         Ok(Ok(_)) => AttemptOutcome {
             latency,
             connection_lost: false,
+            overloaded: false,
         },
         Ok(Err(e)) => {
-            let connection_lost = is_connection_error(&e);
-            if !connection_lost {
+            let overloaded = is_overloaded_error(&e);
+            let connection_lost = !overloaded && is_connection_error(&e);
+            if !connection_lost && !overloaded {
                 warn!("density: invocation error (non-connection): {e:?}");
             }
             AttemptOutcome {
                 latency,
                 connection_lost,
+                overloaded,
             }
         }
         Err(_) => {
@@ -377,6 +393,7 @@ async fn timed_invoke(
             AttemptOutcome {
                 latency: timeout,
                 connection_lost: false,
+                overloaded: false,
             }
         }
     }
@@ -396,7 +413,9 @@ mod keys {
     /// Highest agent count reached before the cell stopped.
     pub const MAX_AGENTS_REACHED: &str = "max-agents-reached";
 
-    /// Invoke-latency distribution key (create/invoke round-trip times).
+    /// Invoke-latency distribution key prefix (create/invoke round-trip times).
+    /// The emitted key is suffixed with `@<zero-padded agent count>` so each
+    /// ramp step gets its own distribution.
     pub const INVOKE_LATENCY: &str = "invoke-latency";
 
     // Scenario-4 (resume-under-saturation) latencies, in milliseconds.
@@ -416,9 +435,11 @@ struct CellOutcome {
     catastrophic_ceiling_agents: Option<u32>,
     terminated_reason: TerminatedReason,
     max_agents_reached: u32,
-    /// Every create/invoke latency the cell measured, surfaced as an
-    /// invoke-latency percentile distribution (avg/min/max/p50/p90/p95/p99).
-    invoke_latencies: Vec<Duration>,
+    /// Invoke latencies bucketed by the ramp-step agent count at which they were
+    /// measured. Each bucket is surfaced as its own invoke-latency distribution
+    /// (avg/min/max/p50/p90/p95/p99) so latency can be read per ramp step rather
+    /// than collapsed across the whole cell.
+    invoke_latencies: BTreeMap<u32, Vec<Duration>>,
     /// Scenario-4 resume/create latency samples (milliseconds).
     resume_existing_ms: Vec<f64>,
     create_fresh_ms: Vec<f64>,
@@ -435,7 +456,7 @@ impl Default for CellOutcome {
             // sharing-mode upper bound.
             terminated_reason: TerminatedReason::UpperBoundHit,
             max_agents_reached: 0,
-            invoke_latencies: Vec::new(),
+            invoke_latencies: BTreeMap::new(),
             resume_existing_ms: Vec::new(),
             create_fresh_ms: Vec::new(),
         }
@@ -478,10 +499,16 @@ impl CellOutcome {
             self.max_agents_reached as u64,
         );
 
-        // Invoke-latency distribution across every create/invoke the cell made,
-        // rendered as the same avg/min/max/p50/p90/p95/p99 table as cloud-perf.
-        for latency in &self.invoke_latencies {
-            recorder.duration(&ResultKey::primary(keys::INVOKE_LATENCY), *latency);
+        // Invoke-latency distribution per ramp step, each rendered as the same
+        // avg/min/max/p50/p90/p95/p99 table as cloud-perf. Keying per step (the
+        // agent count reached) instead of collapsing every step into one
+        // distribution makes the per-step latency readable. The count is
+        // zero-padded so the keys sort numerically.
+        for (agents, latencies) in &self.invoke_latencies {
+            let key = format!("{}@{agents:06}", keys::INVOKE_LATENCY);
+            for latency in latencies {
+                recorder.duration(&ResultKey::primary(&key), *latency);
+            }
         }
 
         if !self.resume_existing_ms.is_empty() {
@@ -827,12 +854,17 @@ async fn run_ramp_cell(
             }
 
             for attempt in &creates {
-                outcome.invoke_latencies.push(attempt.latency);
+                outcome
+                    .invoke_latencies
+                    .entry(target)
+                    .or_default()
+                    .push(attempt.latency);
                 let sample = Sample {
                     latency: attempt.latency,
                     coord: SampleCoord::Agents(target),
                     pod_restart_count,
                     connection_alive: batch_connection_alive,
+                    overloaded: attempt.overloaded,
                     snapshot: CrossAxisSnapshot::default(),
                     queue_depth: None,
                 };
@@ -896,12 +928,17 @@ async fn run_ramp_cell(
             }
 
             for (_, attempt) in &ordered {
-                outcome.invoke_latencies.push(attempt.latency);
+                outcome
+                    .invoke_latencies
+                    .entry(target)
+                    .or_default()
+                    .push(attempt.latency);
                 let sample = Sample {
                     latency: attempt.latency,
                     coord: SampleCoord::Agents(target),
                     pod_restart_count,
                     connection_alive: round_connection_alive,
+                    overloaded: attempt.overloaded,
                     snapshot: CrossAxisSnapshot::default(),
                     queue_depth: None,
                 };
@@ -1002,12 +1039,17 @@ async fn run_resume_cell(
 
         detector.set_elapsed_secs(started.elapsed().as_secs_f64());
         let pod_restart_count = probe.pod_restart_count().await;
-        outcome.invoke_latencies.push(attempt.latency);
+        outcome
+            .invoke_latencies
+            .entry(index + 1)
+            .or_default()
+            .push(attempt.latency);
         let sample = Sample {
             latency: attempt.latency,
             coord: SampleCoord::Agents(index + 1),
             pod_restart_count,
             connection_alive: !attempt.connection_lost,
+            overloaded: attempt.overloaded,
             snapshot: CrossAxisSnapshot::default(),
             queue_depth: None,
         };
@@ -1057,12 +1099,17 @@ async fn run_resume_cell(
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
             let pod_restart_count = probe.pod_restart_count().await;
             let snapshot = CrossAxisSnapshot::default();
-            outcome.invoke_latencies.push(resume.latency);
+            outcome
+                .invoke_latencies
+                .entry(target)
+                .or_default()
+                .push(resume.latency);
             let sample = Sample {
                 latency: resume.latency,
                 coord: SampleCoord::Agents(target),
                 pod_restart_count,
                 connection_alive: !resume.connection_lost,
+                overloaded: resume.overloaded,
                 snapshot: snapshot.clone(),
                 queue_depth: None,
             };
@@ -1091,12 +1138,17 @@ async fn run_resume_cell(
             outcome.max_agents_reached = next_fresh;
 
             detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-            outcome.invoke_latencies.push(create.latency);
+            outcome
+                .invoke_latencies
+                .entry(target)
+                .or_default()
+                .push(create.latency);
             let sample = Sample {
                 latency: create.latency,
                 coord: SampleCoord::Agents(target),
                 pod_restart_count: probe.pod_restart_count().await,
                 connection_alive: !create.connection_lost,
+                overloaded: create.overloaded,
                 snapshot,
                 queue_depth: None,
             };

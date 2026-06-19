@@ -37,9 +37,9 @@
 //!   [`CeilingEvent::HardCrossed`] once and raises an
 //!   escalate-timeout-to-5-minutes signal; flag set; state stays `Measuring`.
 //! - Catastrophic: any of (5-minute timeout fires; pod-restart count increased;
-//!   connection lost; schedule-only queue-depth has not decreased for 60
-//!   consecutive seconds). Transitions to `Catastrophic`; emits
-//!   [`CeilingEvent::Catastrophic`].
+//!   connection lost; a sustained run of overloaded (503) responses; schedule-only
+//!   queue-depth has not decreased for 60 consecutive seconds). Transitions to
+//!   `Catastrophic`; emits [`CeilingEvent::Catastrophic`].
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -74,6 +74,13 @@ pub const ESCALATED_TIMEOUT: Duration = Duration::from_secs(300);
 /// before the queue-depth-no-drain catastrophic condition fires.
 pub const QUEUE_NO_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How many consecutive overloaded (HTTP 503) responses constitute the platform
+/// shedding load rather than an isolated blip. The executor returns 503 when it
+/// cannot admit more work; a handful is tolerable, but a sustained run of them
+/// means the platform can no longer serve the offered load — the overloaded
+/// catastrophic condition.
+pub const OVERLOAD_RUN_LENGTH: u32 = 200;
+
 /// Why a cell stopped. The integer encoding is part of the result schema
 /// (golemcloud/golem#3516) and must not be reordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +91,8 @@ pub enum TerminatedReason {
     UpperBoundHit = 4,
     /// Schedule-density only.
     LagRunaway = 5,
+    /// The platform shed load: a sustained run of HTTP 503 responses.
+    Overloaded = 6,
 }
 
 impl TerminatedReason {
@@ -134,6 +143,8 @@ pub struct Sample {
     pub pod_restart_count: u64,
     /// Whether the connection to the executor is still alive.
     pub connection_alive: bool,
+    /// Whether this attempt was rejected with an overloaded (HTTP 503) response.
+    pub overloaded: bool,
     /// Most recent cross-axis snapshot from the metrics scrape.
     pub snapshot: CrossAxisSnapshot,
     /// Schedule-density only: scheduler queue depth observed for this sample.
@@ -229,6 +240,9 @@ pub struct CeilingDetector {
     queue_tracker: QueueDrainTracker,
     /// Monotonic seconds since cell start, for the queue-no-drain timer.
     elapsed_secs: f64,
+    /// Length of the current uninterrupted run of overloaded responses; any
+    /// non-overloaded sample resets it.
+    overload_run: u32,
 }
 
 impl Default for CeilingDetector {
@@ -246,6 +260,7 @@ impl CeilingDetector {
             rolling: VecDeque::with_capacity(ROLLING_WINDOW),
             queue_tracker: QueueDrainTracker::default(),
             elapsed_secs: 0.0,
+            overload_run: 0,
         }
     }
 
@@ -311,6 +326,17 @@ impl CeilingDetector {
         }
         if sample.pod_restart_count > 0 {
             return Some(TerminatedReason::PodRestart);
+        }
+        // A sustained run of overloaded (503) responses means the platform is
+        // shedding the offered load. A handful is tolerable; OVERLOAD_RUN_LENGTH
+        // consecutive ones is catastrophic.
+        if sample.overloaded {
+            self.overload_run += 1;
+            if self.overload_run >= OVERLOAD_RUN_LENGTH {
+                return Some(TerminatedReason::Overloaded);
+            }
+        } else {
+            self.overload_run = 0;
         }
         // The escalated 5-minute timeout firing is modelled as a sample whose
         // latency reaches it. Only meaningful once the hard ceiling escalated
@@ -433,6 +459,7 @@ mod tests {
             coord: SampleCoord::Agents(agents),
             pod_restart_count: 0,
             connection_alive: true,
+            overloaded: false,
             snapshot: CrossAxisSnapshot::default(),
             queue_depth: None,
         }
@@ -677,5 +704,46 @@ mod tests {
         assert_eq!(TerminatedReason::ConnectionLost.code(), 3);
         assert_eq!(TerminatedReason::UpperBoundHit.code(), 4);
         assert_eq!(TerminatedReason::LagRunaway.code(), 5);
+        assert_eq!(TerminatedReason::Overloaded.code(), 6);
+    }
+
+    #[test]
+    fn occasional_overloads_do_not_fire() {
+        let mut d = CeilingDetector::new();
+        feed_baseline(&mut d, ms(10));
+        // A short run of 503s, broken by a healthy sample, never reaches the
+        // run length and resets each time.
+        for i in 0..(OVERLOAD_RUN_LENGTH * 4) {
+            let mut s = ok_sample(ms(10), 700 + i);
+            s.overloaded = i % (OVERLOAD_RUN_LENGTH / 2) != 0;
+            assert!(d.observe(&s).iter().all(|e| !matches!(
+                e,
+                CeilingEvent::Catastrophic {
+                    reason: TerminatedReason::Overloaded,
+                    ..
+                }
+            )));
+        }
+        assert!(!d.is_terminal());
+    }
+
+    #[test]
+    fn catastrophic_fires_on_sustained_overload() {
+        let mut d = CeilingDetector::new();
+        feed_baseline(&mut d, ms(10));
+        let mut events = Vec::new();
+        for i in 0..OVERLOAD_RUN_LENGTH {
+            let mut s = ok_sample(ms(10), 700 + i);
+            s.overloaded = true;
+            events = d.observe(&s);
+        }
+        assert!(matches!(
+            events.as_slice(),
+            [CeilingEvent::Catastrophic {
+                reason: TerminatedReason::Overloaded,
+                ..
+            }]
+        ));
+        assert!(d.is_terminal());
     }
 }
