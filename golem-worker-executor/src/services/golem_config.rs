@@ -79,9 +79,9 @@ pub struct GolemConfig {
     pub max_websocket_connections: usize,
     pub http_address: String,
     pub http_port: u16,
-    /// How often tokio runtime metrics are sampled from the runtime and pushed
-    /// into the metrics recorder exposed on `/metrics`. Prometheus scrapes the
-    /// rendered values independently; this is the in-process resolution.
+    /// How often runtime/allocator metrics are sampled and refreshed into the
+    /// gauges exposed on `/metrics`. Prometheus scrapes the rendered values
+    /// independently; this is the in-process resolution.
     #[serde(with = "humantime_serde")]
     pub runtime_metrics_sampling_interval: Duration,
 }

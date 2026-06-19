@@ -860,10 +860,14 @@ jobs:
           - platform: linux/amd64
             name: linux/amd64
             target: x86_64-unknown-linux-gnu
+            rustflags_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-cpu=x86-64-v3"
           - platform: linux/arm64
             name: linux/arm64
             target: aarch64-unknown-linux-gnu
             cross: true
+            rustflags_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-feature=+neon,+crc,+lse,+aes,+sha2,+dotprod"
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - uses: actions/checkout@v5
@@ -878,6 +882,13 @@ jobs:
         run: |
           platform=${{ matrix.platform.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          # Target-scoped rustflags pin the instruction-set baseline for the
+          # published images: x86-64-v3 on amd64 and Neoverse N1's stable
+          # optional target features on arm64. The per-target
+          # CARGO_TARGET_*_RUSTFLAGS form is used because plain RUSTFLAGS is
+          # ignored when cross-compiling; CARGO_-prefixed vars are also passed
+          # through into the cross container automatically.
+          echo "${{ matrix.platform.rustflags_env }}=${{ matrix.platform.rustflags }}" >> $GITHUB_ENV
 
       - run: cargo install cross
         if: ${{ matrix.platform.cross }}

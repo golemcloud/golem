@@ -113,6 +113,142 @@ pub mod component {
     }
 }
 
+pub mod runtime {
+    use std::time::Duration;
+
+    use tokio::runtime::Handle;
+    use tokio::task::JoinSet;
+
+    /// Spawns a background task that periodically samples mimalloc allocator
+    /// memory accounting into the Prometheus gauges defined in
+    /// [`crate::metrics::mimalloc`].
+    ///
+    /// `sampling_interval` controls how often the gauges are refreshed from
+    /// `mi_process_info`; Prometheus scrapes the rendered values independently.
+    ///
+    /// The gauges live in the default `prometheus` registry, so they are
+    /// rendered on the executor's existing `/metrics` endpoint without any
+    /// additional wiring.
+    pub fn install_runtime_metrics(
+        runtime: Handle,
+        sampling_interval: Duration,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) {
+        join_set.spawn_on(
+            async move {
+                let mut interval = tokio::time::interval(sampling_interval);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    crate::metrics::mimalloc::sample();
+                }
+            },
+            &runtime,
+        );
+    }
+}
+
+/// mimalloc allocator memory accounting, sampled into Prometheus gauges.
+///
+/// `mi_process_info` reports both the resident set (touched pages actually in
+/// physical RAM) and the committed set (pages mimalloc has obtained from the OS
+/// and not yet returned). On the containerised Linux deployment the cgroup's
+/// `memory.current` — which the admission gate reads — charges the committed
+/// set, so a large `committed - resident` gap means mimalloc is holding pages
+/// it could return, inflating the gate's measured usage. Comparing committed vs
+/// resident distinguishes allocator retention/fragmentation (commit >> rss)
+/// from genuinely live memory (commit ~= rss).
+pub mod mimalloc {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    // `libmimalloc-sys` does not re-export `mi_process_info`, but the symbol is
+    // present in the linked static library, so we declare it ourselves. All
+    // out-parameters are `size_t` (bytes for the memory fields, milliseconds for
+    // the timing fields).
+    unsafe extern "C" {
+        fn mi_process_info(
+            elapsed_msecs: *mut usize,
+            user_msecs: *mut usize,
+            system_msecs: *mut usize,
+            current_rss: *mut usize,
+            peak_rss: *mut usize,
+            current_commit: *mut usize,
+            peak_commit: *mut usize,
+            page_faults: *mut usize,
+        );
+    }
+
+    lazy_static! {
+        static ref MIMALLOC_CURRENT_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_current_rss_bytes",
+            "mimalloc-reported resident set size: pages currently touched and in physical RAM",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref MIMALLOC_PEAK_RSS_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_peak_rss_bytes",
+            "mimalloc-reported peak resident set size since process start",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref MIMALLOC_CURRENT_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_current_commit_bytes",
+            "mimalloc-reported committed memory: pages obtained from the OS and not yet returned (what the cgroup charges as memory.current)",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref MIMALLOC_PEAK_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_mimalloc_peak_commit_bytes",
+            "mimalloc-reported peak committed memory since process start",
+            &["executor_id"]
+        )
+        .unwrap();
+    }
+
+    /// Reads `mi_process_info` and updates the mimalloc memory gauges. Cheap and
+    /// allocation-free; intended to be called from a periodic sampling loop.
+    pub fn sample() {
+        let mut elapsed = 0usize;
+        let mut user = 0usize;
+        let mut system = 0usize;
+        let mut current_rss = 0usize;
+        let mut peak_rss = 0usize;
+        let mut current_commit = 0usize;
+        let mut peak_commit = 0usize;
+        let mut page_faults = 0usize;
+
+        // Safety: all pointers are valid, non-overlapping stack locations of the
+        // expected `size_t` type; mi_process_info only writes through them.
+        unsafe {
+            mi_process_info(
+                &mut elapsed,
+                &mut user,
+                &mut system,
+                &mut current_rss,
+                &mut peak_rss,
+                &mut current_commit,
+                &mut peak_commit,
+                &mut page_faults,
+            );
+        }
+
+        let id = crate::identity::executor_id();
+        MIMALLOC_CURRENT_RSS_BYTES
+            .with_label_values(&[id])
+            .set(current_rss as f64);
+        MIMALLOC_PEAK_RSS_BYTES
+            .with_label_values(&[id])
+            .set(peak_rss as f64);
+        MIMALLOC_CURRENT_COMMIT_BYTES
+            .with_label_values(&[id])
+            .set(current_commit as f64);
+        MIMALLOC_PEAK_COMMIT_BYTES
+            .with_label_values(&[id])
+            .set(peak_commit as f64);
+    }
+}
+
 pub mod events {
     use lazy_static::lazy_static;
     use prometheus::*;
