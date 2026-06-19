@@ -52,6 +52,12 @@ pub struct Cache<K, PV, V, E> {
     /// can deterministically interleave a concurrent insert at that point.
     #[cfg(test)]
     evict_interleave: Arc<Mutex<Option<EvictInterleaveHook>>>,
+    /// Test-only seam: when set, awaited inside the full-cache eviction after
+    /// snapshotting the entries to keep but before retaining the map, so a test
+    /// can deterministically interleave concurrent evictions with stale
+    /// snapshots.
+    #[cfg(test)]
+    evict_before_retain_interleave: Arc<Mutex<Option<EvictInterleaveHook>>>,
 }
 
 #[cfg(test)]
@@ -151,6 +157,8 @@ impl<
             name,
             #[cfg(test)]
             evict_interleave: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            evict_before_retain_interleave: Arc::new(Mutex::new(None)),
         };
 
         if let Some(capacity) = capacity {
@@ -199,6 +207,19 @@ impl<
     #[cfg(test)]
     fn clear_evict_interleave(&self) {
         *self.evict_interleave.lock().unwrap() = None;
+    }
+
+    /// Test-only: installs a hook awaited inside full-cache eviction after the
+    /// surviving entry set is computed but before the map is retained.
+    #[cfg(test)]
+    fn set_evict_before_retain_interleave(&self, hook: EvictInterleaveHook) {
+        *self.evict_before_retain_interleave.lock().unwrap() = Some(hook);
+    }
+
+    /// Test-only: removes the pre-retain eviction interleave hook.
+    #[cfg(test)]
+    fn clear_evict_before_retain_interleave(&self) {
+        *self.evict_before_retain_interleave.lock().unwrap() = None;
     }
 
     /// Tries to get a cached value for the given key. If the value is missing or is pending, it returns None.
@@ -616,12 +637,29 @@ impl<
             keep = keep.min(capacity);
         }
         cached.truncate(keep);
+
+        #[cfg(test)]
+        {
+            let hook = self.evict_before_retain_interleave.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        }
+
         let keys_to_keep: HashSet<&K> = cached.iter().map(|(k, _)| k).collect();
 
+        let removed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let removed_in_retain = removed.clone();
         self.state
             .items
             .retain_async(|k, v| match v {
-                Item::Cached { .. } => keys_to_keep.contains(k),
+                Item::Cached { .. } => {
+                    let keep = keys_to_keep.contains(k);
+                    if !keep {
+                        removed_in_retain.fetch_add(1, Ordering::Relaxed);
+                    }
+                    keep
+                }
                 Item::Pending { .. } => true,
             })
             .await;
@@ -637,11 +675,12 @@ impl<
             }
         }
 
-        // Decrement by the number of cached entries actually removed rather than
-        // overwriting the counter. A blind store would clobber the increments of
-        // inserts that completed concurrently with this eviction, drifting the
-        // size below the real count and disabling the capacity trigger.
-        let removed = cached_len.saturating_sub(keep);
+        // Decrement by the number of cached entries this retain actually
+        // removed rather than by the stale snapshot's expected removal count.
+        // A blind store would clobber concurrent insert increments, and a
+        // snapshot-derived decrement would double-subtract when concurrent
+        // evictions try to remove the same entries.
+        let removed = removed.load(Ordering::Relaxed);
         let new_count = self
             .state
             .count
@@ -1393,6 +1432,74 @@ mod tests {
         );
         assert!(cache.contains_key(&2).await);
         assert!(cache.contains_key(&3).await);
+    }
+
+    #[test]
+    async fn concurrent_lru_evictions_subtract_only_actual_removals() {
+        let capacity = 4usize;
+        let cache = bounded_cache(capacity, "concurrent_lru_evictions");
+
+        for i in 0..6u64 {
+            cache
+                .state
+                .items
+                .upsert_async(
+                    i,
+                    Item::Cached {
+                        value: i,
+                        last_access: Instant::now(),
+                    },
+                )
+                .await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        cache.state.count.store(6, Ordering::Relaxed);
+
+        let arrived = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let arrived_for_hook = arrived.clone();
+        cache.set_evict_before_retain_interleave(Arc::new(move || {
+            let arrived = arrived_for_hook.clone();
+            Box::pin(async move {
+                arrived.fetch_add(1, Ordering::SeqCst);
+                for _ in 0..1000 {
+                    if arrived.load(Ordering::SeqCst) >= 2 {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                panic!("concurrent evictions did not both reach the pre-retain seam");
+            })
+        }));
+
+        let evictions = vec![
+            {
+                let cache = cache.clone();
+                tokio::spawn(async move { cache.evict().await })
+            },
+            {
+                let cache = cache.clone();
+                tokio::spawn(async move { cache.evict().await })
+            },
+        ];
+
+        tokio::time::timeout(Duration::from_secs(5), join_all(evictions))
+            .await
+            .expect("concurrent evictions timed out");
+        cache.clear_evict_before_retain_interleave();
+
+        assert_eq!(cache.iter().await.len(), capacity);
+
+        cache
+            .get_or_insert_simple(&100u64, || async move { Ok(100) })
+            .await
+            .unwrap();
+
+        let size = cache.iter().await.len();
+        assert!(
+            size <= capacity,
+            "cache with capacity {capacity} grew to {size} cached entries after concurrent evictions; \
+             count drifted below the real cached population"
+        );
     }
 
     #[test]
