@@ -1079,6 +1079,7 @@ pub async fn bootstrap_and_run_worker_executor<
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         golem_config.http_addr()?,
         prometheus_registry,
+        golem_config.runtime_metrics_sampling_interval,
         "Worker executor is running",
         join_set,
     )

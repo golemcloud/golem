@@ -34,6 +34,8 @@ pub struct ShardManagerConfig {
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub http_port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
     pub grpc: GrpcApiConfig,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
@@ -62,6 +64,11 @@ impl SafeDisplay for ShardManagerConfig {
             self.health_check.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
 
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
@@ -101,6 +108,7 @@ impl Default for ShardManagerConfig {
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
             http_port: 8081,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             number_of_shards: 1024,
             rebalance_threshold: 0.1,

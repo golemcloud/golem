@@ -51,6 +51,7 @@ humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 indexmap.workspace = true
 lazy_static = { workspace = true }
+metrics-prometheus = { workspace = true }
 openidconnect.workspace = true
 pin-project = { workspace = true }
 poem = { workspace = true }
@@ -79,6 +80,7 @@ strum_macros = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-metrics = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true, features = [ "_tls-any" ] }
