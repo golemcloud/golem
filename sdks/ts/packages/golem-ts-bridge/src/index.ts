@@ -92,7 +92,8 @@ export type SchemaValue =
   | { kind: 'option'; value: { inner?: SchemaValue } }
   | { kind: 'result'; value: { tag: 'ok' | 'err'; value?: SchemaValue } }
   | { kind: 'text'; value: TextValuePayload }
-  | { kind: 'binary'; value: BinaryValuePayload };
+  | { kind: 'binary'; value: BinaryValuePayload }
+  | { kind: 'url'; value: { url: string } };
 
 /**
  * A self-contained schema graph paired with a value (the server's Rust
@@ -559,28 +560,58 @@ type LanguageCode = string;
  *
  * ```
  */
-export type UnstructuredText<LC extends LanguageCode[] = []> = {
-  tag: 'inline';
-  val: string;
-  languageCode?: LC[number];
-};
+export type UnstructuredText<LC extends LanguageCode[] = []> =
+  | {
+      tag: 'url';
+      val: string;
+    }
+  | {
+      tag: 'inline';
+      val: string;
+      languageCode?: LC[number];
+    };
+
+// Variant case indices of the canonical role-marked unstructured wrapper:
+// `variant { inline: text/binary, url: url }`.
+const UNSTRUCTURED_INLINE_CASE = 0;
+const UNSTRUCTURED_URL_CASE = 1;
 
 export const UnstructuredText = {
   /**
-   * Decodes a schema-native `text` value into an `UnstructuredText`, validating
-   * the language tag against `allowedCodes` when the agent declares a fixed set.
+   * Decodes a schema-native unstructured-text `variant { inline, url }` value
+   * into an `UnstructuredText`, validating the language tag against
+   * `allowedCodes` when the agent declares a fixed set.
    */
   fromSchemaValue<LC extends string[] = []>(
     parameterName: string,
     value: SchemaValue,
     allowedCodes: string[],
   ): UnstructuredText<LC> {
-    if (value.kind !== 'text') {
+    if (value.kind !== 'variant') {
       throw new Error(
-        `Invalid value for parameter ${parameterName}. Expected a 'text' value, got '${value.kind}'`,
+        `Invalid value for parameter ${parameterName}. Expected an unstructured-text 'variant' value, got '${value.kind}'`,
       );
     }
-    const language = value.value.language;
+    const { case: caseIndex, payload } = value.value;
+    if (caseIndex === UNSTRUCTURED_URL_CASE) {
+      if (!payload || payload.kind !== 'url') {
+        throw new Error(
+          `Invalid value for parameter ${parameterName}. Expected a 'url' payload for the unstructured-text url case`,
+        );
+      }
+      return { tag: 'url', val: payload.value.url } as UnstructuredText<LC>;
+    }
+    if (caseIndex !== UNSTRUCTURED_INLINE_CASE) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Unknown unstructured-text variant case ${caseIndex}`,
+      );
+    }
+    if (!payload || payload.kind !== 'text') {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Expected a 'text' payload for the unstructured-text inline case`,
+      );
+    }
+    const language = payload.value.language;
     if (allowedCodes.length > 0) {
       if (language === undefined) {
         throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
@@ -593,19 +624,55 @@ export const UnstructuredText = {
     }
     return {
       tag: 'inline',
-      val: value.value.text,
+      val: payload.value.text,
       languageCode: language,
     } as UnstructuredText<LC>;
   },
 
-  /** Encodes an `UnstructuredText` into a schema-native `text` value. */
+  /**
+   * Encodes an `UnstructuredText` into a schema-native unstructured-text
+   * `variant { inline, url }` value.
+   */
   toSchemaValue<LC extends LanguageCode[]>(input: UnstructuredText<LC>): SchemaValue {
+    if (input.tag === 'url') {
+      return {
+        kind: 'variant',
+        value: {
+          case: UNSTRUCTURED_URL_CASE,
+          payload: { kind: 'url', value: { url: input.val } },
+        },
+      };
+    }
     return {
-      kind: 'text',
+      kind: 'variant',
       value: {
-        text: input.val,
-        language: input.languageCode as string | undefined,
+        case: UNSTRUCTURED_INLINE_CASE,
+        payload: {
+          kind: 'text',
+          value: {
+            text: input.val,
+            language: input.languageCode as string | undefined,
+          },
+        },
       },
+    };
+  },
+
+  /**
+   * Creates `UnstructuredText` from a URL.
+   *
+   * ```ts
+   * function foo(input: UnstructuredText) {..}
+   *
+   * foo(UnstructuredText.fromUrl("https://example.com/doc.txt"));
+   * ```
+   *
+   * @param urlValue A URL string
+   */
+  fromUrl(urlValue: string): UnstructuredText {
+    return {
+      tag: 'url',
+      val: urlValue,
     };
   },
 
@@ -682,29 +749,53 @@ export const UnstructuredText = {
  */
 type MimeType = string;
 
-export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> = {
-  tag: 'inline';
-  val: Uint8Array;
-  mimeType: MT extends MimeType[] ? MT[number] : MimeType;
-};
+export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
+  | {
+      tag: 'url';
+      val: string;
+    }
+  | {
+      tag: 'inline';
+      val: Uint8Array;
+      mimeType: MT extends MimeType[] ? MT[number] : MimeType;
+    };
 
 export const UnstructuredBinary = {
   /**
-   * Decodes a schema-native `binary` value into an `UnstructuredBinary`,
-   * validating the mime type against `allowedMimeTypes` when the agent declares
-   * a fixed set.
+   * Decodes a schema-native unstructured-binary `variant { inline, url }` value
+   * into an `UnstructuredBinary`, validating the mime type against
+   * `allowedMimeTypes` when the agent declares a fixed set.
    */
   fromSchemaValue<MT extends string[] | MimeType = MimeType>(
     parameterName: string,
     value: SchemaValue,
     allowedMimeTypes: string[],
   ): UnstructuredBinary<MT> {
-    if (value.kind !== 'binary') {
+    if (value.kind !== 'variant') {
       throw new Error(
-        `Invalid value for parameter ${parameterName}. Expected a 'binary' value, got '${value.kind}'`,
+        `Invalid value for parameter ${parameterName}. Expected an unstructured-binary 'variant' value, got '${value.kind}'`,
       );
     }
-    const mimeType = value.value.mime_type ?? '';
+    const { case: caseIndex, payload } = value.value;
+    if (caseIndex === UNSTRUCTURED_URL_CASE) {
+      if (!payload || payload.kind !== 'url') {
+        throw new Error(
+          `Invalid value for parameter ${parameterName}. Expected a 'url' payload for the unstructured-binary url case`,
+        );
+      }
+      return { tag: 'url', val: payload.value.url } as UnstructuredBinary<MT>;
+    }
+    if (caseIndex !== UNSTRUCTURED_INLINE_CASE) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Unknown unstructured-binary variant case ${caseIndex}`,
+      );
+    }
+    if (!payload || payload.kind !== 'binary') {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Expected a 'binary' payload for the unstructured-binary inline case`,
+      );
+    }
+    const mimeType = payload.value.mime_type ?? '';
     if (allowedMimeTypes.length > 0 && !allowedMimeTypes.includes(mimeType)) {
       throw new Error(
         `Invalid value for parameter ${parameterName}. Mime type \`${mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
@@ -712,21 +803,60 @@ export const UnstructuredBinary = {
     }
     return {
       tag: 'inline',
-      val: new Uint8Array(value.value.bytes),
+      val: new Uint8Array(payload.value.bytes),
       mimeType,
     } as UnstructuredBinary<MT>;
   },
 
-  /** Encodes an `UnstructuredBinary` into a schema-native `binary` value. */
+  /**
+   * Encodes an `UnstructuredBinary` into a schema-native unstructured-binary
+   * `variant { inline, url }` value.
+   */
   toSchemaValue<MT extends MimeType[] | MimeType = MimeType>(
     input: UnstructuredBinary<MT>,
   ): SchemaValue {
+    if (input.tag === 'url') {
+      return {
+        kind: 'variant',
+        value: {
+          case: UNSTRUCTURED_URL_CASE,
+          payload: { kind: 'url', value: { url: input.val } },
+        },
+      };
+    }
     return {
-      kind: 'binary',
+      kind: 'variant',
       value: {
-        bytes: Array.from(input.val),
-        mime_type: input.mimeType as string | undefined,
+        case: UNSTRUCTURED_INLINE_CASE,
+        payload: {
+          kind: 'binary',
+          value: {
+            bytes: Array.from(input.val),
+            mime_type: input.mimeType as string | undefined,
+          },
+        },
       },
+    };
+  },
+
+  /**
+   * Creates a `UnstructuredBinary` from a URL.
+   *
+   * Example usage:
+   *
+   * ```ts
+   *
+   * const urlBinary: UnstructuredBinary =
+   *   UnstructuredBinary.fromUrl("https://example.com/file.bin");
+   *
+   * ```
+   *
+   * @param urlValue
+   */
+  fromUrl(urlValue: string): UnstructuredBinary {
+    return {
+      tag: 'url',
+      val: urlValue,
     };
   },
 

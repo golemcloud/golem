@@ -49,12 +49,10 @@ use crate::base_model::agent::{
     AgentConfigDeclaration, AgentConstructor, AgentDependency, AgentMethod, AgentType, DataValue,
     ElementValue, LegacyParsedAgentId,
 };
-use crate::schema::adapters::analysed_type::{
-    SchemaGraphBuilder, analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
-};
+use crate::schema::adapters::analysed_type::{SchemaGraphBuilder, schema_type_to_analysed_type};
 use crate::schema::adapters::data_schema::{
-    data_schema_to_input_schema, data_schema_to_output_schema, input_schema_to_data_schema,
-    output_schema_to_data_schema,
+    data_schema_to_input_schema, data_schema_to_input_schema_in, data_schema_to_output_schema,
+    data_schema_to_output_schema_in, input_schema_to_data_schema, output_schema_to_data_schema,
 };
 use crate::schema::adapters::error::SchemaAdapterError;
 use crate::schema::adapters::value::value_to_schema_value;
@@ -75,6 +73,21 @@ pub fn agent_constructor_to_schema(
         description: ctor.description.clone(),
         prompt_hint: ctor.prompt_hint.clone(),
         input_schema: data_schema_to_input_schema(&ctor.input_schema)?,
+    })
+}
+
+/// Graph-threaded variant of [`agent_constructor_to_schema`]: lowers the
+/// constructor input schema through the shared `builder` so legacy named
+/// composites are hoisted into the agent's / dependency's [`SchemaGraph`].
+fn agent_constructor_to_schema_in(
+    builder: &mut SchemaGraphBuilder,
+    ctor: &AgentConstructor,
+) -> Result<AgentConstructorSchema, SchemaAdapterError> {
+    Ok(AgentConstructorSchema {
+        name: ctor.name.clone(),
+        description: ctor.description.clone(),
+        prompt_hint: ctor.prompt_hint.clone(),
+        input_schema: data_schema_to_input_schema_in(builder, &ctor.input_schema)?,
     })
 }
 
@@ -109,6 +122,24 @@ pub fn agent_method_to_schema(
     })
 }
 
+/// Graph-threaded variant of [`agent_method_to_schema`]: lowers the method
+/// input and output schemas through the shared `builder` so legacy named
+/// composites are hoisted into the agent's / dependency's [`SchemaGraph`].
+fn agent_method_to_schema_in(
+    builder: &mut SchemaGraphBuilder,
+    method: &AgentMethod,
+) -> Result<AgentMethodSchema, SchemaAdapterError> {
+    Ok(AgentMethodSchema {
+        name: method.name.clone(),
+        description: method.description.clone(),
+        prompt_hint: method.prompt_hint.clone(),
+        input_schema: data_schema_to_input_schema_in(builder, &method.input_schema)?,
+        output_schema: data_schema_to_output_schema_in(builder, &method.output_schema)?,
+        http_endpoint: method.http_endpoint.clone(),
+        read_only: method.read_only.clone(),
+    })
+}
+
 /// Reverse: [`AgentMethodSchema`] → legacy [`AgentMethod`].
 ///
 /// Refs in input and output bodies are resolved against `graph` — the
@@ -130,21 +161,29 @@ pub fn schema_agent_method_to_legacy(
 
 /// Forward: legacy [`AgentDependency`] → [`AgentDependencySchema`].
 ///
-/// Produces an empty `SchemaGraph` with all bodies fully inlined. The
-/// legacy representation has no named-type registry to hoist.
+/// Lowers the constructor and method bodies through a single shared
+/// [`SchemaGraphBuilder`] so legacy named composites (records, variants,
+/// enums, …) are hoisted into the dependency's own [`SchemaGraph`] and
+/// referenced via [`SchemaType::Ref`]. This preserves the type identity the
+/// per-language bridge renderers need; without it, distinct named composites
+/// that lower to the same anonymous inline body become indistinguishable.
 pub fn agent_dependency_to_schema(
     dep: &AgentDependency,
 ) -> Result<AgentDependencySchema, SchemaAdapterError> {
+    let mut builder = SchemaGraphBuilder::new();
+    let constructor = agent_constructor_to_schema_in(&mut builder, &dep.constructor)?;
+    let methods = dep
+        .methods
+        .iter()
+        .map(|m| agent_method_to_schema_in(&mut builder, m))
+        .collect::<Result<_, _>>()?;
+    let schema = builder.into_graph_with_root(placeholder_agent_graph_root());
     Ok(AgentDependencySchema {
         type_name: dep.type_name.clone(),
         description: dep.description.clone(),
-        schema: SchemaGraph::empty(),
-        constructor: agent_constructor_to_schema(&dep.constructor)?,
-        methods: dep
-            .methods
-            .iter()
-            .map(agent_method_to_schema)
-            .collect::<Result<_, _>>()?,
+        schema,
+        constructor,
+        methods,
     })
 }
 
@@ -169,16 +208,29 @@ pub fn schema_agent_dependency_to_legacy(
 
 /// Forward: legacy [`AgentConfigDeclaration`] → [`AgentConfigDeclarationSchema`].
 ///
-/// The `value_type` is lowered from the legacy `AnalysedType` to an inline
-/// [`SchemaType`].
-fn agent_config_declaration_to_schema(
+/// Lowers the config `value_type` through the shared `builder` so legacy named
+/// composites are hoisted into the agent's [`SchemaGraph`] (referenced via
+/// [`SchemaType::Ref`]) rather than inlined anonymously.
+fn agent_config_declaration_to_schema_in(
+    builder: &mut SchemaGraphBuilder,
     c: &AgentConfigDeclaration,
 ) -> Result<AgentConfigDeclarationSchema, SchemaAdapterError> {
     Ok(AgentConfigDeclarationSchema {
         source: c.source,
         path: c.path.clone(),
-        value_type: analysed_type_to_schema_type_inline(&c.value_type)?,
+        value_type: builder.lower(&c.value_type)?,
     })
+}
+
+/// The placeholder root used for an agent's / dependency's [`SchemaGraph`].
+///
+/// Agent-layer carriers are multi-root: the constructor / each method /
+/// each config declaration act as their own roots (held in their respective
+/// `InputSchema` / `OutputSchema` / `value_type` slots), and only the graph's
+/// `defs` registry is consulted. The graph `root` field is therefore an
+/// unused placeholder empty record, matching [`SchemaGraph::empty`].
+fn placeholder_agent_graph_root() -> SchemaType {
+    SchemaType::record(Vec::new())
 }
 
 /// Reverse: [`AgentConfigDeclarationSchema`] → legacy [`AgentConfigDeclaration`].
@@ -200,33 +252,47 @@ fn schema_agent_config_declaration_to_legacy(
 
 /// Forward: legacy [`AgentType`] → [`AgentTypeSchema`].
 ///
-/// Produces an empty `SchemaGraph` with all bodies fully inlined. The
-/// legacy representation has no named-type registry to hoist.
+/// Lowers the constructor, method, and config bodies through a single shared
+/// [`SchemaGraphBuilder`] so legacy named composites (records, variants,
+/// enums, …) are hoisted into the agent's [`SchemaGraph`] and referenced via
+/// [`SchemaType::Ref`]. This preserves the type identity that the per-language
+/// bridge renderers need to print native type names; without it, two distinct
+/// named composites that lower to the same anonymous inline body collapse into
+/// indistinguishable types and break type-name disambiguation.
+///
+/// Dependencies own their own [`SchemaGraph`], so each is lowered through its
+/// own builder by [`agent_dependency_to_schema`].
 pub fn agent_type_to_schema(ty: &AgentType) -> Result<AgentTypeSchema, SchemaAdapterError> {
+    let mut builder = SchemaGraphBuilder::new();
+    let constructor = agent_constructor_to_schema_in(&mut builder, &ty.constructor)?;
+    let methods = ty
+        .methods
+        .iter()
+        .map(|m| agent_method_to_schema_in(&mut builder, m))
+        .collect::<Result<_, _>>()?;
+    let config = ty
+        .config
+        .iter()
+        .map(|c| agent_config_declaration_to_schema_in(&mut builder, c))
+        .collect::<Result<_, _>>()?;
+    let dependencies = ty
+        .dependencies
+        .iter()
+        .map(agent_dependency_to_schema)
+        .collect::<Result<_, _>>()?;
+    let schema = builder.into_graph_with_root(placeholder_agent_graph_root());
     Ok(AgentTypeSchema {
         type_name: ty.type_name.clone(),
         description: ty.description.clone(),
         source_language: ty.source_language.clone(),
-        schema: SchemaGraph::empty(),
-        constructor: agent_constructor_to_schema(&ty.constructor)?,
-        methods: ty
-            .methods
-            .iter()
-            .map(agent_method_to_schema)
-            .collect::<Result<_, _>>()?,
-        dependencies: ty
-            .dependencies
-            .iter()
-            .map(agent_dependency_to_schema)
-            .collect::<Result<_, _>>()?,
+        schema,
+        constructor,
+        methods,
+        dependencies,
         mode: ty.mode,
         http_mount: ty.http_mount.clone(),
         snapshotting: ty.snapshotting.clone(),
-        config: ty
-            .config
-            .iter()
-            .map(agent_config_declaration_to_schema)
-            .collect::<Result<_, _>>()?,
+        config,
     })
 }
 
@@ -369,7 +435,11 @@ fn legacy_element_to_named(
         BinaryReference, BinarySource, ComponentModelElementValue, TextReference, TextSource,
         TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
     };
+    use crate::schema::adapters::unstructured::{
+        INLINE_CASE, URL_CASE, unstructured_binary_schema_type, unstructured_text_schema_type,
+    };
     use crate::schema::schema_type::{BinaryRestrictions, TextRestrictions};
+    use crate::schema::schema_value::VariantValuePayload;
     let name = format!("p{idx}");
     match element {
         ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
@@ -377,35 +447,49 @@ fn legacy_element_to_named(
             let schema_value = value_to_schema_value(&value.value, &value.typ)?;
             Ok((name, schema_ty, schema_value))
         }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Inline(TextSource { data, text_type }) => {
-                let payload = TextValuePayload {
-                    text: data.clone(),
-                    language: text_type
-                        .as_ref()
-                        .map(|TextType { language_code }| language_code.clone()),
-                };
-                let schema_ty = SchemaType::text(TextRestrictions::default());
-                Ok((name, schema_ty, SchemaValue::Text(payload)))
-            }
-            TextReference::Url(_) => Err(SchemaAdapterError::LossySchemaType(
-                "URL text references cannot be projected into SchemaValue::Text".into(),
-            )),
-        },
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                    let payload = BinaryValuePayload {
-                        bytes: data.clone(),
-                        mime_type: Some(binary_type.mime_type.clone()),
-                    };
-                    let schema_ty = SchemaType::binary(BinaryRestrictions::default());
-                    Ok((name, schema_ty, SchemaValue::Binary(payload)))
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+            let schema_ty = unstructured_text_schema_type(TextRestrictions::default());
+            let schema_value = match value {
+                TextReference::Inline(TextSource { data, text_type }) => {
+                    SchemaValue::Variant(VariantValuePayload {
+                        case: INLINE_CASE,
+                        payload: Some(Box::new(SchemaValue::Text(TextValuePayload {
+                            text: data.clone(),
+                            language: text_type
+                                .as_ref()
+                                .map(|TextType { language_code }| language_code.clone()),
+                        }))),
+                    })
                 }
-                BinaryReference::Url(_) => Err(SchemaAdapterError::LossySchemaType(
-                    "URL binary references cannot be projected into SchemaValue::Binary".into(),
-                )),
-            }
+                TextReference::Url(url) => SchemaValue::Variant(VariantValuePayload {
+                    case: URL_CASE,
+                    payload: Some(Box::new(SchemaValue::Url {
+                        url: url.value.clone(),
+                    })),
+                }),
+            };
+            Ok((name, schema_ty, schema_value))
+        }
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            let schema_ty = unstructured_binary_schema_type(BinaryRestrictions::default());
+            let schema_value = match value {
+                BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                    SchemaValue::Variant(VariantValuePayload {
+                        case: INLINE_CASE,
+                        payload: Some(Box::new(SchemaValue::Binary(BinaryValuePayload {
+                            bytes: data.clone(),
+                            mime_type: Some(binary_type.mime_type.clone()),
+                        }))),
+                    })
+                }
+                BinaryReference::Url(url) => SchemaValue::Variant(VariantValuePayload {
+                    case: URL_CASE,
+                    payload: Some(Box::new(SchemaValue::Url {
+                        url: url.value.clone(),
+                    })),
+                }),
+            };
+            Ok((name, schema_ty, schema_value))
         }
     }
 }

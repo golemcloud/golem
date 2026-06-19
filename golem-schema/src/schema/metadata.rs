@@ -119,6 +119,18 @@ impl MetadataEnvelope {
 #[schema(named = "role")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum Role {
+    /// Marks a `list<variant<…>>` whose elements are interchangeable
+    /// modalities (text / image / audio / …). See the multimodal adapters.
     Multimodal,
+    /// Marks a `variant { inline: text, url: url }` as the ergonomic
+    /// "unstructured text" wrapper: a payload that is either inline text or a
+    /// URL referencing the text.
+    UnstructuredText,
+    /// Marks a `variant { inline: binary, url: url }` as the ergonomic
+    /// "unstructured binary" wrapper: a payload that is either inline bytes or
+    /// a URL referencing the bytes.
+    UnstructuredBinary,
+    /// Any other producer-defined role. Preserved verbatim so a receiver that
+    /// does not understand it does not lose the producer's intent.
     Other(String),
 }

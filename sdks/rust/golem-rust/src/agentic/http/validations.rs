@@ -160,25 +160,11 @@ fn collect_method_input_vars(
 }
 
 fn is_unstructured_text_schema(schema: &crate::schema::SchemaGraph) -> bool {
-    let crate::schema::SchemaType::Variant { cases, .. } = &schema.root else {
-        return false;
-    };
-
-    matches!(
-        cases.first().and_then(|case| case.payload.as_ref()),
-        Some(crate::schema::SchemaType::Text { .. })
-    )
+    schema.root.metadata().role.as_ref() == Some(&crate::schema::Role::UnstructuredText)
 }
 
 fn is_unstructured_binary_schema(schema: &crate::schema::SchemaGraph) -> bool {
-    let crate::schema::SchemaType::Variant { cases, .. } = &schema.root else {
-        return false;
-    };
-
-    matches!(
-        cases.first().and_then(|case| case.payload.as_ref()),
-        Some(crate::schema::SchemaType::Binary { .. })
-    )
+    schema.root.metadata().role.as_ref() == Some(&crate::schema::Role::UnstructuredBinary)
 }
 
 fn is_multimodal_schema(schema: &crate::schema::SchemaGraph) -> bool {

@@ -108,9 +108,19 @@ declare module 'golem:core/types@2.0.0' {
    * Open registry; unknown roles fall back to structural handling.
    */
   export type Role = 
+  /** `list<variant<…>>` whose elements are interchangeable modalities. */
   {
     tag: 'multimodal'
   } |
+  /** `variant { inline: text, url: url }` ergonomic unstructured-text wrapper. */
+  {
+    tag: 'unstructured-text'
+  } |
+  /** `variant { inline: binary, url: url }` ergonomic unstructured-binary wrapper. */
+  {
+    tag: 'unstructured-binary'
+  } |
+  /** Any other producer-defined role, preserved verbatim. */
   {
     tag: 'other'
     val: string

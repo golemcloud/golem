@@ -663,7 +663,7 @@ pub fn multimodal_schema_graph(fields: &[(String, SchemaGraph)]) -> SchemaGraph 
 }
 
 pub fn unstructured_text_schema_type(restrictions: Option<Vec<String>>) -> SchemaType {
-    SchemaType::variant(vec![
+    let mut ty = SchemaType::variant(vec![
         VariantCaseType {
             name: "inline".to_string(),
             payload: Some(SchemaType::Text {
@@ -682,11 +682,13 @@ pub fn unstructured_text_schema_type(restrictions: Option<Vec<String>>) -> Schem
             payload: Some(SchemaType::url(UrlRestrictions::default())),
             metadata: MetadataEnvelope::default(),
         },
-    ])
+    ]);
+    ty.metadata_mut().role = Some(Role::UnstructuredText);
+    ty
 }
 
 pub fn unstructured_binary_schema_type(restrictions: Option<Vec<String>>) -> SchemaType {
-    SchemaType::variant(vec![
+    let mut ty = SchemaType::variant(vec![
         VariantCaseType {
             name: "inline".to_string(),
             payload: Some(SchemaType::Binary {
@@ -704,7 +706,9 @@ pub fn unstructured_binary_schema_type(restrictions: Option<Vec<String>>) -> Sch
             payload: Some(SchemaType::url(UrlRestrictions::default())),
             metadata: MetadataEnvelope::default(),
         },
-    ])
+    ]);
+    ty.metadata_mut().role = Some(Role::UnstructuredBinary);
+    ty
 }
 
 pub fn multimodal_schema_type(fields: &[(String, SchemaGraph)]) -> SchemaType {

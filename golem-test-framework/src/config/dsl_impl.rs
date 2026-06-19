@@ -34,7 +34,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -221,7 +221,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let client = self.deps.registry_service().client(&self.token).await;
 
-        let agent_types = extract_agent_types(&source_path, false, true).await?;
+        let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
 
         trace!("Agent types in component {component_name}:\n{agent_types:#?}");
 
@@ -290,7 +290,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let updated_wasm = if let Some(wasm_name) = wasm_name {
             let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
 
-            let agent_types = extract_agent_types(&source_path, false, true).await?;
+            let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
 
             Some((File::open(source_path).await?, agent_types))
         } else {

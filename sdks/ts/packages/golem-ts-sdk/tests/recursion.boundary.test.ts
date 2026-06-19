@@ -35,6 +35,7 @@ import { SchemaValue } from '../src/internal/schema-model';
 import { decodeOutput, encodeInputRecord } from '../src/internal/mapping/values/boundaryValue';
 import { ResolvedGraph, ResolvedType, TypeId } from '../src/internal/mapping/types/resolvedType';
 import type { RecTree, MutualA } from './validAgents';
+import type { ImportedRecTree } from './importedTestTypes';
 
 const RECURSIVE_AGENT = 'RecursiveAgent';
 
@@ -231,5 +232,36 @@ test('echoMutual publishes a mutually-recursive schema graph and round-trips a f
     expect(result.tag).toEqual('ok');
     if (result.tag !== 'ok') return;
     expect(decodeReturn('echoMutual', result.val)).toEqual(a);
+  }
+});
+
+// A recursive type whose definition lives in a *different module* than the agent
+// that references it (`ImportedRecTree` from `./importedTestTypes`). The recursive
+// back-edge must resolve to the same type id as the imported root definition —
+// regression guard for cross-module recursive type resolution.
+test('echoImportedTree resolves a recursive type imported from another module', async () => {
+  const graph = methodParamGraph('echoImportedTree');
+  expect(graph.defs.size).toEqual(1);
+  expect(graphIsRecursive(graph)).toBe(true);
+
+  const agent = initiateRecursiveAgent('rec');
+
+  const cases: ImportedRecTree[] = [
+    { value: 7, children: [] }, // base case
+    {
+      value: 1,
+      children: [
+        { value: 2, children: [] },
+        { value: 3, children: [{ value: 4, children: [] }] },
+      ],
+    },
+  ];
+
+  for (const tree of cases) {
+    const input = buildMethodInput('echoImportedTree', [['tree', tree]]);
+    const result = await agent.invoke('echoImportedTree', input, { tag: 'anonymous' });
+    expect(result.tag).toEqual('ok');
+    if (result.tag !== 'ok') return;
+    expect(decodeReturn('echoImportedTree', result.val)).toEqual(tree);
   }
 });

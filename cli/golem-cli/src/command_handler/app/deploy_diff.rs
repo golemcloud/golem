@@ -30,7 +30,6 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
-use golem_common::schema::adapters::agent_type_to_schema;
 use golem_common::schema::agent::AgentTypeSchema;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
@@ -143,15 +142,9 @@ impl DeployDiff {
             .deployable_components
             .iter()
             .map(|(component_name, component)| {
-                let schema_types = component
-                    .agent_types
-                    .iter()
-                    .map(agent_type_to_schema)
-                    .collect::<Result<Vec<AgentTypeSchema>, _>>()
-                    .map_err(anyhow::Error::msg)?;
-                Ok((component_name.0.clone(), schema_types))
+                (component_name.0.clone(), component.agent_types.clone())
             })
-            .collect::<anyhow::Result<HashMap<_, _>>>()?;
+            .collect::<HashMap<_, _>>();
 
         Ok(DeployUnifiedDiffs {
             display_diff_stage: self

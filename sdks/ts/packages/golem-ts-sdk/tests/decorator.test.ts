@@ -130,6 +130,14 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unstructuredText')).toEqual(
       unstructuredTextShape,
     );
+
+    // The unstructured-text role marks the variant root node itself.
+    expect(
+      paramRoleTag(barAgent, barAgentMethod.inputSchema, 'unstructuredTextWithLanguageCode'),
+    ).toEqual('unstructured-text');
+    expect(paramRoleTag(barAgent, barAgentMethod.inputSchema, 'unstructuredText')).toEqual(
+      'unstructured-text',
+    );
   });
 
   it('should handle UnstructuredText in constructor params', () => {
@@ -145,6 +153,11 @@ describe('Agent decorator should register the agent class and its methods into A
   it('should handle UnstructuredBinary in method params', () => {
     expect(paramShape(barAgent, barAgentMethod.inputSchema, 'unstructuredBinary')).toEqual(
       unstructuredBinaryJsonShape,
+    );
+
+    // The unstructured-binary role marks the variant root node itself.
+    expect(paramRoleTag(barAgent, barAgentMethod.inputSchema, 'unstructuredBinary')).toEqual(
+      'unstructured-binary',
     );
   });
 

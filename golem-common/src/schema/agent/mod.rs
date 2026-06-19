@@ -413,6 +413,11 @@ impl AgentTypeSchema {
         self
     }
 
+    pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
+        agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+        agent_types.into_iter().map(Self::normalized).collect()
+    }
+
     /// Validates the semantic constraints of the agent type. Mirrors the legacy
     /// `AgentType::validate`: ephemeral agents must not declare read-only
     /// methods (there is no shared state to read from).

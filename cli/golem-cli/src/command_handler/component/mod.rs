@@ -51,7 +51,8 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
-use golem_common::model::agent::{AgentConfigSource, AgentType, AgentTypeName};
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
@@ -1080,7 +1081,7 @@ impl ComponentCommandHandler {
         );
 
         let wasm = component_stager.open_wasm().await?;
-        let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
+        let agent_types: Vec<AgentTypeSchema> = component_stager.agent_types().clone();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let files = component_stager.all_files().await?;
@@ -1495,7 +1496,7 @@ fn resolve_config_values(
 }
 
 fn materialize_agent_config_entries(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_root: Option<&serde_json::Value>,
 ) -> Vec<AgentConfigEntryDto> {
     let Some(config_root) = config_root else {
@@ -1516,7 +1517,7 @@ fn materialize_agent_config_entries(
 }
 
 fn collect_unused_agent_config_paths(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_root: Option<&serde_json::Value>,
 ) -> Vec<String> {
     let Some(config_root) = config_root else {

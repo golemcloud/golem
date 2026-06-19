@@ -47,6 +47,8 @@ const arbTypeId = fc.string({ minLength: 1, maxLength: 6 });
 
 const arbRole: Arbitrary<Role> = fc.oneof(
   fc.constant<Role>({ tag: 'multimodal' }),
+  fc.constant<Role>({ tag: 'unstructured-text' }),
+  fc.constant<Role>({ tag: 'unstructured-binary' }),
   fc.record({ tag: fc.constant<'other'>('other'), val: fc.string({ maxLength: 8 }) }),
 );
 

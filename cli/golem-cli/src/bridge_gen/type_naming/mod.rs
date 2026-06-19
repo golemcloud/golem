@@ -15,15 +15,17 @@
 use crate::bridge_gen::type_naming::builder::{Builder, RootOwner};
 use crate::bridge_gen::type_naming::schema_type_ext::SchemaTypeExt;
 use anyhow::bail;
-use golem_common::base_model::agent::{AgentType, DataSchema, ElementSchema};
-use golem_common::schema::adapters::analysed_type::{
-    SchemaGraphBuilder, strip_disambiguation_suffix,
+use golem_common::schema::adapters::analysed_type::strip_disambiguation_suffix;
+use golem_common::schema::adapters::data_schema::multimodal_variant_cases;
+use golem_common::schema::adapters::unstructured::is_unstructured_variant;
+use golem_common::schema::agent::{
+    AgentTypeSchema, FieldSource, InputSchema, NamedField, OutputSchema,
 };
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
+use golem_common::schema::metadata::TypeId;
 use golem_common::schema::schema_type::SchemaType;
-use golem_wasm::analysis::AnalysedType;
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use type_location::{TypeLocation, TypeLocationPath};
@@ -77,43 +79,40 @@ impl Display for TsTypeName {
 /// constructor, methods, and config, and assigns each distinct type a
 /// language-specific generated name.
 ///
-/// The walker is keyed on [`SchemaType`] structural identity. Named legacy
-/// composites are converted through a shared
-/// [`SchemaGraphBuilder`](golem_common::schema::adapters::analysed_type::SchemaGraphBuilder)
-/// kept on `self`, which materialises a [`SchemaTypeDef`] per named type
-/// and references it from the body via [`SchemaType::Ref`]. The same
-/// builder lowers every root (constructor, each method's input/output,
-/// every config field), so same-name structural collisions across roots
-/// are disambiguated globally instead of producing two roots that
-/// silently resolve to the same wrong def.
-///
-/// The merged graph collected from every walked subtree is exposed via
-/// [`TypeNaming::graph`] so downstream callers can resolve refs without
-/// re-converting from the legacy [`AnalysedType`](golem_wasm::analysis::AnalysedType).
+/// The walker is keyed on [`SchemaType`] structural identity. It walks the
+/// schema-native roots ([`InputSchema`] / [`OutputSchema`] /
+/// [`AgentConfigDeclarationSchema`](golem_common::schema::agent::AgentConfigDeclarationSchema)
+/// `value_type`) of an [`AgentTypeSchema`], resolving every
+/// [`SchemaType::Ref`] against the agent's own pre-built
+/// [`SchemaGraph`](AgentTypeSchema::schema). Named-type disambiguation has
+/// already happened at SDK-extraction time, so the walker just adopts that
+/// graph instead of rebuilding it; refs that close a cycle on the current
+/// DFS path are recorded in [`Self::recursive_ids`] (used by the Rust
+/// generator to box recursive by-value positions) and not descended into
+/// again.
 pub struct TypeNaming<TN: TypeName> {
-    schema_builder: SchemaGraphBuilder,
     graph: SchemaGraph,
     named_type_locations: IndexMap<TN, TypeLocationsBySchema>,
     anonymous_type_locations: Vec<(SchemaType, Vec<TypeLocation>)>,
     type_names: HashSet<TN>,
     types: Vec<(SchemaType, TN)>,
-    /// Memoises `AnalysedType → SchemaType` lookups built during the
-    /// `collect_all_schema_types` walk. Generator emit code reuses this to
-    /// resolve a legacy type against the disambiguated def table — a
-    /// fresh `analysed_type_to_schema_graph(typ)` would only see the
-    /// type in isolation and return the base `TypeId`, silently colliding
-    /// with the suffixed id stored in `graph`.
-    imported_schema_types: HashMap<AnalysedType, SchemaType>,
+    /// Set of named-def [`TypeId`]s whose body is reachable from itself —
+    /// detected as back-edges during the collection DFS. The Rust generator
+    /// uses this to decide which `Ref` positions need `Box<T>`.
+    recursive_ids: HashSet<TypeId>,
+    /// [`TypeId`]s currently on the DFS path; used to detect recursive
+    /// back-edges while collecting.
+    visiting: HashSet<TypeId>,
     same_language: bool,
 }
 
 impl<TN: TypeName> TypeNaming<TN> {
-    pub fn new(agent_type: &AgentType, same_language: bool) -> anyhow::Result<Self> {
+    pub fn new(agent_type: &AgentTypeSchema, same_language: bool) -> anyhow::Result<Self> {
         Self::new_with_reserved_names(agent_type, same_language, std::iter::empty::<TN>())
     }
 
     pub fn new_with_reserved_names(
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
         same_language: bool,
         reserved_names: impl IntoIterator<Item = TN>,
     ) -> anyhow::Result<Self> {
@@ -121,31 +120,24 @@ impl<TN: TypeName> TypeNaming<TN> {
         type_names.extend(reserved_names);
 
         let mut type_naming = Self {
-            schema_builder: SchemaGraphBuilder::new(),
-            graph: SchemaGraph::empty(),
+            graph: agent_type.schema.clone(),
             named_type_locations: IndexMap::new(),
             anonymous_type_locations: Vec::new(),
             type_names,
             types: Vec::new(),
-            imported_schema_types: HashMap::new(),
+            recursive_ids: HashSet::new(),
+            visiting: HashSet::new(),
             same_language,
         };
 
         type_naming.collect_all_schema_types(agent_type)?;
-        // After every root has been lowered into the shared builder, take a
-        // single graph snapshot so downstream ref resolution sees the
-        // disambiguated def table.
-        type_naming.graph = type_naming
-            .schema_builder
-            .snapshot_graph(SchemaType::bool());
         type_naming.derive_type_names()?;
 
         Ok(type_naming)
     }
 
-    /// The merged schema graph collected from every traversed subtree.
-    /// `SchemaType::Ref` values produced by the converter all resolve
-    /// against this graph.
+    /// The agent's schema graph. `SchemaType::Ref` values reached while
+    /// walking resolve against this graph.
     pub fn graph(&self) -> &SchemaGraph {
         &self.graph
     }
@@ -158,260 +150,302 @@ impl<TN: TypeName> TypeNaming<TN> {
         self.types.iter().map(|(t, n)| (t, n))
     }
 
-    fn collect_all_schema_types(&mut self, agent_type: &AgentType) -> anyhow::Result<()> {
+    /// Whether `typ` is a [`SchemaType::Ref`] to a definition that
+    /// participates in a cycle (directly or transitively references itself).
+    /// The Rust generator boxes such refs in by-value positions.
+    pub fn is_recursive_ref(&self, typ: &SchemaType) -> bool {
+        matches!(typ, SchemaType::Ref { id, .. } if self.recursive_ids.contains(id))
+    }
+
+    fn collect_all_schema_types(&mut self, agent_type: &AgentTypeSchema) -> anyhow::Result<()> {
         let mut builder = Builder::new();
 
-        self.collect_schema_types_in_data_schema(
-            &mut builder,
-            &agent_type.constructor.input_schema,
-        )?;
+        builder.set_root_owner(RootOwner::ConstructorInput);
+        self.collect_input_schema(&mut builder, &agent_type.constructor.input_schema)?;
 
         for method in &agent_type.methods {
             builder.set_root_owner(RootOwner::MethodInput {
                 method_name: method.name.clone(),
             });
-            self.collect_schema_types_in_data_schema(&mut builder, &method.input_schema)?;
+            self.collect_input_schema(&mut builder, &method.input_schema)?;
 
             builder.set_root_owner(RootOwner::MethodOutput {
                 method_name: method.name.clone(),
             });
-            self.collect_schema_types_in_data_schema(&mut builder, &method.output_schema)?;
+            self.collect_output_schema(&mut builder, &method.output_schema)?;
         }
 
         builder.set_root_owner(RootOwner::AgentConfig);
         for config in &agent_type.config {
             builder.set_root_item_name(&config.path.join("_"));
-            let schema_type = self.import_analysed_type(&config.value_type)?;
-            self.collect_schema_type(&mut builder, &schema_type);
+            self.collect_schema_type(&mut builder, &config.value_type)?;
         }
 
         Ok(())
     }
 
-    fn collect_schema_types_in_data_schema(
+    /// Walk the user-supplied fields of an [`InputSchema`]. Auto-injected
+    /// fields are host-provided and never appear in the generated client
+    /// surface, so they are skipped here. A single user-supplied field that
+    /// is the structural multimodal form (`list<variant<… Role::Multimodal>>`)
+    /// is walked alternative-by-alternative — the multimodal variant/list
+    /// wrappers themselves are special-cased by the generators and do not get
+    /// their own generated name.
+    fn collect_input_schema(
         &mut self,
         builder: &mut Builder,
-        schema: &DataSchema,
+        input: &InputSchema,
     ) -> anyhow::Result<()> {
-        match schema {
-            DataSchema::Tuple(items) => {
-                for named_item in &items.elements {
-                    builder.set_root_item_name(&named_item.name);
-                    self.collect_schema_types_in_element_schema(builder, &named_item.schema)?;
+        let fields = user_supplied_fields(input);
+
+        if let [field] = fields.as_slice()
+            && let Some(cases) = multimodal_variant_cases(&self.graph, &field.schema)?
+        {
+            let cases = cases.to_vec();
+            for case in cases {
+                builder.set_root_item_name(&case.name);
+                if let Some(payload) = &case.payload {
+                    self.collect_schema_type(builder, payload)?;
                 }
             }
-            DataSchema::Multimodal(variants) => {
-                for named_variant in &variants.elements {
-                    builder.set_root_item_name(&named_variant.name);
-                    self.collect_schema_types_in_element_schema(builder, &named_variant.schema)?;
-                }
-            }
+            return Ok(());
+        }
+
+        for field in fields {
+            builder.set_root_item_name(&field.name);
+            self.collect_schema_type(builder, &field.schema)?;
         }
         Ok(())
     }
 
-    fn collect_schema_types_in_element_schema(
+    /// Walk an [`OutputSchema`]. A multimodal output is walked
+    /// alternative-by-alternative (like multimodal input); any other single
+    /// output is walked directly.
+    fn collect_output_schema(
         &mut self,
         builder: &mut Builder,
-        schema: &ElementSchema,
+        output: &OutputSchema,
     ) -> anyhow::Result<()> {
-        let ElementSchema::ComponentModel(component_model_type) = schema else {
+        let OutputSchema::Single(ty) = output else {
             return Ok(());
         };
 
-        let schema_type = self.import_analysed_type(&component_model_type.element_type)?;
-        self.collect_schema_type(builder, &schema_type);
-        Ok(())
-    }
-
-    /// Convert a legacy `AnalysedType` into the schema layer by lowering it
-    /// into the shared [`SchemaGraphBuilder`] kept on `self`. Disambiguation
-    /// runs against every previously lowered root, so two same-name
-    /// structurally distinct types appearing in separate constructor /
-    /// method / config positions of the same agent get distinct
-    /// [`SchemaTypeDef`] entries rather than silently merging into the
-    /// first def's body. The lowering result is memoised so emit-time
-    /// callers can replay the exact disambiguated [`SchemaType`] via
-    /// [`Self::imported_schema_type`] without re-lowering through a
-    /// fresh standalone builder.
-    fn import_analysed_type(&mut self, typ: &AnalysedType) -> anyhow::Result<SchemaType> {
-        if let Some(cached) = self.imported_schema_types.get(typ) {
-            return Ok(cached.clone());
+        if let Some(cases) = multimodal_variant_cases(&self.graph, ty)? {
+            let cases = cases.to_vec();
+            for case in cases {
+                builder.set_root_item_name(&case.name);
+                if let Some(payload) = &case.payload {
+                    self.collect_schema_type(builder, payload)?;
+                }
+            }
+            return Ok(());
         }
-        let lowered = self
-            .schema_builder
-            .lower(typ)
-            .map_err(|e| anyhow::anyhow!("Failed to convert legacy type into schema: {e}"))?;
-        self.imported_schema_types
-            .insert(typ.clone(), lowered.clone());
-        Ok(lowered)
+
+        builder.set_root_item_name("");
+        self.collect_schema_type(builder, ty)
     }
 
-    /// Look up the [`SchemaType`] that was produced when this
-    /// [`AnalysedType`] was lowered during `collect_all_schema_types`. Use
-    /// this from emit code that holds an `&self` and needs to reach the
-    /// disambiguated [`SchemaType::Ref`] / inline body without
-    /// re-lowering through a fresh standalone builder (which would lose
-    /// cross-root disambiguation suffixes).
-    pub fn imported_schema_type(&self, typ: &AnalysedType) -> Option<&SchemaType> {
-        self.imported_schema_types.get(typ)
-    }
-
-    fn collect_schema_type(&mut self, builder: &mut Builder, typ: &SchemaType) {
+    fn collect_schema_type(
+        &mut self,
+        builder: &mut Builder,
+        typ: &SchemaType,
+    ) -> anyhow::Result<()> {
         // Resolve refs so we walk the underlying body, but remember the
         // ref's display name/owner for path annotations. The body is
         // cloned here so the recursive walk does not hold a borrow on
         // `self.graph` while it mutates `self.types`.
-        let (display_name, display_owner, resolved) = self.resolve_for_walk_owned(typ);
+        let ref_id = if let SchemaType::Ref { id, .. } = typ {
+            Some(id.clone())
+        } else {
+            None
+        };
+        // A ref to a def already on the current DFS path closes a cycle:
+        // record it as recursive, register its name, and stop — descending
+        // again would loop forever.
+        let is_back_edge = ref_id
+            .as_ref()
+            .is_some_and(|id| self.visiting.contains(id));
+
+        let (display_name, display_owner, resolved) = self.resolve_for_walk_owned(typ)?;
         let resolved = &resolved;
 
-        match resolved {
-            SchemaType::Variant { cases, .. } => {
-                for case in cases {
-                    if let Some(payload) = case.payload.as_path_elem_type() {
-                        builder.push(TypeLocationPath::VariantCase {
-                            name: display_name.clone(),
-                            owner: display_owner.clone(),
-                            case: case.name.clone(),
-                            inner: None,
-                        });
-                        self.collect_schema_type(builder, payload);
-                        builder.pop();
-                    } else if let Some(payload) = &case.payload {
-                        self.collect_schema_type(builder, payload);
-                    }
-                }
+        if let Some(id) = &ref_id {
+            if is_back_edge {
+                self.recursive_ids.insert(id.clone());
+            } else {
+                self.visiting.insert(id.clone());
             }
-            SchemaType::Result { spec, .. } => {
-                let ok_ref = spec.ok.as_deref();
-                let err_ref = spec.err.as_deref();
-                if let Some(ok) = ok_ref.and_then(SchemaType::as_path_elem_type) {
-                    builder.push(TypeLocationPath::ResultOk {
-                        name: display_name.clone(),
-                        owner: display_owner.clone(),
-                        inner: None,
-                    });
-                    self.collect_schema_type(builder, ok);
-                    builder.pop();
-                } else if let Some(ok) = ok_ref {
-                    self.collect_schema_type(builder, ok);
-                }
+        }
 
-                if let Some(err) = err_ref.and_then(SchemaType::as_path_elem_type) {
-                    builder.push(TypeLocationPath::ResultErr {
-                        name: display_name.clone(),
-                        owner: display_owner.clone(),
-                        inner: None,
-                    });
-                    self.collect_schema_type(builder, err);
-                    builder.pop();
-                } else if let Some(err) = err_ref {
-                    self.collect_schema_type(builder, err);
-                }
-            }
-            SchemaType::Option { inner, .. } => {
-                if let Some(inner_payload) = inner.as_path_elem_type() {
-                    builder.push(TypeLocationPath::Option {
-                        name: display_name.clone(),
-                        owner: display_owner.clone(),
-                        inner: None,
-                    });
-                    self.collect_schema_type(builder, inner_payload);
-                    builder.pop();
-                } else {
-                    self.collect_schema_type(builder, inner);
-                }
-            }
-            SchemaType::Record { fields, .. } => {
-                for field in fields {
-                    if let Some(inner) = field.body.as_path_elem_type() {
-                        builder.push(TypeLocationPath::RecordField {
-                            name: display_name.clone(),
-                            owner: display_owner.clone(),
-                            field_name: field.name.clone(),
-                            inner: None,
-                        });
-                        self.collect_schema_type(builder, inner);
-                        builder.pop();
-                    } else {
-                        self.collect_schema_type(builder, &field.body);
+        // A role-marked unstructured-text/binary variant is a leaf: it renders
+        // inline as the ergonomic wrapper, so the walker must not descend into
+        // its `inline` / `url` cases nor register them as named types.
+        if !is_back_edge && !is_unstructured_variant(resolved) {
+            match resolved {
+                SchemaType::Variant { cases, .. } => {
+                    for case in cases {
+                        if let Some(payload) = case.payload.as_path_elem_type() {
+                            builder.push(TypeLocationPath::VariantCase {
+                                name: display_name.clone(),
+                                owner: display_owner.clone(),
+                                case: case.name.clone(),
+                                inner: None,
+                            });
+                            self.collect_schema_type(builder, payload)?;
+                            builder.pop();
+                        } else if let Some(payload) = &case.payload {
+                            self.collect_schema_type(builder, payload)?;
+                        }
                     }
                 }
-            }
-            SchemaType::Tuple { elements, .. } => {
-                for (idx, item) in elements.iter().enumerate() {
-                    if let Some(inner) = item.as_path_elem_type() {
-                        builder.push(TypeLocationPath::TupleItem {
+                SchemaType::Result { spec, .. } => {
+                    let ok_ref = spec.ok.as_deref();
+                    let err_ref = spec.err.as_deref();
+                    if let Some(ok) = ok_ref.and_then(SchemaType::as_path_elem_type) {
+                        builder.push(TypeLocationPath::ResultOk {
                             name: display_name.clone(),
                             owner: display_owner.clone(),
-                            idx: idx.to_string(),
                             inner: None,
                         });
-                        self.collect_schema_type(builder, inner);
+                        self.collect_schema_type(builder, ok)?;
                         builder.pop();
-                    } else {
-                        self.collect_schema_type(builder, item);
+                    } else if let Some(ok) = ok_ref {
+                        self.collect_schema_type(builder, ok)?;
+                    }
+
+                    if let Some(err) = err_ref.and_then(SchemaType::as_path_elem_type) {
+                        builder.push(TypeLocationPath::ResultErr {
+                            name: display_name.clone(),
+                            owner: display_owner.clone(),
+                            inner: None,
+                        });
+                        self.collect_schema_type(builder, err)?;
+                        builder.pop();
+                    } else if let Some(err) = err_ref {
+                        self.collect_schema_type(builder, err)?;
                     }
                 }
-            }
-            SchemaType::List { element, .. } => {
-                if let Some(inner) = element.as_path_elem_type() {
-                    builder.push(TypeLocationPath::List {
-                        name: display_name.clone(),
-                        owner: display_owner.clone(),
-                        inner: None,
-                    });
-                    self.collect_schema_type(builder, inner);
-                    builder.pop();
-                } else {
-                    self.collect_schema_type(builder, element);
+                SchemaType::Option { inner, .. } => {
+                    if let Some(inner_payload) = inner.as_path_elem_type() {
+                        builder.push(TypeLocationPath::Option {
+                            name: display_name.clone(),
+                            owner: display_owner.clone(),
+                            inner: None,
+                        });
+                        self.collect_schema_type(builder, inner_payload)?;
+                        builder.pop();
+                    } else {
+                        self.collect_schema_type(builder, inner)?;
+                    }
+                }
+                SchemaType::Record { fields, .. } => {
+                    for field in fields {
+                        if let Some(inner) = field.body.as_path_elem_type() {
+                            builder.push(TypeLocationPath::RecordField {
+                                name: display_name.clone(),
+                                owner: display_owner.clone(),
+                                field_name: field.name.clone(),
+                                inner: None,
+                            });
+                            self.collect_schema_type(builder, inner)?;
+                            builder.pop();
+                        } else {
+                            self.collect_schema_type(builder, &field.body)?;
+                        }
+                    }
+                }
+                SchemaType::Tuple { elements, .. } => {
+                    for (idx, item) in elements.iter().enumerate() {
+                        if let Some(inner) = item.as_path_elem_type() {
+                            builder.push(TypeLocationPath::TupleItem {
+                                name: display_name.clone(),
+                                owner: display_owner.clone(),
+                                idx: idx.to_string(),
+                                inner: None,
+                            });
+                            self.collect_schema_type(builder, inner)?;
+                            builder.pop();
+                        } else {
+                            self.collect_schema_type(builder, item)?;
+                        }
+                    }
+                }
+                SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                    if let Some(inner) = element.as_path_elem_type() {
+                        builder.push(TypeLocationPath::List {
+                            name: display_name.clone(),
+                            owner: display_owner.clone(),
+                            inner: None,
+                        });
+                        self.collect_schema_type(builder, inner)?;
+                        builder.pop();
+                    } else {
+                        self.collect_schema_type(builder, element)?;
+                    }
+                }
+                SchemaType::Map { key, value, .. } => {
+                    // Maps render inline (`Map<K, V>` / `Vec<(K, V)>`); the
+                    // walk only needs to discover named types nested in the
+                    // key and value bodies.
+                    self.collect_schema_type(builder, key)?;
+                    self.collect_schema_type(builder, value)?;
+                }
+                SchemaType::Union { spec, .. } => {
+                    for branch in &spec.branches {
+                        if let Some(inner) = branch.body.as_path_elem_type() {
+                            builder.push(TypeLocationPath::VariantCase {
+                                name: display_name.clone(),
+                                owner: display_owner.clone(),
+                                case: branch.tag.clone(),
+                                inner: None,
+                            });
+                            self.collect_schema_type(builder, inner)?;
+                            builder.pop();
+                        } else {
+                            self.collect_schema_type(builder, &branch.body)?;
+                        }
+                    }
+                }
+                SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
+                    if let Some(inner) = inner {
+                        self.collect_schema_type(builder, inner)?;
+                    }
+                }
+                // Closed sums without nested children and all primitives are
+                // leaves, as are the rich scalar / capability types whose
+                // payloads carry no nested user `SchemaType`.
+                SchemaType::Enum { .. }
+                | SchemaType::Flags { .. }
+                | SchemaType::Bool { .. }
+                | SchemaType::S8 { .. }
+                | SchemaType::S16 { .. }
+                | SchemaType::S32 { .. }
+                | SchemaType::S64 { .. }
+                | SchemaType::U8 { .. }
+                | SchemaType::U16 { .. }
+                | SchemaType::U32 { .. }
+                | SchemaType::U64 { .. }
+                | SchemaType::F32 { .. }
+                | SchemaType::F64 { .. }
+                | SchemaType::Char { .. }
+                | SchemaType::String { .. }
+                | SchemaType::Text { .. }
+                | SchemaType::Binary { .. }
+                | SchemaType::Path { .. }
+                | SchemaType::Url { .. }
+                | SchemaType::Datetime { .. }
+                | SchemaType::Duration { .. }
+                | SchemaType::Quantity { .. }
+                | SchemaType::Secret { .. }
+                | SchemaType::QuotaToken { .. } => {
+                    // NOP
+                }
+                // `Ref` was already unwrapped by `resolve_for_walk_owned`;
+                // recursion proceeds on the body.
+                SchemaType::Ref { .. } => {
+                    unreachable!("Ref is resolved before reaching this match")
                 }
             }
-            // Closed sums without nested children and all primitives are leaves.
-            SchemaType::Enum { .. }
-            | SchemaType::Flags { .. }
-            | SchemaType::Bool { .. }
-            | SchemaType::S8 { .. }
-            | SchemaType::S16 { .. }
-            | SchemaType::S32 { .. }
-            | SchemaType::S64 { .. }
-            | SchemaType::U8 { .. }
-            | SchemaType::U16 { .. }
-            | SchemaType::U32 { .. }
-            | SchemaType::U64 { .. }
-            | SchemaType::F32 { .. }
-            | SchemaType::F64 { .. }
-            | SchemaType::Char { .. }
-            | SchemaType::String { .. } => {
-                // NOP
-            }
-            // Rich variants (Text, Binary, Path, Url, Datetime, Duration,
-            // Quantity, Union, Secret, QuotaToken, FixedList, Map, Future,
-            // Stream) have no legacy AnalysedType counterpart and never
-            // appear when the bridge generator is fed a legacy `AgentType`
-            // (the only construction path today). They are silently treated
-            // as leaves here; if such a type ever shows up in a custom
-            // schema, the emission-time projection via
-            // `schema_type_to_analysed_type` will surface a clear error.
-            SchemaType::FixedList { .. }
-            | SchemaType::Map { .. }
-            | SchemaType::Text { .. }
-            | SchemaType::Binary { .. }
-            | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. }
-            | SchemaType::Duration { .. }
-            | SchemaType::Quantity { .. }
-            | SchemaType::Union { .. }
-            | SchemaType::Secret { .. }
-            | SchemaType::QuotaToken { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
-                // NOP
-            }
-            // `Ref` was already unwrapped by `resolve_for_walk`; recursion
-            // proceeds on the body.
-            SchemaType::Ref { .. } => unreachable!("Ref is resolved before reaching this match"),
         }
 
         // Register the original `typ` (not the resolved body) for naming —
@@ -447,36 +481,39 @@ impl<TN: TypeName> TypeNaming<TN> {
                 }
             }
         }
+
+        if let Some(id) = &ref_id
+            && !is_back_edge
+        {
+            self.visiting.remove(id);
+        }
+
+        Ok(())
     }
 
-    /// Resolve a [`SchemaType::Ref`] against the in-progress
-    /// [`SchemaGraphBuilder`] and return the body to recurse into plus the
-    /// displayed name/owner pair.
+    /// Resolve a [`SchemaType::Ref`] against the agent's [`SchemaGraph`] and
+    /// return the body to recurse into plus the displayed name/owner pair.
     ///
     /// For inline types this returns `(None, None, typ.clone())` — the
     /// walker inspects the inline body without any extra context. The
     /// body is owned (cloned for refs) so the caller can mutate `self`
-    /// during recursion without holding a borrow on the builder.
-    ///
-    /// The lookup goes through the live builder rather than the
-    /// `self.graph` snapshot because [`Self::collect_all_schema_types`]
-    /// interleaves `import_analysed_type` (which mutates the builder)
-    /// with `collect_schema_type` (which resolves refs); the snapshot is
-    /// only materialised once collection has finished.
+    /// during recursion without holding a borrow on the graph.
     fn resolve_for_walk_owned(
         &self,
         typ: &SchemaType,
-    ) -> (Option<String>, Option<String>, SchemaType) {
+    ) -> anyhow::Result<(Option<String>, Option<String>, SchemaType)> {
         match typ {
             SchemaType::Ref { id, .. } => {
-                let def: &SchemaTypeDef = self
-                    .schema_builder
-                    .lookup(id)
-                    .expect("Ref points to a def in the shared graph");
+                let def: &SchemaTypeDef = self.graph.lookup(id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Dangling SchemaType::Ref `{}` while collecting agent bridge types",
+                        id.0
+                    )
+                })?;
                 let (owner, name) = split_type_id(&id.0, def.name.as_deref());
-                (name, owner, def.body.clone())
+                Ok((name, owner, def.body.clone()))
             }
-            other => (None, None, other.clone()),
+            other => Ok((None, None, other.clone())),
         }
     }
 
@@ -568,6 +605,22 @@ impl<TN: TypeName> TypeNaming<TN> {
             locations,
         )
     }
+}
+
+/// The user-supplied fields of an [`InputSchema`], in declaration order.
+///
+/// Auto-injected fields (e.g. the host-provided
+/// [`Principal`](golem_common::schema::agent::AutoInjectedKind::Principal))
+/// are filled in by the host at invocation time, never by the generated
+/// client, so the bridge generators omit them from the generated parameter
+/// surface and from the encoded request record — matching the legacy
+/// `DataSchema`, which had no notion of auto-injected fields.
+pub(crate) fn user_supplied_fields(input: &InputSchema) -> Vec<&NamedField> {
+    input
+        .fields()
+        .iter()
+        .filter(|f| matches!(f.source, FieldSource::UserSupplied))
+        .collect()
 }
 
 /// Split a dotted `TypeId` into `(owner, name)`. If the legacy display

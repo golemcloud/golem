@@ -142,6 +142,12 @@ fn metadata_expr_inner(
             "multimodal" => {
                 quote! { ::core::option::Option::Some(#private::Role::Multimodal) }
             }
+            "unstructured-text" => {
+                quote! { ::core::option::Option::Some(#private::Role::UnstructuredText) }
+            }
+            "unstructured-binary" => {
+                quote! { ::core::option::Option::Some(#private::Role::UnstructuredBinary) }
+            }
             other => {
                 let lit = syn::LitStr::new(other, proc_macro2::Span::call_site());
                 quote! { ::core::option::Option::Some(#private::Role::Other(::std::string::String::from(#lit))) }

@@ -73,6 +73,8 @@ fn datetime_strategy() -> impl Strategy<Value = DateTime<Utc>> {
 fn role_strategy() -> impl Strategy<Value = Role> {
     prop_oneof![
         Just(Role::Multimodal),
+        Just(Role::UnstructuredText),
+        Just(Role::UnstructuredBinary),
         ident_strategy().prop_map(Role::Other),
     ]
 }

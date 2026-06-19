@@ -20,6 +20,7 @@ use camino::Utf8Path;
 use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
 use golem_cli::model::GuestLanguage;
+use golem_common::schema::adapters::agent_type_to_schema;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentMethod, AgentMode, AgentType,
@@ -221,7 +222,12 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
 
     let mut generator =
-        RustBridgeGenerator::new(ephemeral_config_agent(), target_dir, true).unwrap();
+        RustBridgeGenerator::new(
+            agent_type_to_schema(&ephemeral_config_agent()).unwrap(),
+            target_dir,
+            true,
+        )
+        .unwrap();
     generator
         .generate()
         .expect("Failed to generate Rust bridge");
@@ -375,6 +381,7 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
+    let agent_type = agent_type_to_schema(&agent_type).unwrap();
     let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
     generator
         .generate()

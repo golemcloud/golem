@@ -155,7 +155,13 @@ interface types {
 
     /// Open registry; unknown roles fall back to structural handling.
     variant role {
+        /// `list<variant<…>>` whose elements are interchangeable modalities.
         multimodal,
+        /// `variant { inline: text, url: url }` ergonomic unstructured-text wrapper.
+        unstructured-text,
+        /// `variant { inline: binary, url: url }` ergonomic unstructured-binary wrapper.
+        unstructured-binary,
+        /// Any other producer-defined role, preserved verbatim.
         other(string),
     }
 

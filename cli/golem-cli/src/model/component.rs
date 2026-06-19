@@ -17,7 +17,6 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
-use golem_common::model::agent::AgentType;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
@@ -161,7 +160,7 @@ impl AgentTypeManifestProvisionConfig {
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
     pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
 }
 

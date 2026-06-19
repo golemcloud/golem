@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::{AgentFileContentHash, AgentType};
+use crate::base_model::agent::AgentFileContentHash;
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component_metadata::ComponentMetadata;
 use crate::base_model::diff;
@@ -24,6 +24,7 @@ use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
+use crate::schema::agent::AgentTypeSchema;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -127,7 +128,7 @@ declare_structs! {
         pub component_name: ComponentName,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_types: Vec<AgentType>,
+        pub agent_types: Vec<AgentTypeSchema>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
@@ -135,7 +136,7 @@ declare_structs! {
 
     pub struct ComponentUpdate {
         pub current_revision: ComponentRevision,
-        pub agent_types: Option<Vec<AgentType>>,
+        pub agent_types: Option<Vec<AgentTypeSchema>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,

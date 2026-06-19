@@ -342,6 +342,8 @@ pub fn encode_metadata(m: &MetadataEnvelope) -> wire::MetadataEnvelope {
         deprecated: m.deprecated.clone(),
         role: m.role.as_ref().map(|r| match r {
             Role::Multimodal => wire::Role::Multimodal,
+            Role::UnstructuredText => wire::Role::UnstructuredText,
+            Role::UnstructuredBinary => wire::Role::UnstructuredBinary,
             Role::Other(s) => wire::Role::Other(s.clone()),
         }),
     }

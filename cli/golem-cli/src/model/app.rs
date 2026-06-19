@@ -29,7 +29,8 @@ use crate::model::template::Template;
 use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::schema::AgentTypeSchema;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::deployment::DeploymentRetryPolicyDefault;
@@ -274,7 +275,7 @@ pub enum AppBuildStep {
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub target_language: GuestLanguage,
     pub output_dir: PathBuf,
 }

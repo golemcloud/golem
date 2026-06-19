@@ -26,6 +26,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+pub mod agentic;
 pub mod base_model;
 pub mod schema;
 

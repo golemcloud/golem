@@ -95,12 +95,15 @@ use crate::base_model::agent::{
     BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
     DataSchema, DataValue, ElementSchema, NamedElementSchema, NamedElementSchemas, TextReference,
     TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
-    UntypedJsonDataValue, UntypedNamedElementValue,
+    UntypedJsonDataValue, UntypedNamedElementValue, Url,
 };
 use crate::schema::adapters::data_schema::{
     as_multimodal_list_variant, data_schema_to_input_schema, data_schema_to_output_schema,
 };
 use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
+use crate::schema::adapters::unstructured::{
+    INLINE_CASE, URL_CASE, unstructured_binary_restrictions, unstructured_text_restrictions,
+};
 use crate::schema::adapters::value::{schema_value_to_value, value_to_schema_value};
 use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -373,31 +376,39 @@ fn untyped_element_to_schema_value(
         (
             UntypedElementValue::UnstructuredText(TextReferenceValue { value: text }),
             ElementSchema::UnstructuredText(_),
-        ) => match text {
+        ) => Ok(match text {
             TextReference::Inline(TextSource { data, text_type }) => {
-                Ok(SchemaValue::Text(TextValuePayload {
-                    text: data,
-                    language: text_type.map(|TextType { language_code }| language_code),
-                }))
+                SchemaValue::Variant(VariantValuePayload {
+                    case: INLINE_CASE,
+                    payload: Some(Box::new(SchemaValue::Text(TextValuePayload {
+                        text: data,
+                        language: text_type.map(|TextType { language_code }| language_code),
+                    }))),
+                })
             }
-            TextReference::Url(_) => Err(SchemaAdapterError::LossySchemaType(
-                "URL text references cannot be projected into SchemaValue::Text".into(),
-            )),
-        },
+            TextReference::Url(Url { value }) => SchemaValue::Variant(VariantValuePayload {
+                case: URL_CASE,
+                payload: Some(Box::new(SchemaValue::Url { url: value })),
+            }),
+        }),
         (
             UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value: binary }),
             ElementSchema::UnstructuredBinary(_),
-        ) => match binary {
+        ) => Ok(match binary {
             BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                Ok(SchemaValue::Binary(BinaryValuePayload {
-                    bytes: data,
-                    mime_type: Some(binary_type.mime_type),
-                }))
+                SchemaValue::Variant(VariantValuePayload {
+                    case: INLINE_CASE,
+                    payload: Some(Box::new(SchemaValue::Binary(BinaryValuePayload {
+                        bytes: data,
+                        mime_type: Some(binary_type.mime_type),
+                    }))),
+                })
             }
-            BinaryReference::Url(_) => Err(SchemaAdapterError::LossySchemaType(
-                "URL binary references cannot be projected into SchemaValue::Binary".into(),
-            )),
-        },
+            BinaryReference::Url(Url { value }) => SchemaValue::Variant(VariantValuePayload {
+                case: URL_CASE,
+                payload: Some(Box::new(SchemaValue::Url { url: value })),
+            }),
+        }),
         (other_value, other_schema) => Err(SchemaAdapterError::ValueShapeMismatch(format!(
             "UntypedElementValue variant does not match ElementSchema variant: \
              value = {other_value:?}, schema = {other_schema:?}"
@@ -575,38 +586,91 @@ fn schema_value_to_untyped_element(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<UntypedElementValue, SchemaAdapterError> {
-    let resolved = resolve_ref(graph, ty)?;
-    match (resolved, value) {
-        (SchemaType::Text { .. }, SchemaValue::Text(TextValuePayload { text, language })) => {
-            let text_type = language.as_ref().map(|code| TextType {
-                language_code: code.clone(),
-            });
-            Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Inline(TextSource {
-                    data: text.clone(),
-                    text_type,
-                }),
-            }))
-        }
-        (
-            SchemaType::Binary { .. },
-            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }),
-        ) => {
-            let mime = mime_type.clone().unwrap_or_default();
-            Ok(UntypedElementValue::UnstructuredBinary(
-                BinaryReferenceValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: bytes.clone(),
-                        binary_type: BinaryType { mime_type: mime },
-                    }),
-                },
-            ))
-        }
-        _ => {
-            let component_value = schema_value_to_value(graph, ty, value)?;
-            Ok(UntypedElementValue::ComponentModel(component_value))
-        }
+    if unstructured_text_restrictions(graph, ty)?.is_some() {
+        let text = match value {
+            SchemaValue::Variant(VariantValuePayload {
+                case: INLINE_CASE,
+                payload: Some(inner),
+            }) => match inner.as_ref() {
+                SchemaValue::Text(TextValuePayload { text, language }) => {
+                    TextReference::Inline(TextSource {
+                        data: text.clone(),
+                        text_type: language.as_ref().map(|code| TextType {
+                            language_code: code.clone(),
+                        }),
+                    })
+                }
+                other => {
+                    return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                        "UnstructuredText inline case payload must be a text value, got: {other:?}"
+                    )));
+                }
+            },
+            SchemaValue::Variant(VariantValuePayload {
+                case: URL_CASE,
+                payload: Some(inner),
+            }) => match inner.as_ref() {
+                SchemaValue::Url { url } => TextReference::Url(Url { value: url.clone() }),
+                other => {
+                    return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                        "UnstructuredText url case payload must be a url value, got: {other:?}"
+                    )));
+                }
+            },
+            other => {
+                return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                    "UnstructuredText value must be an inline/url variant, got: {other:?}"
+                )));
+            }
+        };
+        return Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
+            value: text,
+        }));
     }
+    if unstructured_binary_restrictions(graph, ty)?.is_some() {
+        let binary = match value {
+            SchemaValue::Variant(VariantValuePayload {
+                case: INLINE_CASE,
+                payload: Some(inner),
+            }) => match inner.as_ref() {
+                SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
+                    BinaryReference::Inline(BinarySource {
+                        data: bytes.clone(),
+                        binary_type: BinaryType {
+                            mime_type: mime_type.clone().unwrap_or_default(),
+                        },
+                    })
+                }
+                other => {
+                    return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                        "UnstructuredBinary inline case payload must be a binary value, got: {other:?}"
+                    )));
+                }
+            },
+            SchemaValue::Variant(VariantValuePayload {
+                case: URL_CASE,
+                payload: Some(inner),
+            }) => match inner.as_ref() {
+                SchemaValue::Url { url } => BinaryReference::Url(Url { value: url.clone() }),
+                other => {
+                    return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                        "UnstructuredBinary url case payload must be a url value, got: {other:?}"
+                    )));
+                }
+            },
+            other => {
+                return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                    "UnstructuredBinary value must be an inline/url variant, got: {other:?}"
+                )));
+            }
+        };
+        return Ok(UntypedElementValue::UnstructuredBinary(
+            BinaryReferenceValue { value: binary },
+        ));
+    }
+
+    let component_value = schema_value_to_value(graph, ty, value)?;
+    Ok(UntypedElementValue::ComponentModel(component_value))
 }
 
 // ===========================================================================

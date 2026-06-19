@@ -29,8 +29,10 @@ use crate::services::run_cpu_bound_work;
 use anyhow::Context;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
-use golem_common::model::agent::{AgentConfigSource, AgentType};
+use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+use golem_common::schema::adapters::schema_type_to_analysed_type;
+use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
@@ -322,17 +324,11 @@ impl ComponentWriteService {
         let agent_types_changed = component_update.agent_types.is_some();
         let allow_incompatible_config = component_update.allow_incompatible_config;
 
-        // TODO(B2-followup): legacy ingress seam. `component_update.agent_types`
-        // arrives as legacy `AgentType` over the component-admin API, and
-        // `analyse_component` / `check_config_entries_match` still consume the
-        // legacy form. When no update is supplied we fall back to the existing
-        // metadata, lowering the stored `AgentTypeSchema`s back to legacy.
+        // When no agent type update is supplied, fall back to the schema-native
+        // agent types already stored on the existing component metadata.
         let agent_types = match component_update.agent_types {
             Some(agent_types) => agent_types,
-            None => component
-                .metadata
-                .legacy_agent_types()
-                .map_err(|err| ComponentError::InternalError(anyhow::anyhow!(err)))?,
+            None => component.metadata.agent_types().to_vec(),
         };
 
         let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
@@ -720,7 +716,7 @@ impl ComponentWriteService {
         existing: AgentTypeProvisionConfig,
         update: AgentTypeProvisionConfigUpdate,
         uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
@@ -856,7 +852,7 @@ fn resolve_plugins_for_creation(
 }
 
 fn validate_and_transform_config_entries(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_entries: Vec<AgentConfigEntryDto>,
 ) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
     validate_agent_config_declarations(agent_type)?;
@@ -883,13 +879,25 @@ fn validate_and_transform_config_entries(
             );
         }
 
-        let value =
-            ValueAndType::parse_with_type(&config_value.value.0, &matching_declaration.value_type)
-                .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
-                    agent: agent_type.type_name.clone(),
-                    key: config_value.path.clone(),
-                    errors,
+        // TEMP(Phase E): `TypedAgentConfigEntry.value` is still the legacy
+        // `ValueAndType` (a WIT/oplog interface type in `golem:api@1.5.0/oplog`).
+        // Lower the declaration's schema-native `value_type` to a legacy
+        // `AnalysedType` (resolving refs against the agent graph) so the
+        // existing parse/validation keeps working until the config value
+        // carrier is migrated to `TypedSchemaValue`.
+        let legacy_value_type =
+            schema_type_to_analysed_type(&agent_type.schema, &matching_declaration.value_type)
+                .map_err(|err| {
+                    ComponentError::InternalError(anyhow::anyhow!(
+                        "Failed to lower config value type: {err}"
+                    ))
                 })?;
+        let value = ValueAndType::parse_with_type(&config_value.value.0, &legacy_value_type)
+            .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+                agent: agent_type.type_name.clone(),
+                key: config_value.path.clone(),
+                errors,
+            })?;
 
         if !seen_keys.insert(config_value.path.clone()) {
             return Err(ComponentError::AgentConfigDuplicateValue {
@@ -908,7 +916,7 @@ fn validate_and_transform_config_entries(
 }
 
 fn check_config_entries_match(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config: &[TypedAgentConfigEntry],
 ) -> Result<(), ComponentError> {
     validate_agent_config_declarations(agent_type)?;
@@ -932,7 +940,17 @@ fn check_config_entries_match(
             );
         };
 
-        if entry.value.typ != matching_declaration.value_type {
+        // TEMP(Phase E): compare against the legacy lowering of the
+        // declaration's schema-native `value_type` while `TypedAgentConfigEntry`
+        // still carries a legacy `ValueAndType`.
+        let legacy_value_type =
+            schema_type_to_analysed_type(&agent_type.schema, &matching_declaration.value_type)
+                .map_err(|err| {
+                    ComponentError::InternalError(anyhow::anyhow!(
+                        "Failed to lower config value type: {err}"
+                    ))
+                })?;
+        if entry.value.typ != legacy_value_type {
             return Err(ComponentError::AgentConfigOldConfigNotValid {
                 agent: agent_type.type_name.clone(),
                 key: entry.path.clone(),
@@ -943,7 +961,7 @@ fn check_config_entries_match(
 }
 
 async fn analyze_and_validate_component_wasm(
-    agent_types: Vec<AgentType>,
+    agent_types: Vec<AgentTypeSchema>,
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> Result<ComponentMetadata, ComponentError> {
@@ -960,7 +978,7 @@ async fn analyze_and_validate_component_wasm(
 }
 
 fn provision_configs_for_agent_types(
-    agent_types: &[AgentType],
+    agent_types: &[AgentTypeSchema],
     provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
     let agent_type_names = agent_types
@@ -1015,7 +1033,7 @@ fn authorize_component_permission(
     }))
 }
 
-fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
+fn validate_agent_config_declarations(agent_type: &AgentTypeSchema) -> Result<(), ComponentError> {
     for declaration in &agent_type.config {
         validate_agent_config_path(&agent_type.type_name, &declaration.path)?;
     }

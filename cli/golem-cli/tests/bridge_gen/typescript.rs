@@ -591,7 +591,13 @@ fn bridge_tests_unstructuredtext(
         pkg.target_dir(),
         "FunUnstructuredText",
         json!([{ "tag": "inline", "val": "plain text"}]),
-        json!({"kind": "record", "value": {"fields": [{"kind": "text", "value": {"text": "plain text"}}]}}),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 0, "payload": {"kind": "text", "value": {"text": "plain text"}}}}]}}),
+    );
+    assert_function_input_encoding(
+        pkg.target_dir(),
+        "FunUnstructuredText",
+        json!([{ "tag": "url", "val": "https://example.com/doc.txt"}]),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 1, "payload": {"kind": "url", "value": {"url": "https://example.com/doc.txt"}}}}]}}),
     );
 }
 
@@ -603,7 +609,13 @@ fn bridge_tests_unstructuredbinary(
         pkg.target_dir(),
         "FunUnstructuredBinary",
         json!([{ "tag": "inline", "mimeType": "application/json", "val": [0,1,2,3]}]),
-        json!({"kind": "record", "value": {"fields": [{"kind": "binary", "value": {"bytes": [0, 1, 2, 3], "mime_type": "application/json"}}]}}),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 0, "payload": {"kind": "binary", "value": {"bytes": [0, 1, 2, 3], "mime_type": "application/json"}}}}]}}),
+    );
+    assert_function_input_encoding(
+        pkg.target_dir(),
+        "FunUnstructuredBinary",
+        json!([{ "tag": "url", "val": "https://example.com/file.bin"}]),
+        json!({"kind": "record", "value": {"fields": [{"kind": "variant", "value": {"case": 1, "payload": {"kind": "url", "value": {"url": "https://example.com/file.bin"}}}}]}}),
     );
 }
 
@@ -615,7 +627,7 @@ fn bridge_tests_multimodal(
         pkg.target_dir(),
         "FunMultimodal",
         json!([[{"type": "text", "value": {"tag": "inline", "val": "hello"}}]]),
-        json!({"kind": "record", "value": {"fields": [{"kind": "list", "value": {"elements": [{"kind": "variant", "value": {"case": 0, "payload": {"kind": "text", "value": {"text": "hello"}}}}]}}]}}),
+        json!({"kind": "record", "value": {"fields": [{"kind": "list", "value": {"elements": [{"kind": "variant", "value": {"case": 0, "payload": {"kind": "variant", "value": {"case": 0, "payload": {"kind": "text", "value": {"text": "hello"}}}}}}]}}]}}),
     );
 }
 
@@ -957,6 +969,8 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
+    let agent_type = golem_common::schema::adapters::agent_type_to_schema(&agent_type)
+        .expect("Failed to convert fixture agent type to schema");
     let mut generator = TypeScriptBridgeGenerator::new(agent_type, target_dir, true).unwrap();
     generator.generate().unwrap();
 

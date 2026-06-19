@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::schema::adapters::unstructured::is_unstructured_variant;
 use golem_common::schema::schema_type::SchemaType;
 
 fn is_path_leaf_type(typ: &SchemaType) -> bool {
+    // A role-marked unstructured-text/binary variant renders inline as the
+    // ergonomic wrapper type, so it is a leaf — the walker must not descend
+    // into its `inline` / `url` cases.
+    if is_unstructured_variant(typ) {
+        return true;
+    }
     match typ {
         // Structural composites with nested children — non-leaf in the
         // type-location path the naming walker tracks.
@@ -23,7 +30,14 @@ fn is_path_leaf_type(typ: &SchemaType) -> bool {
         | SchemaType::Option { .. }
         | SchemaType::Record { .. }
         | SchemaType::Tuple { .. }
-        | SchemaType::List { .. } => false,
+        | SchemaType::List { .. }
+        // Rich containers carry nested user `SchemaType`s; the walker
+        // descends into them, so they are non-leaf path elements.
+        | SchemaType::FixedList { .. }
+        | SchemaType::Map { .. }
+        | SchemaType::Union { .. }
+        | SchemaType::Future { .. }
+        | SchemaType::Stream { .. } => false,
         // A `Ref` resolves to a named definition in the surrounding graph;
         // the walker descends into the def body before recursing further,
         // so refs themselves are treated as non-leaf path elements.
@@ -44,16 +58,9 @@ fn is_path_leaf_type(typ: &SchemaType) -> bool {
         | SchemaType::F32 { .. }
         | SchemaType::F64 { .. }
         | SchemaType::Char { .. }
-        | SchemaType::String { .. } => true,
-        // The rich schema variants below have no legacy AnalysedType
-        // counterpart and never appear when the bridge generator is fed
-        // a legacy `AgentType` (the only construction path today). Treat
-        // them as leaves so the walker doesn't try to descend into shapes
-        // it doesn't know how to emit; the emission-time projection via
-        // `schema_type_to_analysed_type` will surface a clear error if
-        // such a type ever shows up.
-        SchemaType::FixedList { .. }
-        | SchemaType::Map { .. }
+        | SchemaType::String { .. }
+        // Rich scalar / capability types whose payloads carry no nested
+        // user `SchemaType` are leaves.
         | SchemaType::Text { .. }
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
@@ -61,15 +68,18 @@ fn is_path_leaf_type(typ: &SchemaType) -> bool {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::Union { .. }
         | SchemaType::Secret { .. }
-        | SchemaType::QuotaToken { .. }
-        | SchemaType::Future { .. }
-        | SchemaType::Stream { .. } => true,
+        | SchemaType::QuotaToken { .. } => true,
     }
 }
 
 fn can_be_named(typ: &SchemaType) -> bool {
+    // A role-marked unstructured-text/binary variant renders inline as the
+    // ergonomic wrapper type (`UnstructuredText` / `UnstructuredBinary`); it
+    // must never be hoisted into a generated nominal enum.
+    if is_unstructured_variant(typ) {
+        return false;
+    }
     match typ {
         // Refs are always named: their identity is the def name in the
         // surrounding graph.
@@ -83,7 +93,10 @@ fn can_be_named(typ: &SchemaType) -> bool {
         | SchemaType::Flags { .. }
         | SchemaType::Record { .. }
         | SchemaType::Tuple { .. }
-        | SchemaType::List { .. } => true,
+        | SchemaType::List { .. }
+        // A discriminated union is a tagged sum like `Variant`: it can carry
+        // a generated name (a TS tagged-union alias / a Rust enum).
+        | SchemaType::Union { .. } => true,
         // Primitives never need a generated type alias.
         SchemaType::Bool { .. }
         | SchemaType::S8 { .. }
@@ -98,8 +111,10 @@ fn can_be_named(typ: &SchemaType) -> bool {
         | SchemaType::F64 { .. }
         | SchemaType::Char { .. }
         | SchemaType::String { .. } => false,
-        // Rich variants without legacy counterparts: see comment in
-        // `is_path_leaf_type`. Excluded from naming.
+        // Rich containers/scalars that render inline in both target
+        // languages (`Map<K,V>`/`Vec<(K,V)>`, `T[]`/`Vec<T>`, string,
+        // bigint, wrapper structs, …) never need a generated alias.
+        // `Future`/`Stream` have no value surface and error at emission.
         SchemaType::FixedList { .. }
         | SchemaType::Map { .. }
         | SchemaType::Text { .. }
@@ -109,7 +124,6 @@ fn can_be_named(typ: &SchemaType) -> bool {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::Union { .. }
         | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. }
         | SchemaType::Future { .. }

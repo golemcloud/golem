@@ -80,7 +80,7 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -1014,15 +1014,21 @@ impl AppCommandHandler {
         // Emit schema evolution warnings
         for (component_name, new_props) in &deploy_diff.deployable_components {
             if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
-                // The deployed (current) agent types are schema-native, while the
-                // local manifest still carries legacy `AgentType`s; bridge the
-                // deployed side back to legacy for the shared evolution check.
+                // TEMP: `validate_schema_evolution` is still a legacy-`AgentType`
+                // positional checker. Both sides are now schema-native, so lower
+                // them to legacy here until that module is ported.
                 let old_agent_types = old_agent_types
                     .iter()
                     .map(golem_common::schema::adapters::schema_agent_type_to_legacy)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(anyhow::Error::msg)?;
-                let warnings = validate_schema_evolution(&old_agent_types, &new_props.agent_types);
+                let new_agent_types = new_props
+                    .agent_types
+                    .iter()
+                    .map(golem_common::schema::adapters::schema_agent_type_to_legacy)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(anyhow::Error::msg)?;
+                let warnings = validate_schema_evolution(&old_agent_types, &new_agent_types);
                 for w in &warnings {
                     log_warn_action(
                         "Schema evolution",
@@ -2738,8 +2744,8 @@ fn resolve_secret_defaults(
 
 fn collect_declared_agent_secret_types(
     deploy_diff: &DeployDiff,
-) -> anyhow::Result<BTreeMap<String, AnalysedType>> {
-    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
+) -> anyhow::Result<BTreeMap<String, SchemaType>> {
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (SchemaType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
         for agent_type in &component.agent_types {

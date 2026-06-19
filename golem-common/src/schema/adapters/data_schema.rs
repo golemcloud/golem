@@ -57,8 +57,9 @@
 //!   shape, so the reverse never flattens.
 
 use crate::base_model::agent::{DataSchema, NamedElementSchema, NamedElementSchemas};
+use crate::schema::adapters::analysed_type::SchemaGraphBuilder;
 use crate::schema::adapters::element_schema::{
-    element_schema_to_schema_type, schema_type_to_element_schema,
+    element_schema_to_schema_type, element_schema_to_schema_type_in, schema_type_to_element_schema,
 };
 use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
 use crate::schema::agent::{FieldSource, InputSchema, NamedField, OutputSchema};
@@ -110,6 +111,34 @@ fn multimodal_elements_to_list_variant(
         .iter()
         .map(|e| {
             let body = element_schema_to_schema_type(&e.schema)?;
+            Ok(VariantCaseType {
+                name: e.name.clone(),
+                payload: Some(body),
+                metadata: Default::default(),
+            })
+        })
+        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+    let mut variant = SchemaType::variant(cases);
+    variant.metadata_mut().role = Some(Role::Multimodal);
+    Ok(SchemaType::list(variant))
+}
+
+/// Graph-threaded variant of [`multimodal_elements_to_list_variant`]: lowers
+/// each alternative's `ComponentModel` body through the shared `builder` so
+/// legacy named composites are preserved as [`SchemaType::Ref`]s.
+fn multimodal_elements_to_list_variant_in(
+    builder: &mut SchemaGraphBuilder,
+    elements: &[NamedElementSchema],
+) -> Result<SchemaType, SchemaAdapterError> {
+    if elements.is_empty() {
+        return Err(SchemaAdapterError::LossySchemaType(
+            "multimodal DataSchema has no alternatives".into(),
+        ));
+    }
+    let cases = elements
+        .iter()
+        .map(|e| {
+            let body = element_schema_to_schema_type_in(builder, &e.schema)?;
             Ok(VariantCaseType {
                 name: e.name.clone(),
                 payload: Some(body),
@@ -221,6 +250,62 @@ pub fn data_schema_to_output_schema(
         },
         DataSchema::Multimodal(NamedElementSchemas { elements }) => Ok(OutputSchema::Single(
             Box::new(multimodal_elements_to_list_variant(elements)?),
+        )),
+    }
+}
+
+/// Graph-threaded variant of [`data_schema_to_input_schema`]: lowers each
+/// element's `ComponentModel` body through the shared `builder` so legacy named
+/// composites are preserved as [`SchemaType::Ref`]s into the agent's
+/// [`SchemaGraph`] instead of being inlined anonymously.
+pub(crate) fn data_schema_to_input_schema_in(
+    builder: &mut SchemaGraphBuilder,
+    schema: &DataSchema,
+) -> Result<InputSchema, SchemaAdapterError> {
+    match schema {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => {
+            let fields = elements
+                .iter()
+                .map(|e| {
+                    Ok(NamedField::user_supplied(
+                        e.name.clone(),
+                        element_schema_to_schema_type_in(builder, &e.schema)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+            Ok(InputSchema::Parameters(fields))
+        }
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
+            let parts = multimodal_elements_to_list_variant_in(builder, elements)?;
+            Ok(InputSchema::Parameters(vec![NamedField::user_supplied(
+                MULTIMODAL_PARTS_FIELD_NAME,
+                parts,
+            )]))
+        }
+    }
+}
+
+/// Graph-threaded variant of [`data_schema_to_output_schema`]: lowers the
+/// output `ComponentModel` body through the shared `builder` so legacy named
+/// composites are preserved as [`SchemaType::Ref`]s.
+pub(crate) fn data_schema_to_output_schema_in(
+    builder: &mut SchemaGraphBuilder,
+    schema: &DataSchema,
+) -> Result<OutputSchema, SchemaAdapterError> {
+    match schema {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => match elements.as_slice() {
+            [] => Ok(OutputSchema::Unit),
+            [single] => Ok(OutputSchema::Single(Box::new(
+                element_schema_to_schema_type_in(builder, &single.schema)?,
+            ))),
+            many => Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                "output DataSchema with {} tuple elements is not supported; \
+                 Golem agent methods must declare 0 or 1 output element",
+                many.len()
+            ))),
+        },
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => Ok(OutputSchema::Single(
+            Box::new(multimodal_elements_to_list_variant_in(builder, elements)?),
         )),
     }
 }

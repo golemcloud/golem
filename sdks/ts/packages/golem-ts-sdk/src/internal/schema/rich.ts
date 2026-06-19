@@ -33,6 +33,8 @@ import { UnstructuredText } from '../../newTypes/textInput';
 import { UnstructuredBinary } from '../../newTypes/binaryInput';
 
 const MULTIMODAL_ROLE: Role = { tag: 'multimodal' };
+const UNSTRUCTURED_TEXT_ROLE: Role = { tag: 'unstructured-text' };
+const UNSTRUCTURED_BINARY_ROLE: Role = { tag: 'unstructured-binary' };
 
 // Variant case indices shared by unstructured text/binary.
 const INLINE_CASE = 0;
@@ -44,18 +46,20 @@ const URL_CASE = 1;
 
 export function unstructuredTextSchemaType(languages: string[]): SchemaType {
   const restrictions = languages.length > 0 ? { languages } : {};
-  return t.variant([
+  const variant = t.variant([
     variantCase('inline', schemaType({ tag: 'text', restrictions })),
     variantCase('url', schemaType({ tag: 'url', restrictions: {} })),
   ]);
+  return { body: variant.body, metadata: { ...emptyMetadata(), role: UNSTRUCTURED_TEXT_ROLE } };
 }
 
 export function unstructuredBinarySchemaType(mimeTypes: string[]): SchemaType {
   const restrictions = mimeTypes.length > 0 ? { mimeTypes } : {};
-  return t.variant([
+  const variant = t.variant([
     variantCase('inline', schemaType({ tag: 'binary', restrictions })),
     variantCase('url', schemaType({ tag: 'url', restrictions: {} })),
   ]);
+  return { body: variant.body, metadata: { ...emptyMetadata(), role: UNSTRUCTURED_BINARY_ROLE } };
 }
 
 export interface MultimodalCaseSchema {

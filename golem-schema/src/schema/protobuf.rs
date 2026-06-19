@@ -179,6 +179,8 @@ impl From<Role> for proto::Role {
     fn from(value: Role) -> Self {
         let inner = match value {
             Role::Multimodal => proto::role::Value::Multimodal(ProtoEmpty {}),
+            Role::UnstructuredText => proto::role::Value::UnstructuredText(ProtoEmpty {}),
+            Role::UnstructuredBinary => proto::role::Value::UnstructuredBinary(ProtoEmpty {}),
             Role::Other(s) => proto::role::Value::Other(s),
         };
         Self { value: Some(inner) }
@@ -191,6 +193,8 @@ impl TryFrom<proto::Role> for Role {
     fn try_from(value: proto::Role) -> Result<Self, Self::Error> {
         match value.value {
             Some(proto::role::Value::Multimodal(_)) => Ok(Role::Multimodal),
+            Some(proto::role::Value::UnstructuredText(_)) => Ok(Role::UnstructuredText),
+            Some(proto::role::Value::UnstructuredBinary(_)) => Ok(Role::UnstructuredBinary),
             Some(proto::role::Value::Other(s)) => Ok(Role::Other(s)),
             None => Err("Missing field: Role.value".to_string()),
         }

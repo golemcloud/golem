@@ -52,7 +52,7 @@ import {
   ResultTypeNonExact3,
   ObjectOrBooleanOrUndefined,
 } from './testTypes';
-import { ImportedSourceOrderedUnion } from './importedTestTypes';
+import { ImportedSourceOrderedUnion, ImportedRecTree } from './importedTestTypes';
 import { describe } from 'vitest';
 
 @agent()
@@ -896,5 +896,9 @@ export class RecursiveAgent extends BaseAgent {
 
   echoMutual(a: MutualA): MutualA {
     return a;
+  }
+
+  echoImportedTree(tree: ImportedRecTree): ImportedRecTree {
+    return tree;
   }
 }

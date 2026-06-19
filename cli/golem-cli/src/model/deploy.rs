@@ -23,7 +23,7 @@ use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::RawAgentId;
 use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
-    AgentConfigSource, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
+    AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
@@ -139,8 +139,13 @@ mod tests {
         EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId, ResourceLimit, ResourceName,
     };
     use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+    use golem_common::schema::schema_type::SchemaType;
     use golem_wasm::analysis::analysed_type::str as analysed_str;
     use uuid::Uuid;
+
+    fn schema_str() -> SchemaType {
+        SchemaType::string()
+    }
 
     fn secret_dto(
         path: &[&str],
@@ -201,7 +206,7 @@ mod tests {
     #[::test_r::test]
     fn environment_setup_secret_type_rendering_matches_between_manifest_and_environment() {
         let mut secret_types = BTreeMap::new();
-        secret_types.insert("superSecret".to_string(), analysed_str());
+        secret_types.insert("superSecret".to_string(), schema_str());
 
         let plan = build_environment_setup_plan(
             vec![DeploymentAgentSecretDefault {
@@ -233,8 +238,8 @@ mod tests {
     #[::test_r::test]
     fn environment_setup_classifies_secret_create_and_skip_existing() {
         let mut secret_types = BTreeMap::new();
-        secret_types.insert("createSecret".to_string(), analysed_str());
-        secret_types.insert("existingSecret".to_string(), analysed_str());
+        secret_types.insert("createSecret".to_string(), schema_str());
+        secret_types.insert("existingSecret".to_string(), schema_str());
 
         let plan = build_environment_setup_plan(
             vec![
@@ -368,7 +373,7 @@ impl EnvironmentSetupDisplay {
 }
 
 pub fn preferred_source_language_for_setup(
-    agent_types_by_component: &HashMap<String, Vec<AgentType>>,
+    agent_types_by_component: &HashMap<String, Vec<AgentTypeSchema>>,
 ) -> SourceLanguage {
     let mut languages = agent_types_by_component
         .values()
@@ -397,7 +402,7 @@ pub fn build_environment_setup_plan(
     current_agent_secrets: Vec<AgentSecretDto>,
     current_retry_policies: Vec<RetryPolicyDto>,
     current_resources: Vec<ResourceDefinition>,
-    secret_types_by_path: &BTreeMap<String, golem_wasm::analysis::AnalysedType>,
+    secret_types_by_path: &BTreeMap<String, golem_common::schema::schema_type::SchemaType>,
     source_language: &SourceLanguage,
 ) -> anyhow::Result<EnvironmentSetupPlan> {
     let mut display = EnvironmentSetupDisplay::default();
@@ -412,7 +417,7 @@ pub fn build_environment_setup_plan(
                 EnvironmentSetupSecretValueDisplay {
                     secret_type: secret_types_by_path
                         .get(&canonical_path_str)
-                        .map(|typ| render_legacy_type_for_language(source_language, typ))
+                        .map(|typ| render_schema_type_for_language(source_language, typ))
                         .unwrap_or_else(|| "unknown".to_string()),
                     value: masked_json_value(&default.secret_value)?,
                 },
@@ -1325,4 +1330,18 @@ fn render_legacy_type_for_language(
         }
         Err(_) => "<unknown>".to_string(),
     }
+}
+
+/// Render a schema-native [`SchemaType`](golem_common::schema::schema_type::SchemaType)
+/// for the given language. Config secret value types are inline (no graph
+/// refs), so they are wrapped in a self-contained single-root graph.
+fn render_schema_type_for_language(
+    source_language: &SourceLanguage,
+    typ: &golem_common::schema::schema_type::SchemaType,
+) -> String {
+    let graph = SchemaGraph {
+        defs: vec![],
+        root: typ.clone(),
+    };
+    render_type_for_language(source_language, &graph, &graph.root, true)
 }

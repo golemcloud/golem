@@ -499,6 +499,68 @@ fn element_schema_unstructured_binary_round_trip() {
 }
 
 #[test]
+fn unstructured_text_role_with_wrong_case_names_is_rejected() {
+    use crate::schema::adapters::unstructured::unstructured_text_restrictions;
+    use crate::schema::schema_type::VariantCaseType;
+
+    // Role marker says unstructured-text, but the cases are mis-named: the
+    // role is authoritative, so this must be a hard error rather than being
+    // silently treated as a plain variant.
+    let mut ty = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "body".into(),
+            payload: Some(SchemaType::text(TextRestrictions::default())),
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "link".into(),
+            payload: Some(SchemaType::url(UrlRestrictions::default())),
+            metadata: Default::default(),
+        },
+    ]);
+    ty.metadata_mut().role = Some(Role::UnstructuredText);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let err = unstructured_text_restrictions(&graph, &ty).unwrap_err();
+    assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+}
+
+#[test]
+fn unstructured_text_role_on_non_variant_is_rejected() {
+    use crate::schema::adapters::unstructured::unstructured_text_restrictions;
+
+    // A node tagged with the unstructured-text role that is not a variant at
+    // all is malformed and must error (role is authoritative).
+    let mut ty = SchemaType::text(TextRestrictions::default());
+    ty.metadata_mut().role = Some(Role::UnstructuredText);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let err = unstructured_text_restrictions(&graph, &ty).unwrap_err();
+    assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+}
+
+#[test]
+fn unstructured_text_restrictions_ignores_unmarked_variant() {
+    use crate::schema::adapters::unstructured::unstructured_text_restrictions;
+    use crate::schema::schema_type::VariantCaseType;
+
+    // The same structural shape WITHOUT the role marker is just an ordinary
+    // user variant, not an unstructured wrapper: detection returns None.
+    let ty = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "inline".into(),
+            payload: Some(SchemaType::text(TextRestrictions::default())),
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "url".into(),
+            payload: Some(SchemaType::url(UrlRestrictions::default())),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    assert!(unstructured_text_restrictions(&graph, &ty).unwrap().is_none());
+}
+
+#[test]
 fn element_schema_component_model_round_trip() {
     let leg = ElementSchema::ComponentModel(ComponentModelElementSchema {
         element_type: record(vec![field("x", s32()), field("y", str())]),
@@ -1494,7 +1556,12 @@ mod untyped_round_trip {
     }
 
     #[test]
-    fn url_text_reference_is_lossy() {
+    fn url_text_reference_round_trips() {
+        // With the canonical role-marked unstructured variant form
+        // (`variant { inline: text, url: url }`), URL references are now
+        // representable via the `url` case, so they round-trip rather than
+        // failing as lossy (the previous bare `SchemaType::Text` form could
+        // only carry inline text).
         let value = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
             TextReferenceValue {
                 value: TextReference::Url(crate::base_model::agent::Url {
@@ -1508,7 +1575,30 @@ mod untyped_round_trip {
                 schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
             }],
         });
-        let err = untyped_data_value_to_typed_input(value, &schema).unwrap_err();
-        assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+        let (input_schema, values) =
+            untyped_data_value_to_typed_input(value.clone(), &schema).unwrap();
+        let back = typed_input_to_untyped_data_value(&input_schema, &values).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn url_binary_reference_round_trips() {
+        let value = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredBinary(
+            BinaryReferenceValue {
+                value: BinaryReference::Url(crate::base_model::agent::Url {
+                    value: "https://example.com/image.png".into(),
+                }),
+            },
+        )]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "image".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            }],
+        });
+        let (input_schema, values) =
+            untyped_data_value_to_typed_input(value.clone(), &schema).unwrap();
+        let back = typed_input_to_untyped_data_value(&input_schema, &values).unwrap();
+        assert_eq!(value, back);
     }
 }

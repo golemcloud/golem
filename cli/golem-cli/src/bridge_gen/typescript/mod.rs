@@ -20,7 +20,7 @@ mod type_name;
 pub use type_name::TypeScriptTypeName;
 
 use crate::bridge_gen::parameter_naming::ParameterNaming;
-use crate::bridge_gen::type_naming::TypeNaming;
+use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::typescript::javascript::escape_js_ident;
 use crate::bridge_gen::typescript::ts_writer::{
     FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter, indent,
@@ -30,16 +30,42 @@ use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
-    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+use golem_common::model::agent::{AgentConfigSource, AgentMode};
+use golem_common::schema::adapters::data_schema::multimodal_variant_cases;
+use golem_common::schema::adapters::unstructured::{
+    unstructured_binary_restrictions, unstructured_text_restrictions,
+};
+use golem_common::schema::agent::{
+    AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaTypeDef;
-use golem_common::schema::schema_type::SchemaType;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
+};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
 use serde_json::json;
+
+/// User-supplied input shape for a constructor or method, derived from an
+/// [`InputSchema`]. Multimodal input (a single user field whose schema is the
+/// structural `list<variant<… Role::Multimodal>>`) is detected up front so the
+/// generators can keep the ergonomic single-array surface.
+enum TsInput {
+    /// Ordinary positional parameters: `(param_name, schema)` in order.
+    Params(Vec<(String, SchemaType)>),
+    /// Multimodal input: `(case_name, payload_schema)` per modality.
+    Multimodal(Vec<(String, SchemaType)>),
+}
+
+/// Output shape for a method, derived from an [`OutputSchema`].
+enum TsOutput {
+    /// No return value.
+    Unit,
+    /// A single returned value of the given schema.
+    Single(SchemaType),
+    /// Multimodal output: `(case_name, payload_schema)` per modality.
+    Multimodal(Vec<(String, SchemaType)>),
+}
 
 const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
 const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
@@ -47,13 +73,17 @@ const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
 pub struct TypeScriptBridgeGenerator {
     target_path: Utf8PathBuf,
     type_naming: TypeNaming<TypeScriptTypeName>,
-    agent_type: AgentType,
+    agent_type: AgentTypeSchema,
     testing: bool,
     same_language: bool,
 }
 
 impl BridgeGenerator for TypeScriptBridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
+    fn new(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
         TypeScriptBridgeGenerator::new(agent_type, target_path, testing)
     }
 
@@ -81,7 +111,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
 
 impl TypeScriptBridgeGenerator {
     pub fn new(
-        agent_type: AgentType,
+        agent_type: AgentTypeSchema,
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
@@ -98,24 +128,63 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
-    /// Resolve a legacy [`AnalysedType`] from the agent declaration to the
-    /// [`SchemaType`] that was lowered for it during `TypeNaming::new`.
-    /// Returning the memoised result is critical: a fresh
-    /// `analysed_type_to_schema_graph(typ)` here would only see the type
-    /// in isolation and emit the base `TypeId`, which would silently
-    /// collide with the disambiguated id in `type_naming.graph()` and
-    /// cause two distinct same-name composites to be rendered as the
-    /// first one's body.
-    fn import_analysed_type(&self, typ: &AnalysedType) -> anyhow::Result<SchemaType> {
-        self.type_naming
-            .imported_schema_type(typ)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow!(
-                    "Legacy AnalysedType was not collected during TypeNaming::new — \
-                     bridge_gen lost track of an emit-time type. typ = {typ:?}"
-                )
+    /// Resolve the user-supplied input shape of an [`InputSchema`].
+    /// Auto-injected fields are omitted; a single field whose schema is the
+    /// structural multimodal form is surfaced as [`TsInput::Multimodal`].
+    fn ts_input(&self, input: &InputSchema) -> anyhow::Result<TsInput> {
+        let fields = user_supplied_fields(input);
+        if let [field] = fields.as_slice()
+            && let Some(cases) = multimodal_variant_cases(self.type_naming.graph(), &field.schema)?
+        {
+            return Ok(TsInput::Multimodal(self.multimodal_cases(cases)?));
+        }
+        Ok(TsInput::Params(
+            fields
+                .iter()
+                .map(|f| (f.name.clone(), f.schema.clone()))
+                .collect(),
+        ))
+    }
+
+    /// Resolve the output shape of an [`OutputSchema`]. A `Single` whose
+    /// schema is the structural multimodal form is surfaced as
+    /// [`TsOutput::Multimodal`].
+    fn ts_output(&self, output: &OutputSchema) -> anyhow::Result<TsOutput> {
+        match output {
+            OutputSchema::Unit => Ok(TsOutput::Unit),
+            OutputSchema::Single(ty) => {
+                if let Some(cases) = multimodal_variant_cases(self.type_naming.graph(), ty)? {
+                    return Ok(TsOutput::Multimodal(self.multimodal_cases(cases)?));
+                }
+                Ok(TsOutput::Single((**ty).clone()))
+            }
+        }
+    }
+
+    /// Whether the generated client surface for `input` is empty, i.e. there
+    /// are no user-supplied parameters (auto-injected fields don't count).
+    fn input_is_unit(&self, input: &InputSchema) -> bool {
+        user_supplied_fields(input).is_empty()
+    }
+
+    /// Convert the variant cases of a multimodal `list<variant<…>>` into
+    /// `(case_name, payload_schema)` pairs. Each modality carries a payload.
+    fn multimodal_cases(
+        &self,
+        cases: &[VariantCaseType],
+    ) -> anyhow::Result<Vec<(String, SchemaType)>> {
+        cases
+            .iter()
+            .map(|case| {
+                let payload = case.payload.clone().ok_or_else(|| {
+                    anyhow!(
+                        "Multimodal case `{}` has no payload schema; expected a modality body",
+                        case.name
+                    )
+                })?;
+                Ok((case.name.clone(), payload))
             })
+            .collect()
     }
 
     /// Resolve a [`SchemaType::Ref`] against [`TypeNaming::graph`] and return
@@ -278,16 +347,16 @@ impl TypeScriptBridgeGenerator {
     fn generate_test_method_encode_input(
         &self,
         writer: &mut TsWriter,
-        method_def: &AgentMethod,
+        method_def: &AgentMethodSchema,
     ) -> anyhow::Result<()> {
         let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut encode_input =
             writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
         encode_input.result("void");
         encode_input.write_line("const __json = await readStdin();");
-        if !method_def.input_schema.is_unit() {
+        if !self.input_is_unit(&method_def.input_schema) {
             encode_input.write("const [");
-            self.write_parameter_name_list(&mut encode_input, &method_def.input_schema);
+            self.write_parameter_name_list(&mut encode_input, &method_def.input_schema)?;
             encode_input.write_line("] = __json;");
         }
         encode_input.write_line("const __result: base.SchemaValue = ");
@@ -306,7 +375,7 @@ impl TypeScriptBridgeGenerator {
     fn generate_test_method_decode_input(
         &self,
         writer: &mut TsWriter,
-        method_def: &AgentMethod,
+        method_def: &AgentMethodSchema,
     ) -> anyhow::Result<()> {
         let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut decode_input =
@@ -328,27 +397,18 @@ impl TypeScriptBridgeGenerator {
     fn generate_test_method_encode_output(
         &self,
         writer: &mut TsWriter,
-        method_def: &AgentMethod,
+        method_def: &AgentMethodSchema,
     ) -> anyhow::Result<()> {
         let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut encode_output =
             writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
         encode_output.result("void");
-        if method_def.output_schema.is_unit() {
+        if matches!(method_def.output_schema, OutputSchema::Unit) {
             encode_output.write_line("console.log('void');");
         } else {
             encode_output.write_line("const __json = await readStdin();");
-            if !method_def.output_schema.is_unit() {
-                encode_output.write("const [");
-                self.write_parameter_name_list(&mut encode_output, &method_def.output_schema);
-                encode_output.write_line("] = __json;");
-            }
             encode_output.write_line("const __result: base.SchemaValue =");
-            self.write_encode_output_value(
-                &mut encode_output,
-                &method_def.output_schema,
-                MULTIMODAL_INPUT_NAME,
-            )?;
+            self.write_encode_output_value(&mut encode_output, &method_def.output_schema, "__json")?;
             encode_output.write_line("console.log(JSON.stringify(__result));");
         }
         Ok(())
@@ -359,13 +419,13 @@ impl TypeScriptBridgeGenerator {
     fn generate_test_method_decode_output(
         &self,
         writer: &mut TsWriter,
-        method_def: &AgentMethod,
+        method_def: &AgentMethodSchema,
     ) -> anyhow::Result<()> {
         let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut decode_output =
             writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
         decode_output.result("void");
-        if method_def.output_schema.is_unit() {
+        if matches!(method_def.output_schema, OutputSchema::Unit) {
             decode_output.write_line("console.log('void');");
         } else {
             decode_output.write_line("const __jsonResult: base.SchemaValue = await readStdin();");
@@ -726,7 +786,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         class_name: &str,
         config_var: &str,
-        local_configs: &[&AgentConfigDeclaration],
+        local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
         writer.write_doc(&format!(
             "Gets or creates an instance of this agent with configuration\n{}",
@@ -759,7 +819,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         class_name: &str,
         config_var: &str,
-        local_configs: &[&AgentConfigDeclaration],
+        local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
         writer.write_doc(&format!(
             "Gets or creates a phantom instance of this agent with configuration and a specific phantom ID\n{}",
@@ -792,7 +852,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         class_name: &str,
         config_var: &str,
-        local_configs: &[&AgentConfigDeclaration],
+        local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
         writer.write_doc(&format!(
             "Creates a new phantom instance of this agent with configuration\n{}",
@@ -823,7 +883,7 @@ impl TypeScriptBridgeGenerator {
     fn write_config_parameter_list(
         &self,
         writer: &mut TsFunctionWriter<'_>,
-        local_configs: &[&AgentConfigDeclaration],
+        local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
         for config in local_configs {
             let param_name = format!(
@@ -834,8 +894,7 @@ impl TypeScriptBridgeGenerator {
                     .map(|s| s.to_upper_camel_case())
                     .collect::<String>()
             );
-            let config_schema_type = self.import_analysed_type(&config.value_type)?;
-            let param_type = self.type_reference(&config_schema_type)?;
+            let param_type = self.type_reference(&config.value_type)?;
             writer.param(&param_name, &param_type);
         }
         Ok(())
@@ -845,7 +904,7 @@ impl TypeScriptBridgeGenerator {
     fn write_config_encoding(
         &self,
         writer: &mut TsFunctionWriter<'_>,
-        local_configs: &[&AgentConfigDeclaration],
+        local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
         writer.write_line("const agentConfig: base.AgentConfigEntry[] = [];");
         for config in local_configs {
@@ -863,8 +922,7 @@ impl TypeScriptBridgeGenerator {
                 .map(|s| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let config_schema_type = self.import_analysed_type(&config.value_type)?;
-            let encoded_value = self.encode_schema_value(&param_name, &config_schema_type)?;
+            let encoded_value = self.encode_schema_value(&param_name, &config.value_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
@@ -934,7 +992,7 @@ impl TypeScriptBridgeGenerator {
     fn generate_ts_remote_method(
         &self,
         writer: &mut TsWriter,
-        method_def: &AgentMethod,
+        method_def: &AgentMethodSchema,
     ) -> anyhow::Result<()> {
         let get_server_config_fn = self.build_get_server_config_fn();
         let get_around_invoke_hook_fn = self.build_get_around_invoke_hook_fn();
@@ -947,8 +1005,8 @@ impl TypeScriptBridgeGenerator {
             &self.to_js_ident(&method_def.name),
             &format!(
                 "base.RemoteMethod<[{}], {}>",
-                self.data_schema_as_type_list(&method_def.input_schema)?,
-                self.data_schema_as_result_type(&method_def.output_schema)?
+                self.input_type_list(&method_def.input_schema)?,
+                self.output_result_type(&method_def.output_schema)?
             ),
             Some(&formatdoc! {"
                 base.createRemoteMethod(
@@ -985,7 +1043,7 @@ impl TypeScriptBridgeGenerator {
     }
 
     /// Builds the function that constructs the base invocation request, with no method parameters set yet
-    fn build_get_method_request_fn(&self, method_def: &AgentMethod) -> String {
+    fn build_get_method_request_fn(&self, method_def: &AgentMethodSchema) -> String {
         let mut get_method_request = TsAnonymousFunctionWriter::new();
         get_method_request.write_line("return {");
         get_method_request.indent();
@@ -1008,18 +1066,14 @@ impl TypeScriptBridgeGenerator {
 
     /// Builds the function that takes the method's parameters and encodes them into a SchemaValue,
     /// to be injected into the invocation request
-    fn build_encode_args_fn(&self, method_def: &AgentMethod) -> anyhow::Result<String> {
+    fn build_encode_args_fn(&self, method_def: &AgentMethodSchema) -> anyhow::Result<String> {
         let mut parameter_naming = ParameterNaming::new();
-        match &method_def.input_schema {
-            DataSchema::Tuple(params) => {
-                parameter_naming.reserve_many(
-                    params
-                        .elements
-                        .iter()
-                        .map(|param| self.to_js_ident(&param.name)),
-                );
+        match self.ts_input(&method_def.input_schema)? {
+            TsInput::Params(params) => {
+                parameter_naming
+                    .reserve_many(params.iter().map(|(name, _)| self.to_js_ident(name)));
             }
-            DataSchema::Multimodal(_) => parameter_naming.reserve(MULTIMODAL_INPUT_NAME),
+            TsInput::Multimodal(_) => parameter_naming.reserve(MULTIMODAL_INPUT_NAME),
         }
 
         let args_tuple_name = parameter_naming.fresh("__args");
@@ -1029,10 +1083,7 @@ impl TypeScriptBridgeGenerator {
         let mut encode_args = TsAnonymousFunctionWriter::new();
         encode_args.param(
             &args_tuple_name,
-            &format!(
-                "[{}]",
-                self.data_schema_as_type_list(&method_def.input_schema)?
-            ),
+            &format!("[{}]", self.input_type_list(&method_def.input_schema)?),
         );
         self.destructure_args_tuple(
             &mut encode_args,
@@ -1054,7 +1105,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Builds the function that takes the invocation API's result `TypedSchemaValue` and decodes it
     /// to the function's expected return type
-    fn build_decode_result_fn(&self, method_def: &AgentMethod) -> anyhow::Result<String> {
+    fn build_decode_result_fn(&self, method_def: &AgentMethodSchema) -> anyhow::Result<String> {
         let mut decode_result = TsAnonymousFunctionWriter::new();
         decode_result.param("result", "base.AgentInvocationResult");
         self.write_decode_output(
@@ -1133,43 +1184,13 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    /// Decodes one element value (component-model / text / binary) from the
-    /// `SchemaValue` expression `value_expr` into a TS value expression.
-    /// `parameter_name` is used for text/binary restriction error messages.
-    fn decode_element_value(
-        &self,
-        schema: &ElementSchema,
-        value_expr: &str,
-        parameter_name: &str,
-    ) -> anyhow::Result<String> {
-        Ok(match schema {
-            ElementSchema::ComponentModel(component_model) => {
-                let element_schema_type =
-                    self.import_analysed_type(&component_model.element_type)?;
-                self.decode_schema_value(value_expr, &element_schema_type)?
-            }
-            ElementSchema::UnstructuredText(descriptor) => {
-                format!(
-                    "base.UnstructuredText.fromSchemaValue('{parameter_name}', {value_expr}, [{}])",
-                    Self::text_restriction_codes(descriptor)
-                )
-            }
-            ElementSchema::UnstructuredBinary(descriptor) => {
-                format!(
-                    "base.UnstructuredBinary.fromSchemaValue('{parameter_name}', {value_expr}, [{}])",
-                    Self::binary_restriction_mimes(descriptor)
-                )
-            }
-        })
-    }
-
     /// Writes a `return <list>.value.elements.map(...)` statement reconstructing
     /// a multimodal TS array from a `list<variant<…>>` `SchemaValue` referenced
-    /// by `list_expr` (variant case index → element name).
+    /// by `list_expr` (variant case index → modality name).
     fn write_decode_multimodal_list<W: FunctionWriter>(
         &self,
         writer: &mut W,
-        multimodal: &NamedElementSchemas,
+        cases: &[(String, SchemaType)],
         list_expr: &str,
     ) -> anyhow::Result<()> {
         writer.write_line(format!("if ({list_expr}.kind !== 'list') {{"));
@@ -1183,16 +1204,12 @@ impl TypeScriptBridgeGenerator {
             "return {list_expr}.value.elements.map((item: any) => {{"
         ));
         writer.indent();
-        for (idx, element) in multimodal.elements.iter().enumerate() {
+        for (idx, (name, schema)) in cases.iter().enumerate() {
             let if_or_else = if idx == 0 { "if" } else { "else if" };
             writer.write_line(format!("{if_or_else} (item.value.case === {idx}) {{"));
             writer.indent();
-            let decoded =
-                self.decode_element_value(&element.schema, "item.value.payload", &element.name)?;
-            writer.write_line(format!(
-                "return {{ type: '{}', value: {decoded} }};",
-                element.name
-            ));
+            let decoded = self.decode_schema_value("item.value.payload", schema)?;
+            writer.write_line(format!("return {{ type: '{name}', value: {decoded} }};"));
             writer.unindent();
             writer.write_line("}");
         }
@@ -1205,20 +1222,20 @@ impl TypeScriptBridgeGenerator {
     /// Writes a `return` statement that decodes the method's output
     /// `TypedSchemaValue` (`{ value: SchemaValue }`, referenced by `typed_expr`)
     /// into the TS return value. The output wire is the bare value the server
-    /// pairs with the method output schema: a single element inline, a
-    /// multimodal `list<variant<…>>`, or the empty tuple (unit).
+    /// pairs with the method output schema: a single value inline, a multimodal
+    /// `list<variant<…>>`, or nothing (unit).
     fn write_decode_output<W: FunctionWriter>(
         &self,
         writer: &mut W,
-        schema: &DataSchema,
+        output: &OutputSchema,
         typed_expr: &str,
     ) -> anyhow::Result<()> {
-        match schema {
-            DataSchema::Tuple(params) if params.elements.is_empty() => {
+        match self.ts_output(output)? {
+            TsOutput::Unit => {
                 writer.write_line("return;");
                 Ok(())
             }
-            _ => {
+            other => {
                 writer.write_line(format!("const __out = {typed_expr};"));
                 writer.write_line("if (!__out) {");
                 writer.indent();
@@ -1226,34 +1243,14 @@ impl TypeScriptBridgeGenerator {
                 writer.unindent();
                 writer.write_line("}");
                 writer.write_line("const __outValue: base.SchemaValue = __out.value;");
-                match schema {
-                    DataSchema::Tuple(params) if params.elements.len() == 1 => {
-                        let param = &params.elements[0];
-                        let decoded =
-                            self.decode_element_value(&param.schema, "__outValue", "result")?;
+                match other {
+                    TsOutput::Unit => unreachable!(),
+                    TsOutput::Single(schema) => {
+                        let decoded = self.decode_schema_value("__outValue", &schema)?;
                         writer.write_line(format!("return {decoded};"));
                     }
-                    DataSchema::Tuple(params) => {
-                        writer.write_line("if (__outValue.kind !== 'tuple') {");
-                        writer.indent();
-                        writer.write_line(
-                            "throw new Error(`Invalid result value. Expected a tuple value, got ${__outValue.kind}`);",
-                        );
-                        writer.unindent();
-                        writer.write_line("}");
-                        writer.write_line("return [");
-                        writer.indent();
-                        for (idx, param) in params.elements.iter().enumerate() {
-                            let elem = format!("__outValue.value.elements[{idx}]");
-                            let decoded =
-                                self.decode_element_value(&param.schema, &elem, &param.name)?;
-                            writer.write_line(format!("{decoded},"));
-                        }
-                        writer.unindent();
-                        writer.write_line("];");
-                    }
-                    DataSchema::Multimodal(multimodal) => {
-                        self.write_decode_multimodal_list(writer, multimodal, "__outValue")?;
+                    TsOutput::Multimodal(cases) => {
+                        self.write_decode_multimodal_list(writer, &cases, "__outValue")?;
                     }
                 }
                 Ok(())
@@ -1267,7 +1264,7 @@ impl TypeScriptBridgeGenerator {
     fn write_decode_input<W: FunctionWriter>(
         &self,
         writer: &mut W,
-        schema: &DataSchema,
+        input: &InputSchema,
         value_expr: &str,
     ) -> anyhow::Result<()> {
         writer.write_line(format!("const __rec: base.SchemaValue = {value_expr};"));
@@ -1278,21 +1275,21 @@ impl TypeScriptBridgeGenerator {
         );
         writer.unindent();
         writer.write_line("}");
-        match schema {
-            DataSchema::Tuple(params) => {
+        match self.ts_input(input)? {
+            TsInput::Params(params) => {
                 writer.write_line("return [");
                 writer.indent();
-                for (idx, param) in params.elements.iter().enumerate() {
+                for (idx, (_, schema)) in params.iter().enumerate() {
                     let elem = format!("__rec.value.fields[{idx}]");
-                    let decoded = self.decode_element_value(&param.schema, &elem, &param.name)?;
+                    let decoded = self.decode_schema_value(&elem, schema)?;
                     writer.write_line(format!("{decoded},"));
                 }
                 writer.unindent();
                 writer.write_line("];");
             }
-            DataSchema::Multimodal(multimodal) => {
+            TsInput::Multimodal(cases) => {
                 writer.write_line("const __parts: base.SchemaValue = __rec.value.fields[0];");
-                self.write_decode_multimodal_list(writer, multimodal, "__parts")?;
+                self.write_decode_multimodal_list(writer, &cases, "__parts")?;
             }
         }
         Ok(())
@@ -1303,20 +1300,19 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut Target,
         tuple: &str,
-        schema: &DataSchema,
+        input: &InputSchema,
         multimodal_input_name: &str,
     ) -> anyhow::Result<()> {
-        match schema {
-            DataSchema::Tuple(params) => {
+        match self.ts_input(input)? {
+            TsInput::Params(params) => {
                 let param_names: Vec<String> = params
-                    .elements
                     .iter()
-                    .map(|param| self.to_js_ident(&param.name))
+                    .map(|(name, _)| self.to_js_ident(name))
                     .collect();
                 writer.write_line(format!("const [{}] = {};", param_names.join(", "), tuple));
                 Ok(())
             }
-            DataSchema::Multimodal(_) => {
+            TsInput::Multimodal(_) => {
                 // For multimodal input, extract the array from the args tuple
                 writer.write_line(format!("const {multimodal_input_name} = {tuple}[0];"));
                 Ok(())
@@ -1324,69 +1320,16 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    /// Comma-separated, single-quoted list of allowed language codes for a
-    /// text descriptor (empty when unrestricted).
-    fn text_restriction_codes(descriptor: &TextDescriptor) -> String {
-        descriptor
-            .restrictions
-            .as_ref()
-            .map_or(String::new(), |restrictions| {
-                restrictions
-                    .iter()
-                    .map(|tt| format!("'{}'", tt.language_code))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-    }
-
-    /// Comma-separated, single-quoted list of allowed mime types for a binary
-    /// descriptor (empty when unrestricted).
-    fn binary_restriction_mimes(descriptor: &BinaryDescriptor) -> String {
-        descriptor
-            .restrictions
-            .as_ref()
-            .map_or(String::new(), |restrictions| {
-                restrictions
-                    .iter()
-                    .map(|bt| format!("'{}'", bt.mime_type))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-    }
-
-    /// Encodes one element value (component-model / text / binary) into a
-    /// schema-native `SchemaValue` expression, given the TS variable holding
-    /// the value.
-    fn encode_element_value(
-        &self,
-        schema: &ElementSchema,
-        value_var: &str,
-    ) -> anyhow::Result<String> {
-        Ok(match schema {
-            ElementSchema::ComponentModel(component_model) => {
-                let element_schema_type =
-                    self.import_analysed_type(&component_model.element_type)?;
-                self.encode_schema_value(value_var, &element_schema_type)?
-            }
-            ElementSchema::UnstructuredText(_) => {
-                format!("base.UnstructuredText.toSchemaValue({value_var})")
-            }
-            ElementSchema::UnstructuredBinary(_) => {
-                format!("base.UnstructuredBinary.toSchemaValue({value_var})")
-            }
-        })
-    }
-
     /// Writes the `{ kind: 'list', value: { elements: <input>.map(...) } }`
     /// expression for a multimodal value, mapping each TS `{ type, value }`
-    /// element to a `variant` `SchemaValue` whose case index is the element's
+    /// element to a `variant` `SchemaValue` whose case index is the modality's
     /// position in the schema (matching the server's `parts` `list<variant<…>>`).
     /// `terminator` is appended after the closing braces (`,` inside a field
     /// list, `;` as a statement value).
     fn write_multimodal_list_expr<Target: FunctionWriter>(
         &self,
         writer: &mut Target,
-        multimodal: &NamedElementSchemas,
+        cases: &[(String, SchemaType)],
         multimodal_input_name: &str,
         terminator: &str,
     ) -> anyhow::Result<()> {
@@ -1394,14 +1337,11 @@ impl TypeScriptBridgeGenerator {
             "{{ kind: 'list', value: {{ elements: {multimodal_input_name}.map((item: any) => {{"
         ));
         writer.indent();
-        for (idx, element) in multimodal.elements.iter().enumerate() {
+        for (idx, (name, schema)) in cases.iter().enumerate() {
             let if_or_else = if idx == 0 { "if" } else { "else if" };
-            writer.write_line(format!(
-                "{if_or_else} (item.type === '{}') {{",
-                element.name
-            ));
+            writer.write_line(format!("{if_or_else} (item.type === '{name}') {{"));
             writer.indent();
-            let payload_expr = self.encode_element_value(&element.schema, "item.value")?;
+            let payload_expr = self.encode_schema_value("item.value", schema)?;
             writer.write_line(format!(
                 "return {{ kind: 'variant', value: {{ case: {idx}, payload: {payload_expr} }} }};"
             ));
@@ -1421,22 +1361,22 @@ impl TypeScriptBridgeGenerator {
     fn write_encode_input_record<Target: FunctionWriter>(
         &self,
         writer: &mut Target,
-        schema: &DataSchema,
+        input: &InputSchema,
         multimodal_input_name: &str,
     ) -> anyhow::Result<()> {
         writer.indent();
         writer.write_line("{ kind: 'record', value: { fields: [");
         writer.indent();
-        match schema {
-            DataSchema::Tuple(params) => {
-                for param in &params.elements {
-                    let param_name = self.to_js_ident(&param.name);
-                    let field_expr = self.encode_element_value(&param.schema, &param_name)?;
+        match self.ts_input(input)? {
+            TsInput::Params(params) => {
+                for (name, schema) in &params {
+                    let param_name = self.to_js_ident(name);
+                    let field_expr = self.encode_schema_value(&param_name, schema)?;
                     writer.write_line(format!("{field_expr},"));
                 }
             }
-            DataSchema::Multimodal(multimodal) => {
-                self.write_multimodal_list_expr(writer, multimodal, multimodal_input_name, ",")?;
+            TsInput::Multimodal(cases) => {
+                self.write_multimodal_list_expr(writer, &cases, multimodal_input_name, ",")?;
             }
         }
         writer.unindent();
@@ -1446,39 +1386,27 @@ impl TypeScriptBridgeGenerator {
     }
 
     /// Encodes a method's return value into the bare output `SchemaValue` that
-    /// the server pairs with the method's output schema (single element inline,
-    /// multimodal `list<variant<…>>`, or the canonical empty tuple). Only used
-    /// by the generated test harness; the unit case is handled by the caller.
+    /// the server pairs with the method's output schema (single value inline or
+    /// a multimodal `list<variant<…>>`). Only used by the generated test
+    /// harness; the unit case is handled by the caller. `value_var` holds the
+    /// TS return value.
     fn write_encode_output_value<Target: FunctionWriter>(
         &self,
         writer: &mut Target,
-        schema: &DataSchema,
-        multimodal_input_name: &str,
+        output: &OutputSchema,
+        value_var: &str,
     ) -> anyhow::Result<()> {
         writer.indent();
-        match schema {
-            DataSchema::Tuple(params) => {
-                if params.elements.is_empty() {
-                    writer.write_line("{ kind: 'tuple', value: { elements: [] } };");
-                } else if params.elements.len() == 1 {
-                    let param = &params.elements[0];
-                    let param_name = self.to_js_ident(&param.name);
-                    let value_expr = self.encode_element_value(&param.schema, &param_name)?;
-                    writer.write_line(format!("{value_expr};"));
-                } else {
-                    writer.write_line("{ kind: 'tuple', value: { elements: [");
-                    writer.indent();
-                    for param in &params.elements {
-                        let param_name = self.to_js_ident(&param.name);
-                        let value_expr = self.encode_element_value(&param.schema, &param_name)?;
-                        writer.write_line(format!("{value_expr},"));
-                    }
-                    writer.unindent();
-                    writer.write_line("] } };");
-                }
+        match self.ts_output(output)? {
+            TsOutput::Unit => {
+                writer.write_line("{ kind: 'tuple', value: { elements: [] } };");
             }
-            DataSchema::Multimodal(multimodal) => {
-                self.write_multimodal_list_expr(writer, multimodal, multimodal_input_name, ";")?;
+            TsOutput::Single(schema) => {
+                let value_expr = self.encode_schema_value(value_var, &schema)?;
+                writer.write_line(format!("{value_expr};"));
+            }
+            TsOutput::Multimodal(cases) => {
+                self.write_multimodal_list_expr(writer, &cases, value_var, ";")?;
             }
         }
         writer.unindent();
@@ -1499,6 +1427,19 @@ impl TypeScriptBridgeGenerator {
     /// named-type lookup. `value` is a `SchemaValue` wire-node expression
     /// (`{ kind, value }`); the result is a TS value expression.
     fn decode_schema_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        // Role-marked unstructured-text/binary variant → ergonomic wrapper.
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(format!(
+                "base.UnstructuredText.fromSchemaValue('value', {value}, [{}])",
+                Self::text_restriction_codes(restrictions)
+            ));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(format!(
+                "base.UnstructuredBinary.fromSchemaValue('value', {value}, [{}])",
+                Self::binary_restriction_mimes(restrictions)
+            ));
+        }
         let rendered = match typ {
             SchemaType::String { .. } | SchemaType::Char { .. } => {
                 format!("((n: any) => n.value as string)({value})")
@@ -1642,26 +1583,71 @@ impl TypeScriptBridgeGenerator {
                          missing name in type_naming. value expr = {value}"
                 );
             }
-            // Rich schema variants without a legacy AnalysedType counterpart
-            // cannot round-trip through the current `IntoValue` / `FromValue`
-            // SDK contract.
-            SchemaType::FixedList { .. }
-            | SchemaType::Map { .. }
-            | SchemaType::Text { .. }
-            | SchemaType::Binary { .. }
-            | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. }
-            | SchemaType::Duration { .. }
-            | SchemaType::Quantity { .. }
-            | SchemaType::Union { .. }
+            SchemaType::FixedList { element, .. } => {
+                // Same wire shape as `list`; the length contract is validated
+                // by the server. `Uint8Array` for `fixed-list<u8>`.
+                if matches!(**element, SchemaType::U8 { .. }) {
+                    format!(
+                        "((n: any) => new Uint8Array(n.value.elements.map((e: any) => e.value as number)))({value})"
+                    )
+                } else {
+                    let inner_decode = self.decode_schema_value("item", element)?;
+                    format!(
+                        "((n: any) => n.value.elements.map((item: any) => ({inner_decode})))({value})"
+                    )
+                }
+            }
+            SchemaType::Map { key, value: val, .. } => {
+                let key_decode = self.decode_schema_value("entry[0]", key)?;
+                let val_decode = self.decode_schema_value("entry[1]", val)?;
+                format!(
+                    "new Map({value}.value.entries.map((entry: any) => [{key_decode}, {val_decode}]))"
+                )
+            }
+            SchemaType::Union { spec, .. } => {
+                let arms = spec
+                    .branches
+                    .iter()
+                    .map(|branch| {
+                        let decoded = self.decode_schema_value("n.value.body", &branch.body)?;
+                        Ok::<_, anyhow::Error>(format!(
+                            "if (n.value.tag === '{}') {{ return {{ tag: '{}', val: {decoded} }}; }}",
+                            branch.tag, branch.tag
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ");
+                format!(
+                    "((n: any) => {{ {arms} throw new Error(`Unknown union branch tag ${{n.value.tag}}`); }})({value})"
+                )
+            }
+            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
+                return Err(anyhow!(
+                    "Bare text/binary rich scalars have no TypeScript bridge surface; \
+                     wrap them in the unstructured text/binary variant ({typ:?})"
+                ));
+            }
+            SchemaType::Path { .. } => {
+                format!("((n: any) => n.value.path as string)({value})")
+            }
+            SchemaType::Url { .. } => {
+                format!("((n: any) => n.value.url as string)({value})")
+            }
+            SchemaType::Datetime { .. } => {
+                format!("((n: any) => n.value.value as string)({value})")
+            }
+            SchemaType::Duration { .. } => {
+                format!("((n: any) => BigInt(n.value.nanoseconds))({value})")
+            }
+            // Capability / quantity / WASI-P3 nodes are not part of the agent
+            // IO surface exercised by the bridge today.
+            SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 anyhow::bail!(
-                    "Rich SchemaType variant has no legacy AnalysedType \
-                         decoding for the TypeScript bridge; type = {typ:?}"
+                    "SchemaType variant has no TypeScript bridge decoding yet; type = {typ:?}"
                 );
             }
         };
@@ -1682,6 +1668,13 @@ impl TypeScriptBridgeGenerator {
     /// named-type lookup. `value` is a TS value expression; the result is a
     /// `SchemaValue` wire-node expression (`{ kind, value }`).
     fn encode_schema_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        // Role-marked unstructured-text/binary variant → ergonomic wrapper.
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!("base.UnstructuredText.toSchemaValue({value})"));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!("base.UnstructuredBinary.toSchemaValue({value})"));
+        }
         let rendered = match typ {
             SchemaType::Bool { .. } => format!("{{ kind: 'bool', value: {value} }}"),
             SchemaType::S8 { .. } => format!("{{ kind: 's8', value: {value} }}"),
@@ -1809,188 +1802,208 @@ impl TypeScriptBridgeGenerator {
                          missing name in type_naming. value expr = {value}"
                 );
             }
-            // Rich schema variants without a legacy AnalysedType counterpart
-            // cannot round-trip through the current `IntoValue` / `FromValue`
-            // SDK contract.
-            SchemaType::FixedList { .. }
-            | SchemaType::Map { .. }
-            | SchemaType::Text { .. }
-            | SchemaType::Binary { .. }
-            | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. }
-            | SchemaType::Duration { .. }
-            | SchemaType::Quantity { .. }
-            | SchemaType::Union { .. }
+            SchemaType::FixedList { element, .. } => {
+                // Same wire shape as `list`; `Array.from` handles `Uint8Array`.
+                let inner_encode = self.encode_schema_value("item", element)?;
+                format!(
+                    "{{ kind: 'fixed-list', value: {{ elements: Array.from({value} as Iterable<any>).map((item: any) => ({inner_encode})) }} }}"
+                )
+            }
+            SchemaType::Map { key, value: val, .. } => {
+                let key_encode = self.encode_schema_value("entry[0]", key)?;
+                let val_encode = self.encode_schema_value("entry[1]", val)?;
+                format!(
+                    "{{ kind: 'map', value: {{ entries: Array.from(({value} as Map<any, any>).entries()).map((entry: any) => [{key_encode}, {val_encode}]) }} }}"
+                )
+            }
+            SchemaType::Union { spec, .. } => {
+                let arms = spec
+                    .branches
+                    .iter()
+                    .map(|branch| {
+                        let encoded = self.encode_schema_value("v.val", &branch.body)?;
+                        Ok::<_, anyhow::Error>(format!(
+                            "if (v.tag === '{}') {{ return {{ kind: 'union', value: {{ tag: '{}', body: {encoded} }} }}; }}",
+                            branch.tag, branch.tag
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ");
+                format!(
+                    "((v: any) => {{ {arms} throw new Error(`Unknown union branch ${{v.tag}}`); }})({value})"
+                )
+            }
+            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
+                return Err(anyhow!(
+                    "Bare text/binary rich scalars have no TypeScript bridge surface; \
+                     wrap them in the unstructured text/binary variant ({typ:?})"
+                ));
+            }
+            SchemaType::Path { .. } => {
+                format!("{{ kind: 'path', value: {{ path: {value} }} }}")
+            }
+            SchemaType::Url { .. } => {
+                format!("{{ kind: 'url', value: {{ url: {value} }} }}")
+            }
+            SchemaType::Datetime { .. } => {
+                format!("{{ kind: 'datetime', value: {{ value: {value} }} }}")
+            }
+            SchemaType::Duration { .. } => {
+                format!("{{ kind: 'duration', value: {{ nanoseconds: Number({value}) }} }}")
+            }
+            // Capability / quantity / WASI-P3 nodes are not part of the agent
+            // IO surface exercised by the bridge today.
+            SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 anyhow::bail!(
-                    "Rich SchemaType variant has no legacy AnalysedType \
-                         encoding for the TypeScript bridge; type = {typ:?}"
+                    "SchemaType variant has no TypeScript bridge encoding yet; type = {typ:?}"
                 );
             }
         };
         Ok(rendered)
     }
 
-    fn unstructured_text_type(descriptor: &TextDescriptor) -> String {
-        if let Some(restrictions) = &descriptor.restrictions {
-            format!(
+    fn unstructured_text_type(restrictions: &TextRestrictions) -> String {
+        match &restrictions.languages {
+            Some(langs) if !langs.is_empty() => format!(
                 "base.UnstructuredText<[{}]>",
-                restrictions
+                langs
                     .iter()
-                    .map(|tt| { format!("'{}'", tt.language_code) })
+                    .map(|l| format!("'{l}'"))
                     .collect::<Vec<_>>()
                     .join(", ")
-            )
-        } else {
-            "base.UnstructuredText".to_string()
+            ),
+            _ => "base.UnstructuredText".to_string(),
         }
     }
 
-    fn unstructured_binary_type(descriptor: &BinaryDescriptor) -> String {
-        if let Some(restrictions) = &descriptor.restrictions {
-            format!(
+    fn unstructured_binary_type(restrictions: &BinaryRestrictions) -> String {
+        match &restrictions.mime_types {
+            Some(mimes) if !mimes.is_empty() => format!(
                 "base.UnstructuredBinary<[{}]>",
-                restrictions
+                mimes
                     .iter()
-                    .map(|bt| { format!("'{}'", bt.mime_type) })
+                    .map(|m| format!("'{m}'"))
                     .collect::<Vec<_>>()
                     .join(", ")
-            )
-        } else {
-            "base.UnstructuredBinary".to_string()
+            ),
+            _ => "base.UnstructuredBinary".to_string(),
         }
     }
 
-    fn data_schema_as_type_list(&self, schema: &DataSchema) -> anyhow::Result<String> {
-        Ok(match schema {
-            DataSchema::Tuple(params) => params
-                .elements
+    /// Comma-separated, single-quoted list of allowed BCP-47 language codes for
+    /// a text type (empty when unrestricted).
+    fn text_restriction_codes(restrictions: &TextRestrictions) -> String {
+        restrictions
+            .languages
+            .as_ref()
+            .map_or(String::new(), |langs| {
+                langs
+                    .iter()
+                    .map(|l| format!("'{l}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+    }
+
+    /// Comma-separated, single-quoted list of allowed MIME types for a binary
+    /// type (empty when unrestricted).
+    fn binary_restriction_mimes(restrictions: &BinaryRestrictions) -> String {
+        restrictions
+            .mime_types
+            .as_ref()
+            .map_or(String::new(), |mimes| {
+                mimes
+                    .iter()
+                    .map(|m| format!("'{m}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+    }
+
+    /// Comma-separated TS type list of the user-supplied input parameters,
+    /// used as the `RemoteMethod` args-tuple element list. Multimodal input is
+    /// a single `(…)[]` array parameter.
+    fn input_type_list(&self, input: &InputSchema) -> anyhow::Result<String> {
+        Ok(match self.ts_input(input)? {
+            TsInput::Params(params) => params
                 .iter()
-                .map(|elem| self.named_element_schema_as_type(elem))
+                .map(|(_, schema)| self.type_reference(schema))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", "),
-            DataSchema::Multimodal(multimodal) => {
-                let union_types = multimodal
-                    .elements
-                    .iter()
-                    .map(|elem| self.named_element_schema_as_type(elem))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .join(" | ");
-                format!("({})[]", union_types)
+            TsInput::Multimodal(cases) => {
+                format!("({})[]", self.multimodal_tagged_union(&cases)?)
             }
         })
     }
 
-    fn named_element_schema_as_type(&self, schema: &NamedElementSchema) -> anyhow::Result<String> {
-        self.element_schema_as_type(&schema.schema)
-    }
-
-    fn named_element_schemas_as_type(
-        &self,
-        schemas: &NamedElementSchemas,
-    ) -> anyhow::Result<String> {
-        Ok(schemas
-            .elements
+    /// TS `{ type: 'name'; value: T } | …` union for a multimodal modality list.
+    fn multimodal_tagged_union(&self, cases: &[(String, SchemaType)]) -> anyhow::Result<String> {
+        Ok(cases
             .iter()
-            .map(|element| {
+            .map(|(name, schema)| {
                 Ok::<String, anyhow::Error>(format!(
-                    "{{ type: '{}', value: {} }}",
-                    element.name,
-                    self.named_element_schema_as_type(element)?
+                    "{{ type: '{name}'; value: {} }}",
+                    self.type_reference(schema)?
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?
             .join(" | "))
     }
 
-    fn element_schema_as_type(&self, schema: &ElementSchema) -> anyhow::Result<String> {
-        Ok(match schema {
-            ElementSchema::ComponentModel(component_model) => {
-                let element_schema_type =
-                    self.import_analysed_type(&component_model.element_type)?;
-                self.type_reference(&element_schema_type)?
-            }
-            ElementSchema::UnstructuredText(descriptor) => Self::unstructured_text_type(descriptor),
-            ElementSchema::UnstructuredBinary(descriptor) => {
-                Self::unstructured_binary_type(descriptor)
-            }
-        })
-    }
-
-    fn write_parameter_name_list(&self, writer: &mut TsFunctionWriter<'_>, schema: &DataSchema) {
-        match schema {
-            DataSchema::Tuple(params) => {
+    /// Writes the comma-separated parameter names for destructuring the input.
+    fn write_parameter_name_list(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        input: &InputSchema,
+    ) -> anyhow::Result<()> {
+        match self.ts_input(input)? {
+            TsInput::Params(params) => {
                 let param_names: Vec<String> = params
-                    .elements
                     .iter()
-                    .map(|param| self.to_js_ident(&param.name))
+                    .map(|(name, _)| self.to_js_ident(name))
                     .collect();
                 writer.write(param_names.join(", "));
             }
-            DataSchema::Multimodal(_) => {
+            TsInput::Multimodal(_) => {
                 writer.write(MULTIMODAL_INPUT_NAME);
             }
         }
+        Ok(())
     }
 
     fn write_parameter_list(
         &self,
         writer: &mut TsFunctionWriter<'_>,
-        schema: &DataSchema,
+        input: &InputSchema,
     ) -> anyhow::Result<()> {
-        match schema {
-            DataSchema::Tuple(params) => {
-                for param in &params.elements {
-                    let param_name = self.to_js_ident(&param.name);
-                    match &param.schema {
-                        ElementSchema::ComponentModel(component_model) => {
-                            let element_schema_type =
-                                self.import_analysed_type(&component_model.element_type)?;
-                            writer.param(&param_name, &self.type_reference(&element_schema_type)?)
-                        }
-                        ElementSchema::UnstructuredText(descriptor) => {
-                            writer.param(&param_name, &Self::unstructured_text_type(descriptor));
-                        }
-                        ElementSchema::UnstructuredBinary(descriptor) => {
-                            writer.param(&param_name, &Self::unstructured_binary_type(descriptor));
-                        }
-                    }
+        match self.ts_input(input)? {
+            TsInput::Params(params) => {
+                for (name, schema) in &params {
+                    let param_name = self.to_js_ident(name);
+                    writer.param(&param_name, &self.type_reference(schema)?);
                 }
                 Ok(())
             }
-            DataSchema::Multimodal(multimodal) => {
+            TsInput::Multimodal(cases) => {
                 writer.param(
                     MULTIMODAL_INPUT_NAME,
-                    &format!("({})[]", self.named_element_schemas_as_type(multimodal)?),
+                    &format!("({})[]", self.multimodal_tagged_union(&cases)?),
                 );
                 Ok(())
             }
         }
     }
 
-    fn data_schema_as_result_type(&self, schema: &DataSchema) -> anyhow::Result<String> {
-        Ok(match schema {
-            DataSchema::Tuple(params) => {
-                if params.elements.is_empty() {
-                    "void".to_string()
-                } else if params.elements.len() == 1 {
-                    self.named_element_schema_as_type(&params.elements[0])?
-                } else {
-                    let types = params
-                        .elements
-                        .iter()
-                        .map(|elem| self.named_element_schema_as_type(elem))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .join(", ");
-                    format!("[{}]", types)
-                }
-            }
-            DataSchema::Multimodal(multimodal) => {
-                format!("({})[]", self.named_element_schemas_as_type(multimodal)?)
+    fn output_result_type(&self, output: &OutputSchema) -> anyhow::Result<String> {
+        Ok(match self.ts_output(output)? {
+            TsOutput::Unit => "void".to_string(),
+            TsOutput::Single(schema) => self.type_reference(&schema)?,
+            TsOutput::Multimodal(cases) => {
+                format!("({})[]", self.multimodal_tagged_union(&cases)?)
             }
         })
     }
@@ -1999,6 +2012,18 @@ impl TypeScriptBridgeGenerator {
         match self.type_naming.type_name_for_type(typ) {
             Some(name) => Ok(name.to_string()),
             None => {
+                // Role-marked unstructured-text/binary variant → ergonomic
+                // wrapper type (`base.UnstructuredText` / `base.UnstructuredBinary`).
+                if let Some(restrictions) =
+                    unstructured_text_restrictions(self.type_naming.graph(), typ)?
+                {
+                    return Ok(Self::unstructured_text_type(restrictions));
+                }
+                if let Some(restrictions) =
+                    unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+                {
+                    return Ok(Self::unstructured_binary_type(restrictions));
+                }
                 match typ {
                     SchemaType::String { .. } => Ok("string".to_string()),
                     SchemaType::Char { .. } => Ok("string".to_string()),
@@ -2056,13 +2081,18 @@ impl TypeScriptBridgeGenerator {
                     | SchemaType::Flags { .. }
                     | SchemaType::Record { .. } => self.type_definition(typ),
                     SchemaType::Ref { .. } => self.type_definition(typ),
+                    // Bare text/binary rich scalars have no TS surface; the
+                    // ergonomic wrapper types are reached only via the
+                    // role-marked unstructured variant intercepted above.
+                    SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
+                        "Bare text/binary rich scalars have no TypeScript bridge type; \
+                         wrap them in the unstructured text/binary variant ({typ:?})"
+                    )),
                     // Rich schema variants without a legacy AnalysedType
                     // counterpart have no TS surface in the current SDK
                     // template.
                     SchemaType::FixedList { .. }
                     | SchemaType::Map { .. }
-                    | SchemaType::Text { .. }
-                    | SchemaType::Binary { .. }
                     | SchemaType::Path { .. }
                     | SchemaType::Url { .. }
                     | SchemaType::Datetime { .. }

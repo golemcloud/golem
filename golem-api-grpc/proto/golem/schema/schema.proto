@@ -38,6 +38,8 @@ message Role {
   oneof value {
     golem.common.Empty multimodal = 1;
     string other = 2;
+    golem.common.Empty unstructured_text = 3;
+    golem.common.Empty unstructured_binary = 4;
   }
 }
 

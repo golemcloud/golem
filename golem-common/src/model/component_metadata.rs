@@ -24,7 +24,7 @@ use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::component::InstalledPlugin;
-use crate::schema::adapters::{agent_type_to_schema, schema_agent_type_to_legacy};
+use crate::schema::adapters::schema_agent_type_to_legacy;
 use crate::schema::agent::AgentTypeSchema;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -33,15 +33,10 @@ use std::sync::Arc;
 impl ComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
-        agent_types: Vec<AgentType>,
+        agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Result<Self, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
-        let agent_types = agent_types
-            .iter()
-            .map(agent_type_to_schema)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| ComponentProcessingError::Metadata(format!("{err}")))?;
         Ok(Self {
             data: Arc::new(raw.into_metadata(agent_types, agent_type_provision_configs)),
         })
