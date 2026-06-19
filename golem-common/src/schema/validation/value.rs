@@ -849,7 +849,11 @@ fn check_text(
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
+    // A missing language is always allowed; an empty allow-list is treated as
+    // unrestricted. Only a *present* language outside a *non-empty* allow-list
+    // is rejected.
     if let (Some(allowed), Some(lang)) = (&restrictions.languages, &payload.language)
+        && !allowed.is_empty()
         && !allowed.iter().any(|a| a == lang)
     {
         errors.push(ValueError::TextLanguageNotAllowed {
@@ -893,7 +897,11 @@ fn check_binary(
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
+    // A missing MIME type is always allowed; an empty allow-list is treated as
+    // unrestricted. Only a *present* MIME type outside a *non-empty* allow-list
+    // is rejected.
     if let (Some(allowed), Some(mime)) = (&restrictions.mime_types, &payload.mime_type)
+        && !allowed.is_empty()
         && !allowed.iter().any(|a| a == mime)
     {
         errors.push(ValueError::BinaryMimeNotAllowed {

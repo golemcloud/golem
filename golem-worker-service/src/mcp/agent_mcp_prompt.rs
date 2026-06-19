@@ -276,9 +276,10 @@ mod tests {
     }
 
     /// Build the structural multimodal input form: a single user-supplied
-    /// `parts` field whose schema is `list<variant<… Role::Multimodal>>`.
+    /// `parts` field whose schema is `list<variant<…>>` with the list node
+    /// carrying `Role::Multimodal`.
     fn multimodal_parts_field(branches: Vec<(&str, SchemaType)>) -> NamedField {
-        let mut variant = SchemaType::variant(
+        let variant = SchemaType::variant(
             branches
                 .into_iter()
                 .map(|(name, body)| VariantCaseType {
@@ -288,8 +289,9 @@ mod tests {
                 })
                 .collect(),
         );
-        variant.metadata_mut().role = Some(Role::Multimodal);
-        NamedField::user_supplied("parts", SchemaType::list(variant))
+        let mut list = SchemaType::list(variant);
+        list.metadata_mut().role = Some(Role::Multimodal);
+        NamedField::user_supplied("parts", list)
     }
 
     #[test]

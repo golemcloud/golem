@@ -86,9 +86,10 @@ pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
 
 /// Build the structural form of a multimodal schema: a `list<variant<…>>`
-/// whose inner [`SchemaType::Variant`] carries [`Role::Multimodal`] on its
-/// metadata, with one case per named element. Shared by the input and
-/// output multimodal conversions.
+/// whose [`SchemaType::List`] node carries [`Role::Multimodal`] on its
+/// metadata, with one variant case per named element. This list-root
+/// placement matches the guest SDK convention (Rust/TypeScript). Shared by
+/// the input and output multimodal conversions.
 ///
 /// Multimodal is a *tagged* sum (each part carries its alternative name), so
 /// it is modelled as a [`SchemaType::Variant`] rather than a
@@ -96,9 +97,8 @@ pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
 /// the generic value codec for any payload type, whereas an inferred-tag
 /// union would need every alternative to be distinguishable by a structural
 /// discriminator (which multimodal parts are not). The [`Role::Multimodal`]
-/// marker only distinguishes a multimodal variant from an ordinary
-/// user-defined `list<variant<…>>`; it does not change codec or validation
-/// behaviour.
+/// marker only distinguishes a multimodal `list<variant<…>>` from an ordinary
+/// user-defined one; it does not change codec or validation behaviour.
 fn multimodal_elements_to_list_variant(
     elements: &[NamedElementSchema],
 ) -> Result<SchemaType, SchemaAdapterError> {
@@ -118,9 +118,9 @@ fn multimodal_elements_to_list_variant(
             })
         })
         .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-    let mut variant = SchemaType::variant(cases);
-    variant.metadata_mut().role = Some(Role::Multimodal);
-    Ok(SchemaType::list(variant))
+    let mut list = SchemaType::list(SchemaType::variant(cases));
+    list.metadata_mut().role = Some(Role::Multimodal);
+    Ok(list)
 }
 
 /// Graph-threaded variant of [`multimodal_elements_to_list_variant`]: lowers
@@ -146,9 +146,9 @@ fn multimodal_elements_to_list_variant_in(
             })
         })
         .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-    let mut variant = SchemaType::variant(cases);
-    variant.metadata_mut().role = Some(Role::Multimodal);
-    Ok(SchemaType::list(variant))
+    let mut list = SchemaType::list(SchemaType::variant(cases));
+    list.metadata_mut().role = Some(Role::Multimodal);
+    Ok(list)
 }
 
 /// If `ty` (resolved against `graph`) is the structural multimodal form
@@ -179,9 +179,9 @@ pub(crate) fn as_multimodal_list_variant<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
 ) -> Result<Option<&'a [VariantCaseType]>, SchemaAdapterError> {
-    if let SchemaType::List { element, .. } = resolve_ref(graph, ty)?
-        && let SchemaType::Variant { cases, metadata } = resolve_ref(graph, element)?
+    if let SchemaType::List { element, metadata } = resolve_ref(graph, ty)?
         && metadata.role == Some(Role::Multimodal)
+        && let SchemaType::Variant { cases, .. } = resolve_ref(graph, element)?
     {
         return Ok(Some(cases));
     }
@@ -370,19 +370,16 @@ pub fn output_schema_to_data_schema(
 ) -> Result<DataSchema, SchemaAdapterError> {
     match output {
         OutputSchema::Unit => Ok(DataSchema::Tuple(NamedElementSchemas { elements: vec![] })),
-        OutputSchema::Single(top_ty) => match resolve_ref(graph, top_ty)? {
-            SchemaType::List { element, .. } => {
-                // Multimodal output: `list<variant<...> with Role::Multimodal>`.
-                if let SchemaType::Variant { cases, metadata } = resolve_ref(graph, element)?
-                    && metadata.role == Some(Role::Multimodal)
-                {
-                    let elements = multimodal_cases_to_elements(graph, cases)?;
-                    return Ok(DataSchema::Multimodal(NamedElementSchemas { elements }));
-                }
+        OutputSchema::Single(top_ty) => {
+            // Multimodal output: `list<variant<...>>` whose list node carries
+            // `Role::Multimodal`.
+            if let Some(cases) = as_multimodal_list_variant(graph, top_ty)? {
+                let elements = multimodal_cases_to_elements(graph, cases)?;
+                Ok(DataSchema::Multimodal(NamedElementSchemas { elements }))
+            } else {
                 synthetic_single_element(graph, top_ty)
             }
-            _ => synthetic_single_element(graph, top_ty),
-        },
+        }
     }
 }
 

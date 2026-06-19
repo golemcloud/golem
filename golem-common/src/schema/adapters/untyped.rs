@@ -553,14 +553,13 @@ pub fn typed_schema_value_to_untyped_data_value(
             Ok(UntypedDataValue::Tuple(Vec::new()))
         }
         (
-            SchemaType::List { element, .. },
+            SchemaType::List { element, metadata },
             SchemaValue::List {
                 elements: list_values,
             },
         ) => {
-            let resolved_element = resolve_ref(graph, element)?;
-            if let SchemaType::Variant { cases, metadata } = resolved_element
-                && metadata.role == Some(Role::Multimodal)
+            if metadata.role == Some(Role::Multimodal)
+                && let SchemaType::Variant { cases, .. } = resolve_ref(graph, element)?
             {
                 let elements = multimodal_list_value_to_untyped(graph, cases, list_values)?;
                 Ok(UntypedDataValue::Multimodal(elements))

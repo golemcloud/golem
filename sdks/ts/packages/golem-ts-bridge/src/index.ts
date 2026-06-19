@@ -612,15 +612,12 @@ export const UnstructuredText = {
       );
     }
     const language = payload.value.language;
-    if (allowedCodes.length > 0) {
-      if (language === undefined) {
-        throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
-      }
-      if (!allowedCodes.includes(language)) {
-        throw new Error(
-          `Invalid value for parameter ${parameterName}. Language code \`${language}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
-        );
-      }
+    // Lenient decode (matches Rust/schema `check_text`): a missing language is
+    // always allowed; only a present language outside the allow-list is rejected.
+    if (allowedCodes.length > 0 && language !== undefined && !allowedCodes.includes(language)) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Language code \`${language}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
+      );
     }
     return {
       tag: 'inline',
@@ -795,8 +792,15 @@ export const UnstructuredBinary = {
         `Invalid value for parameter ${parameterName}. Expected a 'binary' payload for the unstructured-binary inline case`,
       );
     }
-    const mimeType = payload.value.mime_type ?? '';
-    if (allowedMimeTypes.length > 0 && !allowedMimeTypes.includes(mimeType)) {
+    const mimeType = payload.value.mime_type;
+    // Lenient decode (matches Rust/schema `check_binary`): a missing mime type
+    // is always allowed; only a present mime type outside the allow-list is
+    // rejected.
+    if (
+      allowedMimeTypes.length > 0 &&
+      mimeType !== undefined &&
+      !allowedMimeTypes.includes(mimeType)
+    ) {
       throw new Error(
         `Invalid value for parameter ${parameterName}. Mime type \`${mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
       );
@@ -804,7 +808,7 @@ export const UnstructuredBinary = {
     return {
       tag: 'inline',
       val: new Uint8Array(payload.value.bytes),
-      mimeType,
+      mimeType: mimeType ?? '',
     } as UnstructuredBinary<MT>;
   },
 

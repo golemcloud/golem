@@ -23,7 +23,8 @@ use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::schema::adapters::{
-    FALLBACK_OUTPUT_FIELD_NAME, multimodal_variant_cases, resolve_ref,
+    FALLBACK_OUTPUT_FIELD_NAME, UnstructuredOutput, decode_unstructured_output,
+    multimodal_variant_cases,
 };
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
@@ -35,7 +36,7 @@ use golem_common::schema::schema_value::{
 use rmcp::ErrorData;
 use rmcp::model::{
     AnnotateAble, CallToolResult, Content, JsonObject, RawAudioContent, RawContent,
-    RawEmbeddedResource, ResourceContents,
+    RawEmbeddedResource, RawResource, ResourceContents,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -245,42 +246,52 @@ fn internal_error(error: impl std::fmt::Display) -> ErrorData {
 }
 
 /// Convert a single agent response value, typed by `ty` (resolved against
-/// `graph`), into the JSON format expected by MCP clients. Component-model
-/// values render through the shared schema-layer JSON codec; `Text` / `Binary`
-/// values map onto MCP content blocks. Any changes here must be carefully
-/// tested against real MCP clients.
+/// `graph`), into the JSON format expected by MCP clients.
+///
+/// Raw `Text` / `Binary` values map onto MCP content blocks — a text / image /
+/// audio / embedded-resource block — whether they arrive bare or as the
+/// `inline` case of a canonical unstructured `variant { inline, url }` wrapper.
+/// The wrapper's `url` case becomes a `resource_link` referencing the external
+/// content. Every other (component-model) value renders through the shared
+/// schema-layer JSON codec. Any changes here must be carefully tested against
+/// real MCP clients.
 fn schema_value_to_tool_result(
     graph: &SchemaGraph,
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<ToolResult, ErrorData> {
-    match resolve_ref(graph, ty) {
-        Ok(SchemaType::Text { .. }) => match value {
-            SchemaValue::Text(TextValuePayload { text, .. }) => Ok(ToolResult::Content(
-                RawContent::text(text.clone()).no_annotation(),
+    // An unstructured text/binary output — either the canonical
+    // `variant { inline, url }` wrapper or a bare `Text` / `Binary` rich scalar.
+    // `inline` / raw values map onto content blocks; the wrapper's `url` case
+    // becomes a `resource_link`. The classifier also validates the value matches
+    // the output kind; every other value renders through the JSON codec.
+    if let Some(output) = decode_unstructured_output(graph, ty, value).map_err(internal_error)? {
+        return match output {
+            UnstructuredOutput::Url(url) => Ok(ToolResult::Content(
+                RawContent::resource_link(RawResource::new(url, url)).no_annotation(),
             )),
-            _ => Err(ErrorData::internal_error(
-                "Expected a text value for a text output".to_string(),
-                None,
-            )),
-        },
-        Ok(SchemaType::Binary { .. }) => match value {
-            SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => Ok(
-                binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")),
-            ),
-            _ => Err(ErrorData::internal_error(
-                "Expected a binary value for a binary output".to_string(),
-                None,
-            )),
-        },
-        _ => to_json_value(graph, ty, value)
-            .map_err(|e| {
-                ErrorData::internal_error(
-                    format!("Failed to serialize component model response: {e}"),
-                    None,
-                )
-            })
-            .map(ToolResult::Default),
+            UnstructuredOutput::Inline(inline) => value_to_tool_content(inline).ok_or_else(|| {
+                internal_error("unstructured `inline` value must be a text or binary value")
+            }),
+        };
+    }
+
+    to_json_value(graph, ty, value)
+        .map_err(|e| internal_error(format!("Failed to serialize component model response: {e}")))
+        .map(ToolResult::Default)
+}
+
+/// Render a raw `Text` / `Binary` value into an MCP content block (text, image,
+/// audio, or embedded resource). Returns `None` for any other value.
+fn value_to_tool_content(value: &SchemaValue) -> Option<ToolResult> {
+    match value {
+        SchemaValue::Text(TextValuePayload { text, .. }) => Some(ToolResult::Content(
+            RawContent::text(text.clone()).no_annotation(),
+        )),
+        SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) => {
+            Some(binary_to_tool_content(bytes, mime_type.as_deref().unwrap_or("")))
+        }
+        _ => None,
     }
 }
 
@@ -340,6 +351,10 @@ mod tests {
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{AgentMode, AgentTypeName};
     use golem_common::model::AgentInvocationOutput;
+    use golem_common::schema::adapters::unstructured::{
+        unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
+        unstructured_url_value,
+    };
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
     };
@@ -372,9 +387,9 @@ mod tests {
                 metadata: Default::default(),
             })
             .collect();
-        let mut variant = SchemaType::variant(variant_cases);
-        variant.metadata_mut().role = Some(Role::Multimodal);
-        OutputSchema::Single(Box::new(SchemaType::list(variant)))
+        let mut list = SchemaType::list(SchemaType::variant(variant_cases));
+        list.metadata_mut().role = Some(Role::Multimodal);
+        OutputSchema::Single(Box::new(list))
     }
 
     #[test]
@@ -395,7 +410,112 @@ mod tests {
     }
 
     #[test]
-    fn tuple_text_element_to_data_object() {
+    fn unstructured_text_output_to_text_content() {
+        let output = OutputSchema::Single(Box::new(unstructured_text_schema_type(
+            TextRestrictions::default(),
+        )));
+        let response = unstructured_inline_value(SchemaValue::Text(TextValuePayload {
+            text: "weather is sunny".to_string(),
+            language: Some("en".to_string()),
+        }));
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        assert_eq!(raw_content, &RawContent::text("weather is sunny"));
+    }
+
+    #[test]
+    fn unstructured_binary_output_to_base64_content() {
+        let output = OutputSchema::Single(Box::new(unstructured_binary_schema_type(
+            BinaryRestrictions::default(),
+        )));
+        let response = unstructured_inline_value(SchemaValue::Binary(BinaryValuePayload {
+            bytes: vec![1, 2, 3],
+            mime_type: Some("image/png".to_string()),
+        }));
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        assert_eq!(
+            raw_content,
+            &RawContent::image("AQID", "image/png".to_string())
+        );
+    }
+
+    #[test]
+    fn text_output_with_binary_value_is_rejected() {
+        // Schema-driven output mapping: a text output paired with a binary value
+        // is a type mismatch and must error rather than render an image block.
+        let output = OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default())));
+        let response = SchemaValue::Binary(BinaryValuePayload {
+            bytes: vec![1, 2, 3],
+            mime_type: Some("image/png".to_string()),
+        });
+        let result = map_agent_response_to_tool_result(&graph(), &output, response);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn text_wrapper_schema_accepts_raw_text_value() {
+        // DE: a wrapper-typed output schema must also accept a raw `Text` value.
+        let output = OutputSchema::Single(Box::new(unstructured_text_schema_type(
+            TextRestrictions::default(),
+        )));
+        let response = SchemaValue::Text(TextValuePayload {
+            text: "weather is sunny".to_string(),
+            language: Some("en".to_string()),
+        });
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        assert_eq!(raw_content, &RawContent::text("weather is sunny"));
+    }
+
+    #[test]
+    fn text_wrapper_schema_with_raw_binary_value_is_rejected() {
+        let output = OutputSchema::Single(Box::new(unstructured_text_schema_type(
+            TextRestrictions::default(),
+        )));
+        let response = SchemaValue::Binary(BinaryValuePayload {
+            bytes: vec![1, 2, 3],
+            mime_type: Some("image/png".to_string()),
+        });
+        let result = map_agent_response_to_tool_result(&graph(), &output, response);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unstructured_text_url_output_to_resource_link() {
+        let output = OutputSchema::Single(Box::new(unstructured_text_schema_type(
+            TextRestrictions::default(),
+        )));
+        let response = unstructured_url_value("https://example.com/doc.txt".to_string());
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        let resource = raw_content
+            .as_resource_link()
+            .expect("expected a resource_link content block");
+        assert_eq!(resource.uri, "https://example.com/doc.txt");
+    }
+
+    #[test]
+    fn unstructured_binary_url_output_to_resource_link() {
+        let output = OutputSchema::Single(Box::new(unstructured_binary_schema_type(
+            BinaryRestrictions::default(),
+        )));
+        let response = unstructured_url_value("https://example.com/blob.bin".to_string());
+        let result = map_agent_response_to_tool_result(&graph(), &output, response).unwrap();
+
+        let raw_content = &result.content[0].raw;
+        let resource = raw_content
+            .as_resource_link()
+            .expect("expected a resource_link content block");
+        assert_eq!(resource.uri, "https://example.com/blob.bin");
+    }
+
+    #[test]
+    fn raw_text_value_to_text_content() {
         let output = OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default())));
         let response = SchemaValue::Text(TextValuePayload {
             text: "weather is sunny".to_string(),
@@ -408,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn tuple_binary_element_to_base64_object() {
+    fn raw_binary_value_to_base64_content() {
         let output =
             OutputSchema::Single(Box::new(SchemaType::binary(BinaryRestrictions::default())));
         let response = SchemaValue::Binary(BinaryValuePayload {
@@ -427,24 +547,34 @@ mod tests {
     #[test]
     fn multimodal_response_to_parts_array() {
         let output = multimodal_output(vec![
-            ("desc", SchemaType::text(TextRestrictions::default())),
-            ("photo", SchemaType::binary(BinaryRestrictions::default())),
+            (
+                "desc",
+                unstructured_text_schema_type(TextRestrictions::default()),
+            ),
+            (
+                "photo",
+                unstructured_binary_schema_type(BinaryRestrictions::default()),
+            ),
         ]);
         let response = SchemaValue::List {
             elements: vec![
                 SchemaValue::Variant(VariantValuePayload {
                     case: 0,
-                    payload: Some(Box::new(SchemaValue::Text(TextValuePayload {
-                        text: "a photo".to_string(),
-                        language: None,
-                    }))),
+                    payload: Some(Box::new(unstructured_inline_value(SchemaValue::Text(
+                        TextValuePayload {
+                            text: "a photo".to_string(),
+                            language: None,
+                        },
+                    )))),
                 }),
                 SchemaValue::Variant(VariantValuePayload {
                     case: 1,
-                    payload: Some(Box::new(SchemaValue::Binary(BinaryValuePayload {
-                        bytes: vec![1, 2, 3],
-                        mime_type: Some("image/png".to_string()),
-                    }))),
+                    payload: Some(Box::new(unstructured_inline_value(SchemaValue::Binary(
+                        BinaryValuePayload {
+                            bytes: vec![1, 2, 3],
+                            mime_type: Some("image/png".to_string()),
+                        },
+                    )))),
                 }),
             ],
         };

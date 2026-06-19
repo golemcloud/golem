@@ -20,12 +20,13 @@ use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::schema::adapters::{is_multimodal_schema_type, resolve_ref};
+use golem_common::schema::adapters::{
+    UnstructuredPayloadKind, is_multimodal_schema_type, unstructured_or_raw_kind,
+};
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, FieldSource, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::schema_type::SchemaType;
 use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Tool};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -188,15 +189,18 @@ fn output_resource_mime_type(graph: &SchemaGraph, output: &OutputSchema) -> Opti
         return None;
     };
     // Refs are pre-validated in `from_agent_method` (via the legacy projection),
-    // so `is_multimodal_schema_type` / `resolve_ref` here cannot mask a real
-    // dangling/recursive ref; the fallbacks only guard truly unreachable cases.
+    // so `is_multimodal_schema_type` / `unstructured_or_raw_kind` here cannot
+    // mask a real dangling/recursive ref; the fallbacks only guard truly
+    // unreachable cases.
     if is_multimodal_schema_type(graph, ty).unwrap_or(false) {
         return None;
     }
-    match resolve_ref(graph, ty) {
-        Ok(SchemaType::Text { .. }) => Some("text/plain".to_string()),
-        Ok(SchemaType::Binary { .. }) => None,
-        Ok(_) => Some("application/json".to_string()),
+    // Canonical unstructured wrappers advertise the same MIME type as the raw
+    // text/binary rich scalars they wrap.
+    match unstructured_or_raw_kind(graph, ty) {
+        Ok(Some(UnstructuredPayloadKind::Text)) => Some("text/plain".to_string()),
+        Ok(Some(UnstructuredPayloadKind::Binary)) => None,
+        Ok(None) => Some("application/json".to_string()),
         Err(_) => None,
     }
 }

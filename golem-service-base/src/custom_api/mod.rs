@@ -227,13 +227,17 @@ pub enum RequestBodySchema {
     JsonBody {
         expected: CompiledSchema,
     },
-    /// Raw binary request body; `expected.graph.root` resolves to
-    /// `SchemaType::Binary` (its restrictions carry the allowed MIME types).
+    /// Raw binary request body; `expected.graph.root` is an unstructured binary
+    /// carrier — either the canonical `variant { inline, url }` wrapper or a
+    /// bare `SchemaType::Binary` rich scalar (its restrictions carry the allowed
+    /// MIME types).
     BinaryBody {
         expected: CompiledSchema,
     },
-    /// Raw text request body; `expected.graph.root` resolves to
-    /// `SchemaType::Text` (its restrictions carry the allowed languages).
+    /// Raw text request body; `expected.graph.root` is an unstructured text
+    /// carrier — either the canonical `variant { inline, url }` wrapper or a
+    /// bare `SchemaType::Text` rich scalar (its restrictions carry the allowed
+    /// languages).
     TextBody {
         expected: CompiledSchema,
     },

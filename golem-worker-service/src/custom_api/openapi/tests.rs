@@ -23,6 +23,9 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::adapters::analysed_type_to_schema_graph;
+use golem_common::schema::adapters::unstructured::{
+    unstructured_binary_schema_type, unstructured_text_schema_type,
+};
 use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
 use golem_common::schema::{InputSchema, OutputSchema, Role, SchemaGraph, SchemaType};
 use golem_service_base::custom_api::{
@@ -87,12 +90,40 @@ fn binary_response(restrictions: Option<Vec<BinaryType>>) -> CompiledOutputSchem
     }
 }
 
-/// The structural multimodal form `list<variant<… Role::Multimodal>>`, which
-/// the emitter renders as an opaque binary response.
+/// Like [`text_response`], but the output schema is the canonical
+/// unstructured-text `variant { inline, url }` wrapper (which the guest SDKs
+/// publish) rather than a bare `Text` rich scalar.
+fn wrapper_text_response(restrictions: Option<Vec<TextType>>) -> CompiledOutputSchema {
+    let languages = restrictions.map(|r| r.into_iter().map(|t| t.language_code).collect());
+    let ty = unstructured_text_schema_type(TextRestrictions {
+        languages,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+/// Like [`binary_response`], but the output schema is the canonical
+/// unstructured-binary `variant { inline, url }` wrapper.
+fn wrapper_binary_response(restrictions: Option<Vec<BinaryType>>) -> CompiledOutputSchema {
+    let mime_types = restrictions.map(|r| r.into_iter().map(|t| t.mime_type).collect());
+    let ty = unstructured_binary_schema_type(BinaryRestrictions {
+        mime_types,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+/// The structural multimodal form `list<variant<…>>` whose list node carries
+/// `Role::Multimodal`, which the emitter renders as an opaque binary response.
 fn multimodal_response() -> CompiledOutputSchema {
-    let mut variant = SchemaType::variant(vec![]);
-    variant.metadata_mut().role = Some(Role::Multimodal);
-    let ty = SchemaType::list(variant);
+    let mut ty = SchemaType::list(SchemaType::variant(vec![]));
+    ty.metadata_mut().role = Some(Role::Multimodal);
     CompiledOutputSchema {
         graph: SchemaGraph::anonymous(ty.clone()),
         output_schema: OutputSchema::Single(Box::new(ty)),
@@ -138,6 +169,34 @@ fn restricted_text(languages: Vec<String>) -> RequestBodySchema {
     RequestBodySchema::TextBody {
         expected: CompiledSchema {
             graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+                languages: Some(languages),
+                ..Default::default()
+            })),
+        },
+    }
+}
+
+/// Like [`restricted_binary`], but the body root is the canonical
+/// unstructured-binary `variant { inline, url }` wrapper rather than a bare
+/// `Binary` rich scalar.
+fn wrapper_restricted_binary(mime_types: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::BinaryBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(unstructured_binary_schema_type(BinaryRestrictions {
+                mime_types: Some(mime_types),
+                ..Default::default()
+            })),
+        },
+    }
+}
+
+/// Like [`restricted_text`], but the body root is the canonical
+/// unstructured-text `variant { inline, url }` wrapper rather than a bare
+/// `Text` rich scalar.
+fn wrapper_restricted_text(languages: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::TextBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(unstructured_text_schema_type(TextRestrictions {
                 languages: Some(languages),
                 ..Default::default()
             })),
@@ -434,6 +493,76 @@ fn binary_response_uses_restricted_mime_or_octet_stream() {
 }
 
 #[test]
+fn unstructured_text_wrapper_response_matches_bare_text_response() {
+    let op = operation_for(
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "txt".to_string(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            wrapper_text_response(Some(vec![TextType {
+                language_code: "en".to_string(),
+            }])),
+            None,
+        ),
+        "/txt",
+        "get",
+    );
+    assert_eq!(
+        op["responses"]["200"]["content"]["text/plain"]["schema"],
+        json!({ "type": "string" })
+    );
+    let header = &op["responses"]["200"]["headers"]["Content-Language"];
+    assert_eq!(header["required"], json!(false));
+    assert_eq!(header["schema"]["enum"], json!(["en"]));
+}
+
+#[test]
+fn unstructured_binary_wrapper_response_matches_bare_binary_response() {
+    let restricted = operation_for(
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "bin".to_string(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            wrapper_binary_response(Some(vec![BinaryType {
+                mime_type: "image/png".to_string(),
+            }])),
+            None,
+        ),
+        "/bin",
+        "get",
+    );
+    assert_eq!(
+        restricted["responses"]["200"]["content"]["image/png"]["schema"],
+        json!({ "type": "string", "format": "binary" })
+    );
+
+    let unrestricted = operation_for(
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "bin".to_string(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            wrapper_binary_response(None),
+            None,
+        ),
+        "/bin",
+        "get",
+    );
+    assert!(
+        unrestricted["responses"]["200"]["content"]["application/octet-stream"]["schema"]
+            .is_object()
+    );
+}
+
+#[test]
 fn multimodal_response_maps_to_unknown_binary() {
     let op = operation_for(
         call_agent_route(
@@ -538,6 +667,62 @@ fn restricted_binary_body_lists_each_mime_type() {
             .as_object()
             .is_some()
     );
+}
+
+#[test]
+fn unstructured_binary_wrapper_request_body_lists_each_mime_type() {
+    let op = operation_for(
+        call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "binbody".to_string(),
+            }],
+            wrapper_restricted_binary(vec!["image/gif".to_string()]),
+            vec![],
+            unit_response(),
+            None,
+        ),
+        "/binbody",
+        "post",
+    );
+    assert_eq!(
+        op["requestBody"]["description"],
+        json!("Restricted binary body")
+    );
+    assert!(
+        op["requestBody"]["content"]["image/gif"]["schema"]
+            .as_object()
+            .is_some()
+    );
+}
+
+#[test]
+fn unstructured_text_wrapper_request_body_lists_languages() {
+    let op = operation_for(
+        call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "txtbody".to_string(),
+            }],
+            wrapper_restricted_text(vec!["en".to_string(), "de".to_string()]),
+            vec![],
+            unit_response(),
+            None,
+        ),
+        "/txtbody",
+        "post",
+    );
+    assert_eq!(
+        op["requestBody"]["content"]["text/plain"]["schema"],
+        json!({ "type": "string" })
+    );
+    let params = op["parameters"].as_array().expect("parameters");
+    let content_language = params
+        .iter()
+        .find(|p| p["name"] == json!("Content-Language"))
+        .expect("Content-Language header parameter present");
+    assert_eq!(content_language["in"], json!("header"));
+    assert_eq!(content_language["schema"]["enum"], json!(["en", "de"]));
 }
 
 // --------------------------------------------------------------------------

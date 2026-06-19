@@ -1,4 +1,4 @@
-use super::{OidcSession, ParsedRequestBody};
+use super::{OidcSession, ParsedRequestBody, RawBinaryBody};
 
 // Copyright 2024-2026 Golem Cloud
 //
@@ -16,14 +16,14 @@ use super::{OidcSession, ParsedRequestBody};
 
 use super::error::RequestHandlerError;
 use anyhow::anyhow;
-use golem_common::model::agent::{BinarySource, BinaryType, TextSource, TextType};
+use golem_common::model::agent::{TextSource, TextType};
 use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, TraceId,
 };
 use golem_common::model::{IdempotencyKey, invocation_context};
-use golem_common::schema::adapters::resolve_ref;
+use golem_common::schema::adapters::{binary_body_restrictions, text_body_restrictions};
 use golem_common::schema::render::from_json_value;
-use golem_common::schema::{SchemaGraph, SchemaType};
+use golem_common::schema::SchemaGraph;
 use golem_service_base::custom_api::RequestBodySchema;
 use golem_service_base::headers::TraceContextHeaders;
 use http::HeaderMap;
@@ -267,27 +267,33 @@ impl RichRequest {
 
         let header_name = http::header::CONTENT_TYPE.to_string();
 
-        let mime_type = self
+        // A missing `Content-Type` header carries no MIME type; preserve that
+        // absence rather than defaulting to `application/octet-stream`.
+        let mime_type: Option<String> = self
             .headers()
             .get(header_name.clone())
             .map(|value| value.to_str())
             .transpose()
             .map_err(|_| RequestHandlerError::HeaderIsNotAscii { header_name })?
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "application/octet-stream".to_string());
+            .map(|v| v.to_string());
 
+        // Lenient MIME handling (mirrors `parse_text_body` / the schema
+        // semantics): a missing MIME type is always allowed; only a *present*
+        // MIME type outside a *non-empty* allow-list is rejected.
         if let Some(allowed) = allowed_mime_types
-            && !allowed.iter().any(|allowed| allowed == &mime_type)
+            && !allowed.is_empty()
+            && let Some(mime) = &mime_type
+            && !allowed.iter().any(|allowed| allowed == mime)
         {
             return Err(RequestHandlerError::UnsupportedMimeType {
-                mime_type,
+                mime_type: mime.clone(),
                 allowed_mime_types: allowed.clone(),
             });
         }
 
-        Ok(ParsedRequestBody::UnstructuredBinary(Some(BinarySource {
+        Ok(ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody {
             data,
-            binary_type: BinaryType { mime_type },
+            mime_type,
         })))
     }
 
@@ -398,31 +404,25 @@ fn extract_request_attributes(
 }
 
 /// Resolve a `BinaryBody` compiled-schema graph root to its allowed MIME types
-/// (`None` = unrestricted). The producer guarantees the root resolves to
-/// [`SchemaType::Binary`].
+/// (`None` = unrestricted). The producer guarantees the root is either a
+/// canonical unstructured-binary `variant { inline, url }` wrapper or a bare
+/// [`SchemaType::Binary`] rich scalar; both carry the MIME restrictions on their
+/// (inline) binary type.
 fn binary_mime_types(graph: &SchemaGraph) -> Result<Option<Vec<String>>, RequestHandlerError> {
-    match resolve_ref(graph, &graph.root)
-        .map_err(|err| anyhow!("Invalid binary body schema: {err}"))?
-    {
-        SchemaType::Binary { restrictions, .. } => Ok(restrictions.mime_types.clone()),
-        _ => Err(RequestHandlerError::invariant_violated(
-            "Binary body schema root is not a binary type",
-        )),
-    }
+    let restrictions = binary_body_restrictions(graph, &graph.root)
+        .map_err(|err| anyhow!("Invalid binary body schema: {err}"))?;
+    Ok(restrictions.mime_types.clone())
 }
 
 /// Resolve a `TextBody` compiled-schema graph root to its allowed language codes
-/// (`None` = unrestricted). The producer guarantees the root resolves to
-/// [`SchemaType::Text`].
+/// (`None` = unrestricted). The producer guarantees the root is either a
+/// canonical unstructured-text `variant { inline, url }` wrapper or a bare
+/// [`SchemaType::Text`] rich scalar; both carry the language restrictions on
+/// their (inline) text type.
 fn text_languages(graph: &SchemaGraph) -> Result<Option<Vec<String>>, RequestHandlerError> {
-    match resolve_ref(graph, &graph.root)
-        .map_err(|err| anyhow!("Invalid text body schema: {err}"))?
-    {
-        SchemaType::Text { restrictions, .. } => Ok(restrictions.languages.clone()),
-        _ => Err(RequestHandlerError::invariant_violated(
-            "Text body schema root is not a text type",
-        )),
-    }
+    let restrictions = text_body_restrictions(graph, &graph.root)
+        .map_err(|err| anyhow!("Invalid text body schema: {err}"))?;
+    Ok(restrictions.languages.clone())
 }
 
 #[cfg(test)]
@@ -430,7 +430,9 @@ mod request_body_tests {
     use super::*;
     use assert2::{assert, let_assert};
     use golem_common::schema::SchemaValue;
-    use golem_common::schema::schema_type::{BinaryRestrictions, NamedFieldType, TextRestrictions};
+    use golem_common::schema::schema_type::{
+        BinaryRestrictions, NamedFieldType, SchemaType, TextRestrictions,
+    };
     use golem_service_base::custom_api::{CompiledSchema, RequestBodySchema};
     use http::Method;
     use poem::{Body, Request};
@@ -579,12 +581,11 @@ mod request_body_tests {
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(
-            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { data, binary_type })) =
-                result
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { data, mime_type })) = result
         );
 
         assert!(data == b"binary-data");
-        assert!(binary_type.mime_type == "application/octet-stream");
+        assert!(mime_type.as_deref() == Some("application/octet-stream"));
     }
 
     #[test]
@@ -609,7 +610,10 @@ mod request_body_tests {
     }
 
     #[test]
-    async fn restricted_binary_body_without_content_type_uses_default_and_is_checked() {
+    async fn restricted_binary_body_without_content_type_is_accepted_with_no_mime() {
+        // Lenient MIME handling: a missing `Content-Type` is always allowed,
+        // even under a restrictive schema, and its absence is preserved (not
+        // defaulted to `application/octet-stream`).
         let mut request = raw_request(b"binary-data");
 
         let schema = restricted_binary(vec!["application/octet-stream".to_string()]);
@@ -617,10 +621,28 @@ mod request_body_tests {
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(
-            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { binary_type, .. })) = result
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { data, mime_type })) = result
         );
 
-        assert!(binary_type.mime_type == "application/octet-stream");
+        assert!(data == b"binary-data");
+        assert!(mime_type.is_none());
+    }
+
+    #[test]
+    async fn binary_body_with_empty_allow_list_accepts_any_mime_type() {
+        // An empty MIME allow-list (`Some(vec![])`) is treated as unrestricted,
+        // consistent with the schema/MCP semantics.
+        let mut request = raw_request_with_content_type(b"binary-data", "application/weird");
+
+        let schema = restricted_binary(vec![]);
+
+        let result = request.parse_request_body(&schema).await.unwrap();
+
+        let_assert!(
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { mime_type, .. })) = result
+        );
+
+        assert!(mime_type.as_deref() == Some("application/weird"));
     }
 
     #[test]
@@ -632,10 +654,10 @@ mod request_body_tests {
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(
-            ParsedRequestBody::UnstructuredBinary(Some(BinarySource { binary_type, .. })) = result
+            ParsedRequestBody::UnstructuredBinary(Some(RawBinaryBody { mime_type, .. })) = result
         );
 
-        assert!(binary_type.mime_type == "application/weird");
+        assert!(mime_type.as_deref() == Some("application/weird"));
     }
 
     fn text_request(

@@ -32,7 +32,8 @@
 use super::call_agent;
 use golem_common::schema::OutputSchema;
 use golem_common::schema::adapters::{
-    SchemaAdapterError, analysed_type_to_schema_type_inline, is_multimodal_schema_type, resolve_ref,
+    SchemaAdapterError, analysed_type_to_schema_type_inline, binary_body_restrictions,
+    is_multimodal_schema_type, text_body_restrictions,
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::merge_agent_graphs;
@@ -163,24 +164,31 @@ fn lower_request_body(
             RequestBodyModel::Json(Box::new(expected.graph.root.clone()))
         }
         RequestBodySchema::BinaryBody { expected } => {
-            match resolve_ref(&expected.graph, &expected.graph.root)? {
-                SchemaType::Binary { restrictions, .. } => match &restrictions.mime_types {
-                    Some(mime_types) => RequestBodyModel::RestrictedBinary {
-                        mime_types: mime_types.clone(),
-                    },
-                    None => RequestBodyModel::UnrestrictedBinary,
+            // The body root is either a canonical unstructured-binary
+            // `variant { inline, url }` wrapper or a bare `Binary` rich scalar;
+            // both carry the MIME restrictions on their (inline) binary type. An
+            // empty allow-list is treated as unrestricted (matching the runtime
+            // request decoder).
+            let restrictions = binary_body_restrictions(&expected.graph, &expected.graph.root)?;
+            match &restrictions.mime_types {
+                Some(mime_types) if !mime_types.is_empty() => RequestBodyModel::RestrictedBinary {
+                    mime_types: mime_types.clone(),
                 },
                 _ => RequestBodyModel::UnrestrictedBinary,
             }
         }
         RequestBodySchema::TextBody { expected } => {
-            match resolve_ref(&expected.graph, &expected.graph.root)? {
-                SchemaType::Text { restrictions, .. } => match &restrictions.languages {
-                    Some(languages) => RequestBodyModel::RestrictedText {
-                        language_codes: languages.clone(),
-                    },
-                    None => RequestBodyModel::UnrestrictedText,
-                },
+            // The body root is either a canonical unstructured-text
+            // `variant { inline, url }` wrapper or a bare `Text` rich scalar;
+            // both carry the language restrictions on their (inline) text type.
+            // An empty allow-list is treated as unrestricted.
+            let restrictions = text_body_restrictions(&expected.graph, &expected.graph.root)?;
+            match &restrictions.languages {
+                Some(language_codes) if !language_codes.is_empty() => {
+                    RequestBodyModel::RestrictedText {
+                        language_codes: language_codes.clone(),
+                    }
+                }
                 _ => RequestBodyModel::UnrestrictedText,
             }
         }

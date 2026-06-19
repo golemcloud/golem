@@ -59,6 +59,14 @@ pub use data_schema::{
 };
 pub use element_schema::{element_schema_to_schema_type, schema_type_to_element_schema};
 pub use error::{SchemaAdapterError, legacy_type_id, resolve_ref};
+pub use unstructured::{
+    INLINE_CASE, URL_CASE, UnstructuredKind, UnstructuredOutput, UnstructuredPayloadKind,
+    UnstructuredValueCase, binary_body_restrictions, decode_unstructured_output,
+    decode_unstructured_value, is_unstructured_variant, text_body_restrictions,
+    unstructured_binary_restrictions, unstructured_binary_schema_type, unstructured_inline_value,
+    unstructured_kind, unstructured_or_raw_kind, unstructured_text_restrictions,
+    unstructured_text_schema_type, unstructured_url_value, wrap_unstructured_inline_for_schema,
+};
 pub use untyped::{
     input_value_to_typed_schema_value, json_data_value_to_input_value,
     json_data_value_to_legacy_data_value, json_input_schema_value_to_typed_schema_value,

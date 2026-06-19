@@ -32,8 +32,11 @@ use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig};
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::schema::adapters::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
-use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
+use golem_service_base::custom_api::{
+    CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
+};
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
 use std::collections::HashMap;
@@ -396,10 +399,15 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        SchemaValue::Binary(BinaryValuePayload {
+                        let raw = SchemaValue::Binary(BinaryValuePayload {
                             bytes: binary_source.data,
-                            mime_type: Some(binary_source.binary_type.mime_type),
-                        })
+                            mime_type: binary_source.mime_type,
+                        });
+                        // The field schema is either the canonical unstructured
+                        // wrapper (raw body -> `inline` case; DA: url-referenced
+                        // request bodies are not accepted) or a bare `Binary`
+                        // rich scalar (raw value as-is).
+                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
                     }
 
                     _ => {
@@ -417,12 +425,17 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        SchemaValue::Text(TextValuePayload {
+                        let raw = SchemaValue::Text(TextValuePayload {
                             text: text_source.data,
                             language: text_source
                                 .text_type
                                 .map(|text_type| text_type.language_code),
-                        })
+                        });
+                        // The field schema is either the canonical unstructured
+                        // wrapper (raw body -> `inline` case; DA: url-referenced
+                        // request bodies are not accepted) or a bare `Text` rich
+                        // scalar (raw value as-is).
+                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
                     }
 
                     _ => {
@@ -438,6 +451,28 @@ impl CallAgentHandler {
 
         Ok(values)
     }
+}
+
+/// Build the method-input value for a raw unstructured request body, wrapping
+/// the decoded `Text` / `Binary` value in the canonical `inline` case when the
+/// bound field schema is an unstructured `variant { inline, url }` wrapper, or
+/// passing it through unchanged for a bare `Text` / `Binary` rich scalar.
+fn wrap_unstructured_body_value(
+    body_schema: &RequestBodySchema,
+    raw: SchemaValue,
+) -> Result<SchemaValue, RequestHandlerError> {
+    let expected = match body_schema {
+        RequestBodySchema::BinaryBody { expected } | RequestBodySchema::TextBody { expected } => {
+            expected
+        }
+        _ => {
+            return Err(RequestHandlerError::invariant_violated(
+                "Unstructured body parameter used but body schema is not a text/binary body",
+            ));
+        }
+    };
+    wrap_unstructured_inline_for_schema(&expected.graph, &expected.graph.root, raw)
+        .map_err(|err| anyhow!("Failed to build unstructured body value: {err}").into())
 }
 
 /// HTTP methods for which the worker-service emits read-only cache headers

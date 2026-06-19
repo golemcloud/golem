@@ -111,19 +111,17 @@ export function unstructuredTextFromValue(
       );
     }
 
-    if (allowedCodes.length > 0) {
-      if (!payload.language) {
-        throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
-      }
-      if (!allowedCodes.includes(payload.language)) {
-        throw new Error(
-          `Invalid value for parameter ${parameterName}. Language code \`${payload.language}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
-        );
-      }
-      return { tag: 'inline', val: payload.text, languageCode: payload.language };
+    // Lenient decode (matches Rust/schema `check_text`): a missing language is
+    // always allowed; only a present language outside the allow-list is rejected.
+    if (allowedCodes.length > 0 && payload.language && !allowedCodes.includes(payload.language)) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Language code \`${payload.language}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
+      );
     }
 
-    return { tag: 'inline', val: payload.text };
+    return payload.language
+      ? { tag: 'inline', val: payload.text, languageCode: payload.language }
+      : { tag: 'inline', val: payload.text };
   }
 
   throw new Error(
@@ -168,9 +166,13 @@ export function unstructuredBinaryFromValue(
         `Expected inline binary payload for unstructured-binary parameter ${parameterName}`,
       );
     }
+    // Lenient decode (matches Rust/schema `check_binary`): a missing mime type
+    // is always allowed; only a present mime type outside the allow-list is
+    // rejected.
     if (
       allowedMimeTypes.length > 0 &&
-      (!payload.mimeType || !allowedMimeTypes.includes(payload.mimeType))
+      payload.mimeType &&
+      !allowedMimeTypes.includes(payload.mimeType)
     ) {
       throw new Error(
         `Invalid value for parameter ${parameterName}. Mime type \`${payload.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,

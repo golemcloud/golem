@@ -25,7 +25,7 @@
 
 use crate::mcp::schema::field_disambiguation::field_name_mapping;
 use golem_common::schema::adapters::{
-    FALLBACK_OUTPUT_FIELD_NAME, is_multimodal_schema_type, resolve_ref,
+    FALLBACK_OUTPUT_FIELD_NAME, is_multimodal_schema_type, resolve_ref, unstructured_or_raw_kind,
 };
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, InputSchema, NamedField, OutputSchema,
@@ -134,8 +134,10 @@ fn structured_output_schema(graph: &SchemaGraph, output: &OutputSchema) -> Optio
     Some(rmcp::model::object(wrapper))
 }
 
-/// Whether the output type is unstructured (`Text` / `Binary`) or multimodal,
-/// in which case MCP omits the output schema.
+/// Whether the output type is unstructured — a raw `Text` / `Binary` rich
+/// scalar or a canonical unstructured `variant { inline, url }` wrapper — or
+/// multimodal, in which case MCP omits the output schema and clients render the
+/// content array instead.
 fn is_unstructured_output(graph: &SchemaGraph, ty: &SchemaType) -> bool {
     // Output refs are pre-validated in `from_agent_method` (via the legacy
     // projection of the method's output schema), so this classification runs on
@@ -144,10 +146,9 @@ fn is_unstructured_output(graph: &SchemaGraph, ty: &SchemaType) -> bool {
     if is_multimodal_schema_type(graph, ty).unwrap_or(false) {
         return true;
     }
-    matches!(
-        resolve_ref(graph, ty),
-        Ok(SchemaType::Text { .. }) | Ok(SchemaType::Binary { .. })
-    )
+    unstructured_or_raw_kind(graph, ty)
+        .map(|k| k.is_some())
+        .unwrap_or(false)
 }
 
 fn resolves_to_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {

@@ -155,7 +155,9 @@ fn extract_single_field_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::schema::adapters::MULTIMODAL_PARTS_FIELD_NAME;
+    use golem_common::schema::adapters::{
+        MULTIMODAL_PARTS_FIELD_NAME, unstructured_binary_schema_type, unstructured_text_schema_type,
+    };
     use golem_common::schema::metadata::Role;
     use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType, TextRestrictions};
     use serde_json::json;
@@ -177,6 +179,16 @@ mod tests {
         NamedField::user_supplied(name, SchemaType::binary(BinaryRestrictions::default()))
     }
 
+    fn restricted_binary_field(name: &str, mime_types: Vec<&str>) -> NamedField {
+        NamedField::user_supplied(
+            name,
+            SchemaType::binary(BinaryRestrictions {
+                mime_types: Some(mime_types.into_iter().map(String::from).collect()),
+                ..Default::default()
+            }),
+        )
+    }
+
     /// Build a structural multimodal input field (`list<variant<… Role::Multimodal>>`).
     fn multimodal_field(cases: Vec<(&str, SchemaType)>) -> NamedField {
         let variant_cases = cases
@@ -187,9 +199,9 @@ mod tests {
                 metadata: Default::default(),
             })
             .collect();
-        let mut variant = SchemaType::variant(variant_cases);
-        variant.metadata_mut().role = Some(Role::Multimodal);
-        NamedField::user_supplied(MULTIMODAL_PARTS_FIELD_NAME, SchemaType::list(variant))
+        let mut list = SchemaType::list(SchemaType::variant(variant_cases));
+        list.metadata_mut().role = Some(Role::Multimodal);
+        NamedField::user_supplied(MULTIMODAL_PARTS_FIELD_NAME, list)
     }
 
     fn input(fields: Vec<NamedField>) -> InputSchema {
@@ -285,6 +297,40 @@ mod tests {
     }
 
     #[test]
+    fn restricted_binary_without_mime_type_is_accepted() {
+        // Lenient MIME handling (D2): even when the schema restricts the MIME
+        // type, an absent MIME type on the value is allowed — only a *present*
+        // MIME type outside the allow-list is rejected.
+        let schema = input(vec![restricted_binary_field("image", vec!["image/png"])]);
+        let args: JsonObject = json!({"image": {"bytes": "YWJj"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = get_agent_method_input(&args, &graph(), &schema).unwrap();
+        match result {
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Binary(b) => {
+                    assert_eq!(b.bytes, b"abc");
+                    assert!(b.mime_type.is_none());
+                }
+                _ => panic!("expected unstructured binary"),
+            },
+            _ => panic!("expected record"),
+        }
+    }
+
+    #[test]
+    fn restricted_binary_with_disallowed_mime_type_is_rejected() {
+        let schema = input(vec![restricted_binary_field("image", vec!["image/png"])]);
+        let args: JsonObject = json!({"image": {"bytes": "YWJj", "mime_type": "image/jpeg"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let err = get_agent_method_input(&args, &graph(), &schema).unwrap_err();
+        assert!(err.contains("image/jpeg' is not allowed"), "got: {err}");
+    }
+
+    #[test]
     fn multimodal_extracts_parts() {
         let schema = input(vec![multimodal_field(vec![
             ("description", SchemaType::text(TextRestrictions::default())),
@@ -325,6 +371,102 @@ mod tests {
         .clone();
         let err = get_agent_method_input(&args, &graph(), &schema).unwrap_err();
         assert!(err.contains("unknown element name"), "got: {err}");
+    }
+
+    /// A canonical role-marked unstructured-text wrapper input field
+    /// (`variant { inline: text, url }`). Real guest SDK agents publish the
+    /// wrapper form, so the advertised MCP input schema renders it as a generic
+    /// variant `oneOf` and the extraction path parses the same single-key object
+    /// form via `from_json_value` — there is no bare-scalar ergonomic shortcut
+    /// for the wrapper.
+    fn wrapper_text_field(name: &str) -> NamedField {
+        NamedField::user_supplied(
+            name,
+            unstructured_text_schema_type(TextRestrictions::default()),
+        )
+    }
+
+    fn wrapper_binary_field(name: &str) -> NamedField {
+        NamedField::user_supplied(
+            name,
+            unstructured_binary_schema_type(BinaryRestrictions::default()),
+        )
+    }
+
+    #[test]
+    fn wrapper_text_input_inline_case_roundtrips() {
+        let schema = input(vec![wrapper_text_field("report")]);
+        // Canonical variant wire form (what the advertised oneOf schema declares).
+        let args: JsonObject = json!({"report": {"inline": {"text": "hello world"}}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = get_agent_method_input(&args, &graph(), &schema).unwrap();
+        match result {
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Variant(VariantValuePayload { case, payload }) => {
+                    assert_eq!(*case, 0); // inline
+                    match payload.as_deref() {
+                        Some(SchemaValue::Text(t)) => assert_eq!(t.text, "hello world"),
+                        _ => panic!("expected inline text payload"),
+                    }
+                }
+                _ => panic!("expected wrapper variant"),
+            },
+            _ => panic!("expected record"),
+        }
+    }
+
+    #[test]
+    fn wrapper_text_input_url_case_roundtrips() {
+        let schema = input(vec![wrapper_text_field("report")]);
+        let args: JsonObject = json!({"report": {"url": "https://example.com/report.txt"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = get_agent_method_input(&args, &graph(), &schema).unwrap();
+        match result {
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Variant(VariantValuePayload { case, payload }) => {
+                    assert_eq!(*case, 1); // url
+                    match payload.as_deref() {
+                        Some(SchemaValue::Url { url }) => {
+                            assert_eq!(url, "https://example.com/report.txt")
+                        }
+                        _ => panic!("expected url payload"),
+                    }
+                }
+                _ => panic!("expected wrapper variant"),
+            },
+            _ => panic!("expected record"),
+        }
+    }
+
+    #[test]
+    fn wrapper_binary_input_inline_case_roundtrips() {
+        let schema = input(vec![wrapper_binary_field("image")]);
+        let args: JsonObject =
+            json!({"image": {"inline": {"bytes": "YWJj", "mime_type": "image/png"}}})
+                .as_object()
+                .unwrap()
+                .clone();
+        let result = get_agent_method_input(&args, &graph(), &schema).unwrap();
+        match result {
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::Variant(VariantValuePayload { case, payload }) => {
+                    assert_eq!(*case, 0); // inline
+                    match payload.as_deref() {
+                        Some(SchemaValue::Binary(b)) => {
+                            assert_eq!(b.bytes, b"abc");
+                            assert_eq!(b.mime_type.as_deref(), Some("image/png"));
+                        }
+                        _ => panic!("expected inline binary payload"),
+                    }
+                }
+                _ => panic!("expected wrapper variant"),
+            },
+            _ => panic!("expected record"),
+        }
     }
 
     #[test]

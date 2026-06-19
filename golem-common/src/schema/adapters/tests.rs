@@ -561,6 +561,71 @@ fn unstructured_text_restrictions_ignores_unmarked_variant() {
 }
 
 #[test]
+fn decode_unstructured_output_matrix() {
+    use crate::schema::adapters::unstructured::{
+        UnstructuredOutput, decode_unstructured_output, unstructured_binary_schema_type,
+        unstructured_inline_value, unstructured_text_schema_type, unstructured_url_value,
+    };
+    use crate::schema::schema_value::{BinaryValuePayload, TextValuePayload};
+
+    let text_wrapper = unstructured_text_schema_type(TextRestrictions::default());
+    let binary_wrapper = unstructured_binary_schema_type(BinaryRestrictions::default());
+    let bare_text = SchemaType::text(TextRestrictions::default());
+    let bare_binary = SchemaType::binary(BinaryRestrictions::default());
+
+    let text_val = SchemaValue::Text(TextValuePayload {
+        text: "hi".into(),
+        language: None,
+    });
+    let binary_val = SchemaValue::Binary(BinaryValuePayload {
+        bytes: vec![1, 2, 3],
+        mime_type: None,
+    });
+
+    let graph = SchemaGraph::empty();
+
+    // Wrapper schema accepts the wrapper inline value.
+    let v = unstructured_inline_value(text_val.clone());
+    let out = decode_unstructured_output(&graph, &text_wrapper, &v).unwrap();
+    assert!(matches!(out, Some(UnstructuredOutput::Inline(_))));
+
+    // Wrapper schema accepts a *raw* matching value (DE).
+    let out = decode_unstructured_output(&graph, &text_wrapper, &text_val).unwrap();
+    assert!(matches!(out, Some(UnstructuredOutput::Inline(_))));
+    let out = decode_unstructured_output(&graph, &binary_wrapper, &binary_val).unwrap();
+    assert!(matches!(out, Some(UnstructuredOutput::Inline(_))));
+
+    // Wrapper schema yields a url only via the wrapper `url` value.
+    let v = unstructured_url_value("https://example.com/x".into());
+    let out = decode_unstructured_output(&graph, &text_wrapper, &v).unwrap();
+    assert!(matches!(out, Some(UnstructuredOutput::Url(u)) if u == "https://example.com/x"));
+
+    // Wrapper schema + kind-mismatched raw value errors.
+    assert!(decode_unstructured_output(&graph, &text_wrapper, &binary_val).is_err());
+    // Wrapper schema + wrapper inline value of the wrong kind errors.
+    let v = unstructured_inline_value(binary_val.clone());
+    assert!(decode_unstructured_output(&graph, &text_wrapper, &v).is_err());
+
+    // Bare schema accepts a raw matching value.
+    let out = decode_unstructured_output(&graph, &bare_text, &text_val).unwrap();
+    assert!(matches!(out, Some(UnstructuredOutput::Inline(_))));
+    let out = decode_unstructured_output(&graph, &bare_binary, &binary_val).unwrap();
+    assert!(matches!(out, Some(UnstructuredOutput::Inline(_))));
+
+    // Bare schema + kind-mismatched value errors.
+    assert!(decode_unstructured_output(&graph, &bare_text, &binary_val).is_err());
+
+    // A bare scalar schema never yields a `url` (a wrapper-only case): a url
+    // value paired with a bare schema is a kind mismatch and must error.
+    let v = unstructured_url_value("https://example.com/x".into());
+    assert!(decode_unstructured_output(&graph, &bare_text, &v).is_err());
+
+    // A non-unstructured schema returns None (caller falls back).
+    let out = decode_unstructured_output(&graph, &SchemaType::s32(), &SchemaValue::S32(1)).unwrap();
+    assert!(out.is_none());
+}
+
+#[test]
 fn element_schema_component_model_round_trip() {
     let leg = ElementSchema::ComponentModel(ComponentModelElementSchema {
         element_type: record(vec![field("x", s32()), field("y", str())]),
@@ -637,18 +702,20 @@ fn data_schema_multimodal_input_round_trip() {
     assert_eq!(fields[0].name, "parts");
     assert!(matches!(fields[0].source, FieldSource::UserSupplied));
     match &fields[0].schema {
-        SchemaType::List { element, .. } => match element.as_ref() {
-            SchemaType::Variant { cases, metadata } => {
-                assert_eq!(metadata.role, Some(Role::Multimodal));
-                let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
-                assert_eq!(names, vec!["text", "binary"]);
-                assert!(
-                    cases.iter().all(|c| c.payload.is_some()),
-                    "every multimodal variant case carries an element payload"
-                );
+        SchemaType::List { element, metadata } => {
+            assert_eq!(metadata.role, Some(Role::Multimodal));
+            match element.as_ref() {
+                SchemaType::Variant { cases, .. } => {
+                    let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                    assert_eq!(names, vec!["text", "binary"]);
+                    assert!(
+                        cases.iter().all(|c| c.payload.is_some()),
+                        "every multimodal variant case carries an element payload"
+                    );
+                }
+                other => panic!("expected list element to be Variant, got {other:?}"),
             }
-            other => panic!("expected list element to be Variant, got {other:?}"),
-        },
+        }
         other => panic!("expected `parts` to be a List, got {other:?}"),
     }
     let graph = SchemaGraph::anonymous(SchemaType::bool());
@@ -798,17 +865,20 @@ fn data_schema_multimodal_output_round_trip() {
         ],
     });
     let output = data_schema_to_output_schema(&ds).unwrap();
-    // Forward should produce `Single(list<variant<...> with Role::Multimodal>)`.
+    // Forward should produce `Single(list<variant<...>>)` whose list node
+    // carries `Role::Multimodal`.
     match &output {
         OutputSchema::Single(boxed) => match boxed.as_ref() {
-            SchemaType::List { element, .. } => match element.as_ref() {
-                SchemaType::Variant { cases, metadata } => {
-                    assert_eq!(metadata.role, Some(Role::Multimodal));
-                    let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
-                    assert_eq!(names, vec!["text", "binary"]);
+            SchemaType::List { element, metadata } => {
+                assert_eq!(metadata.role, Some(Role::Multimodal));
+                match element.as_ref() {
+                    SchemaType::Variant { cases, .. } => {
+                        let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                        assert_eq!(names, vec!["text", "binary"]);
+                    }
+                    other => panic!("expected list element to be Variant, got {other:?}"),
                 }
-                other => panic!("expected list element to be Variant, got {other:?}"),
-            },
+            }
             other => panic!("expected Single(List(...)), got {other:?}"),
         },
         other => panic!("expected Single(List(...)), got {other:?}"),

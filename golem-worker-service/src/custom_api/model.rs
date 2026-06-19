@@ -154,11 +154,21 @@ impl fmt::Debug for ResponseBody {
     }
 }
 
+/// A raw unstructured-binary request body. Unlike [`BinarySource`], the MIME
+/// type is optional: a request without a `Content-Type` header carries no MIME
+/// type, and that absence must be preserved (lenient MIME handling — a missing
+/// MIME type is always allowed and surfaces to the guest as `None`, rather than
+/// being defaulted to `application/octet-stream`).
+pub struct RawBinaryBody {
+    pub data: Vec<u8>,
+    pub mime_type: Option<String>,
+}
+
 pub enum ParsedRequestBody {
     Unused,
     JsonBody(SchemaValue),
     // Always Some initially, will be None after being consumed by handler code
-    UnstructuredBinary(Option<BinarySource>),
+    UnstructuredBinary(Option<RawBinaryBody>),
     // Always Some initially, will be None after being consumed by handler code
     UnstructuredText(Option<TextSource>),
 }

@@ -29,7 +29,9 @@
 use golem_common::model::agent::{
     HeaderVariable, HttpEndpointDetails, HttpMountDetails, PathSegment, QueryVariable,
 };
-use golem_common::schema::adapters::resolve_ref;
+use golem_common::schema::adapters::{
+    UnstructuredPayloadKind, resolve_ref, unstructured_or_raw_kind,
+};
 use golem_common::schema::{
     FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
 };
@@ -210,53 +212,46 @@ fn handle_body_parameters<E>(
         return Ok(RequestBodySchema::Unused);
     }
 
-    // binary body
+    // Single unstructured text/binary body: a raw request body bound to one
+    // parameter. The field's schema is either the canonical role-marked
+    // `variant { inline, url }` wrapper or a bare `SchemaType::Text` /
+    // `SchemaType::Binary` rich scalar — both are accepted as a raw body.
     if leftovers.len() == 1
-        && let SchemaType::Binary { .. } =
-            resolve_ref(graph, &leftovers[0].1.schema).map_err(|e| make_error(e.to_string()))?
+        && let Some(kind) = unstructured_or_raw_kind(graph, &leftovers[0].1.schema)
+            .map_err(|e| make_error(e.to_string()))?
     {
-        per_field[leftovers[0].0] = Some(MethodParameter::UnstructuredBinaryBody);
-        return Ok(RequestBodySchema::BinaryBody {
-            expected: CompiledSchema {
-                graph: SchemaGraph {
-                    defs: graph.defs.clone(),
-                    root: leftovers[0].1.schema.clone(),
-                },
+        let (input_index, field) = leftovers[0];
+        let expected = CompiledSchema {
+            graph: SchemaGraph {
+                defs: graph.defs.clone(),
+                root: field.schema.clone(),
             },
+        };
+        return Ok(match kind {
+            UnstructuredPayloadKind::Binary => {
+                per_field[input_index] = Some(MethodParameter::UnstructuredBinaryBody);
+                RequestBodySchema::BinaryBody { expected }
+            }
+            UnstructuredPayloadKind::Text => {
+                per_field[input_index] = Some(MethodParameter::UnstructuredTextBody);
+                RequestBodySchema::TextBody { expected }
+            }
         });
     }
 
-    // text body
-    if leftovers.len() == 1
-        && let SchemaType::Text { .. } =
-            resolve_ref(graph, &leftovers[0].1.schema).map_err(|e| make_error(e.to_string()))?
-    {
-        per_field[leftovers[0].0] = Some(MethodParameter::UnstructuredTextBody);
-        return Ok(RequestBodySchema::TextBody {
-            expected: CompiledSchema {
-                graph: SchemaGraph {
-                    defs: graph.defs.clone(),
-                    root: leftovers[0].1.schema.clone(),
-                },
-            },
-        });
-    }
-
-    // JSON object body: every leftover field must be a structural component-model
-    // type (i.e. not a raw unstructured binary/text body). `field_index` indexes
-    // into the JSON body record (built here in leftover/declaration order), not
-    // into the input field list.
+    // JSON object body: every leftover field must be a structural type (i.e. not
+    // a raw unstructured text/binary body, which must be the sole parameter).
+    // `field_index` indexes into the JSON body record (built here in
+    // leftover/declaration order), not into the input field list.
     let mut body_fields = Vec::new();
     for (input_index, field) in &leftovers {
-        let resolved = resolve_ref(graph, &field.schema).map_err(|e| make_error(e.to_string()))?;
-        if matches!(
-            resolved,
-            SchemaType::Binary { .. } | SchemaType::Text { .. }
-        ) {
+        if unstructured_or_raw_kind(graph, &field.schema)
+            .map_err(|e| make_error(e.to_string()))?
+            .is_some()
+        {
             return Err(make_error(
-                "Invalid body parameters: expected either no body, \
-                 all structural parameters (JSON object body), a single binary parameter, \
-                 or a single text parameter"
+                "Invalid body parameters: an unstructured text/binary body must be the \
+                 only body parameter"
                     .into(),
             ));
         }

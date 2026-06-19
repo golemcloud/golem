@@ -100,25 +100,19 @@ pub(crate) fn schema_binary_value_from_json(
 ) -> Result<SchemaValue, String> {
     let payload = canonical::binary::from_json(value_json).map_err(|e| e.to_string())?;
 
-    if let Some(allowed) = &restrictions.mime_types
+    // Lenient MIME handling, mirroring `schema_text_value_from_json` and the
+    // guest-SDK / Rust schema semantics: an absent MIME type is always allowed;
+    // only a *present* MIME type outside a non-empty allow-list is rejected.
+    if let Some(mime) = &payload.mime_type
+        && let Some(allowed) = &restrictions.mime_types
         && !allowed.is_empty()
+        && !allowed.iter().any(|m| m == mime)
     {
-        match &payload.mime_type {
-            Some(mime) if allowed.iter().any(|m| m == mime) => {}
-            Some(mime) => {
-                return Err(format!(
-                    "MIME type '{}' is not allowed. Expected one of: {}",
-                    mime,
-                    allowed.join(", ")
-                ));
-            }
-            None => {
-                return Err(format!(
-                    "MIME type is required. Expected one of: {}",
-                    allowed.join(", ")
-                ));
-            }
-        }
+        return Err(format!(
+            "MIME type '{}' is not allowed. Expected one of: {}",
+            mime,
+            allowed.join(", ")
+        ));
     }
 
     Ok(SchemaValue::Binary(payload))

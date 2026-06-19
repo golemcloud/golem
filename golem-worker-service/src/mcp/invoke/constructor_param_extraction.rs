@@ -138,9 +138,9 @@ mod tests {
                 metadata: Default::default(),
             })
             .collect();
-        let mut variant = SchemaType::variant(variant_cases);
-        variant.metadata_mut().role = Some(Role::Multimodal);
-        NamedField::user_supplied("parts", SchemaType::list(variant))
+        let mut list = SchemaType::list(SchemaType::variant(variant_cases));
+        list.metadata_mut().role = Some(Role::Multimodal);
+        NamedField::user_supplied("parts", list)
     }
 
     fn input(fields: Vec<NamedField>) -> InputSchema {

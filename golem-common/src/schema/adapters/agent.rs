@@ -407,10 +407,10 @@ pub fn legacy_data_value_to_typed_schema_value(
                     payload: Some(Box::new(schema_value)),
                 }));
             }
-            let mut variant_ty = SchemaType::variant(cases);
-            variant_ty.metadata_mut().role = Some(Role::Multimodal);
+            let mut list_ty = SchemaType::list(SchemaType::variant(cases));
+            list_ty.metadata_mut().role = Some(Role::Multimodal);
             Ok(TypedSchemaValue::new(
-                builder.into_graph_with_root(SchemaType::list(variant_ty)),
+                builder.into_graph_with_root(list_ty),
                 SchemaValue::List {
                     elements: variant_values,
                 },
