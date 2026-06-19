@@ -54,7 +54,7 @@ section: agent
 # density-prep only uploads 999 distinct components. The ramp is inlined per
 # cell rather than shared via a YAML anchor because the buildspec's yq does not
 # reliably resolve aliases on read.
-defaultRamp: [100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 10000]
+defaultRamp: [50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000]
 
 cells:
   # ISOLATION RUN: durable vs ephemeral under the identical round load model
