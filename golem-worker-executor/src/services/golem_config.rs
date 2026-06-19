@@ -79,6 +79,11 @@ pub struct GolemConfig {
     pub max_websocket_connections: usize,
     pub http_address: String,
     pub http_port: u16,
+    /// How often runtime/allocator metrics are sampled and refreshed into the
+    /// gauges exposed on `/metrics`. Prometheus scrapes the rendered values
+    /// independently; this is the in-process resolution.
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
 }
 
 impl SafeDisplay for GolemConfig {
@@ -312,6 +317,7 @@ impl Default for GolemConfig {
             max_websocket_connections: 100,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
     }
 }

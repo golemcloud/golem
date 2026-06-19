@@ -3,6 +3,7 @@ http_address = "0.0.0.0"
 http_port = 8082
 max_in_function_retry_delay = "20s"
 max_websocket_connections = 100
+runtime_metrics_sampling_interval = "5s"
 tracing_file_name_with_port = true
 
 [active_workers]
@@ -347,6 +348,7 @@ without_time = false
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
+# runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -693,6 +695,7 @@ without_time = false
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
+# runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
