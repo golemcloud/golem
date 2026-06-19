@@ -92,6 +92,15 @@ const BUSY_MILLIS: u32 = 500;
 /// short — the test measures concurrent residency, not sustained CPU load.
 const EPHEMERAL_HOLD_MILLIS: u32 = 500;
 
+/// Number of latency probes taken against the active set after each ramp step
+/// of an active cell (scenarios 2-3). The ramp's own samples are dominated by
+/// the fast `increment` create path; without several probes against agents that
+/// are under sustained `busy_for` load, an active-load latency ceiling
+/// (soft/usability/hard) would be diluted by those fast creates and registered
+/// late or missed. The probes hit distinct active agents round-robin so they
+/// reflect the population's latency distribution, not one agent's.
+const ACTIVE_PROBES_PER_STEP: u32 = 16;
+
 /// Maximum number of agent-create invocations in flight at once while ramping a
 /// cell. The cost of a step is dominated by the round-trips for the new agents,
 /// so fanning them out cuts wall-clock from hours to minutes. The cap keeps the
@@ -887,38 +896,42 @@ async fn run_ramp_cell(
             active.add(user.clone(), component.clone(), agent);
         }
 
-        // With the active set now at full size for this step, take one probe
-        // sample so a ceiling that only manifests under sustained active load
-        // (latency blow-up, OOM, connection loss) is caught even at the final
-        // ramp step where there are no further creates to sample.
+        // With the active set now at full size for this step, probe it several
+        // times so a ceiling that only manifests under sustained active load
+        // (latency blow-up, OOM, connection loss) is measured against the active
+        // population rather than diluted by the fast `increment` creates. The
+        // probes hit distinct active agents round-robin. Also covers the final
+        // ramp step, where there are no further creates to sample.
         if want_active > 0 {
-            let (component, agent) = agent_for_index(config, 0, components)?;
-            let attempt = timed_invoke(
-                user,
-                component,
-                &agent,
-                "increment",
-                data_value!(),
-                timeout.current,
-            )
-            .await;
-            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-            let pod_restart_count = probe.pod_restart_count().await;
-            let snapshot = CrossAxisSnapshot::default();
-            outcome.invoke_latencies.push(attempt.latency);
-            let sample = Sample {
-                latency: attempt.latency,
-                coord: SampleCoord::Agents(target),
-                pod_restart_count,
-                connection_alive: !attempt.connection_lost,
-                snapshot,
-                queue_depth: None,
-            };
-            for event in detector.observe(&sample) {
-                handle_event(event, &mut outcome, &mut timeout);
-            }
-            if detector.is_terminal() {
-                break 'ramp;
+            for p in 0..ACTIVE_PROBES_PER_STEP {
+                let probe_index = p % want_active;
+                let (component, agent) = agent_for_index(config, probe_index, components)?;
+                let attempt = timed_invoke(
+                    user,
+                    component,
+                    &agent,
+                    "busy_for",
+                    data_value!(BUSY_MILLIS),
+                    timeout.current,
+                )
+                .await;
+                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+                let pod_restart_count = probe.pod_restart_count().await;
+                outcome.invoke_latencies.push(attempt.latency);
+                let sample = Sample {
+                    latency: attempt.latency,
+                    coord: SampleCoord::Agents(target),
+                    pod_restart_count,
+                    connection_alive: !attempt.connection_lost,
+                    snapshot: CrossAxisSnapshot::default(),
+                    queue_depth: None,
+                };
+                for event in detector.observe(&sample) {
+                    handle_event(event, &mut outcome, &mut timeout);
+                }
+                if detector.is_terminal() {
+                    break 'ramp;
+                }
             }
         }
     }
