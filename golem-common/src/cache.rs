@@ -292,6 +292,97 @@ impl<
         result
     }
 
+    /// Cancellation-safe variant of [`Self::get_or_insert`].
+    ///
+    /// Behaves like `get_or_insert`, but the owner future is spawned via
+    /// `tokio::task::spawn` instead of being awaited inline. The caller
+    /// subscribes to the same `tokio::sync::watch` channel as other waiters,
+    /// so if the caller's future is dropped the spawned owner still runs to
+    /// completion and resolves the pending entry — either upserting the
+    /// cached value (on `Ok`) or removing the pending entry (on `Err`).
+    ///
+    /// Without this guarantee, a cancelled caller could leave the pending
+    /// entry in the map forever, permanently blocking subsequent callers
+    /// for the same key.
+    pub async fn get_or_insert_spawned<F1, F2>(&self, key: &K, f1: F1, f2: F2) -> Result<V, E>
+    where
+        F1: FnOnce() -> PV,
+        F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send + 'static,
+    {
+        let own_id = self.state.last_id.fetch_add(1, Ordering::Relaxed);
+        let result = self.get_or_add_as_pending(key, own_id, f1).await?;
+        match result {
+            Item::Pending {
+                ref tx,
+                id,
+                pending_value,
+            } => {
+                if id == own_id {
+                    record_cache_miss(self.name);
+                    // Owner: spawn the producer so cancellation of the caller
+                    // does not abandon the pending entry.
+                    let key_clone = key.clone();
+                    let tx_clone = tx.clone();
+                    let self_clone = self.clone();
+                    let mut eviction_needed = false;
+                    tokio::task::spawn(
+                        async move {
+                            let value = f2(&pending_value).await;
+                            if let Ok(success_value) = &value {
+                                self_clone
+                                    .state
+                                    .items
+                                    .upsert_async(
+                                        key_clone.clone(),
+                                        Item::Cached {
+                                            value: success_value.clone(),
+                                            last_access: Instant::now(),
+                                        },
+                                    )
+                                    .await;
+                                let old_count =
+                                    self_clone.state.count.fetch_add(1, Ordering::Relaxed);
+                                let new_count = old_count.saturating_add(1);
+
+                                record_cache_size(self_clone.name, new_count);
+
+                                if self_clone
+                                    .capacity
+                                    .is_some_and(|capacity| new_count > capacity)
+                                {
+                                    eviction_needed = true;
+                                }
+                            } else {
+                                self_clone.state.items.remove_async(&key_clone).await;
+                            }
+                            let _ = tx_clone.send(Some(value));
+                            if eviction_needed {
+                                self_clone.evict().await;
+                            }
+                        }
+                        .in_current_span(),
+                    );
+                } else {
+                    record_cache_hit(self.name);
+                }
+                // Owner and all waiters subscribe to the same watch and
+                // receive the spawned future's `Result<V, E>`.
+                let mut rx = tx.subscribe();
+                let val = rx
+                    .wait_for(|v| v.is_some())
+                    .await
+                    .expect("cache watch sender dropped without sending");
+                val.clone()
+                    .expect("watch value must be Some after wait_for")
+            }
+            Item::Cached { value, .. } => {
+                record_cache_hit(self.name);
+                self.update_last_access(key).await;
+                Ok(value)
+            }
+        }
+    }
+
     /// Gets a cached value for a given key, or inserts a new one with the given async function but immediately
     /// returns the pending value. If a value is pending, it's pending value is returned immediately.
     pub async fn get_or_insert_pending<F1, F2>(
@@ -1158,7 +1249,7 @@ mod tests {
         assert!(cache.contains_key(&3).await);
     }
 
-    #[test(flavor = "multi_thread", worker_threads = 4)]
+    #[test]
     async fn capacity_holds_when_insert_races_eviction() {
         // Deterministically reproduces the production count race. Capacity
         // eviction snapshots the surviving entry set and then *blindly stores*
@@ -1225,6 +1316,79 @@ mod tests {
         assert!(
             size <= capacity,
             "cache with capacity {capacity} grew to {size} cached entries after an insert raced \
+             eviction; the capacity bound is not being enforced"
+        );
+    }
+
+    #[test]
+    async fn spawned_capacity_holds_when_insert_races_eviction() {
+        let capacity = 4usize;
+        let cache = bounded_cache(capacity, "spawned_capacity_race");
+
+        for i in 0..capacity as u64 {
+            cache
+                .get_or_insert_simple_spawned(&i, move || async move { Ok(i) })
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.iter().await.len(), capacity);
+
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let completed_for_hook = completed.clone();
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired_for_hook = fired.clone();
+        cache.set_evict_interleave(Arc::new(move || {
+            let completed = completed_for_hook.clone();
+            let fired = fired_for_hook.clone();
+            Box::pin(async move {
+                if !fired.swap(true, Ordering::SeqCst) {
+                    for _ in 0..1000 {
+                        if completed.load(Ordering::SeqCst) >= 2 {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    panic!("spawned inserts did not complete while eviction was interleaved");
+                }
+            })
+        }));
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let tasks: Vec<_> = [100u64, 101u64]
+            .into_iter()
+            .map(|key| {
+                let cache = cache.clone();
+                let release = release.clone();
+                let completed = completed.clone();
+                tokio::spawn(async move {
+                    let result = cache
+                        .get_or_insert_simple_spawned(&key, move || async move {
+                            release.notified().await;
+                            Ok(key)
+                        })
+                        .await;
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    result
+                })
+            })
+            .collect();
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        release.notify_waiters();
+
+        let results = tokio::time::timeout(Duration::from_secs(5), join_all(tasks))
+            .await
+            .expect("spawned inserts timed out");
+        for result in results {
+            result.unwrap().unwrap();
+        }
+
+        cache.clear_evict_interleave();
+
+        let size = cache.iter().await.len();
+        assert!(
+            size <= capacity,
+            "spawned cache with capacity {capacity} grew to {size} cached entries after inserts raced \
              eviction; the capacity bound is not being enforced"
         );
     }
