@@ -15,7 +15,19 @@
 use super::DurableWorkerCtx;
 use crate::preview2::wasi::config::store::{Error, Host};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_common::base_model::render_config_path;
+use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+
+/// Render an agent-config value (held in executor state as a legacy
+/// `ValueAndType`) into the flat string form expected by `wasi:config/store`.
+/// Scalars render as their bare JSON string; structured values render as JSON.
+fn render_agent_config_value(value: &ValueAndType) -> Option<String> {
+    value.to_json_value().ok().map(|json| match json {
+        serde_json::Value::String(value) => value,
+        other => other.to_string(),
+    })
+}
 
 /// `wasi:config/store` implementation
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -26,14 +38,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             return Ok(Ok(None));
         }
 
-        let value = self.state.agent_config.get(&path).and_then(|value| {
-            TypedAgentConfigEntry {
-                path,
-                value: value.clone(),
-            }
-            .to_flat_pair()
-            .map(|(_, rendered_value)| rendered_value)
-        });
+        let value = self
+            .state
+            .agent_config
+            .get(&path)
+            .and_then(render_agent_config_value);
 
         Ok(Ok(value))
     }
@@ -43,14 +52,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .state
             .agent_config
             .iter()
-            .map(|(path, value)| TypedAgentConfigEntry {
-                path: path.clone(),
-                value: value.clone(),
+            .filter_map(|(path, value)| {
+                render_agent_config_value(value)
+                    .map(|rendered| (render_config_path(path), rendered))
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        Ok(Ok(TypedAgentConfigEntry::to_flat_map(&entries)
-            .into_iter()
-            .collect()))
+        Ok(Ok(entries))
     }
 }

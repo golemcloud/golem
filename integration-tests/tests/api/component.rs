@@ -34,12 +34,11 @@ use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::schema::adapters::agent::{agent_type_to_schema, schema_agent_type_to_legacy};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::adapters::agent::agent_type_to_schema;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::analysis::analysed_type::{option, str};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
-use golem_wasm::{Value, ValueAndType};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -146,11 +145,14 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
         component
             .metadata
             .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
-            .unwrap_or_default(),
-        &[golem_common::model::worker::TypedAgentConfigEntry {
-            path: vec!["var1".to_string()],
-            value: ValueAndType::new(Value::String("value1".to_string()), str())
-        }]
+            .unwrap_or_default()
+            .iter()
+            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .collect::<Vec<_>>(),
+        vec![(
+            vec!["var1".to_string()],
+            SchemaValue::String("value1".to_string())
+        )]
     );
 
     let updated_component = user
@@ -182,19 +184,21 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
         updated_component
             .metadata
             .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
-            .unwrap_or_default(),
-        &[
-            golem_common::model::worker::TypedAgentConfigEntry {
-                path: vec!["var1".to_string()],
-                value: ValueAndType::new(Value::String("value11".to_string()), str())
-            },
-            golem_common::model::worker::TypedAgentConfigEntry {
-                path: vec!["var2".to_string()],
-                value: ValueAndType::new(
-                    Value::Option(Some(Box::new(Value::String("value2".to_string())))),
-                    option(str())
-                )
-            }
+            .unwrap_or_default()
+            .iter()
+            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                vec!["var1".to_string()],
+                SchemaValue::String("value11".to_string())
+            ),
+            (
+                vec!["var2".to_string()],
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("value2".to_string())))
+                }
+            )
         ]
     );
 
@@ -232,7 +236,6 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
     let mut other_agent = component.metadata.agent_types()[0].clone();
     other_agent.type_name = AgentTypeName("OtherAgent".to_string());
     other_agent.description = "Constructs the agent OtherAgent".to_string();
-    let other_agent = schema_agent_type_to_legacy(&other_agent)?;
 
     let updated_component = client
         .update_component(
@@ -792,12 +795,14 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         config: Vec::new(),
     };
 
+    let agent_type_schema = agent_type_to_schema(&agent_type)?;
+
     let component = client
         .create_component(
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("it:agent-counters".to_string()),
-                agent_types: vec![agent_type.clone()],
+                agent_types: vec![agent_type_schema.clone()],
                 agent_type_provision_configs: std::collections::BTreeMap::new(),
             },
             tokio::fs::File::open(
@@ -809,7 +814,6 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         )
         .await?;
 
-    let agent_type_schema = agent_type_to_schema(&agent_type)?;
     assert_eq!(
         component.metadata.agent_types(),
         std::slice::from_ref(&agent_type_schema)

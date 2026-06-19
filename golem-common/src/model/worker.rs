@@ -17,10 +17,8 @@ use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
-use crate::schema::SchemaGraph;
 use crate::schema::adapters::schema_type_to_analysed_type;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use crate::schema::{SchemaGraph, TypedSchemaValue};
 use std::collections::BTreeMap;
 
 impl TypedAgentConfigEntry {
@@ -29,7 +27,13 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {
-        self.value.to_json_value().ok().map(|json| {
+        crate::schema::render::to_json_value(
+            self.value.graph(),
+            self.value.root_type(),
+            self.value.value(),
+        )
+        .ok()
+        .map(|json| {
             let rendered_value = match json {
                 serde_json::Value::String(value) => value,
                 other => other.to_string(),
@@ -57,27 +61,46 @@ impl UntypedAgentConfigEntry {
             "cannot enrich local agent config for non-agentic workers".to_string()
         })?;
 
-        let value_type = component_metadata
+        let agent_type = component_metadata
             .find_agent_type_by_name(agent_type_name)
             .ok_or_else(|| {
                 format!("did not find expected agent type {agent_type_name} in the metadata")
-            })?
+            })?;
+
+        let declaration = agent_type
             .config
-            .into_iter()
+            .iter()
             .find(|c| c.source == AgentConfigSource::Local && c.path == self.path)
             .ok_or_else(|| {
                 format!(
                     "did not find config key {} in the metadata",
                     self.path.join(".")
                 )
-            })?
-            .value_type;
-        let value_type = schema_type_to_analysed_type(&SchemaGraph::empty(), &value_type)
+            })?;
+
+        // This is the legacy-oplog upgrade boundary: the incoming value is a
+        // legacy `golem_wasm::Value` recovered from the persisted raw oplog
+        // entry. We keep the agent's native config schema graph (so named/ref
+        // composites are preserved) and only lower the declared `value_type` to
+        // a legacy `AnalysedType` to drive decoding of the legacy value into a
+        // `SchemaValue`. Refs in `value_type` are resolved against the agent's
+        // full `SchemaGraph`. This honestly fails on config types that have no
+        // legacy representation (which a legacy `Value` could never have
+        // carried anyway).
+        let graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: declaration.value_type.clone(),
+        };
+
+        let analysed = schema_type_to_analysed_type(&agent_type.schema, &declaration.value_type)
             .map_err(|err| format!("failed to convert config type: {err}"))?;
+
+        let schema_value = crate::schema::adapters::value_to_schema_value(&self.value, &analysed)
+            .map_err(|err| format!("failed to convert config value: {err}"))?;
 
         Ok(TypedAgentConfigEntry {
             path: self.path,
-            value: ValueAndType::new(self.value, value_type),
+            value: TypedSchemaValue::new(graph, schema_value),
         })
     }
 }

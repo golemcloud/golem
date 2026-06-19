@@ -153,18 +153,9 @@ pub fn parse_worker_creation_agent_config(
             ))
         })?;
 
-        let parsed_value =
-            typed_schema_value_to_value_and_type(&TypedSchemaValue::new(graph, schema_value))
-                .map_err(|err| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "config value for path {} cannot be converted to a value: {err}",
-                        entry.path.join(".")
-                    ))
-                })?;
-
         initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,
-            value: parsed_value,
+            value: TypedSchemaValue::new(graph, schema_value),
         });
     }
 
@@ -178,7 +169,7 @@ pub fn parse_worker_creation_agent_config(
             .map(|s| s.to_vec())
             .unwrap_or_default();
 
-        let config = effective_agent_config(initial_agent_config.clone(), component_config);
+        let config = effective_agent_config(initial_agent_config.clone(), component_config)?;
 
         validate_agent_config(&config, &agent_type)?;
     }
@@ -188,12 +179,18 @@ pub fn parse_worker_creation_agent_config(
 
 /// Merges the component-level typed config (stored in `AgentTypeProvisionConfig`) with
 /// the worker-creation config entries, with worker entries taking precedence.
-/// Returns a map from config path to `ValueAndType`.
+///
+/// This is the single downgrade boundary from the schema-native
+/// [`TypedSchemaValue`] carried by [`TypedAgentConfigEntry`] to the legacy
+/// `golem_wasm::ValueAndType` still consumed by the executor's guest-facing
+/// config plumbing (`wasi:config/store`, named retry-policy parsing). The
+/// downgrade is partial and fails for shapes without a legacy counterpart;
+/// it stays here until those consumers migrate to schema-native values.
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
-) -> HashMap<Vec<String>, ValueAndType> {
-    let mut result = HashMap::new();
+) -> Result<HashMap<Vec<String>, ValueAndType>, WorkerExecutorError> {
+    let mut result: HashMap<Vec<String>, TypedSchemaValue> = HashMap::new();
 
     for entry in default_agent_config {
         result.insert(entry.path, entry.value);
@@ -204,6 +201,17 @@ pub fn effective_agent_config(
     }
 
     result
+        .into_iter()
+        .map(|(path, typed)| {
+            let value = typed_schema_value_to_value_and_type(&typed).map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "config value for path {} cannot be converted to a value: {err}",
+                    path.join(".")
+                ))
+            })?;
+            Ok((path, value))
+        })
+        .collect()
 }
 
 pub fn validate_agent_config(

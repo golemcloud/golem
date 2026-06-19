@@ -31,8 +31,6 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::schema::adapters::schema_type_to_analysed_type;
-use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
@@ -52,12 +50,13 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -879,25 +878,29 @@ fn validate_and_transform_config_entries(
             );
         }
 
-        // TEMP(Phase E): `TypedAgentConfigEntry.value` is still the legacy
-        // `ValueAndType` (a WIT/oplog interface type in `golem:api@1.5.0/oplog`).
-        // Lower the declaration's schema-native `value_type` to a legacy
-        // `AnalysedType` (resolving refs against the agent graph) so the
-        // existing parse/validation keeps working until the config value
-        // carrier is migrated to `TypedSchemaValue`.
-        let legacy_value_type =
-            schema_type_to_analysed_type(&agent_type.schema, &matching_declaration.value_type)
-                .map_err(|err| {
-                    ComponentError::InternalError(anyhow::anyhow!(
-                        "Failed to lower config value type: {err}"
-                    ))
-                })?;
-        let value = ValueAndType::parse_with_type(&config_value.value.0, &legacy_value_type)
-            .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+        // The DTO carries the config value as a bare `SchemaValue` JSON. Decode
+        // it and validate it against the declaration's schema-native
+        // `value_type` (resolving refs against the agent graph), then store the
+        // schema-native `TypedSchemaValue` directly.
+        let schema_value: SchemaValue = serde_json::from_value(config_value.value.0.clone())
+            .map_err(|err| ComponentError::AgentConfigTypeMismatch {
                 agent: agent_type.type_name.clone(),
                 key: config_value.path.clone(),
-                errors,
+                errors: vec![format!("config value is not a valid schema value: {err}")],
             })?;
+
+        let graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: matching_declaration.value_type.clone(),
+        };
+
+        validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
+            ComponentError::AgentConfigTypeMismatch {
+                agent: agent_type.type_name.clone(),
+                key: config_value.path.clone(),
+                errors: errors.iter().map(|e| e.to_string()).collect(),
+            }
+        })?;
 
         if !seen_keys.insert(config_value.path.clone()) {
             return Err(ComponentError::AgentConfigDuplicateValue {
@@ -908,7 +911,7 @@ fn validate_and_transform_config_entries(
 
         results.push(TypedAgentConfigEntry {
             path: config_value.path,
-            value,
+            value: TypedSchemaValue::new(graph, schema_value),
         });
     }
 
@@ -940,17 +943,25 @@ fn check_config_entries_match(
             );
         };
 
-        // TEMP(Phase E): compare against the legacy lowering of the
-        // declaration's schema-native `value_type` while `TypedAgentConfigEntry`
-        // still carries a legacy `ValueAndType`.
-        let legacy_value_type =
-            schema_type_to_analysed_type(&agent_type.schema, &matching_declaration.value_type)
-                .map_err(|err| {
-                    ComponentError::InternalError(anyhow::anyhow!(
-                        "Failed to lower config value type: {err}"
-                    ))
-                })?;
-        if entry.value.typ != legacy_value_type {
+        // Strict compatibility gate. The stored config value is positional
+        // (records/variants carry no field/case names at runtime), so it may
+        // only be reinterpreted under the updated declaration when the two
+        // types are *structurally identical*. Field/case renames, reorderings
+        // and width changes are rejected because they would silently change
+        // the meaning of the stored value even though it would still
+        // "validate" against the new shape. The comparison is cross-graph so
+        // the stored value's own graph is compared against the updated agent
+        // graph, and coinductive so recursive types terminate.
+        let new_graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: matching_declaration.value_type.clone(),
+        };
+        if !is_equivalent_cross_graph(
+            entry.value.graph(),
+            entry.value.root_type(),
+            &new_graph,
+            &new_graph.root,
+        ) {
             return Err(ComponentError::AgentConfigOldConfigNotValid {
                 agent: agent_type.type_name.clone(),
                 key: entry.path.clone(),

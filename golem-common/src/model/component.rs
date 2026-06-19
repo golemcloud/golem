@@ -14,7 +14,6 @@
 
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::diff;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
@@ -37,14 +36,21 @@ impl ComponentDto {
                                 .map(|e| {
                                     Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
-                                            |reason| diff::DiffError::TypedConfigJsonConversion {
-                                                operation:
-                                                    "component dto to_diffable config entry conversion",
-                                                path: e.path.join("."),
-                                                reason,
-                                            },
-                                        )?),
+                                        NormalizedJsonValue::new(
+                                            crate::schema::render::to_json_value(
+                                                e.value.graph(),
+                                                e.value.root_type(),
+                                                e.value.value(),
+                                            )
+                                            .map_err(|reason| {
+                                                diff::DiffError::TypedConfigJsonConversion {
+                                                    operation:
+                                                        "component dto to_diffable config entry conversion",
+                                                    path: e.path.join("."),
+                                                    reason: reason.to_string(),
+                                                }
+                                            })?,
+                                        ),
                                     ))
                                 })
                                 .collect::<Result<_, _>>()?,

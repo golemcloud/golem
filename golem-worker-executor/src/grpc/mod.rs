@@ -73,7 +73,6 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -299,7 +298,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if existing_entry.path != request_entry.path {
                 return false;
             }
-            let existing_json = existing_entry.value.to_json_value().ok();
+            // Compare the existing entry's bare schema value JSON (the same form
+            // the request DTO carries) against the requested value.
+            let existing_json = serde_json::to_value(existing_entry.value.value()).ok();
             if existing_json.as_ref() != Some(&request_entry.value.0) {
                 return false;
             }

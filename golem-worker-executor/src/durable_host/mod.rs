@@ -423,7 +423,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            )
+            )?
         } else {
             HashMap::new()
         };
@@ -2295,7 +2295,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            );
+            )?;
 
             validate_agent_config(&updated_agent_config, &agent_type)?;
 

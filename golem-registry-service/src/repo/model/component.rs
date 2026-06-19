@@ -30,7 +30,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -164,14 +163,21 @@ impl ComponentRevisionRecord {
                                 .map(|e| {
                                     Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
-                                            |reason| diff::DiffError::TypedConfigJsonConversion {
-                                                operation:
-                                                    "component revision to_diffable config entry conversion",
-                                                path: e.path.join("."),
-                                                reason,
-                                            },
-                                        )?),
+                                        NormalizedJsonValue::new(
+                                            golem_common::schema::render::to_json_value(
+                                                e.value.graph(),
+                                                e.value.root_type(),
+                                                e.value.value(),
+                                            )
+                                            .map_err(|reason| {
+                                                diff::DiffError::TypedConfigJsonConversion {
+                                                    operation:
+                                                        "component revision to_diffable config entry conversion",
+                                                    path: e.path.join("."),
+                                                    reason: reason.to_string(),
+                                                }
+                                            })?,
+                                        ),
                                     ))
                                 })
                                 .collect::<Result<_, _>>()?,

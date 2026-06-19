@@ -75,12 +75,17 @@ declare_structs! {
         pub value: NormalizedJsonValue
     }
 
-    #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
-    #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
+    // Schema-native local agent-config carrier. Unlike `UntypedAgentConfigEntry`
+    // (the `raw-local-agent-config-entry` WIT form carrying `golem_wasm::Value`),
+    // this type holds a `TypedSchemaValue` and is NOT coupled to the legacy
+    // `golem_wasm` value reflection. Its guest-facing WIT realization
+    // (`local-agent-config-entry`) is produced via the schema WIT bridge
+    // (`encode_typed`) at the public-oplog edge, not through `IntoValue`.
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct TypedAgentConfigEntry {
         pub path: Vec<String>,
-        pub value: golem_wasm::ValueAndType
+        pub value: crate::schema::TypedSchemaValue
     }
 
     pub struct AgentCreationRequest {
@@ -187,23 +192,28 @@ declare_enums! {
     }
 }
 
-impl From<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
-    fn from(value: TypedAgentConfigEntry) -> Self {
-        Self {
+#[cfg(feature = "full")]
+impl TryFrom<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
+    type Error = String;
+
+    fn try_from(value: TypedAgentConfigEntry) -> Result<Self, Self::Error> {
+        let inner = crate::schema::adapters::schema_value_to_value(
+            value.value.graph(),
+            value.value.root_type(),
+            value.value.value(),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Self {
             path: value.path,
-            value: value.value.value,
-        }
+            value: inner,
+        })
     }
 }
 
 #[cfg(feature = "full")]
 impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
     fn from(value: TypedAgentConfigEntry) -> Self {
-        let typed = crate::schema::adapters::value_and_type_to_typed_schema_value(&value.value)
-            .expect(
-                "ValueAndType in TypedAgentConfigEntry must be representable as a schema value",
-            );
-        let (_graph, schema_value) = typed.into_parts();
+        let (_graph, schema_value) = value.value.into_parts();
         Self {
             path: value.path,
             value: serde_json::to_value(&schema_value)

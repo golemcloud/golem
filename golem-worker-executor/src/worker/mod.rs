@@ -2697,6 +2697,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
                 // both options are equivalent here, this is just cheaper.
 
+                // Downgrade the schema-native config entries to the legacy raw
+                // form persisted in the Create oplog entry.
+                let local_agent_config: Vec<golem_common::model::worker::UntypedAgentConfigEntry> =
+                    initial_worker_metadata
+                        .config
+                        .iter()
+                        .cloned()
+                        .map(golem_common::model::worker::UntypedAgentConfigEntry::try_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(|err: String| WorkerExecutorError::runtime(err))?;
+
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.agent_id.clone(),
                     initial_worker_metadata.agent_mode,
@@ -2713,12 +2724,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
-                    initial_worker_metadata
-                        .config
-                        .iter()
-                        .cloned()
-                        .map(Into::into)
-                        .collect(),
+                    local_agent_config,
                     initial_worker_metadata.original_phantom_id,
                     instance_id,
                 );

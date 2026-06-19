@@ -239,6 +239,218 @@ fn assignable(
     }
 }
 
+/// Structural type equivalence across two (possibly different) graphs.
+///
+/// Returns `true` when `ty_a` (resolved inside `graph_a`) and `ty_b`
+/// (resolved inside `graph_b`) describe exactly the same type.
+///
+/// This is **stricter** than [`is_assignable`]: it is a symmetric, invariant
+/// comparison used as a compatibility gate where a stored positional value
+/// must keep its exact meaning under an updated type declaration. Field and
+/// case renames, reorderings, width changes, and any scalar-restriction
+/// differences are all rejected. Because [`SchemaValue`](crate::schema::SchemaValue)
+/// values are positional, a value can only be safely reinterpreted under a
+/// new type when that type is structurally identical.
+///
+/// The comparison is coinductive over [`SchemaType::Ref`] on both sides so
+/// recursive types terminate.
+pub fn is_equivalent_cross_graph(
+    graph_a: &SchemaGraph,
+    ty_a: &SchemaType,
+    graph_b: &SchemaGraph,
+    ty_b: &SchemaType,
+) -> bool {
+    let mut visited = HashSet::new();
+    equivalent(graph_a, ty_a, graph_b, ty_b, &mut visited)
+}
+
+fn equivalent(
+    graph_a: &SchemaGraph,
+    a: &SchemaType,
+    graph_b: &SchemaGraph,
+    b: &SchemaType,
+    visited: &mut HashSet<(TypeId, TypeId)>,
+) -> bool {
+    // Resolve refs on both sides while tracking the pair to detect cycles.
+    let (a_resolved, a_key) = resolve(graph_a, a);
+    let (b_resolved, b_key) = resolve(graph_b, b);
+
+    // Coinductive cycle break, keyed by the last resolved-ref id on each
+    // side. Re-entering an already-seen pair terminates with accept; any
+    // real disagreement is observed on the first (acyclic) visit.
+    if let (Some(ka), Some(kb)) = (a_key, b_key)
+        && !visited.insert((ka, kb))
+    {
+        return true;
+    }
+
+    match (a_resolved, b_resolved) {
+        // Primitives must match exactly.
+        (SchemaType::Bool { .. }, SchemaType::Bool { .. })
+        | (SchemaType::S8 { .. }, SchemaType::S8 { .. })
+        | (SchemaType::S16 { .. }, SchemaType::S16 { .. })
+        | (SchemaType::S32 { .. }, SchemaType::S32 { .. })
+        | (SchemaType::S64 { .. }, SchemaType::S64 { .. })
+        | (SchemaType::U8 { .. }, SchemaType::U8 { .. })
+        | (SchemaType::U16 { .. }, SchemaType::U16 { .. })
+        | (SchemaType::U32 { .. }, SchemaType::U32 { .. })
+        | (SchemaType::U64 { .. }, SchemaType::U64 { .. })
+        | (SchemaType::F32 { .. }, SchemaType::F32 { .. })
+        | (SchemaType::F64 { .. }, SchemaType::F64 { .. })
+        | (SchemaType::Char { .. }, SchemaType::Char { .. })
+        | (SchemaType::String { .. }, SchemaType::String { .. })
+        | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
+        | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
+
+        // Rich scalars: restrictions/specs must be exactly equal.
+        (
+            SchemaType::Text {
+                restrictions: ra, ..
+            },
+            SchemaType::Text {
+                restrictions: rb, ..
+            },
+        ) => ra == rb,
+        (
+            SchemaType::Binary {
+                restrictions: ra, ..
+            },
+            SchemaType::Binary {
+                restrictions: rb, ..
+            },
+        ) => ra == rb,
+        (
+            SchemaType::Url {
+                restrictions: ra, ..
+            },
+            SchemaType::Url {
+                restrictions: rb, ..
+            },
+        ) => ra == rb,
+        (SchemaType::Path { spec: sa, .. }, SchemaType::Path { spec: sb, .. }) => sa == sb,
+        (SchemaType::Quantity { spec: sa, .. }, SchemaType::Quantity { spec: sb, .. }) => sa == sb,
+
+        // Records: exact structural match (field count, order, names, bodies).
+        (SchemaType::Record { fields: a, .. }, SchemaType::Record { fields: b, .. }) => {
+            a.len() == b.len()
+                && a.iter().zip(b.iter()).all(|(af, bf)| {
+                    af.name == bf.name && equivalent(graph_a, &af.body, graph_b, &bf.body, visited)
+                })
+        }
+
+        // Variants: exact case-name match and order, payloads equivalent.
+        (SchemaType::Variant { cases: a, .. }, SchemaType::Variant { cases: b, .. }) => {
+            a.len() == b.len()
+                && a.iter().zip(b.iter()).all(|(ac, bc)| {
+                    ac.name == bc.name
+                        && match (&ac.payload, &bc.payload) {
+                            (None, None) => true,
+                            (Some(ap), Some(bp)) => equivalent(graph_a, ap, graph_b, bp, visited),
+                            _ => false,
+                        }
+                })
+        }
+
+        // Enums / flags: exact-match by names and order.
+        (SchemaType::Enum { cases: a, .. }, SchemaType::Enum { cases: b, .. }) => a == b,
+        (SchemaType::Flags { flags: a, .. }, SchemaType::Flags { flags: b, .. }) => a == b,
+
+        // Tuples: same length, element-wise equivalence.
+        (SchemaType::Tuple { elements: a, .. }, SchemaType::Tuple { elements: b, .. }) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(ae, be)| equivalent(graph_a, ae, graph_b, be, visited))
+        }
+
+        (SchemaType::List { element: a, .. }, SchemaType::List { element: b, .. }) => {
+            equivalent(graph_a, a, graph_b, b, visited)
+        }
+        (
+            SchemaType::FixedList {
+                element: a,
+                length: na,
+                ..
+            },
+            SchemaType::FixedList {
+                element: b,
+                length: nb,
+                ..
+            },
+        ) => na == nb && equivalent(graph_a, a, graph_b, b, visited),
+        (
+            SchemaType::Map {
+                key: ak, value: av, ..
+            },
+            SchemaType::Map {
+                key: bk, value: bv, ..
+            },
+        ) => {
+            equivalent(graph_a, ak, graph_b, bk, visited)
+                && equivalent(graph_a, av, graph_b, bv, visited)
+        }
+
+        (SchemaType::Option { inner: a, .. }, SchemaType::Option { inner: b, .. }) => {
+            equivalent(graph_a, a, graph_b, b, visited)
+        }
+        (SchemaType::Result { spec: a, .. }, SchemaType::Result { spec: b, .. }) => {
+            let ok_ok = match (&a.ok, &b.ok) {
+                (None, None) => true,
+                (Some(ax), Some(bx)) => equivalent(graph_a, ax, graph_b, bx, visited),
+                _ => false,
+            };
+            let err_ok = match (&a.err, &b.err) {
+                (None, None) => true,
+                (Some(ax), Some(bx)) => equivalent(graph_a, ax, graph_b, bx, visited),
+                _ => false,
+            };
+            ok_ok && err_ok
+        }
+
+        // Capabilities are invariant on their typed spec.
+        (SchemaType::Secret { spec: a, .. }, SchemaType::Secret { spec: b, .. }) => a == b,
+        (SchemaType::QuotaToken { spec: a, .. }, SchemaType::QuotaToken { spec: b, .. }) => a == b,
+
+        // Unions: exact tag set, matching discriminators and equivalent bodies.
+        (SchemaType::Union { spec: a, .. }, SchemaType::Union { spec: b, .. }) => {
+            a.branches.len() == b.branches.len()
+                && b.branches.iter().all(|b_branch| {
+                    a.branches
+                        .iter()
+                        .find(|ab| ab.tag == b_branch.tag)
+                        .map(|ab| {
+                            ab.discriminator == b_branch.discriminator
+                                && equivalent(graph_a, &ab.body, graph_b, &b_branch.body, visited)
+                        })
+                        .unwrap_or(false)
+                })
+        }
+
+        // Same-id refs that could not be expanded further (dangling or
+        // self-resolving) are assumed equal when their ids agree.
+        (SchemaType::Ref { id: a, .. }, SchemaType::Ref { id: b, .. }) => a == b,
+
+        // Future / Stream stubs: same shape, optional inner type equivalent.
+        (SchemaType::Future { inner: a, .. }, SchemaType::Future { inner: b, .. }) => {
+            match (a, b) {
+                (None, None) => true,
+                (Some(ai), Some(bi)) => equivalent(graph_a, ai, graph_b, bi, visited),
+                _ => false,
+            }
+        }
+        (SchemaType::Stream { inner: a, .. }, SchemaType::Stream { inner: b, .. }) => {
+            match (a, b) {
+                (None, None) => true,
+                (Some(ai), Some(bi)) => equivalent(graph_a, ai, graph_b, bi, visited),
+                _ => false,
+            }
+        }
+
+        // Mismatched kinds (post-resolution) are not equivalent.
+        _ => false,
+    }
+}
+
 /// Resolve `Ref` chains. Returns `(resolved_type, Some(last_ref_id))` when
 /// any ref was followed; the ref id is used as part of the cycle-detection
 /// key.

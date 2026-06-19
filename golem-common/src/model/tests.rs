@@ -220,7 +220,10 @@ fn worker_filter_matches() {
         created_by_email: AccountEmail::new("test@golem"),
         config: vec![TypedAgentConfigEntry {
             path: vec!["var1".to_string()],
-            value: ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),
+            value: crate::schema::adapters::value_and_type_to_typed_schema_value(
+                &ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),
+            )
+            .unwrap(),
         }],
         created_at: Timestamp::now_utc(),
         parent: None,

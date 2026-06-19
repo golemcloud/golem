@@ -28,7 +28,6 @@ use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement, Wid
 use golem_common::model::AgentStatus;
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::worker::TypedAgentConfigEntry;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -400,11 +399,13 @@ pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
         .iter()
         .map(|entry| {
             let key = entry.path.join(".");
-            let value = entry
-                .value
-                .to_json_value()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|_| "<invalid>".to_string());
+            let value = golem_common::schema::render::to_json_value(
+                entry.value.graph(),
+                entry.value.root_type(),
+                entry.value.value(),
+            )
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| "<invalid>".to_string());
             format!("{}={}", key.log_color_highlight(), value)
         })
         .join("\n")

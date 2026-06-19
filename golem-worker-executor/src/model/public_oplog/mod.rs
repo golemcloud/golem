@@ -51,9 +51,7 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
-use golem_common::schema::adapters::{
-    data_schema_to_input_schema, data_schema_to_output_schema, value_and_type_to_typed_schema_value,
-};
+use golem_common::schema::adapters::{data_schema_to_input_schema, data_schema_to_output_schema};
 use golem_common::schema::{
     NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
@@ -286,11 +284,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .into_iter()
                     .map(|lac| {
                         let typed = lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
-                        let value = value_and_type_to_typed_schema_value(&typed.value)
-                            .map_err(|e| e.to_string())?;
                         Ok::<_, String>(PublicTypedAgentConfigEntry {
                             path: typed.path,
-                            value,
+                            value: typed.value,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;

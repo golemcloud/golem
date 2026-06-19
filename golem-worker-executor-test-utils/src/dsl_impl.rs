@@ -47,8 +47,8 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::adapters::analysed_type::schema_type_to_analysed_type;
-use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_common::schema::validation::validate_value;
+use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
@@ -56,8 +56,6 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{AgentResult, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::Streaming;
@@ -1196,22 +1194,34 @@ fn parse_provision_config_from_agent_type_schema(
                     )
                 })?;
 
-            let declaration_type =
-                schema_type_to_analysed_type(&agent_type.schema, &declaration.value_type)
-                    .map_err(|err| anyhow!("Config type conversion error: {err}"))?;
-
-            let parsed_value = ValueAndType::parse_with_type(&entry.value.0, &declaration_type)
-                .map_err(|err| {
+            let schema_value: SchemaValue =
+                serde_json::from_value(entry.value.0.clone()).map_err(|err| {
                     anyhow!(
-                        "config value for path {} does not match expected schema: [{}]",
-                        entry.path.join("."),
-                        err.join(", ")
+                        "config value for path {} is not a valid schema value: {err}",
+                        entry.path.join(".")
                     )
                 })?;
 
+            let graph = SchemaGraph {
+                defs: agent_type.schema.defs.clone(),
+                root: declaration.value_type.clone(),
+            };
+
+            validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
+                anyhow!(
+                    "config value for path {} does not match expected schema: [{}]",
+                    entry.path.join("."),
+                    errors
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+
             Ok(TypedAgentConfigEntry {
                 path: entry.path,
-                value: parsed_value,
+                value: TypedSchemaValue::new(graph, schema_value),
             })
         })
         .collect()

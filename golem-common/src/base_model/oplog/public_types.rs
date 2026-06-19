@@ -25,10 +25,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-/// Public-oplog-local, schema-native counterpart of the legacy
-/// `TypedAgentConfigEntry` (which still carries `golem_wasm::ValueAndType` for
-/// non-migrated consumers). Used when rendering the `Create` oplog entry as a
-/// public entry; converted from the legacy form at the public-oplog render edge.
+/// Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
+/// schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
+/// (poem/serde shape) and is produced at the public-oplog render edge.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
