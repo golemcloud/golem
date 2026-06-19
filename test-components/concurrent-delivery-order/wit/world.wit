@@ -1,0 +1,20 @@
+package golem:cmtest;
+
+/// Bespoke host interface for the Seam 3 runtime fixture. It is intentionally
+/// minimal and unrelated to the Golem agent guest interface: `call` is an async
+/// host function whose completion order the host test controls.
+interface host {
+    /// An async host call identified by `id`. The host test completes these in
+    /// a chosen order to exercise the component-model ready-queue delivery
+    /// order.
+    call: async func(id: u32);
+}
+
+world delivery-order {
+    import host;
+
+    /// Starts `count` concurrent `host.call` invocations (ids `0..count`),
+    /// drains their completions via a `FuturesUnordered`, and returns the ids in
+    /// the order the guest observed them complete (the delivery order).
+    export run: async func(count: u32) -> list<u32>;
+}

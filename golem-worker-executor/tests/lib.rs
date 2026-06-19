@@ -29,6 +29,7 @@ pub mod agent_sdk_ts;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
+pub mod concurrent_delivery_order;
 pub mod durability;
 pub mod fuel;
 pub mod hot_update;
