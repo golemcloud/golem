@@ -58,10 +58,12 @@ pub const AGENT_COUNTERS_WASM: &str = "it_agent_counters_release";
 /// compiled-component-cache thrash on the executor. The executor's compiled
 /// cache defaults to 32 entries, so even a few hundred distinct components
 /// thrash it hard — the per-agent ceiling is reached well below this count.
-/// Capped at 999 so that 999 distinct + 1 shared = 1000 components stays within
-/// the default plan's `TotalComponentCount` limit (1000); raising it would
-/// require putting the density account on a higher-quota plan.
-pub const PER_AGENT_COMPONENT_COUNT: u32 = 999;
+///
+/// The suite currently runs shared-component cells only, which need no distinct
+/// components, so this is kept small to make prep fast (uploading hundreds of
+/// components dominates prep wall-clock). A small non-zero value preserves the
+/// manifest shape so per-agent cells can be re-enabled without a prep change.
+pub const PER_AGENT_COMPONENT_COUNT: u32 = 2;
 
 /// Registry name of the single shared agent-density component (the
 /// shared-component sharing mode, labelled `U`).
