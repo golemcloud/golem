@@ -117,19 +117,22 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 #[derive(Debug, Default)]
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
-    pending: HashMap<OplogIndex, ReplayableOneshot<Resolution>>,
+    pending: HashMap<OplogIndex, ReplayableOneshot<ResolutionOutcome>>,
     /// Resolutions observed before their awaiter registered. While durable host calls are
     /// serialized this is always empty (the await-resolution guard guarantees a call's `Start` is
     /// claimed before its `End`/`Cancelled` is consumed); it exists for the resolver's own unit
     /// tests and for once host calls can genuinely overlap and that order is no longer guaranteed.
-    buffered: HashMap<OplogIndex, Resolution>,
+    buffered: HashMap<OplogIndex, ResolutionOutcome>,
 }
 
 impl ConcurrentReplayResolver {
     /// Registers an awaiter for the call started at `start_idx` and returns the receiver it should
     /// await on. If the resolution was already observed (buffered), the returned receiver is
     /// pre-resolved.
-    pub fn register(&mut self, start_idx: OplogIndex) -> ReplayableOneshotReceiver<Resolution> {
+    pub fn register(
+        &mut self,
+        start_idx: OplogIndex,
+    ) -> ReplayableOneshotReceiver<ResolutionOutcome> {
         let (tx, rx) = oneshot::channel();
         if let Some(resolution) = self.buffered.remove(&start_idx) {
             let _ = tx.send(resolution);
@@ -153,10 +156,11 @@ impl ConcurrentReplayResolver {
     /// calls nobody is awaiting are dropped rather than accumulating in `buffered`.
     #[cfg(test)]
     pub fn resolve(&mut self, start_idx: OplogIndex, resolution: Resolution) {
+        let outcome = ResolutionOutcome::Resolved(resolution);
         if let Some(tx) = self.pending.remove(&start_idx) {
-            let _ = tx.send(resolution);
+            let _ = tx.send(outcome);
         } else {
-            self.buffered.insert(start_idx, resolution);
+            self.buffered.insert(start_idx, outcome);
         }
     }
 
@@ -168,10 +172,24 @@ impl ConcurrentReplayResolver {
     /// registers an awaiter — is silently ignored rather than buffered forever.
     pub fn resolve_if_pending(&mut self, start_idx: OplogIndex, resolution: Resolution) -> bool {
         if let Some(tx) = self.pending.remove(&start_idx) {
-            let _ = tx.send(resolution);
+            let _ = tx.send(ResolutionOutcome::Resolved(resolution));
             true
         } else {
             false
+        }
+    }
+
+    /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].
+    ///
+    /// Called when replay reaches the end of the oplog ([`crate::durable_host::replay_state::ReplayState::switch_to_live`]):
+    /// any call whose `Start` was committed but whose `End`/`Cancelled` never was is, by definition,
+    /// incomplete. Waking the awaiters here (rather than relying on each to notice end-of-replay
+    /// itself) is what lets a call that is *suspended* waiting for the cursor to advance — because a
+    /// concurrently-replaying sibling call owns the cursor head — make progress once replay finishes
+    /// instead of hanging forever.
+    pub fn fail_all_pending_incomplete(&mut self) {
+        for (_start_idx, tx) in self.pending.drain() {
+            let _ = tx.send(ResolutionOutcome::Incomplete);
         }
     }
 
@@ -183,7 +201,11 @@ impl ConcurrentReplayResolver {
     }
 
     /// Returns whether an awaiter is currently registered for `start_idx`.
-    #[cfg(test)]
+    ///
+    /// The replay cursor uses this to decide which `End`/`Cancelled` entries are *awaited
+    /// terminals* it may auto-drain (and route back to their awaiter) versus the ones it must leave
+    /// for their own positional consumer: scope `End`s, unclaimed `Start`s, and deterministic
+    /// markers.
     pub fn is_pending(&self, start_idx: OplogIndex) -> bool {
         self.pending.contains_key(&start_idx)
     }
@@ -194,11 +216,14 @@ impl ConcurrentReplayResolver {
 #[derive(Debug)]
 pub struct ReplayCallHandle {
     start_idx: OplogIndex,
-    receiver: ReplayableOneshotReceiver<Resolution>,
+    receiver: ReplayableOneshotReceiver<ResolutionOutcome>,
 }
 
 impl ReplayCallHandle {
-    pub fn new(start_idx: OplogIndex, receiver: ReplayableOneshotReceiver<Resolution>) -> Self {
+    pub fn new(
+        start_idx: OplogIndex,
+        receiver: ReplayableOneshotReceiver<ResolutionOutcome>,
+    ) -> Self {
         Self {
             start_idx,
             receiver,
@@ -210,7 +235,7 @@ impl ReplayCallHandle {
     }
 
     /// Consumes the handle into its parts (used by the replay-state driver).
-    pub fn into_parts(self) -> (OplogIndex, ReplayableOneshotReceiver<Resolution>) {
+    pub fn into_parts(self) -> (OplogIndex, ReplayableOneshotReceiver<ResolutionOutcome>) {
         (self.start_idx, self.receiver)
     }
 }
@@ -905,14 +930,18 @@ mod tests {
 
         assert!(resolver.resolve_if_pending(idx(2), completed(3)));
         match rx2.try_recv() {
-            Ok(Resolution::Completed { end_idx, .. }) => assert_eq!(end_idx, idx(3)),
+            Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
+                assert_eq!(end_idx, idx(3))
+            }
             other => panic!("unexpected resolution for h2: {other:?}"),
         }
         assert!(rx1.try_recv().is_err());
 
         assert!(resolver.resolve_if_pending(idx(1), completed(4)));
         match rx1.try_recv() {
-            Ok(Resolution::Completed { end_idx, .. }) => assert_eq!(end_idx, idx(4)),
+            Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
+                assert_eq!(end_idx, idx(4))
+            }
             other => panic!("unexpected resolution for h1: {other:?}"),
         }
     }
@@ -930,7 +959,9 @@ mod tests {
             },
         ));
         match rx.try_recv() {
-            Ok(Resolution::Cancelled { cancelled_idx, .. }) => assert_eq!(cancelled_idx, idx(2)),
+            Ok(ResolutionOutcome::Resolved(Resolution::Cancelled { cancelled_idx, .. })) => {
+                assert_eq!(cancelled_idx, idx(2))
+            }
             other => panic!("unexpected resolution: {other:?}"),
         }
     }
@@ -942,7 +973,9 @@ mod tests {
         assert!(!resolver.is_pending(idx(1)));
         let mut rx = resolver.register(idx(1));
         match rx.try_recv() {
-            Ok(Resolution::Completed { end_idx, .. }) => assert_eq!(end_idx, idx(2)),
+            Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
+                assert_eq!(end_idx, idx(2))
+            }
             other => panic!("expected pre-resolved receiver, got {other:?}"),
         }
     }
@@ -958,6 +991,30 @@ mod tests {
     }
 
     #[test]
+    fn resolver_fail_all_pending_incomplete_wakes_everyone() {
+        // End-of-replay must wake every still-suspended awaiter as Incomplete, not leave them
+        // hanging. A resolved awaiter is already gone and is unaffected.
+        let mut resolver = ConcurrentReplayResolver::default();
+        let mut rx1 = resolver.register(idx(1));
+        let mut rx2 = resolver.register(idx(2));
+        assert!(resolver.resolve_if_pending(idx(1), completed(3)));
+
+        resolver.fail_all_pending_incomplete();
+
+        match rx1.try_recv() {
+            Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
+                assert_eq!(end_idx, idx(3))
+            }
+            other => panic!("rx1 should already be resolved: {other:?}"),
+        }
+        match rx2.try_recv() {
+            Ok(ResolutionOutcome::Incomplete) => {}
+            other => panic!("rx2 should be Incomplete: {other:?}"),
+        }
+        assert!(!resolver.is_pending(idx(2)));
+    }
+
+    #[test]
     fn resolver_duplicate_resolution_is_ignored() {
         let mut resolver = ConcurrentReplayResolver::default();
         let mut rx = resolver.register(idx(1));
@@ -965,7 +1022,9 @@ mod tests {
         // Second resolution: no longer pending.
         assert!(!resolver.resolve_if_pending(idx(1), completed(3)));
         match rx.try_recv() {
-            Ok(Resolution::Completed { end_idx, .. }) => assert_eq!(end_idx, idx(2)),
+            Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
+                assert_eq!(end_idx, idx(2))
+            }
             other => panic!("unexpected resolution: {other:?}"),
         }
     }
