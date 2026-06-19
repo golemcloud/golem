@@ -339,7 +339,7 @@ impl<
         F1: FnOnce() -> PV,
         F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send + 'static,
     {
-        let own_id = self.state.last_id.fetch_add(1, Ordering::SeqCst);
+        let own_id = self.state.last_id.fetch_add(1, Ordering::Relaxed);
         let result = self.get_or_add_as_pending(key, own_id, f1).await?;
         match result {
             Item::Pending {
@@ -371,11 +371,15 @@ impl<
                                     )
                                     .await;
                                 let old_count =
-                                    self_clone.state.count.fetch_add(1, Ordering::SeqCst);
+                                    self_clone.state.count.fetch_add(1, Ordering::Relaxed);
+                                let new_count = old_count.saturating_add(1);
 
-                                record_cache_size(self_clone.name, old_count.saturating_add(1));
+                                record_cache_size(self_clone.name, new_count);
 
-                                if Some(old_count) == self_clone.capacity {
+                                if self_clone
+                                    .capacity
+                                    .is_some_and(|capacity| new_count > capacity)
+                                {
                                     eviction_needed = true;
                                 }
                             } else {
@@ -1391,7 +1395,7 @@ mod tests {
         assert!(cache.contains_key(&3).await);
     }
 
-    #[test(flavor = "multi_thread", worker_threads = 4)]
+    #[test]
     async fn capacity_holds_when_insert_races_eviction() {
         // Deterministically reproduces the production count race. Capacity
         // eviction snapshots the surviving entry set and then *blindly stores*
@@ -1458,6 +1462,79 @@ mod tests {
         assert!(
             size <= capacity,
             "cache with capacity {capacity} grew to {size} cached entries after an insert raced \
+             eviction; the capacity bound is not being enforced"
+        );
+    }
+
+    #[test]
+    async fn spawned_capacity_holds_when_insert_races_eviction() {
+        let capacity = 4usize;
+        let cache = bounded_cache(capacity, "spawned_capacity_race");
+
+        for i in 0..capacity as u64 {
+            cache
+                .get_or_insert_simple_spawned(&i, move || async move { Ok(i) })
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.iter().await.len(), capacity);
+
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let completed_for_hook = completed.clone();
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired_for_hook = fired.clone();
+        cache.set_evict_interleave(Arc::new(move || {
+            let completed = completed_for_hook.clone();
+            let fired = fired_for_hook.clone();
+            Box::pin(async move {
+                if !fired.swap(true, Ordering::SeqCst) {
+                    for _ in 0..1000 {
+                        if completed.load(Ordering::SeqCst) >= 2 {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    panic!("spawned inserts did not complete while eviction was interleaved");
+                }
+            })
+        }));
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let tasks: Vec<_> = [100u64, 101u64]
+            .into_iter()
+            .map(|key| {
+                let cache = cache.clone();
+                let release = release.clone();
+                let completed = completed.clone();
+                tokio::spawn(async move {
+                    let result = cache
+                        .get_or_insert_simple_spawned(&key, move || async move {
+                            release.notified().await;
+                            Ok(key)
+                        })
+                        .await;
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    result
+                })
+            })
+            .collect();
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        release.notify_waiters();
+
+        let results = tokio::time::timeout(Duration::from_secs(5), join_all(tasks))
+            .await
+            .expect("spawned inserts timed out");
+        for result in results {
+            result.unwrap().unwrap();
+        }
+
+        cache.clear_evict_interleave();
+
+        let size = cache.iter().await.len();
+        assert!(
+            size <= capacity,
+            "spawned cache with capacity {capacity} grew to {size} cached entries after inserts raced \
              eviction; the capacity bound is not being enforced"
         );
     }

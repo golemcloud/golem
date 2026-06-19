@@ -1247,10 +1247,10 @@ pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
     pub max_resolved_component_capacity: usize,
-    /// Maximum number of component compilations allowed to run concurrently on
-    /// this executor. Bounds the transient memory of a cold-start storm (each
-    /// compilation holds the downloaded bytes plus the JIT working set). `0`
-    /// means unlimited.
+    /// Maximum number of local component compile fallback attempts allowed to
+    /// run concurrently on this executor. This bounds the transient working set
+    /// used after both the in-process cache and compiled artifact store miss.
+    /// `0` means unlimited.
     pub max_concurrent_compilations: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,

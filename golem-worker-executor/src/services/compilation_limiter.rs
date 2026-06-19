@@ -1,6 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source Available License v1.1 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,16 +16,17 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-/// Bounds the number of concurrent component compilations.
+/// Bounds the number of concurrent local component compile fallback attempts.
 ///
-/// A cold-start storm can request many unique components at once. Each
-/// compilation transiently holds the downloaded component bytes plus the
-/// wasmtime JIT working set, so an unbounded burst of concurrent compilations
-/// can exhaust the executor's memory regardless of how the resulting compiled
-/// components are cached. This limiter caps how many compilations run at the
-/// same time; callers beyond the limit wait for a permit.
+/// Worker admission accounts for guest linear memory and a shared
+/// per-component-revision charge derived from registry metadata. It does not
+/// reserve the transient working set used when the worker-executor in-process
+/// component cache and compiled artifact store both miss. That fallback buffers
+/// the raw component bytes, compiles them with Wasmtime, serializes the compiled
+/// artifact, and writes it to the compiled artifact store.
 ///
-///
+/// This limiter caps how many fallback attempts run at the same time; callers
+/// beyond the limit wait for a permit.
 /// A limit of `0` is treated as unlimited: the gate is bypassed entirely.
 #[derive(Clone)]
 pub struct CompilationLimiter {
@@ -71,7 +72,7 @@ mod tests {
     use std::time::Duration;
     use test_r::test;
 
-    #[test(flavor = "multi_thread", worker_threads = 8)]
+    #[test]
     async fn limits_concurrent_compilations_to_the_configured_maximum() {
         let limit = 4usize;
         let bursts = 200usize;
@@ -109,7 +110,7 @@ mod tests {
         );
     }
 
-    #[test(flavor = "multi_thread", worker_threads = 8)]
+    #[test]
     async fn unlimited_limiter_does_not_gate() {
         let limiter = CompilationLimiter::new(0);
         let current = Arc::new(AtomicUsize::new(0));

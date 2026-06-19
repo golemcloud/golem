@@ -182,9 +182,9 @@ impl ComponentService for ComponentServiceDefault {
                     match component {
                         Some(component) => Ok(component),
                         None => {
-                            // Bound concurrent download+compile work across the
-                            // whole executor so a cold-start storm of unique
-                            // components cannot exhaust memory.
+                            // Bound the local compile fallback working set when
+                            // both the in-process cache and compiled artifact
+                            // store miss.
                             compilation_limiter
                                 .run(async move {
                                     let bytes = self
