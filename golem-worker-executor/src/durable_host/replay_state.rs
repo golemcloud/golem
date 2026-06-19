@@ -596,16 +596,34 @@ impl CursorTx<'_> {
             _ => {}
         }
 
-        if read_idx == self.cursor.replay_target() {
-            self.record_replay_event(ReplayEvent::ReplayFinished);
-        }
-
         Ok(())
     }
 
+    /// Advances the published cursor to `new_idx`, applying any skipped-region jump, and synthesizes
+    /// a single [`ReplayEvent::ReplayFinished`] if this advance is the one that crosses the cursor
+    /// into live mode.
+    ///
+    /// This is the single chokepoint for every replay-mode position advance — direct consumption of
+    /// the target entry, skipping past trailing hint entries, jumping over a persist-nothing zone,
+    /// and jumping over a skipped region (via [`Self::get_out_of_skipped_region`]) all funnel through
+    /// here. Detecting the transition here (rather than only when the *consumed* entry index equals
+    /// `replay_target`) guarantees `ReplayFinished` is queued on every transition to live, including
+    /// when the cursor reaches the target via a skip/jump that never consumes the target entry. The
+    /// forced transition in [`Self::switch_to_live`] is the only other path to live and emits its
+    /// own `ReplayFinished`.
+    ///
+    /// Exactly-once holds because the `was_replay && is_live` edge is true only on the single advance
+    /// that crosses into live: once live, the replay-driving loops stop and no further
+    /// `move_replay_idx` runs until the replay target is grown (`set_replay_target`) or the cursor is
+    /// reset (`new` / `drop_override_and_restart`), each of which starts a fresh replay epoch that
+    /// emits its own `ReplayFinished` on completion.
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
+        let was_replay = self.cursor.is_replay();
         self.cursor.position.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await;
+        if was_replay && self.cursor.is_live() {
+            self.record_replay_event(ReplayEvent::ReplayFinished);
+        }
     }
 
     async fn get_out_of_skipped_region(&mut self) {
@@ -2128,6 +2146,118 @@ mod tests {
         assert!(
             !internal.concurrent_resolver.is_pending(start_idx),
             "switch_to_live must unregister the parked awaiter"
+        );
+    }
+
+    fn change_persistence_nothing() -> OplogEntry {
+        OplogEntry::ChangePersistenceLevel {
+            timestamp: Timestamp::now_utc(),
+            persistence_level: PersistenceLevel::PersistNothing,
+        }
+    }
+
+    fn log_entry() -> OplogEntry {
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            level: LogLevel::Info,
+            context: "ctx".to_string(),
+            message: "msg".to_string(),
+        }
+    }
+
+    /// When replay reaches the target via a persist-nothing-zone jump (the zone extends to the end of
+    /// the oplog and is never closed) rather than by consuming the target entry, the transition to
+    /// live must still synthesize `ReplayFinished` — otherwise a pending automatic update would never
+    /// be finalized. (Regression: the synthesis used to be gated on the *consumed* entry index
+    /// equalling `replay_target`, which this jump never satisfies.)
+    #[test]
+    async fn replay_finished_emitted_when_persist_nothing_zone_reaches_target() {
+        // [NoOp(1), ChangePersistenceLevel(PersistNothing)(2), Log(3), Log(4)] — the persist-nothing
+        // zone opened at 2 is never closed, so replay jumps straight to the target (4) without
+        // consuming it.
+        let rs = replay_state_over(vec![
+            noop(),
+            change_persistence_nothing(),
+            log_entry(),
+            log_entry(),
+        ])
+        .await;
+        assert!(rs.is_live(), "replay should be complete after construction");
+        let events = rs.take_new_replay_events().await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReplayEvent::ReplayFinished)),
+            "a persist-nothing-zone jump to the target must still emit ReplayFinished, got {events:?}"
+        );
+    }
+
+    /// When replay reaches the target via a skipped-region jump (`get_out_of_skipped_region` jumps
+    /// the cursor to the region end, which is the target) rather than by consuming the target entry,
+    /// the transition to live must still synthesize `ReplayFinished`.
+    #[test]
+    async fn replay_finished_emitted_when_skipped_region_reaches_target() {
+        // [NoOp(1), Start(2), Log(3), Log(4)] with deleted region [3, 4]: consuming the Start at 2
+        // jumps the cursor over the deleted tail straight to the target (4).
+        let oplog = Arc::new(InMemoryOplog::new());
+        for entry in [noop(), start_now(), log_entry(), log_entry()] {
+            oplog.add(entry).await;
+        }
+        let oplog: Arc<dyn Oplog> = oplog;
+        let skipped = DeletedRegions::from_regions([OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(4),
+        }]);
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+            .await
+            .expect("failed to build replay state");
+
+        assert!(!rs.is_live(), "Start at 2 is not yet consumed");
+        let (idx, _) = rs.get_oplog_entry().await.unwrap();
+        assert_eq!(idx, OplogIndex::from_u64(2));
+
+        assert!(
+            rs.is_live(),
+            "consuming the Start must jump over the deleted tail to the target"
+        );
+        let events = rs.take_new_replay_events().await;
+        let finished = events
+            .iter()
+            .filter(|e| matches!(e, ReplayEvent::ReplayFinished))
+            .count();
+        assert_eq!(
+            finished, 1,
+            "a skipped-region jump to the target must emit exactly one ReplayFinished, got {events:?}"
+        );
+    }
+
+    /// Regression guard for the moved transition detection: consuming the target entry directly
+    /// (the common path) still emits exactly one `ReplayFinished`.
+    #[test]
+    async fn replay_finished_emitted_when_target_entry_consumed() {
+        // [NoOp(1), Start(2), End(3)] — replay becomes live by consuming the End at the target (3).
+        let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
+        // Nothing has crossed into live yet (the Start is still pending a claim).
+        assert!(rs.take_new_replay_events().await.is_empty());
+
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(handle).await.unwrap();
+
+        assert!(rs.is_live());
+        let events = rs.take_new_replay_events().await;
+        let finished = events
+            .iter()
+            .filter(|e| matches!(e, ReplayEvent::ReplayFinished))
+            .count();
+        assert_eq!(
+            finished, 1,
+            "consuming the target entry must emit exactly one ReplayFinished, got {events:?}"
         );
     }
 }
