@@ -26,30 +26,40 @@
 //! the sharing mode's upper bound is hit. The cell records the agent counts at
 //! which the soft, hard, and catastrophic ceilings were crossed.
 //!
+//! # The usable-floor load model
+//!
+//! At each ramp step the driver first ensures `N` agents exist, then applies
+//! [`INVOKES_PER_AGENT_PER_STEP`] *load rounds*. A round fires one concurrent
+//! `busy_for` invocation per agent in the step's load set and awaits the whole
+//! round, so it reproduces the realistic worst case — `N` independent users each
+//! invoking their own agent at the same instant. This measures how many agents
+//! the executor can usefully *serve concurrently*, not merely hold resident, and
+//! where it actually breaks under that load.
+//!
 //! # Scenarios
 //!
-//! 1. create-only: create N agents, each invoked once then left idle (drifts to
-//!    `LoadedIdle`, eviction-eligible). Measures the create path.
-//! 2. create-with-active-fraction: like (1), but a fraction of the agents are
-//!    kept active (one in-flight `busy_for(500ms)` call each, looping).
-//! 3. concurrent-active: all N agents kept active concurrently.
+//! 1. create-only: create N agents, then load every one of them each round
+//!    (load set = N). Measures the create path plus the usable floor.
+//! 2. create-with-active-fraction: create N agents, load only the configured
+//!    fraction (25/50/75%) each round (load set = fraction of N).
+//! 3. concurrent-active: load all N agents each round (load set = N).
 //! 4. resume-under-saturation: durable-only. Pre-fill the pod with `prefill_n`
 //!    idle agents (forcing eviction), then measure the latency of resuming an
 //!    already-evicted agent vs. creating a fresh one.
 //!
-//! Ephemeral mode is special for scenarios 1-3: an ephemeral agent only exists
-//! while one of its invocations is running, so it cannot be "created and left
-//! idle". An ephemeral cell therefore holds its population by keeping one
-//! in-flight `busy_for` call per agent — N concurrent calls == N concurrent
-//! resident ephemeral agents — and measures the largest concurrent population
-//! the executor sustains. (See [`run_ephemeral_concurrent_cell`].)
+//! Durable and ephemeral modes run the same ramp/round driver
+//! ([`run_ramp_cell`]). Durable agents are created once in a step's first phase
+//! and persist across rounds; ephemeral agents have no persistent identity, so a
+//! round's concurrent invocations *are* that round's ephemeral agents (created
+//! and gone within the round). Because both modes apply the identical
+//! one-invoke-per-agent load, their usable floors are directly comparable.
 //!
 //! # Operational definitions (from #3523)
 //!
-//! - Active: the driver maintains exactly one in-flight `busy_for(500ms)` call
-//!   per active agent, looping continuously.
-//! - Passive (idle): created and invoked once, then left to drift into
-//!   `LoadedIdle` and become eviction-eligible.
+//! - Load round: one concurrent `busy_for(500ms)` invocation per agent in the
+//!   load set, all in flight at once, awaited together.
+//! - Passive (idle): for durable create-only, an agent between load rounds drifts
+//!   toward `LoadedIdle` and becomes eviction-eligible.
 //! - Soft / hard / catastrophic ceilings: see [`super::ceiling`].
 
 use crate::benchmarks::density::ceiling::{
@@ -72,34 +82,20 @@ use golem_test_framework::dsl::TestDsl;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 /// Agent type names exported by the agent-counters component.
 const DURABLE_AGENT_TYPE: &str = "Counter";
 const EPHEMERAL_AGENT_TYPE: &str = "EphemeralCounter";
 
-/// CPU busy time per `busy_for` call defining an "active" agent.
+/// CPU busy time per `busy_for` call defining one unit of load.
 const BUSY_MILLIS: u32 = 500;
 
-/// `busy_for` duration used to keep an ephemeral agent's invocation in flight
-/// long enough that a ramp step's whole batch overlaps. An ephemeral agent
-/// exists only while a call runs, so to hold `target` agents at once the batch
-/// must still be running when its last request is sent. The client opens all
-/// `target` requests concurrently (reqwest does not cap in-flight requests, only
-/// idle pooled connections), so launching even 10k takes well under a second on
-/// a fast link; this only has to outlast that launch window. It is deliberately
-/// short — the test measures concurrent residency, not sustained CPU load.
-const EPHEMERAL_HOLD_MILLIS: u32 = 500;
-
-/// Number of latency probes taken against the active set after each ramp step
-/// of an active cell (scenarios 2-3). The ramp's own samples are dominated by
-/// the fast `increment` create path; without several probes against agents that
-/// are under sustained `busy_for` load, an active-load latency ceiling
-/// (soft/usability/hard) would be diluted by those fast creates and registered
-/// late or missed. The probes hit distinct active agents round-robin so they
-/// reflect the population's latency distribution, not one agent's.
-const ACTIVE_PROBES_PER_STEP: u32 = 16;
+/// Number of load rounds per ramp step. Each round invokes every agent in the
+/// step's load set once, concurrently, so a step applies this many waves of
+/// "one simultaneous invocation per loaded agent" — enough samples to measure
+/// the latency distribution at that density and surface a latency ceiling.
+const INVOKES_PER_AGENT_PER_STEP: u32 = 100;
 
 /// Maximum number of agent-create invocations in flight at once while ramping a
 /// cell. The cost of a step is dominated by the round-trips for the new agents,
@@ -563,53 +559,6 @@ fn percentile_ms(samples: &[f64], k: f64) -> u64 {
     v.round() as u64
 }
 
-// ── Active-load manager ──────────────────────────────────────────────────────
-
-/// Keeps a set of agents "active": one in-flight `busy_for(BUSY_MILLIS)` call
-/// per agent, looping continuously, until [`Self::stop`] is called. Spawns one
-/// background task per active agent.
-struct ActiveLoad {
-    tasks: JoinSet<()>,
-    stop: Arc<AtomicBool>,
-}
-
-impl ActiveLoad {
-    fn new() -> Self {
-        Self {
-            tasks: JoinSet::new(),
-            stop: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Starts looping `busy_for(BUSY_MILLIS)` on `agent` until stopped.
-    fn add(
-        &mut self,
-        user: TestUserContext<BenchmarkTestDependencies>,
-        component: ComponentDto,
-        agent: ParsedAgentId,
-    ) {
-        let stop = self.stop.clone();
-        self.tasks.spawn(async move {
-            while !stop.load(Ordering::Relaxed) {
-                let _ = timed_invoke(
-                    &user,
-                    &component,
-                    &agent,
-                    "busy_for",
-                    data_value!(BUSY_MILLIS),
-                    super::ceiling::ESCALATED_TIMEOUT,
-                )
-                .await;
-            }
-        });
-    }
-
-    async fn stop(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        self.tasks.shutdown().await;
-    }
-}
-
 // ── Ramp loop ────────────────────────────────────────────────────────────────
 
 /// Runs one agent-density cell to completion and returns its
@@ -630,9 +579,6 @@ pub async fn run_cell(
     let outcome = match config.scenario {
         Scenario::ResumeUnderSaturation => {
             run_resume_cell(config, &user, &components, probe).await?
-        }
-        _ if config.mode == AgentMode::Ephemeral => {
-            run_ephemeral_concurrent_cell(config, &user, &components, probe).await?
         }
         _ => run_ramp_cell(config, &user, &components, probe).await?,
     };
@@ -778,10 +724,17 @@ async fn resolve_components(
     }
 }
 
-/// How many of the first `n` agents are active for scenarios 1-3.
-fn active_count(config: &CellConfig, n: u32) -> u32 {
+/// Size of the per-round load set at agent count `n`: how many of the `n` live
+/// agents receive one concurrent `busy_for` invocation in each load round.
+///
+/// The load round models the usable floor — N users each invoking their own
+/// agent at the same instant — so for `CreateOnly` and `ConcurrentActive` every
+/// live agent is invoked (`n`); `CreateWithActiveFraction` loads only the
+/// configured fraction. `ResumeUnderSaturation` runs its own resume/create probe
+/// loop and does not use this.
+fn load_count(config: &CellConfig, n: u32) -> u32 {
     match config.scenario {
-        Scenario::CreateOnly => 0,
+        Scenario::CreateOnly => n,
         Scenario::ConcurrentActive => n,
         Scenario::CreateWithActiveFraction => {
             let pct = config.active_fraction.unwrap_or(0);
@@ -791,9 +744,27 @@ fn active_count(config: &CellConfig, n: u32) -> u32 {
     }
 }
 
-/// Scenarios 1-3: ramp the agent count, each step creating the new agents (and
-/// activating the configured fraction), measuring the create-path latency of
-/// the newly-added batch.
+/// Scenarios 1-3 (durable and ephemeral): ramp the agent count and, at each
+/// step, measure the *usable floor* under concurrent load.
+///
+/// Each ramp step has two phases:
+///
+/// 1. **Ensure N agents exist.** For durable cells the new agents in
+///    `created..target` are created (first-invoked) once, with bounded in-flight
+///    concurrency. Ephemeral agents are not persistent — each invocation is its
+///    own agent — so there is no separate create phase for them.
+///
+/// 2. **Load rounds.** [`INVOKES_PER_AGENT_PER_STEP`] rounds, each firing one
+///    concurrent `busy_for` invocation per agent in the load set (size
+///    [`load_count`]) and awaiting the whole round. A round's concurrency equals
+///    the load-set size, so it reproduces the realistic worst case — every loaded
+///    agent invoked at the same instant, as independent users would — which is
+///    what reveals the usable agent ceiling and where the executor breaks. For
+///    ephemeral cells each round's concurrent invocations are that round's
+///    ephemeral agents (created and gone within the round).
+///
+/// Every invocation latency is fed to the ceiling detector; the executor's
+/// pod-restart count is polled once per round.
 async fn run_ramp_cell(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
@@ -803,10 +774,10 @@ async fn run_ramp_cell(
     let ramp = config.ramp.clone();
     let mut detector = CeilingDetector::new();
     let mut outcome = CellOutcome::default();
-    let mut active = ActiveLoad::new();
     let mut timeout = AdaptiveTimeout::new();
     let started = Instant::now();
     let mut created = 0u32;
+    let is_ephemeral = config.mode == AgentMode::Ephemeral;
 
     'ramp: for &target in &ramp {
         info!(
@@ -814,115 +785,123 @@ async fn run_ramp_cell(
             config.cell_name()
         );
 
-        // Create (first-invoke) the new agents from `created` to `target`
-        // concurrently with bounded in-flight count, then feed their latency
-        // samples to the detector in index order (the detector is sequential).
-        // Sequential creation made a 10000-agent step take hours; fanning the
-        // round-trips out is the dominant speedup.
-        let batch: Vec<u32> = (created..target).collect();
-        let timeout_current = timeout.current;
-        let attempts: Vec<(u32, AttemptOutcome)> = futures::stream::iter(batch)
-            .map(|index| {
-                let (component, agent) = agent_for_index(config, index, components)
-                    .expect("agent_for_index within ramp");
-                let component = component.clone();
-                async move {
-                    let outcome = timed_invoke(
-                        user,
-                        &component,
-                        &agent,
-                        "increment",
-                        data_value!(),
-                        timeout_current,
-                    )
-                    .await;
-                    (index, outcome)
-                }
-            })
-            .buffer_unordered(CREATE_CONCURRENCY)
-            .collect()
-            .await;
-
-        // One pod-restart poll for the whole batch (cheap; a mid-batch restart
-        // is also caught by the connection-lost signal on the affected calls).
-        let pod_restart_count = probe.pod_restart_count().await;
-        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-
-        let mut ordered = attempts;
-        ordered.sort_by_key(|(index, _)| *index);
-
-        // Batch-level transport verdict: only declare the connection lost when a
-        // large fraction of the batch failed to send, so a single transient
-        // send error does not end an otherwise-healthy cell, while a wedged or
-        // unreachable executor (a flood of send failures) trips catastrophic.
-        let transport_failures = ordered.iter().filter(|(_, a)| a.connection_lost).count();
-        let batch_connection_alive = ordered.is_empty()
-            || (transport_failures as f64) < (ordered.len() as f64 * TRANSPORT_FAILURE_RATIO);
-        if !batch_connection_alive {
-            warn!(
-                "Density-agent[{}]: {transport_failures}/{} invocations failed at transport level — treating executor as unreachable",
-                config.cell_name(),
-                ordered.len()
-            );
-        }
-
-        for (index, attempt) in &ordered {
-            outcome.invoke_latencies.push(attempt.latency);
-            let sample = Sample {
-                latency: attempt.latency,
-                coord: SampleCoord::Agents(index + 1),
-                pod_restart_count,
-                connection_alive: batch_connection_alive,
-                snapshot: CrossAxisSnapshot::default(),
-                queue_depth: None,
-            };
-            for event in detector.observe(&sample) {
-                handle_event(event, &mut outcome, &mut timeout);
-            }
-            if detector.is_terminal() {
-                outcome.max_agents_reached = index + 1;
-                active.stop().await;
-                return Ok(outcome);
-            }
-        }
-        created = target;
-        outcome.max_agents_reached = target;
-
-        // Bring the active set up to the configured fraction of `target`.
-        let want_active = active_count(config, target);
-        let already_active = active.tasks.len() as u32;
-        for index in already_active..want_active {
-            let (component, agent) = agent_for_index(config, index, components)?;
-            active.add(user.clone(), component.clone(), agent);
-        }
-
-        // With the active set now at full size for this step, probe it several
-        // times so a ceiling that only manifests under sustained active load
-        // (latency blow-up, OOM, connection loss) is measured against the active
-        // population rather than diluted by the fast `increment` creates. The
-        // probes hit distinct active agents round-robin. Also covers the final
-        // ramp step, where there are no further creates to sample.
-        if want_active > 0 {
-            for p in 0..ACTIVE_PROBES_PER_STEP {
-                let probe_index = p % want_active;
-                let (component, agent) = agent_for_index(config, probe_index, components)?;
-                let attempt = timed_invoke(
-                    user,
-                    component,
-                    &agent,
-                    "busy_for",
-                    data_value!(BUSY_MILLIS),
-                    timeout.current,
-                )
+        // Phase 1: ensure the durable agents up to `target` exist. Created once,
+        // fanned out with bounded in-flight concurrency (sequential creation made
+        // a 10000-agent step take hours). Ephemeral agents have no persistent
+        // identity, so they are created implicitly by the load rounds below.
+        if !is_ephemeral && target > created {
+            let batch: Vec<u32> = (created..target).collect();
+            let timeout_current = timeout.current;
+            let creates: Vec<AttemptOutcome> = futures::stream::iter(batch)
+                .map(|index| {
+                    let (component, agent) = agent_for_index(config, index, components)
+                        .expect("agent_for_index within ramp");
+                    let component = component.clone();
+                    async move {
+                        timed_invoke(
+                            user,
+                            &component,
+                            &agent,
+                            "increment",
+                            data_value!(),
+                            timeout_current,
+                        )
+                        .await
+                    }
+                })
+                .buffer_unordered(CREATE_CONCURRENCY)
+                .collect()
                 .await;
-                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-                let pod_restart_count = probe.pod_restart_count().await;
+
+            let pod_restart_count = probe.pod_restart_count().await;
+            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+            let transport_failures = creates.iter().filter(|a| a.connection_lost).count();
+            let batch_connection_alive = creates.is_empty()
+                || (transport_failures as f64) < (creates.len() as f64 * TRANSPORT_FAILURE_RATIO);
+            if !batch_connection_alive {
+                warn!(
+                    "Density-agent[{}]: {transport_failures}/{} creates failed at transport level — treating executor as unreachable",
+                    config.cell_name(),
+                    creates.len()
+                );
+            }
+
+            for attempt in &creates {
                 outcome.invoke_latencies.push(attempt.latency);
                 let sample = Sample {
                     latency: attempt.latency,
                     coord: SampleCoord::Agents(target),
                     pod_restart_count,
-                    connection_alive: !attempt.connection_lost,
+                    connection_alive: batch_connection_alive,
+                    snapshot: CrossAxisSnapshot::default(),
+                    queue_depth: None,
+                };
+                for event in detector.observe(&sample) {
+                    handle_event(event, &mut outcome, &mut timeout);
+                }
+                if detector.is_terminal() {
+                    outcome.max_agents_reached = target;
+                    break 'ramp;
+                }
+            }
+            created = target;
+        }
+        outcome.max_agents_reached = target;
+
+        // Phase 2: load rounds. Each round fires one concurrent `busy_for` per
+        // agent in the load set and awaits the whole round — N users invoking
+        // their own agents at the same instant.
+        let load = load_count(config, target);
+        if load == 0 {
+            continue;
+        }
+        for _ in 0..INVOKES_PER_AGENT_PER_STEP {
+            let timeout_current = timeout.current;
+            let round: Vec<(u32, AttemptOutcome)> = futures::stream::iter(0..load)
+                .map(|index| {
+                    let (component, agent) = agent_for_index(config, index, components)
+                        .expect("agent_for_index within load round");
+                    let component = component.clone();
+                    async move {
+                        let outcome = timed_invoke(
+                            user,
+                            &component,
+                            &agent,
+                            "busy_for",
+                            data_value!(BUSY_MILLIS),
+                            timeout_current,
+                        )
+                        .await;
+                        (index, outcome)
+                    }
+                })
+                .buffer_unordered(load as usize)
+                .collect()
+                .await;
+
+            let pod_restart_count = probe.pod_restart_count().await;
+            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+
+            let mut ordered = round;
+            ordered.sort_by_key(|(index, _)| *index);
+            let transport_failures = ordered.iter().filter(|(_, a)| a.connection_lost).count();
+            let round_connection_alive = ordered.is_empty()
+                || (transport_failures as f64) < (ordered.len() as f64 * TRANSPORT_FAILURE_RATIO);
+            if !round_connection_alive {
+                warn!(
+                    "Density-agent[{}]: {transport_failures}/{} load invocations failed at transport level — treating executor as unreachable",
+                    config.cell_name(),
+                    ordered.len()
+                );
+            }
+
+            for (_, attempt) in &ordered {
+                outcome.invoke_latencies.push(attempt.latency);
+                let sample = Sample {
+                    latency: attempt.latency,
+                    coord: SampleCoord::Agents(target),
+                    pod_restart_count,
+                    connection_alive: round_connection_alive,
                     snapshot: CrossAxisSnapshot::default(),
                     queue_depth: None,
                 };
@@ -932,108 +911,6 @@ async fn run_ramp_cell(
                 if detector.is_terminal() {
                     break 'ramp;
                 }
-            }
-        }
-    }
-
-    active.stop().await;
-    Ok(outcome)
-}
-
-/// Ephemeral cells: an ephemeral agent exists only while one of its invocations
-/// is executing, so a population of N concurrent ephemeral agents is produced by
-/// firing N invocations at once and keeping them all in flight together. Each
-/// ramp step issues `target` concurrent `busy_for` invocations (one per agent)
-/// and awaits the whole batch: while those futures are outstanding the executor
-/// is holding `target` ephemeral agents simultaneously. A `busy_for` (rather
-/// than a sub-millisecond `increment`) makes each call last long enough that the
-/// whole batch genuinely overlaps instead of early calls returning before later
-/// ones are sent. Each batch is independent — when it completes the agents are
-/// gone — so there is nothing to delete at the end of the cell.
-async fn run_ephemeral_concurrent_cell(
-    config: &CellConfig,
-    user: &TestUserContext<BenchmarkTestDependencies>,
-    components: &[ComponentDto],
-    probe: &ExecutorProbe,
-) -> anyhow::Result<CellOutcome> {
-    let ramp = config.ramp.clone();
-    let mut detector = CeilingDetector::new();
-    let mut outcome = CellOutcome::default();
-    let mut timeout = AdaptiveTimeout::new();
-    let started = Instant::now();
-
-    'ramp: for &target in &ramp {
-        info!(
-            "Density-agent[{}]: firing {target} concurrent ephemeral invocations",
-            config.cell_name()
-        );
-
-        // Fire all `target` invocations concurrently (no concurrency cap, unlike
-        // the durable create path) and hold them in flight together so the
-        // executor has `target` ephemeral agents resident at the same time. The
-        // short `busy_for` body keeps each call live long enough that the whole
-        // batch overlaps before the first calls return.
-        let timeout_current = timeout.current;
-        let attempts: Vec<(u32, AttemptOutcome)> = futures::stream::iter(0..target)
-            .map(|index| {
-                let (component, agent) = agent_for_index(config, index, components)
-                    .expect("agent_for_index within ephemeral ramp");
-                let component = component.clone();
-                async move {
-                    let outcome = timed_invoke(
-                        user,
-                        &component,
-                        &agent,
-                        "busy_for",
-                        data_value!(EPHEMERAL_HOLD_MILLIS),
-                        timeout_current,
-                    )
-                    .await;
-                    (index, outcome)
-                }
-            })
-            .buffer_unordered(target as usize)
-            .collect()
-            .await;
-
-        let pod_restart_count = probe.pod_restart_count().await;
-        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-
-        let mut ordered = attempts;
-        ordered.sort_by_key(|(index, _)| *index);
-
-        // Batch-level transport verdict: a flood of send failures means the
-        // executor went unreachable mid-batch (the catastrophic connection-lost
-        // condition); a single transient one must not end an otherwise-healthy
-        // cell.
-        let transport_failures = ordered.iter().filter(|(_, a)| a.connection_lost).count();
-        let batch_connection_alive = ordered.is_empty()
-            || (transport_failures as f64) < (ordered.len() as f64 * TRANSPORT_FAILURE_RATIO);
-        if !batch_connection_alive {
-            warn!(
-                "Density-agent[{}]: {transport_failures}/{} ephemeral invocations failed at transport level — treating executor as unreachable",
-                config.cell_name(),
-                ordered.len()
-            );
-        }
-
-        outcome.max_agents_reached = target;
-        for (index, attempt) in &ordered {
-            outcome.invoke_latencies.push(attempt.latency);
-            let sample = Sample {
-                latency: attempt.latency,
-                coord: SampleCoord::Agents(index + 1),
-                pod_restart_count,
-                connection_alive: batch_connection_alive,
-                snapshot: CrossAxisSnapshot::default(),
-                queue_depth: None,
-            };
-            for event in detector.observe(&sample) {
-                handle_event(event, &mut outcome, &mut timeout);
-            }
-            if detector.is_terminal() {
-                outcome.max_agents_reached = index + 1;
-                break 'ramp;
             }
         }
     }
@@ -1241,7 +1118,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn active_count_respects_fraction() {
+    fn load_count_respects_fraction() {
         let cell = CellConfig {
             scenario: Scenario::CreateWithActiveFraction,
             mode: AgentMode::Durable,
@@ -1250,11 +1127,11 @@ mod tests {
             prefill_n: None,
             ramp: vec![100, 250, 500],
         };
-        assert_eq!(active_count(&cell, 1000), 500);
+        assert_eq!(load_count(&cell, 1000), 500);
     }
 
     #[test]
-    fn concurrent_active_activates_all() {
+    fn concurrent_active_loads_all() {
         let cell = CellConfig {
             scenario: Scenario::ConcurrentActive,
             mode: AgentMode::Durable,
@@ -1263,6 +1140,19 @@ mod tests {
             prefill_n: None,
             ramp: vec![100, 250, 500],
         };
-        assert_eq!(active_count(&cell, 1000), 1000);
+        assert_eq!(load_count(&cell, 1000), 1000);
+    }
+
+    #[test]
+    fn create_only_loads_all() {
+        let cell = CellConfig {
+            scenario: Scenario::CreateOnly,
+            mode: AgentMode::Durable,
+            sharing: ComponentSharing::Shared,
+            active_fraction: None,
+            prefill_n: None,
+            ramp: vec![100, 250, 500],
+        };
+        assert_eq!(load_count(&cell, 1000), 1000);
     }
 }
