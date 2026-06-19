@@ -16,4 +16,13 @@
 
 package golem.runtime
 
-final case class ConstructorMetadata(name: Option[String], description: String, promptHint: Option[String])
+/**
+ * Metadata for an agent's constructor: identity fields plus the schema-native
+ * description of its parameters ([[InputMetadata]]).
+ */
+final case class ConstructorMetadata(
+  name: Option[String],
+  description: String,
+  promptHint: Option[String],
+  input: InputMetadata = InputMetadata.empty
+)

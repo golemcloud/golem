@@ -17,12 +17,23 @@
 package golem.host
 
 import golem.HostApi
+import golem.schema.{IntoSchema, SchemaValue}
+import golem.schema.wire.SchemaWire
 import zio.test._
 
 import scala.scalajs.js
 
 object OplogEntryRoundtripSpec extends ZIOSpecDefault {
   import OplogApi._
+
+  /**
+   * A valid `typed-schema-value` JS facade, produced through the same encode
+   * pipeline the host uses, so the parse round-trip is meaningful.
+   */
+  private val sampleTypedJs: js.Any =
+    SchemaWireInterop
+      .typedToJs(SchemaWire.typedSchemaValueToWit(IntoSchema[Int].toTyped(42)))
+      .asInstanceOf[js.Any]
 
   private def ts(seconds: Int = 1700000000, nanos: Int = 500000000): js.Dynamic =
     js.Dynamic.literal(
@@ -335,17 +346,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       )
     },
     test("AgentInvocationFinished with response from dynamic (agent-method result)") {
-      val tdvDyn = js.Dynamic.literal(
-        value = js.Dynamic.literal(tag = "tuple", `val` = js.Array[js.Any]()),
-        schema = js.Dynamic.literal(tag = "tuple", `val` = js.Array[js.Any]())
-      )
       val raw = wrapEntry(
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
           result = js.Dynamic.literal(
             tag = "agent-method",
-            `val` = js.Dynamic.literal(output = tdvDyn)
+            `val` = js.Dynamic.literal(output = sampleTypedJs)
           ),
           consumedFuel = js.BigInt("1000"),
           componentRevision = js.BigInt("1")
@@ -356,6 +363,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.AgentInvocationFinished],
         c.params.response.isDefined == true,
+        c.params.response.map(_.value).contains(SchemaValue.S32Value(42)),
         c.params.consumedFuel == 1000L
       )
     },
@@ -376,22 +384,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       )
     },
     test("HostCall from dynamic") {
-      val vatDyn = js.Dynamic.literal(
-        value = js.Dynamic.literal(nodes = js.Array(js.Dynamic.literal(tag = "prim-s32", `val` = 42))),
-        typ = js.Dynamic.literal(nodes =
-          js.Array(
-            js.Dynamic
-              .literal(name = js.undefined, owner = js.undefined, `type` = js.Dynamic.literal(tag = "prim-s32-type"))
-          )
-        )
-      )
       val raw = wrapEntry(
         "imported-function-invoked",
         js.Dynamic.literal(
           timestamp = ts(),
           functionName = "wasi:io/read",
-          request = vatDyn,
-          response = vatDyn,
+          request = sampleTypedJs,
+          response = sampleTypedJs,
           durableFunctionType = js.Dynamic.literal(tag = "read-remote")
         )
       )
@@ -400,6 +399,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.HostCall],
         i.params.functionName == "wasi:io/read",
+        i.params.request.value == SchemaValue.S32Value(42),
+        i.params.response.value == SchemaValue.S32Value(42),
         i.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
       )
     },
@@ -645,10 +646,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       )
     },
     test("PendingAgentInvocation with exported-function from dynamic") {
-      val dummyInput = js.Dynamic.literal(
-        value = js.Dynamic.literal(tag = "tuple", `val` = js.Array[js.Any]()),
-        schema = js.Dynamic.literal(tag = "tuple", `val` = js.Array[js.Any]())
-      )
       val raw = wrapEntry(
         "pending-agent-invocation",
         js.Dynamic.literal(
@@ -658,7 +655,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
             `val` = js.Dynamic.literal(
               idempotencyKey = "idem-1",
               methodName = "increment",
-              functionInput = dummyInput,
+              functionInput = sampleTypedJs,
               traceId = "trace-1",
               traceStates = js.Array[String](),
               invocationContext = js.Array[js.Any]()
@@ -671,7 +668,14 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingAgentInvocation],
         inv.isInstanceOf[AgentInvocation.ExportedFunction],
-        inv.asInstanceOf[AgentInvocation.ExportedFunction].params.functionName == "increment"
+        inv.asInstanceOf[AgentInvocation.ExportedFunction].params.functionName == "increment",
+        inv
+          .asInstanceOf[AgentInvocation.ExportedFunction]
+          .params
+          .input
+          .flatMap(_.headOption)
+          .map(_.value)
+          .contains(SchemaValue.S32Value(42))
       )
     },
     test("PendingAgentInvocation with manual-update from dynamic") {

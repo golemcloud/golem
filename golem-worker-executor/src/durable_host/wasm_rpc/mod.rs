@@ -51,7 +51,6 @@ use golem_common::model::{
     OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
 use golem_common::schema::adapters::agent::schema_agent_type_to_legacy;
-use golem_common::schema::adapters::typed_schema_value_to_value_and_type;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
 use golem_schema::schema::wit::{decode_typed, decode_value, encode_value};
@@ -70,7 +69,6 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
     match err {
@@ -132,15 +130,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .into_iter()
             .map(|c| {
                 // The config value travels as a self-contained
-                // `golem:core@2.0.0` typed-schema-value; decode it and project
-                // it down to the legacy typed-value JSON form the service
-                // boundary (migrated in a later wave) still expects.
+                // `golem:core@2.0.0` typed-schema-value. Decode it and
+                // serialize the inner `SchemaValue` as adjacently-tagged JSON,
+                // matching the `AgentConfigEntryDto` service-boundary contract
+                // (`parse_worker_creation_agent_config` parses `value` as a
+                // `SchemaValue`, mirroring `From<TypedAgentConfigEntry>`).
                 let typed = decode_typed(&c.value)
                     .map_err(|err| anyhow::anyhow!("Invalid agent config value: {err}"))?;
-                let value_and_type = typed_schema_value_to_value_and_type(&typed)
-                    .map_err(|err| anyhow::anyhow!("Invalid agent config value: {err}"))?;
-                let encoded = value_and_type
-                    .to_json_value()
+                let encoded = serde_json::to_value(typed.value())
                     .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
 
                 Ok::<_, anyhow::Error>(AgentConfigEntryDto {

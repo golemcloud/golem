@@ -16,7 +16,6 @@
 
 package golem.config
 
-import golem.data.{DataInterop, ElementSchema}
 import zio.blocks.schema.{Reflect, Schema}
 import zio.blocks.schema.binding.{Binding, Registers}
 import zio.blocks.typeid.TypeId
@@ -98,8 +97,7 @@ object ConfigBuilder {
     loader: ConfigFieldLoader
   ): A = {
     implicit val schemaA: Schema[A] = new Schema(reflect)
-    val elem                        = ElementSchema.Component(DataInterop.reflectToDataType(reflect))
-    loader.loadLocal[A](path, elem)
+    loader.loadLocal[A](path)
   }
 
   private def buildSecret[A](
@@ -108,8 +106,7 @@ object ConfigBuilder {
     loader: ConfigFieldLoader
   ): Secret[A] = {
     implicit val schemaA: Schema[A] = new Schema(innerReflect)
-    val elem                        = ElementSchema.Component(DataInterop.reflectToDataType(innerReflect))
-    loader.loadSecret[A](path, elem)
+    loader.loadSecret[A](path)
   }
 
   private def buildWrapper(
