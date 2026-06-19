@@ -609,8 +609,12 @@ pub async fn run_cell(
     Ok(outcome.into_benchmark_result(config))
 }
 
-/// Deletes every agent this cell created so the next cell starts from a clean
-/// executor.
+/// Deletes every durable agent this cell created so the next cell starts from a
+/// clean executor.
+///
+/// Only durable agents are deleted. Ephemeral agents do not outlive their
+/// invocation — they leave nothing in the `running-workers` set to recover and
+/// are already gone, so deleting them only yields `AGENT_NOT_FOUND`.
 ///
 /// Deletion goes through the platform's `delete_worker` API, which removes the
 /// agent from the executor's `running-workers` set that the startup recovery
@@ -626,6 +630,9 @@ async fn cleanup_cell_agents(
     components: &[ComponentDto],
     outcome: &CellOutcome,
 ) {
+    if config.mode == AgentMode::Ephemeral {
+        return;
+    }
     let count = outcome.max_agents_reached;
     if count == 0 {
         return;
