@@ -90,6 +90,12 @@ impl TerminatedReason {
     pub fn code(self) -> u64 {
         self as u64
     }
+
+    /// Whether the cell stopped because the platform broke (as opposed to
+    /// reaching its ramp upper bound healthily).
+    pub fn is_catastrophic(self) -> bool {
+        !matches!(self, TerminatedReason::UpperBoundHit)
+    }
 }
 
 /// The ramp axis coordinate at which a crossing happened. `Agents` for

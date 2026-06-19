@@ -66,7 +66,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Agent type names exported by the agent-counters component.
 const DURABLE_AGENT_TYPE: &str = "Counter";
@@ -80,13 +80,17 @@ const BUSY_MILLIS: u32 = 500;
 /// so fanning them out cuts wall-clock from hours to minutes. The cap keeps the
 /// driver's own connection pool from becoming the bottleneck.
 const CREATE_CONCURRENCY: usize = 100;
-
 /// Fraction of a ramp batch that must fail at the transport level (request
 /// could not be sent / no round-trip) before the batch is judged as the
 /// executor being unreachable. A single transient send failure must not end a
 /// cell; a wedged or restarting executor produces a flood of them, which this
 /// threshold catches so the catastrophic connection-lost condition fires.
 const TRANSPORT_FAILURE_RATIO: f64 = 0.5;
+
+/// Upper bound on per-cell agent-deletion wall time. Cleanup against a healthy
+/// executor finishes in seconds even for tens of thousands of agents; the
+/// budget only fires if the executor degrades, so the run cannot stall on it.
+const CLEANUP_BUDGET: Duration = Duration::from_secs(600);
 
 /// Which density scenario a cell runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -613,17 +617,22 @@ pub async fn run_cell(
 /// clean executor.
 ///
 /// Only durable agents are deleted. Ephemeral agents do not outlive their
-/// invocation — they leave nothing in the `running-workers` set to recover and
-/// are already gone, so deleting them only yields `AGENT_NOT_FOUND`.
+/// invocation — they leave nothing in the `running-workers` set and are already
+/// gone, so deleting them only yields `AGENT_NOT_FOUND`.
+///
+/// Cleanup is skipped when the cell ended catastrophically: the executor is no
+/// longer healthy, each `delete_worker` loads the agent into memory before
+/// removing it, and pouring thousands of those into a collapsed executor stalls
+/// indefinitely. State for catastrophic cells is cleared out-of-band by the
+/// buildspec (a from-fresh keyvalue/indexed recreate plus Redis flush).
 ///
 /// Deletion goes through the platform's `delete_worker` API, which removes the
 /// agent from the executor's `running-workers` set that the startup recovery
-/// scan reads.
-///
-/// Created agents occupy indices `0..max_agents_reached` (the same indices the
-/// ramp and prefill loops use via `agent_for_index`). Deletes are fanned out
-/// with the same bounded concurrency as creation so a cell with thousands of
-/// agents cleans up in minutes rather than hours.
+/// scan reads. Created agents occupy indices `0..max_agents_reached` (the same
+/// indices the ramp and prefill loops use via `agent_for_index`) and are fanned
+/// out with the same bounded concurrency as creation. A whole-cleanup time
+/// budget and a transport-failure short-circuit bound the wall time so a
+/// degraded executor cannot stall the run.
 async fn cleanup_cell_agents(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
@@ -631,6 +640,14 @@ async fn cleanup_cell_agents(
     outcome: &CellOutcome,
 ) {
     if config.mode == AgentMode::Ephemeral {
+        return;
+    }
+    if outcome.terminated_reason.is_catastrophic() {
+        info!(
+            "Density-agent[{}]: skipping agent deletion ({:?}); buildspec clears state from fresh",
+            config.cell_name(),
+            outcome.terminated_reason
+        );
         return;
     }
     let count = outcome.max_agents_reached;
@@ -649,18 +666,55 @@ async fn cleanup_cell_agents(
         })
         .collect();
 
-    futures::stream::iter(agent_ids)
-        .for_each_concurrent(CREATE_CONCURRENCY, |agent_id| async move {
-            if let Err(err) = user.delete_worker(&agent_id).await {
-                warn!("Density-agent: failed to delete agent {agent_id}: {err:?}");
+    // Stop issuing deletes once a request fails to reach the executor: a flood
+    // of transport errors means it has gone unhealthy, and continuing only
+    // stalls on per-request timeouts.
+    let transport_failed = Arc::new(AtomicBool::new(false));
+    let delete_all = futures::stream::iter(agent_ids).for_each_concurrent(
+        CREATE_CONCURRENCY,
+        |agent_id| {
+            let transport_failed = transport_failed.clone();
+            async move {
+                if transport_failed.load(Ordering::Relaxed) {
+                    return;
+                }
+                if let Err(err) = user.delete_worker(&agent_id).await {
+                    let text = err.to_string();
+                    if text.contains("AGENT_NOT_FOUND") {
+                        debug!("Density-agent: agent {agent_id} already gone");
+                    } else if is_transport_error(&text) {
+                        transport_failed.store(true, Ordering::Relaxed);
+                        warn!(
+                            "Density-agent: executor unreachable while deleting {agent_id}, abandoning cleanup: {err:?}"
+                        );
+                    } else {
+                        warn!("Density-agent: failed to delete agent {agent_id}: {err:?}");
+                    }
+                }
             }
-        })
-        .await;
-
-    info!(
-        "Density-agent[{}]: cleanup of {count} agents complete",
-        config.cell_name()
+        },
     );
+
+    match tokio::time::timeout(CLEANUP_BUDGET, delete_all).await {
+        Ok(()) => info!(
+            "Density-agent[{}]: cleanup of {count} agents complete",
+            config.cell_name()
+        ),
+        Err(_) => warn!(
+            "Density-agent[{}]: cleanup exceeded {}s budget, abandoning",
+            config.cell_name(),
+            CLEANUP_BUDGET.as_secs()
+        ),
+    }
+}
+
+/// Whether a `delete_worker` error string indicates the request could not reach
+/// the executor (as opposed to a per-agent application error).
+fn is_transport_error(text: &str) -> bool {
+    text.contains("Middleware error")
+        || text.contains("error sending request")
+        || text.contains("connection")
+        || text.contains("timed out")
 }
 
 /// Resolves the `ComponentDto`s this cell needs from the manifest's stored ids.
