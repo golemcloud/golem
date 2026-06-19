@@ -37,6 +37,13 @@
 //!    idle agents (forcing eviction), then measure the latency of resuming an
 //!    already-evicted agent vs. creating a fresh one.
 //!
+//! Ephemeral mode is special for scenarios 1-3: an ephemeral agent only exists
+//! while one of its invocations is running, so it cannot be "created and left
+//! idle". An ephemeral cell therefore holds its population by keeping one
+//! in-flight `busy_for` call per agent — N concurrent calls == N concurrent
+//! resident ephemeral agents — and measures the largest concurrent population
+//! the executor sustains. (See [`run_ephemeral_concurrent_cell`].)
+//!
 //! # Operational definitions (from #3523)
 //!
 //! - Active: the driver maintains exactly one in-flight `busy_for(500ms)` call
@@ -74,6 +81,16 @@ const EPHEMERAL_AGENT_TYPE: &str = "EphemeralCounter";
 
 /// CPU busy time per `busy_for` call defining an "active" agent.
 const BUSY_MILLIS: u32 = 500;
+
+/// `busy_for` duration used to keep an ephemeral agent's invocation in flight
+/// long enough that a ramp step's whole batch overlaps. An ephemeral agent
+/// exists only while a call runs, so to hold `target` agents at once the batch
+/// must still be running when its last request is sent. The client opens all
+/// `target` requests concurrently (reqwest does not cap in-flight requests, only
+/// idle pooled connections), so launching even 10k takes well under a second on
+/// a fast link; this only has to outlast that launch window. It is deliberately
+/// short — the test measures concurrent residency, not sustained CPU load.
+const EPHEMERAL_HOLD_MILLIS: u32 = 500;
 
 /// Maximum number of agent-create invocations in flight at once while ramping a
 /// cell. The cost of a step is dominated by the round-trips for the new agents,
@@ -555,7 +572,7 @@ impl ActiveLoad {
         }
     }
 
-    /// Starts looping `busy_for` on `agent` until stopped.
+    /// Starts looping `busy_for(BUSY_MILLIS)` on `agent` until stopped.
     fn add(
         &mut self,
         user: TestUserContext<BenchmarkTestDependencies>,
@@ -605,6 +622,9 @@ pub async fn run_cell(
         Scenario::ResumeUnderSaturation => {
             run_resume_cell(config, &user, &components, probe).await?
         }
+        _ if config.mode == AgentMode::Ephemeral => {
+            run_ephemeral_concurrent_cell(config, &user, &components, probe).await?
+        }
         _ => run_ramp_cell(config, &user, &components, probe).await?,
     };
 
@@ -616,9 +636,11 @@ pub async fn run_cell(
 /// Deletes every durable agent this cell created so the next cell starts from a
 /// clean executor.
 ///
-/// Only durable agents are deleted. Ephemeral agents do not outlive their
-/// invocation — they leave nothing in the `running-workers` set and are already
-/// gone, so deleting them only yields `AGENT_NOT_FOUND`.
+/// Only durable agents are deleted. Ephemeral agents exist only while an
+/// invocation is in flight; an ephemeral cell holds them as concurrent in-flight
+/// batches that finish on their own when each ramp step completes, so by the end
+/// of the cell they are already gone and there is nothing in the
+/// `running-workers` set to delete.
 ///
 /// Cleanup is skipped when the cell ended catastrophically: the executor is no
 /// longer healthy, each `delete_worker` loads the agent into memory before
@@ -902,6 +924,107 @@ async fn run_ramp_cell(
     }
 
     active.stop().await;
+    Ok(outcome)
+}
+
+/// Ephemeral cells: an ephemeral agent exists only while one of its invocations
+/// is executing, so a population of N concurrent ephemeral agents is produced by
+/// firing N invocations at once and keeping them all in flight together. Each
+/// ramp step issues `target` concurrent `busy_for` invocations (one per agent)
+/// and awaits the whole batch: while those futures are outstanding the executor
+/// is holding `target` ephemeral agents simultaneously. A `busy_for` (rather
+/// than a sub-millisecond `increment`) makes each call last long enough that the
+/// whole batch genuinely overlaps instead of early calls returning before later
+/// ones are sent. Each batch is independent — when it completes the agents are
+/// gone — so there is nothing to delete at the end of the cell.
+async fn run_ephemeral_concurrent_cell(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    probe: &ExecutorProbe,
+) -> anyhow::Result<CellOutcome> {
+    let ramp = config.ramp.clone();
+    let mut detector = CeilingDetector::new();
+    let mut outcome = CellOutcome::default();
+    let mut timeout = AdaptiveTimeout::new();
+    let started = Instant::now();
+
+    'ramp: for &target in &ramp {
+        info!(
+            "Density-agent[{}]: firing {target} concurrent ephemeral invocations",
+            config.cell_name()
+        );
+
+        // Fire all `target` invocations concurrently (no concurrency cap, unlike
+        // the durable create path) and hold them in flight together so the
+        // executor has `target` ephemeral agents resident at the same time. The
+        // short `busy_for` body keeps each call live long enough that the whole
+        // batch overlaps before the first calls return.
+        let timeout_current = timeout.current;
+        let attempts: Vec<(u32, AttemptOutcome)> = futures::stream::iter(0..target)
+            .map(|index| {
+                let (component, agent) = agent_for_index(config, index, components)
+                    .expect("agent_for_index within ephemeral ramp");
+                let component = component.clone();
+                async move {
+                    let outcome = timed_invoke(
+                        user,
+                        &component,
+                        &agent,
+                        "busy_for",
+                        data_value!(EPHEMERAL_HOLD_MILLIS),
+                        timeout_current,
+                    )
+                    .await;
+                    (index, outcome)
+                }
+            })
+            .buffer_unordered(target as usize)
+            .collect()
+            .await;
+
+        let pod_restart_count = probe.pod_restart_count().await;
+        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+
+        let mut ordered = attempts;
+        ordered.sort_by_key(|(index, _)| *index);
+
+        // Batch-level transport verdict: a flood of send failures means the
+        // executor went unreachable mid-batch (the catastrophic connection-lost
+        // condition); a single transient one must not end an otherwise-healthy
+        // cell.
+        let transport_failures = ordered.iter().filter(|(_, a)| a.connection_lost).count();
+        let batch_connection_alive = ordered.is_empty()
+            || (transport_failures as f64) < (ordered.len() as f64 * TRANSPORT_FAILURE_RATIO);
+        if !batch_connection_alive {
+            warn!(
+                "Density-agent[{}]: {transport_failures}/{} ephemeral invocations failed at transport level — treating executor as unreachable",
+                config.cell_name(),
+                ordered.len()
+            );
+        }
+
+        outcome.max_agents_reached = target;
+        for (index, attempt) in &ordered {
+            outcome.invoke_latencies.push(attempt.latency);
+            let sample = Sample {
+                latency: attempt.latency,
+                coord: SampleCoord::Agents(index + 1),
+                pod_restart_count,
+                connection_alive: batch_connection_alive,
+                snapshot: CrossAxisSnapshot::default(),
+                queue_depth: None,
+            };
+            for event in detector.observe(&sample) {
+                handle_event(event, &mut outcome, &mut timeout);
+            }
+            if detector.is_terminal() {
+                outcome.max_agents_reached = index + 1;
+                break 'ramp;
+            }
+        }
+    }
+
     Ok(outcome)
 }
 
