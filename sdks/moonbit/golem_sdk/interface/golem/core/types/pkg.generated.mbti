@@ -1,10 +1,6 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/core/types"
 
-import {
-  "moonbitlang/core/debug",
-}
-
 // Values
 pub fn parse_uuid(String) -> Result[Uuid, String]
 
@@ -15,164 +11,310 @@ pub fn uuid_to_string(Uuid) -> String
 // Types and methods
 pub(all) struct AccountId {
   uuid : Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentId {
   component_id : ComponentId
   agent_id : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct BinaryDescriptor {
-  restrictions : Array[BinaryType]?
-} derive(Eq, @debug.Debug)
+pub(all) struct BinaryRestrictions {
+  mime_types : Array[String]?
+  min_bytes : UInt?
+  max_bytes : UInt?
+} derive(Eq, Show)
 
-pub(all) enum BinaryReference {
-  Url(String)
-  Inline(BinarySource)
-} derive(Eq, @debug.Debug)
-
-pub(all) struct BinarySource {
-  data : FixedArray[Byte]
-  binary_type : BinaryType
-} derive(Eq, @debug.Debug)
-
-pub(all) struct BinaryType {
-  mime_type : String
-} derive(Eq, @debug.Debug)
+pub(all) struct BinaryValuePayload {
+  bytes : FixedArray[Byte]
+  mime_type : String?
+} derive(Eq, Show)
 
 pub(all) struct ComponentId {
   uuid : Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) enum DataSchema {
-  Tuple(Array[(String, ElementSchema)])
-  Multimodal(Array[(String, ElementSchema)])
-} derive(Eq, @debug.Debug)
+pub(all) struct Datetime {
+  seconds : Int64
+  nanoseconds : UInt
+} derive(Eq, Show)
 
-pub(all) enum DataValue {
-  Tuple(Array[ElementValue])
-  Multimodal(Array[(String, ElementValue)])
-} derive(Eq, @debug.Debug)
+pub(all) enum DiscriminatorRule {
+  Prefix(String)
+  Suffix(String)
+  Contains(String)
+  Regex(String)
+  FieldEquals(FieldDiscriminator)
+  FieldAbsent(String)
+} derive(Eq, Show)
 
-pub(all) enum ElementSchema {
-  ComponentModel(WitType)
-  UnstructuredText(TextDescriptor)
-  UnstructuredBinary(BinaryDescriptor)
-} derive(Eq, @debug.Debug)
+pub(all) struct DurationValuePayload {
+  nanoseconds : Int64
+} derive(Eq, Show)
 
-pub(all) enum ElementValue {
-  ComponentModel(WitValue)
-  UnstructuredText(TextReference)
-  UnstructuredBinary(BinaryReference)
-} derive(Eq, @debug.Debug)
+pub(all) struct EnvironmentId {
+  uuid : Uuid
+} derive(Eq, Show)
 
-pub(all) struct NamedWitTypeNode {
-  name : String?
-  owner : String?
-  type_ : WitTypeNode
-} derive(Eq, @debug.Debug)
+pub(all) struct FieldDiscriminator {
+  field_name : String
+  literal : String?
+} derive(Eq, Show)
+
+pub(all) struct FixedListSpec {
+  element : Int
+  length : UInt
+} derive(Eq, Show)
+
+pub(all) struct MapEntry {
+  key : Int
+  value : Int
+} derive(Eq, Show)
+
+pub(all) struct MapSpec {
+  key : Int
+  value : Int
+} derive(Eq, Show)
+
+pub(all) struct MetadataEnvelope {
+  doc : String?
+  aliases : Array[String]
+  examples : Array[String]
+  deprecated : String?
+  role : Role?
+} derive(Eq, Show)
+
+pub(all) struct NamedFieldType {
+  name : String
+  body : Int
+  metadata : MetadataEnvelope
+} derive(Eq, Show)
+
+pub(all) enum PathDirection {
+  INPUT
+  OUTPUT
+  IN_OUT
+} derive(Eq, Show)
+pub fn PathDirection::from(Int) -> Self
+pub fn PathDirection::ordinal(Self) -> Int
+
+pub(all) enum PathKind {
+  FILE
+  DIRECTORY
+  ANY
+} derive(Eq, Show)
+pub fn PathKind::from(Int) -> Self
+pub fn PathKind::ordinal(Self) -> Int
+
+pub(all) struct PathSpec {
+  direction : PathDirection
+  kind : PathKind
+  allowed_mime_types : Array[String]?
+  allowed_extensions : Array[String]?
+} derive(Eq, Show)
 
 pub(all) struct PromiseId {
   agent_id : AgentId
   oplog_idx : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) enum ResourceMode {
-  OWNED
-  BORROWED
-} derive(Eq, @debug.Debug)
-pub fn ResourceMode::from(Int) -> Self
-pub fn ResourceMode::ordinal(Self) -> Int
+pub(all) struct QuantitySpec {
+  base_unit : String
+  allowed_suffixes : Array[String]
+  min : QuantityValue?
+  max : QuantityValue?
+} derive(Eq, Show)
 
-pub(all) struct TextDescriptor {
-  restrictions : Array[TextType]?
-} derive(Eq, @debug.Debug)
+pub(all) struct QuantityValue {
+  mantissa : Int64
+  scale : Int
+  unit : String
+} derive(Eq, Show)
 
-pub(all) enum TextReference {
-  Url(String)
-  Inline(TextSource)
-} derive(Eq, @debug.Debug)
+pub(all) struct QuotaTokenSpec {
+  resource_name : String?
+} derive(Eq, Show)
 
-pub(all) struct TextSource {
-  data : String
-  text_type : TextType?
-} derive(Eq, @debug.Debug)
+pub(all) struct QuotaTokenValuePayload {
+  environment_id : EnvironmentId
+  resource_name : String
+  expected_use : UInt64
+  last_credit : Int64
+  last_credit_at : Datetime
+} derive(Eq, Show)
 
-pub(all) struct TextType {
-  language_code : String
-} derive(Eq, @debug.Debug)
+pub(all) struct ResultSpec {
+  ok : Int?
+  err : Int?
+} derive(Eq, Show)
 
-pub(all) struct Uri {
-  value : String
-} derive(Eq, @debug.Debug)
+pub(all) enum ResultValuePayload {
+  OkValue(Int?)
+  ErrValue(Int?)
+} derive(Eq, Show)
 
-pub(all) struct Uuid {
-  high_bits : UInt64
-  low_bits : UInt64
-} derive(Eq, @debug.Debug)
+pub(all) enum Role {
+  Multimodal
+  Other(String)
+} derive(Eq, Show)
 
-pub(all) struct ValueAndType {
-  value : WitValue
-  typ : WitType
-} derive(Eq, @debug.Debug)
+pub(all) struct SchemaGraph {
+  type_nodes : Array[SchemaTypeNode]
+  defs : Array[SchemaTypeDef]
+  root : Int
+} derive(Eq, Show)
 
-pub(all) enum WitNode {
-  RecordValue(Array[Int])
-  VariantValue((UInt, Int?))
-  EnumValue(UInt)
-  FlagsValue(Array[Bool])
-  TupleValue(Array[Int])
-  ListValue(Array[Int])
-  OptionValue(Int?)
-  ResultValue(Result[Int?, Int?])
-  PrimU8(Byte)
-  PrimU16(UInt)
-  PrimU32(UInt)
-  PrimU64(UInt64)
-  PrimS8(Int)
-  PrimS16(Int)
-  PrimS32(Int)
-  PrimS64(Int64)
-  PrimFloat32(Float)
-  PrimFloat64(Double)
-  PrimChar(Char)
-  PrimBool(Bool)
-  PrimString(String)
-  Handle((Uri, UInt64))
-} derive(Eq, @debug.Debug)
-
-pub(all) struct WitType {
-  nodes : Array[NamedWitTypeNode]
-} derive(Eq, @debug.Debug)
-
-pub(all) enum WitTypeNode {
-  RecordType(Array[(String, Int)])
-  VariantType(Array[(String, Int?)])
+pub(all) enum SchemaTypeBody {
+  RefType(Int)
+  BoolType
+  S8Type
+  S16Type
+  S32Type
+  S64Type
+  U8Type
+  U16Type
+  U32Type
+  U64Type
+  F32Type
+  F64Type
+  CharType
+  StringType
+  RecordType(Array[NamedFieldType])
+  VariantType(Array[VariantCaseType])
   EnumType(Array[String])
   FlagsType(Array[String])
   TupleType(Array[Int])
   ListType(Int)
+  FixedListType(FixedListSpec)
+  MapType(MapSpec)
   OptionType(Int)
-  ResultType((Int?, Int?))
-  PrimU8Type
-  PrimU16Type
-  PrimU32Type
-  PrimU64Type
-  PrimS8Type
-  PrimS16Type
-  PrimS32Type
-  PrimS64Type
-  PrimF32Type
-  PrimF64Type
-  PrimCharType
-  PrimBoolType
-  PrimStringType
-  HandleType((UInt64, ResourceMode))
-} derive(Eq, @debug.Debug)
+  ResultType(ResultSpec)
+  TextType(TextRestrictions)
+  BinaryType(BinaryRestrictions)
+  PathType(PathSpec)
+  UrlType(UrlRestrictions)
+  DatetimeType
+  DurationType
+  QuantityType(QuantitySpec)
+  UnionType(UnionSpec)
+  SecretType(SecretSpec)
+  QuotaTokenType(QuotaTokenSpec)
+  FutureType(Int?)
+  StreamType(Int?)
+} derive(Eq, Show)
 
-pub(all) struct WitValue {
-  nodes : Array[WitNode]
-} derive(Eq, @debug.Debug)
+pub(all) struct SchemaTypeDef {
+  id : String
+  name : String?
+  body : Int
+} derive(Eq, Show)
+
+pub(all) struct SchemaTypeNode {
+  body : SchemaTypeBody
+  metadata : MetadataEnvelope
+} derive(Eq, Show)
+
+pub(all) enum SchemaValueNode {
+  BoolValue(Bool)
+  S8Value(Int)
+  S16Value(Int)
+  S32Value(Int)
+  S64Value(Int64)
+  U8Value(Byte)
+  U16Value(UInt)
+  U32Value(UInt)
+  U64Value(UInt64)
+  F32Value(Float)
+  F64Value(Double)
+  CharValue(Char)
+  StringValue(String)
+  RecordValue(Array[Int])
+  VariantValue(VariantValuePayload)
+  EnumValue(UInt)
+  FlagsValue(Array[Bool])
+  TupleValue(Array[Int])
+  ListValue(Array[Int])
+  FixedListValue(Array[Int])
+  MapValue(Array[MapEntry])
+  OptionValue(Int?)
+  ResultValue(ResultValuePayload)
+  TextValue(TextValuePayload)
+  BinaryValue(BinaryValuePayload)
+  PathValue(String)
+  UrlValue(String)
+  DatetimeValue(Datetime)
+  DurationValue(DurationValuePayload)
+  QuantityValueNode(QuantityValue)
+  UnionValue(UnionValuePayload)
+  SecretValue(SecretValuePayload)
+  QuotaTokenValue(QuotaTokenValuePayload)
+} derive(Eq, Show)
+
+pub(all) struct SchemaValueTree {
+  value_nodes : Array[SchemaValueNode]
+  root : Int
+} derive(Eq, Show)
+
+pub(all) struct SecretSpec {
+  category : String?
+} derive(Eq, Show)
+
+pub(all) struct SecretValuePayload {
+  secret_ref : String
+} derive(Eq, Show)
+
+pub(all) struct TextRestrictions {
+  languages : Array[String]?
+  min_length : UInt?
+  max_length : UInt?
+  regex : String?
+} derive(Eq, Show)
+
+pub(all) struct TextValuePayload {
+  text : String
+  language : String?
+} derive(Eq, Show)
+
+pub(all) struct TypedSchemaValue {
+  graph : SchemaGraph
+  value : SchemaValueTree
+} derive(Eq, Show)
+
+pub(all) struct UnionBranch {
+  tag : String
+  body : Int
+  discriminator : DiscriminatorRule
+  metadata : MetadataEnvelope
+} derive(Eq, Show)
+
+pub(all) struct UnionSpec {
+  branches : Array[UnionBranch]
+} derive(Eq, Show)
+
+pub(all) struct UnionValuePayload {
+  tag : String
+  body : Int
+} derive(Eq, Show)
+
+pub(all) struct UrlRestrictions {
+  allowed_schemes : Array[String]?
+  allowed_hosts : Array[String]?
+} derive(Eq, Show)
+
+pub(all) struct Uuid {
+  high_bits : UInt64
+  low_bits : UInt64
+} derive(Eq, Show)
+
+pub(all) struct VariantCaseType {
+  name : String
+  payload : Int?
+  metadata : MetadataEnvelope
+} derive(Eq, Show)
+
+pub(all) struct VariantValuePayload {
+  case : UInt
+  payload : Int?
+} derive(Eq, Show)
 
 // Type aliases
 

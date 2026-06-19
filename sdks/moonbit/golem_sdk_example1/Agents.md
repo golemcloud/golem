@@ -250,8 +250,6 @@ pub fn MyAgent::increment(self : Self) -> UInt64 {
 
 Available annotations:
 - `#derive.prompt_hint("...")` — adds a prompt hint to the method's agent definition
-- `#derive.text_languages("param_name", "en", "de")` — restricts an `UnstructuredText` parameter to specific languages
-- `#derive.mime_types("param_name", "image/png", "image/jpeg")` — restricts an `UnstructuredBinary` parameter to specific MIME types
 - Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions
 
 ### Multimodal Types
@@ -275,11 +273,17 @@ fn VisionAgent::new() -> VisionAgent { { count: 0 } }
 /// Analyze multimodal input
 pub fn VisionAgent::analyze(
   self : Self,
-  input : @types.Multimodal[TextOrImage],
+  input : @multimodal.Multimodal[TextOrImage],
 ) -> String {
-  // Process mixed text and image items
+  // Process mixed text and image items via input.items
 }
 ```
+
+A multimodal value is encoded in the new schema model as a `list<variant>` whose
+list node carries `role = multimodal`. `@multimodal.Multimodal[T]` is an ordinary
+schema type — it may be a direct method parameter or return type (mixed with
+other regular parameters), but it cannot be nested inside `Option`/`Array`/
+`Result`/tuples or inside a `#derive.golem_schema` payload.
 
 ### Logging and Tracing
 
@@ -403,7 +407,7 @@ golem agent invoke -L '<agent-id>' 'method' args   # Invoke method directly
 - Target is **WASM only** — no native system calls, threads, or platform-specific code
 - String encoding is **UTF-16** (MoonBit's native format)
 - All agent method parameters are passed by value
-- All custom types need `#derive.golem_schema` (which generates `HasElementSchema`, `FromExtractor`, `FromElementValue`, `ToElementValue` impls)
+- All custom types need `#derive.golem_schema` (which generates `@schema.IntoSchema` / `@schema.FromSchema` impls)
 - Do NOT manually edit generated files (`golem_reexports.mbt`, `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`)
 - Do NOT manually edit files in `wit/` directories — they are managed by the SDK
 - `golem-temp/` and `_build/` are gitignored build artifacts

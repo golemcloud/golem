@@ -7,21 +7,22 @@ pub fn generate_config_field_impls(
   let buf = StringBuilder::new()
   for ct in config_types {
     let name = ct.name
-    // Generate collect_entries impl
+    // Generate collect_entries impl. Returns the pre-encoding declaration form
+    // `@agents.AgentConfigDef` (the agent-type assembler merges each value_type
+    // graph into the shared pool); `collect_entries_of` raises
+    // `@common.AgentError`, propagated by the (raising) trait method.
     buf.write_string("///|\n")
     buf.write_string(
       "impl @config.ConfigField for \{name} with collect_entries(path) {\n",
     )
-    buf.write_string(
-      "  let entries : Array[@common.AgentConfigDeclaration] = []\n",
-    )
+    buf.write_string("  let entries : Array[@agents.AgentConfigDef] = []\n")
     for i, field in ct.fields {
       let (field_name, pt) = field
       let type_str = param_type_to_type_string(pt)
       buf.write_string("  let fp\{i} = path.copy()\n")
-      buf.write_string("  fp\{i}.push(\"\{field_name}\")\n")
+      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
       buf.write_string(
-        "  entries.append(@config.collect_entries_of!((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
+        "  entries.append(@config.collect_entries_of((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i}))\n",
       )
     }
     buf.write_string("  entries\n")
@@ -33,9 +34,9 @@ pub fn generate_config_field_impls(
       let (field_name, pt) = field
       let type_str = param_type_to_type_string(pt)
       buf.write_string("  let fp\{i} = path.copy()\n")
-      buf.write_string("  fp\{i}.push(\"\{field_name}\")\n")
+      buf.write_string("  fp\{i}.push(\"\{escape_string_lit(field_name)}\")\n")
       buf.write_string(
-        "  let \{field_name} : \{type_str} = @config.load_field!((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i})\n",
+        "  let \{field_name} : \{type_str} = @config.load_field((@schema.TypeTag::{} : @schema.TypeTag[\{type_str}]), fp\{i})\n",
       )
     }
     // Build the struct literal with all field names
@@ -48,8 +49,7 @@ pub fn generate_config_field_impls(
   if source.is_empty() {
     return @list.List::from_array([])
   }
-  let (parsed, _) = @parser.parse_string(source)
-  parsed
+  parse_generated_impls(source, "config field impls")
 }
 
 ///|
@@ -91,10 +91,16 @@ pub fn generate_config_override_types(
       }
       match pt {
         Simple(name) =>
-          if config_type_names.get(name) is Some(_) {
-            override_fields.push((field_name, name + "Override"))
-          } else {
-            override_fields.push((field_name, param_type_to_type_string(pt)))
+          match config_type_names.get(name) {
+            // Nested config: only reference its `*Override` when the nested
+            // struct actually has overridable leaves (otherwise no override
+            // type is emitted for it and the reference would dangle).
+            Some(nested) =>
+              if config_has_overridable_fields(nested, config_type_names) {
+                override_fields.push((field_name, name + "Override"))
+              }
+            None =>
+              override_fields.push((field_name, param_type_to_type_string(pt)))
           }
         _ => override_fields.push((field_name, param_type_to_type_string(pt)))
       }
@@ -121,8 +127,7 @@ pub fn generate_config_override_types(
   if source.is_empty() {
     return @list.List::from_array([])
   }
-  let (parsed, _) = @parser.parse_string(source)
-  parsed
+  parse_generated_impls(source, "config override types")
 }
 
 ///|
@@ -138,10 +143,7 @@ pub fn generate_config_override_walkers(
   }
   let buf = StringBuilder::new()
   for ct in config_types {
-    let has_non_secret = ct.fields
-      .iter()
-      .any(fn(f) { not(is_secret_type(f.1)) })
-    if not(has_non_secret) {
+    if not(config_has_overridable_fields(ct, config_type_names)) {
       continue
     }
     let override_name = ct.name + "Override"
@@ -158,24 +160,29 @@ pub fn generate_config_override_walkers(
       if is_secret_type(pt) {
         continue
       }
-      let is_nested = match pt {
-        Simple(name) => config_type_names.get(name) is Some(_)
-        _ => false
+      // A nested config field only appears in the `*Override` struct (and so is
+      // walkable here) when the nested struct has overridable leaves.
+      let nested_fn = match pt {
+        Simple(name) =>
+          match config_type_names.get(name) {
+            Some(nested) =>
+              if config_has_overridable_fields(nested, config_type_names) {
+                Some("collect_" + pascal_to_snake(name) + "_overrides")
+              } else {
+                continue
+              }
+            None => None
+          }
+        _ => None
       }
       buf.write_string("  match config.\{field_name} {\n")
       buf.write_string("    Some(v) => {\n")
       buf.write_string("      let p = path.copy()\n")
-      buf.write_string("      p.push(\"\{field_name}\")\n")
-      if is_nested {
-        match pt {
-          Simple(name) => {
-            let nested_fn = "collect_" + pascal_to_snake(name) + "_overrides"
-            buf.write_string("      result.append(\{nested_fn}!(v, p))\n")
-          }
-          _ => ()
-        }
-      } else {
-        buf.write_string("      result.push(@rpc.typed_config_value!(p, v))\n")
+      buf.write_string("      p.push(\"\{escape_string_lit(field_name)}\")\n")
+      match nested_fn {
+        Some(f) => buf.write_string("      result.append(\{f}(v, p))\n")
+        None =>
+          buf.write_string("      result.push(@rpc.typed_config_value(p, v))\n")
       }
       buf.write_string("    }\n")
       buf.write_string("    None => ()\n")
@@ -188,6 +195,5 @@ pub fn generate_config_override_walkers(
   if source.is_empty() {
     return @list.List::from_array([])
   }
-  let (parsed, _) = @parser.parse_string(source)
-  parsed
+  parse_generated_impls(source, "config override walkers")
 }

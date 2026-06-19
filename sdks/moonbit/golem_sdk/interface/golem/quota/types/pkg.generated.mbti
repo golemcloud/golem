@@ -4,7 +4,6 @@ package "golemcloud/golem_sdk/interface/golem/quota/types"
 import {
   "golemcloud/golem_sdk/interface/golem/api/host",
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -14,9 +13,9 @@ import {
 // Types and methods
 pub(all) struct FailedReservation {
   estimated_wait_nanos : UInt64?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct QuotaToken(Int) derive(Eq, @debug.Debug)
+pub(all) struct QuotaToken(Int) derive(Eq, Show)
 pub fn QuotaToken::drop(Self) -> Unit
 pub fn QuotaToken::from_record(QuotaTokenRecord) -> Self
 pub fn QuotaToken::merge(Self, Self) -> Unit
@@ -31,9 +30,9 @@ pub(all) struct QuotaTokenRecord {
   expected_use : UInt64
   last_credit : Int64
   last_credit_at : @wallClock.Datetime
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct Reservation(Int) derive(Eq, @debug.Debug)
+pub(all) struct Reservation(Int) derive(Eq, Show)
 pub fn Reservation::commit(Self, UInt64) -> Unit
 pub fn Reservation::drop(Self) -> Unit
 

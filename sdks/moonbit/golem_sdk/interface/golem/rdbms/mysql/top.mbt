@@ -7,7 +7,7 @@ pub(all) suberror Error_ {
   QueryExecutionFailure(String)
   QueryResponseFailure(String)
   Other(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum DbColumnType {
@@ -46,7 +46,7 @@ pub(all) enum DbColumnType {
   Set
   Bit
   Json
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DbColumn {
@@ -54,7 +54,7 @@ pub(all) struct DbColumn {
   name : String
   db_type : DbColumnType
   db_type_name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Value descriptor for a single database value
@@ -95,23 +95,23 @@ pub(all) enum DbValue {
   Bit(Array[Bool])
   Json(String)
   Null
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A single row of values
 pub(all) struct DbRow {
   values : Array[DbValue]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DbResult {
   columns : Array[DbColumn]
   rows : Array[DbRow]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A potentially very large and lazy stream of rows:
-pub(all) struct DbResultStream(Int) derive(Debug, Eq)
+pub(all) struct DbResultStream(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -121,7 +121,7 @@ pub fn DbResultStream::drop(self : DbResultStream) -> Unit {
 }
 
 ///|
-pub(all) struct DbConnection(Int) derive(Debug, Eq)
+pub(all) struct DbConnection(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -131,7 +131,7 @@ pub fn DbConnection::drop(self : DbConnection) -> Unit {
 }
 
 ///|
-pub(all) struct DbTransaction(Int) derive(Debug, Eq)
+pub(all) struct DbTransaction(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -235,8 +235,8 @@ pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]? {
 
           let lifted = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::Boolean(mbt_ffi_load8_u(iter_base + 8) != 0)
-            1 => DbValue::Tinyint(mbt_ffi_load8(iter_base + 8) - 0x100)
-            2 => DbValue::Smallint(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            1 => DbValue::Tinyint(mbt_ffi_load8(iter_base + 8))
+            2 => DbValue::Smallint(mbt_ffi_load16(iter_base + 8))
             3 => DbValue::Mediumint(mbt_ffi_load32(iter_base + 8))
             4 => DbValue::Int(mbt_ffi_load32(iter_base + 8))
             5 => DbValue::Bigint(mbt_ffi_load64(iter_base + 8))
@@ -964,8 +964,8 @@ pub fn DbConnection::query(
 
           let lifted73 = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::Boolean(mbt_ffi_load8_u(iter_base + 8) != 0)
-            1 => DbValue::Tinyint(mbt_ffi_load8(iter_base + 8) - 0x100)
-            2 => DbValue::Smallint(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            1 => DbValue::Tinyint(mbt_ffi_load8(iter_base + 8))
+            2 => DbValue::Smallint(mbt_ffi_load16(iter_base + 8))
             3 => DbValue::Mediumint(mbt_ffi_load32(iter_base + 8))
             4 => DbValue::Int(mbt_ffi_load32(iter_base + 8))
             5 => DbValue::Bigint(mbt_ffi_load64(iter_base + 8))
@@ -2569,8 +2569,8 @@ pub fn DbTransaction::query(
 
           let lifted73 = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::Boolean(mbt_ffi_load8_u(iter_base + 8) != 0)
-            1 => DbValue::Tinyint(mbt_ffi_load8(iter_base + 8) - 0x100)
-            2 => DbValue::Smallint(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            1 => DbValue::Tinyint(mbt_ffi_load8(iter_base + 8))
+            2 => DbValue::Smallint(mbt_ffi_load16(iter_base + 8))
             3 => DbValue::Mediumint(mbt_ffi_load32(iter_base + 8))
             4 => DbValue::Int(mbt_ffi_load32(iter_base + 8))
             5 => DbValue::Bigint(mbt_ffi_load64(iter_base + 8))

@@ -27,7 +27,6 @@ test "parse_pkg_exports extracts export entries from moon.pkg" {
       #|  "wasmExportInit:golem:agent/guest#initialize",
       #|  "wasmExportSave:golem:api/save-snapshot@1.1.7#save",
       #|]
-
     ),
   )
 }
@@ -59,7 +58,6 @@ test "update_pkg_link replaces existing link block" {
     result,
     content=(
       #|"import {\n  \"some/pkg\",\n}\n\noptions(\n  \"is-main\": true,\n  link: {\n    \"wasm\": {\n      \"export-memory-name\": \"memory\",\n      \"exports\": [\n        \"cabi_realloc:cabi_realloc\",\n        \"wasmExportInit:golem:agent/guest#initialize\",\n      ],\n      \"heap-start-address\": 16,\n    },\n  },\n)"
-
     ),
   )
 }
@@ -80,7 +78,6 @@ test "update_pkg_link inserts link into existing options" {
     result,
     content=(
       #|"import {\n  \"some/pkg\",\n}\n\noptions(\n  \"is-main\": true,\n  link: {\n    \"wasm\": {\n      \"export-memory-name\": \"memory\",\n      \"exports\": [\n        \"cabi_realloc:cabi_realloc\",\n      ],\n      \"heap-start-address\": 16,\n    },\n  },\n)"
-
     ),
   )
 }
@@ -96,13 +93,12 @@ test "ensure_pkg_import adds import to existing block" {
     #|  "is-main": true,
     #|)
   let result = @lib.ensure_pkg_import(
-    content, "golemcloud/golem_sdk/agents/types", "@types",
+    content, "golemcloud/golem_sdk/schema", "@schema",
   )
   debug_inspect(
     result,
     content=(
-      #|"import {\n  \"some/pkg\",\n  \"golemcloud/golem_sdk/agents/types\" @types,\n}\n\noptions(\n  \"is-main\": true,\n)"
-
+      #|"import {\n  \"some/pkg\",\n  \"golemcloud/golem_sdk/schema\" @schema,\n}\n\noptions(\n  \"is-main\": true,\n)"
     ),
   )
 }
@@ -112,20 +108,19 @@ test "ensure_pkg_import is idempotent" {
   let content =
     #|import {
     #|  "some/pkg",
-    #|  "golemcloud/golem_sdk/agents/types" @types,
+    #|  "golemcloud/golem_sdk/schema" @schema,
     #|}
     #|
     #|options(
     #|  "is-main": true,
     #|)
   let result = @lib.ensure_pkg_import(
-    content, "golemcloud/golem_sdk/agents/types", "@types",
+    content, "golemcloud/golem_sdk/schema", "@schema",
   )
   debug_inspect(
     result,
     content=(
-      #|"import {\n  \"some/pkg\",\n  \"golemcloud/golem_sdk/agents/types\" @types,\n}\n\noptions(\n  \"is-main\": true,\n)"
-
+      #|"import {\n  \"some/pkg\",\n  \"golemcloud/golem_sdk/schema\" @schema,\n}\n\noptions(\n  \"is-main\": true,\n)"
     ),
   )
 }
@@ -137,13 +132,12 @@ test "ensure_pkg_import adds import block when none exists" {
     #|  "is-main": true,
     #|)
   let result = @lib.ensure_pkg_import(
-    content, "golemcloud/golem_sdk/agents/types", "@types",
+    content, "golemcloud/golem_sdk/schema", "@schema",
   )
   debug_inspect(
     result,
     content=(
-      #|"import {\n  \"golemcloud/golem_sdk/agents/types\" @types,\n}\n\noptions(\n  \"is-main\": true,\n)"
-
+      #|"import {\n  \"golemcloud/golem_sdk/schema\" @schema,\n}\n\noptions(\n  \"is-main\": true,\n)"
     ),
   )
 }
@@ -160,7 +154,6 @@ test "update_pkg_link appends options when none exist" {
     result,
     content=(
       #|"import {\n  \"some/pkg\",\n}\n\noptions(\n  link: {\n    \"wasm\": {\n      \"export-memory-name\": \"memory\",\n      \"exports\": [\n        \"cabi_realloc:cabi_realloc\",\n      ],\n      \"heap-start-address\": 16,\n    },\n  },\n)"
-
     ),
   )
 }

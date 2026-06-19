@@ -127,16 +127,8 @@ glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/scala/wit/deps
 glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
-# The MoonBit SDK's agent-guest world still references golem:core@1.5.0
-# only. Including golem:core@2.0.0 causes its bindgen/codegen to emit
-# version-suffixed module paths (e.g. golem::core1_5_0), which breaks downstream
-# code generators, so it keeps golem-core (1.5.0) and drops golem-core-v2.
-rm -r sdks/moonbit/golem_sdk/wit/deps/golem-core-v2
-# The TypeScript and Scala SDKs are fully migrated to golem:core@2.0.0 (no legacy
-# value/type mapper), so they keep golem-core-v2 and drop golem-core (1.5.0)
-# entirely. Keeping both core versions would make wasm-rquickjs emit
-# version-suffixed module paths and break the agent-template wrapper crate.
 rm -r sdks/ts/wit/deps/golem-core
+rm -r sdks/moonbit/golem_sdk/wit/deps/golem-core
 rm -r sdks/scala/wit/deps/golem-core
 """
 

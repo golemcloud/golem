@@ -9,7 +9,7 @@ pub(all) enum Level {
   WARN
   ERROR
   CRITICAL
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn Level::ordinal(self : Level) -> Int {

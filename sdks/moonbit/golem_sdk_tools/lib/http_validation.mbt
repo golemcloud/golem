@@ -49,36 +49,6 @@ pub fn validate_http_routes(
           }
         }
         let mount_var_names = collect_path_variable_names(segments)
-        // Rule 2: UnstructuredBinary constructor params cannot be mount path variables
-        for v in mount_var_names {
-          let param = agent.constructor_params
-            .iter()
-            .find_first(fn(p) { p.0 == v })
-          match param {
-            Some((_, pt)) =>
-              if is_unstructured_binary_type(pt) {
-                raise AgentParseError(
-                  "Constructor param '\{v}' of agent '\{agent.name}' is UnstructuredBinary and cannot be a mount path variable",
-                )
-              }
-            None => ()
-          }
-        }
-        // Rule 2b: UnstructuredText constructor params cannot be mount path variables
-        for v in mount_var_names {
-          let param = agent.constructor_params
-            .iter()
-            .find_first(fn(p) { p.0 == v })
-          match param {
-            Some((_, pt)) =>
-              if is_unstructured_text_type(pt) {
-                raise AgentParseError(
-                  "Constructor param '\{v}' of agent '\{agent.name}' is UnstructuredText and cannot be a mount path variable",
-                )
-              }
-            None => ()
-          }
-        }
         // Rule 8: Principal params cannot be mount path variables
         for v in mount_var_names {
           let param = agent.constructor_params
@@ -185,27 +155,16 @@ pub fn validate_http_routes(
               )
             }
           }
-          // Rule 7: Endpoint variables cannot bind to UnstructuredBinary, UnstructuredText or Principal params
+          // Rule 7: Endpoint variables cannot bind to Principal params
           for v in all_var_names {
             let param = meth.params.iter().find_first(fn(p) { p.0 == v })
             match param {
-              Some((_, pt)) => {
-                if is_unstructured_binary_type(pt) {
-                  raise AgentParseError(
-                    "Endpoint variable '\{v}' in method '\{meth.name}' on agent '\{agent.name}' binds to a UnstructuredBinary param which is not HTTP-safe",
-                  )
-                }
-                if is_unstructured_text_type(pt) {
-                  raise AgentParseError(
-                    "Endpoint variable '\{v}' in method '\{meth.name}' on agent '\{agent.name}' binds to a UnstructuredText param which is not HTTP-safe",
-                  )
-                }
+              Some((_, pt)) =>
                 if is_principal_type(pt) {
                   raise AgentParseError(
                     "Endpoint variable '\{v}' in method '\{meth.name}' on agent '\{agent.name}' binds to a Principal param which is not HTTP-safe",
                   )
                 }
-              }
               None => ()
             }
           }

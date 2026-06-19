@@ -113,6 +113,7 @@ pub fn parse_value_types(
           if is_schema {
             let name = type_decl.tycon
             let kind = parse_type_desc(name, type_decl.components)
+            validate_no_multimodal_in_value_kind(name, kind)
             results.push({ name, kind })
           }
         }
@@ -206,5 +207,56 @@ fn parse_constr_payload(
         Multi(items, any_labelled)
       }
     }
+  }
+}
+
+///|
+/// Checks whether a `ParamType` contains a `Multimodal` type at any nesting level.
+fn param_type_contains_multimodal(pt : ParamType) -> Bool {
+  match pt {
+    MultimodalType(_) => true
+    Simple(_) => false
+    Optional(inner) => param_type_contains_multimodal(inner)
+    List(inner) => param_type_contains_multimodal(inner)
+    ResultType(ok, err) =>
+      param_type_contains_multimodal(ok) || param_type_contains_multimodal(err)
+    Tuple(elems) => elems.iter().any(param_type_contains_multimodal)
+    Parameterized(_, params) =>
+      params.iter().any(param_type_contains_multimodal)
+  }
+}
+
+///|
+/// Rejects `Multimodal` types inside `#derive.golem_schema` payloads. Multimodal
+/// is only valid as a direct agent method parameter or return type, matching the
+/// Rust/TS SDKs (which forbid multimodal in derived value-type payloads).
+fn validate_no_multimodal_in_value_kind(
+  name : String,
+  kind : ValueTypeKind,
+) -> Unit raise AgentParseError {
+  let check = fn(field : String, pt : ParamType) -> Unit raise AgentParseError {
+    if param_type_contains_multimodal(pt) {
+      raise AgentParseError(
+        "Multimodal type is not allowed in field '\{field}' of #derive.golem_schema type '\{name}'; multimodal is only supported as a direct agent method parameter or return type",
+      )
+    }
+  }
+  match kind {
+    Record(fields) =>
+      for f in fields {
+        check(f.0, f.1)
+      }
+    SimpleEnum(_) => ()
+    VariantEnum(cases) =>
+      for c in cases {
+        match c.1 {
+          None => ()
+          Single(pt) => check(c.0, pt)
+          Multi(items, _) =>
+            for it in items {
+              check("\{c.0}.\{it.0}", it.1)
+            }
+        }
+      }
   }
 }

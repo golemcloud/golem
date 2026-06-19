@@ -2,21 +2,19 @@
 package "golemcloud/golem_sdk/config"
 
 import {
+  "golemcloud/golem_sdk/agents",
   "golemcloud/golem_sdk/interface/golem/agent/common",
-  "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema",
 }
 
 // Values
-pub fn[T : ConfigField] collect_entries_of(@schema.TypeTag[T], Array[String]) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError
+pub fn[T : ConfigField] collect_entries_of(@schema.TypeTag[T], Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
 
 pub fn[T : ConfigField] load_config(@schema.TypeTag[T]) -> Config[T] raise @common.AgentError
 
-pub fn[T : @schema.HasElementSchema + @schema.FromExtractor] load_config_value(Array[String]) -> T raise @common.AgentError
+pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(Array[String]) -> T raise @common.AgentError
 
 pub fn[T : ConfigField] load_field(@schema.TypeTag[T], Array[String]) -> T raise @common.AgentError
-
-pub fn[T : @schema.HasElementSchema] wit_type_of(@schema.TypeTag[T]) -> @types.WitType raise @common.AgentError
 
 // Errors
 
@@ -27,16 +25,15 @@ pub(all) struct Config[T] {
 
 pub(all) struct Secret[T] {
   key : Array[String]
-  expected_type : @types.WitType
 }
-pub fn[T : @schema.FromExtractor] Secret::get(Self[T]) -> T raise @common.AgentError
-pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for Secret[T]
+pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(Self[T]) -> T raise @common.AgentError
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T]
 
 // Type aliases
 
 // Traits
 pub(open) trait ConfigField {
-  collect_entries(Array[String]) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError
+  collect_entries(Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
   load(Array[String]) -> Self raise @common.AgentError
 }
 pub impl ConfigField for Bool
@@ -49,8 +46,8 @@ pub impl ConfigField for UInt64
 pub impl ConfigField for Float
 pub impl ConfigField for Double
 pub impl ConfigField for String
-pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for T?
-pub impl[T : @schema.HasElementSchema + @schema.FromExtractor, E : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for Result[T, E]
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T?
+pub impl[T : @schema.IntoSchema + @schema.FromSchema, E : @schema.IntoSchema + @schema.FromSchema] ConfigField for Result[T, E]
 pub impl ConfigField for Bytes
-pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for Array[T]
+pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T]
 

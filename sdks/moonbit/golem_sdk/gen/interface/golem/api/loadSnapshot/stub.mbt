@@ -32,7 +32,9 @@ pub fn load(snapshot : @host.Snapshot) -> Result[Unit, String] {
         Ok((type_name, ctor_params, _phantom_id)) =>
           match
             @agents.construct_and_set_instance(
-              type_name, ctor_params, principal,
+              type_name,
+              ctor_params.value,
+              principal,
             ) {
             Ok(_) =>
               match @agents.get_agent_instance() {
@@ -43,9 +45,9 @@ pub fn load(snapshot : @host.Snapshot) -> Result[Unit, String] {
                   }
                 None => Err("Failed to construct agent instance")
               }
-            Err(e) => Err("Failed to construct agent: \{@debug.to_string(e)}")
+            Err(e) => Err("Failed to construct agent: \{e}")
           }
-        Err(e) => Err("Failed to parse agent ID: \{@debug.to_string(e)}")
+        Err(e) => Err("Failed to parse agent ID: \{e}")
       }
     }
   }

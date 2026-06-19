@@ -6,7 +6,6 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -16,11 +15,11 @@ pub fn get_agent_type(String) -> @common.RegisteredAgentType?
 
 pub fn get_all_agent_types() -> Array[@common.RegisteredAgentType]
 
-pub fn get_config_value(Array[String], @types.WitType) -> @types.WitValue
+pub fn get_config_value(Array[String], @types.SchemaGraph) -> @types.SchemaValueTree
 
-pub fn make_agent_id(String, @types.DataValue, @types.Uuid?) -> Result[String, @common.AgentError]
+pub fn make_agent_id(String, @types.SchemaValueTree, @types.Uuid?) -> Result[String, @common.AgentError]
 
-pub fn parse_agent_id(String) -> Result[(String, @types.DataValue, @types.Uuid?), @common.AgentError]
+pub fn parse_agent_id(String) -> Result[(String, @types.TypedSchemaValue, @types.Uuid?), @common.AgentError]
 
 // Errors
 pub(all) suberror RpcError {
@@ -29,27 +28,27 @@ pub(all) suberror RpcError {
   NotFound(String)
   RemoteInternalError(String)
   RemoteAgentError(@common.AgentError)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Types and methods
-pub(all) struct CancellationToken(Int) derive(Eq, @debug.Debug)
+pub(all) struct CancellationToken(Int) derive(Eq, Show)
 pub fn CancellationToken::cancel(Self) -> Unit
 pub fn CancellationToken::drop(Self) -> Unit
 
-pub(all) struct FutureInvokeResult(Int) derive(Eq, @debug.Debug)
+pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
 pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
-pub fn FutureInvokeResult::get(Self) -> Result[@types.DataValue, RpcError]?
+pub fn FutureInvokeResult::get(Self) -> Result[@types.SchemaValueTree?, RpcError]?
 pub fn FutureInvokeResult::subscribe(Self) -> @poll.Pollable
 
-pub(all) struct WasmRpc(Int) derive(Eq, @debug.Debug)
-pub fn WasmRpc::async_invoke_and_await(Self, String, @types.DataValue) -> FutureInvokeResult
+pub(all) struct WasmRpc(Int) derive(Eq, Show)
+pub fn WasmRpc::async_invoke_and_await(Self, String, @types.SchemaValueTree) -> FutureInvokeResult
 pub fn WasmRpc::drop(Self) -> Unit
-pub fn WasmRpc::invoke(Self, String, @types.DataValue) -> Result[Unit, RpcError]
-pub fn WasmRpc::invoke_and_await(Self, String, @types.DataValue) -> Result[@types.DataValue, RpcError]
-pub fn WasmRpc::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @types.DataValue) -> CancellationToken
-pub fn WasmRpc::schedule_invocation(Self, @wallClock.Datetime, String, @types.DataValue) -> Unit
-pub fn WasmRpc::wasm_rpc(String, @types.DataValue, @types.Uuid?, Array[@common.TypedAgentConfigValue]) -> Self
+pub fn WasmRpc::invoke(Self, String, @types.SchemaValueTree) -> Result[Unit, RpcError]
+pub fn WasmRpc::invoke_and_await(Self, String, @types.SchemaValueTree) -> Result[@types.SchemaValueTree?, RpcError]
+pub fn WasmRpc::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> CancellationToken
+pub fn WasmRpc::schedule_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> Unit
+pub fn WasmRpc::wasm_rpc(String, @types.SchemaValueTree, @types.Uuid?, Array[@common.TypedAgentConfigValue]) -> Self
 
 // Type aliases
 

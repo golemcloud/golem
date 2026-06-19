@@ -4,7 +4,6 @@ package "golemcloud/golem_sdk/interface/wasi/io/streams"
 import {
   "golemcloud/golem_sdk/interface/wasi/io/error",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -13,10 +12,10 @@ import {
 pub(all) suberror StreamError {
   LastOperationFailed(@error.Error_)
   Closed
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Types and methods
-pub(all) struct InputStream(Int) derive(Eq, @debug.Debug)
+pub(all) struct InputStream(Int) derive(Eq, Show)
 pub fn InputStream::blocking_read(Self, UInt64) -> Result[FixedArray[Byte], StreamError]
 pub fn InputStream::blocking_skip(Self, UInt64) -> Result[UInt64, StreamError]
 pub fn InputStream::drop(Self) -> Unit
@@ -24,7 +23,7 @@ pub fn InputStream::read(Self, UInt64) -> Result[FixedArray[Byte], StreamError]
 pub fn InputStream::skip(Self, UInt64) -> Result[UInt64, StreamError]
 pub fn InputStream::subscribe(Self) -> @poll.Pollable
 
-pub(all) struct OutputStream(Int) derive(Eq, @debug.Debug)
+pub(all) struct OutputStream(Int) derive(Eq, Show)
 pub fn OutputStream::blocking_flush(Self) -> Result[Unit, StreamError]
 pub fn OutputStream::blocking_splice(Self, InputStream, UInt64) -> Result[UInt64, StreamError]
 pub fn OutputStream::blocking_write_and_flush(Self, FixedArray[Byte]) -> Result[Unit, StreamError]

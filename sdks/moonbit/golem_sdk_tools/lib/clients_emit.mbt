@@ -1,3 +1,15 @@
+// Emission of typed RPC client stubs (`golem_clients.mbt`) for the recursive
+// schema model (`golem:core/types@2.0.0`).
+//
+// Each agent gets a `<Name>Client` wrapping `@rpc.AgentClient`. Constructor and
+// method arguments are encoded into a `@types.SchemaValueTree` input record via
+// `@agents.encode_invocation_input`, and awaited results decoded via
+// `@agents.decode_output`. Every generated method raises `@common.AgentError`
+// (the encode helper raises), matching the SDK's uniform error contract.
+//
+// Built as a MoonBit-source string and parsed back via `parse_generated_impls`
+// (see `value_types_emit.mbt` / `agents_emit.mbt`).
+
 ///|
 /// Checks if any constructor parameter uses an RPC-incompatible type.
 fn has_rpc_incompatible_constructor(agent : AgentInfo) -> Bool {
@@ -22,603 +34,386 @@ fn method_has_rpc_incompatible_types(meth : MethodInfo) -> Bool {
 }
 
 ///|
-/// Generates typed RPC client stubs for all agents. Each agent gets a client
-/// struct with invoke, trigger, and schedule methods.
+/// Renders the typed parameter signature fragment for a parameter list
+/// (e.g. `name : String, count : UInt64`).
+fn params_sig(params : Array[(String, ParamType)]) -> String {
+  params.map(fn(p) { "\{p.0} : \{param_type_to_type_string(p.1)}" }).join(", ")
+}
+
+///|
+/// Renders the `@agents.encode_invocation_input([...])` expression that encodes
+/// the user-supplied parameters (in declared order) into a wire input record.
+fn encode_input_expr(params : Array[(String, ParamType)]) -> String {
+  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
+  "@agents.encode_invocation_input([\{parts}])"
+}
+
+///|
+/// Generates typed RPC client stubs for all agents.
 pub fn generate_client_code(
   agents : Array[AgentInfo],
   config_types? : Array[ConfigTypeInfo] = [],
   agent_package? : String = "",
 ) -> @list.List[@syntax.Impl] {
-  let impls : Array[@syntax.Impl] = []
+  let buf = StringBuilder::new()
   for agent in agents {
-    // Skip agents with RPC-incompatible constructors
     if has_rpc_incompatible_constructor(agent) {
       continue
     }
-    let client_name = agent.name + "Client"
-    impls.push(build_client_struct(client_name))
-    match agent.mode {
-      Durable => impls.push(build_client_get(agent, client_name))
-      Ephemeral => ()
+    emit_client(buf, agent, config_types, agent_package)
+  }
+  let source = buf.to_string()
+  if source.is_empty() {
+    return @list.List::from_array([])
+  }
+  parse_generated_impls(source, "clients")
+}
+
+///|
+/// Emits the full client surface for a single agent.
+fn emit_client(
+  buf : StringBuilder,
+  agent : AgentInfo,
+  config_types : Array[ConfigTypeInfo],
+  agent_package : String,
+) -> Unit {
+  let client = agent.name + "Client"
+  let vis = visible_params(agent.constructor_params)
+  let ctor_sig = params_sig(vis)
+  let ctor_input = encode_input_expr(vis)
+  let comma_sig = if ctor_sig.is_empty() { "" } else { ctor_sig + ",\n  " }
+  // struct
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub(all) struct \{client} {\n  client : @rpc.AgentClient\n}\n\n",
+  )
+  // get (durable only)
+  let durable = match agent.mode {
+    Durable => true
+    Ephemeral => false
+  }
+  if durable {
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub fn \{client}::get(\n  \{comma_sig}) -> \{client} raise @common.AgentError {\n",
+    )
+    buf.write_string("  let constructor_input = \{ctor_input}\n")
+    buf.write_string(
+      "  let client = @rpc.AgentClient::get(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
+    )
+    buf.write_string("  { client, }\n}\n\n")
+  }
+  // new_phantom
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::new_phantom(\n  \{comma_sig}) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::new_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
+  // get_phantom
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
+  // get_agent_id
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_agent_id(self : \{client}) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n",
+  )
+  // phantom_id
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::phantom_id(self : \{client}) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n",
+  )
+  // drop
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::drop(self : \{client}) -> Unit {\n  self.client.drop()\n}\n\n",
+  )
+  // scoped (durable only)
+  if durable {
+    emit_client_scoped(buf, client, "scoped", "get", vis, [])
+  }
+  emit_client_scoped(buf, client, "scoped_new_phantom", "new_phantom", vis, [])
+  emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
+    ("phantom_id", "@types.Uuid"),
+  ])
+  // methods
+  for meth in agent.methods {
+    if method_has_rpc_incompatible_types(meth) {
+      continue
     }
-    impls.push(build_client_new_phantom(agent, client_name))
-    impls.push(build_client_get_phantom(agent, client_name))
-    impls.push(build_client_get_agent_id(client_name))
-    impls.push(build_client_phantom_id(client_name))
-    impls.push(build_client_drop(client_name))
-    match agent.mode {
-      Durable => impls.push(build_client_scoped(agent, client_name))
-      Ephemeral => ()
-    }
-    impls.push(build_client_scoped_new_phantom(agent, client_name))
-    impls.push(build_client_scoped_get_phantom(agent, client_name))
-    for meth in agent.methods {
-      // Skip methods with RPC-incompatible params/return types
-      if method_has_rpc_incompatible_types(meth) {
-        continue
+    emit_client_method(buf, agent, meth, client)
+  }
+  // _with_config variants
+  match resolve_config_type(agent, config_types, agent_package) {
+    Some(ct) => {
+      // Use the same recursive "has overridable leaves" predicate as the
+      // config emitter, so we only emit `_with_config` variants when an
+      // `*Override` type + walker were actually generated for `ct`.
+      let by_name : Map[String, ConfigTypeInfo] = {}
+      for c in config_types {
+        by_name[c.name] = c
       }
-      impls.push(build_client_method_invoke(agent, meth, client_name))
-      impls.push(build_client_method_trigger(agent, meth, client_name))
-      impls.push(build_client_method_schedule(agent, meth, client_name))
-      impls.push(
-        build_client_method_schedule_cancelable(agent, meth, client_name),
-      )
+      if config_has_overridable_fields(ct, by_name) {
+        let override_name = ct.name + "Override"
+        let walker = "collect_" + pascal_to_snake(ct.name) + "_overrides"
+        emit_client_config_variants(
+          buf, agent, client, vis, override_name, walker, durable,
+        )
+      }
     }
-    // Generate _with_config variants for agents with non-secret config fields
-    let resolved_ct = resolve_config_type(agent, config_types, agent_package)
-    match resolved_ct {
-      Some(ct) =>
-        if has_non_secret_config_fields(ct) {
-          let override_name = ct.name + "Override"
-          let walker_name = "collect_" + pascal_to_snake(ct.name) + "_overrides"
-          match agent.mode {
-            Durable =>
-              impls.push(
-                build_client_get_with_config(
-                  agent, client_name, override_name, walker_name,
-                ),
-              )
-            Ephemeral => ()
-          }
-          impls.push(
-            build_client_new_phantom_with_config(
-              agent, client_name, override_name, walker_name,
-            ),
-          )
-          impls.push(
-            build_client_get_phantom_with_config(
-              agent, client_name, override_name, walker_name,
-            ),
-          )
-          match agent.mode {
-            Durable =>
-              impls.push(
-                build_client_scoped_with_config(
-                  agent, client_name, override_name,
-                ),
-              )
-            Ephemeral => ()
-          }
-          impls.push(
-            build_client_scoped_new_phantom_with_config(
-              agent, client_name, override_name,
-            ),
-          )
-          impls.push(
-            build_client_scoped_get_phantom_with_config(
-              agent, client_name, override_name,
-            ),
-          )
-        }
-      None => ()
-    }
+    None => ()
   }
-  to_list(impls)
 }
 
 ///|
-/// Generates the client struct definition containing an `AgentClient` field.
-fn build_client_struct(client_name : String) -> @syntax.Impl {
-  make_struct_def(client_name, [
-    ("client", make_qualified_parameterized_type("rpc", "AgentClient", [])),
-  ])
+/// Emits a `scoped*` convenience method that acquires a client, defers `drop`,
+/// and runs the callback. `extra` are additional parameters (e.g. `phantom_id`)
+/// passed through to the underlying constructor.
+fn emit_client_scoped(
+  buf : StringBuilder,
+  client : String,
+  fn_name : String,
+  ctor_name : String,
+  vis : Array[(String, ParamType)],
+  extra : Array[(String, String)],
+) -> Unit {
+  let sig_parts : Array[String] = []
+  for p in vis {
+    sig_parts.push("\{p.0} : \{param_type_to_type_string(p.1)}")
+  }
+  for e in extra {
+    sig_parts.push("\{e.0} : \{e.1}")
+  }
+  sig_parts.push("f : (\{client}) -> T raise @common.AgentError")
+  let call_args : Array[String] = []
+  for p in vis {
+    call_args.push(p.0)
+  }
+  for e in extra {
+    call_args.push(e.0)
+  }
+  let sig = sig_parts.join(",\n  ")
+  let call = call_args.join(", ")
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T raise @common.AgentError {\n",
+  )
+  buf.write_string("  let client = \{client}::\{ctor_name}(\{call})\n")
+  buf.write_string("  defer client.drop()\n")
+  buf.write_string("  f(client)\n}\n\n")
 }
 
 ///|
-/// Generates the expression that serializes constructor parameters into a `DataValue`.
-/// Principal parameters are excluded — they are auto-injected by the runtime.
-fn build_constructor_data_expr(agent : AgentInfo) -> @syntax.Expr {
-  let vis = visible_params(agent.constructor_params)
-  // Check if the constructor has a multimodal parameter (must be the only visible param)
-  let has_multimodal = vis.iter().find_first(fn(p) { is_multimodal_type(p.1) })
-  if has_multimodal is Some(_) {
-    // Multimodal constructor: param.to_data_value()
-    let param_name = vis[0].0
-    make_dot_apply(make_ident_expr(param_name), "to_data_value", [])
+/// Emits the four per-method client functions: awaited invoke, fire-and-forget
+/// trigger, scheduled invoke, and cancelable scheduled invoke.
+fn emit_client_method(
+  buf : StringBuilder,
+  agent : AgentInfo,
+  meth : MethodInfo,
+  client : String,
+) -> Unit {
+  let vis = visible_params(meth.params)
+  let ctx = escape_string_lit("\{agent.name}.\{meth.name}")
+  let input_expr = encode_input_expr(vis)
+  let arg_sig = params_sig(vis)
+  let self_args = if arg_sig.is_empty() {
+    "self : \{client}"
   } else {
-    let elements = vis.map(fn(param) {
-      make_apply(make_qualified_expr("schema", "to_element_value_as"), [
-        make_ident_expr(param.0),
-      ])
-    })
-    make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
-      make_array(elements),
-    ])
+    "self : \{client}, \{arg_sig}"
   }
-}
-
-///|
-/// Generates the `get` constructor that creates a client by initializing the remote agent.
-fn build_client_get(agent : AgentInfo, client_name : String) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  let body = make_let(
-    "constructor_data",
-    build_constructor_data_expr(agent),
-    make_let(
-      "client",
-      make_apply(make_qualified_method_ref("rpc", "AgentClient", "get"), [
-        make_string_expr(agent.name),
-        make_ident_expr("constructor_data"),
-      ]),
-      make_record([make_field("client", make_ident_expr("client"))]),
-    ),
-  )
-  make_top_func(
-    Some(client_name),
-    "get",
-    params,
-    Some(make_type(client_name)),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the `new_phantom` constructor that creates a phantom client with an auto-generated UUID.
-fn build_client_new_phantom(
-  agent : AgentInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  let body = make_let(
-    "constructor_data",
-    build_constructor_data_expr(agent),
-    make_let(
-      "client",
-      make_apply(
-        make_qualified_method_ref("rpc", "AgentClient", "new_phantom"),
-        [make_string_expr(agent.name), make_ident_expr("constructor_data")],
-      ),
-      make_record([make_field("client", make_ident_expr("client"))]),
-    ),
-  )
-  make_top_func(
-    Some(client_name),
-    "new_phantom",
-    params,
-    Some(make_type(client_name)),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the `get_phantom` constructor that creates a phantom client with a caller-supplied UUID.
-fn build_client_get_phantom(
-  agent : AgentInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(
-    make_typed_param(
-      "phantom_id",
-      make_qualified_parameterized_type("rpcTypes", "Uuid", []),
-    ),
-  )
-  let body = make_let(
-    "constructor_data",
-    build_constructor_data_expr(agent),
-    make_let(
-      "client",
-      make_apply(
-        make_qualified_method_ref("rpc", "AgentClient", "get_phantom"),
-        [
-          make_string_expr(agent.name),
-          make_ident_expr("constructor_data"),
-          make_ident_expr("phantom_id"),
-        ],
-      ),
-      make_record([make_field("client", make_ident_expr("client"))]),
-    ),
-  )
-  make_top_func(
-    Some(client_name),
-    "get_phantom",
-    params,
-    Some(make_type(client_name)),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the `get_agent_id` method that returns the remote agent's ID.
-fn build_client_get_agent_id(client_name : String) -> @syntax.Impl {
-  let body = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "get_agent_id",
-    [],
-  )
-  make_top_func(
-    Some(client_name),
-    "get_agent_id",
-    [make_self_param(client_name)],
-    Some(make_type("String")),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the `phantom_id` method that returns the phantom UUID, if any.
-fn build_client_phantom_id(client_name : String) -> @syntax.Impl {
-  let body = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "phantom_id",
-    [],
-  )
-  make_top_func(
-    Some(client_name),
-    "phantom_id",
-    [make_self_param(client_name)],
-    Some(
-      make_option_type(
-        make_qualified_parameterized_type("rpcTypes", "Uuid", []),
-      ),
-    ),
-    false,
-    body,
-  )
-}
-
-///|
-/// Generates the `drop` method that releases the remote agent handle.
-fn build_client_drop(client_name : String) -> @syntax.Impl {
-  let body = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "drop",
-    [],
-  )
-  make_top_func(
-    Some(client_name),
-    "drop",
-    [make_self_param(client_name)],
-    Some(make_type("Unit")),
-    false,
-    body,
-  )
-}
-
-///|
-/// Builds a function type: (ClientType) -> T raise @common.AgentError
-fn make_callback_type(client_name : String) -> @syntax.Type {
-  @syntax.Type::Arrow(
-    args=to_list([make_type(client_name)]),
-    res=make_type("T"),
-    err=@syntax.ErrorType::ErrorType(
-      ty=make_qualified_parameterized_type("common", "AgentError", []),
-    ),
-    is_async=None,
-    loc=dummy_loc,
-  )
-}
-
-///|
-/// Generates the `scoped` convenience method that acquires a client via `get`,
-/// defers `drop`, and calls a callback.
-fn build_client_scoped(agent : AgentInfo, client_name : String) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(make_typed_param("f", make_callback_type(client_name)))
-  // Build body: let client = ClientName::get(args...); defer client.drop(); f(client)
-  let get_args : Array[@syntax.Expr] = vis.map(fn(p) { make_ident_expr(p.0) })
-  let body = make_let(
-    "client",
-    make_apply(make_method_ref(client_name, "get"), get_args),
-    make_defer(
-      make_dot_apply(make_ident_expr("client"), "drop", []),
-      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
-    ),
-  )
-  make_top_func_generic(
-    Some(client_name),
-    "scoped",
-    ["T"],
-    params,
-    Some(make_type("T")),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the `scoped_new_phantom` convenience method that acquires a client via
-/// `new_phantom` (auto-generated UUID), defers `drop`, and calls a callback.
-fn build_client_scoped_new_phantom(
-  agent : AgentInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(make_typed_param("f", make_callback_type(client_name)))
-  let new_phantom_args : Array[@syntax.Expr] = vis.map(fn(p) {
-    make_ident_expr(p.0)
-  })
-  let body = make_let(
-    "client",
-    make_apply(make_method_ref(client_name, "new_phantom"), new_phantom_args),
-    make_defer(
-      make_dot_apply(make_ident_expr("client"), "drop", []),
-      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
-    ),
-  )
-  make_top_func_generic(
-    Some(client_name),
-    "scoped_new_phantom",
-    ["T"],
-    params,
-    Some(make_type("T")),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the `scoped_get_phantom` convenience method that acquires a client via
-/// `get_phantom` (caller-supplied UUID), defers `drop`, and calls a callback.
-fn build_client_scoped_get_phantom(
-  agent : AgentInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(
-    make_typed_param(
-      "phantom_id",
-      make_qualified_parameterized_type("rpcTypes", "Uuid", []),
-    ),
-  )
-  params.push(make_typed_param("f", make_callback_type(client_name)))
-  let get_phantom_args : Array[@syntax.Expr] = vis.map(fn(p) {
-    make_ident_expr(p.0)
-  })
-  get_phantom_args.push(make_ident_expr("phantom_id"))
-  let body = make_let(
-    "client",
-    make_apply(make_method_ref(client_name, "get_phantom"), get_phantom_args),
-    make_defer(
-      make_dot_apply(make_ident_expr("client"), "drop", []),
-      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
-    ),
-  )
-  make_top_func_generic(
-    Some(client_name),
-    "scoped_get_phantom",
-    ["T"],
-    params,
-    Some(make_type("T")),
-    true,
-    body,
-  )
-}
-
-///|
-/// Generates the expression that serializes a single method parameter to an `ElementValue` for RPC.
-fn build_rpc_param_expr(param : (String, ParamType)) -> @syntax.Expr {
-  let (name, _pt) = param
-  make_apply(make_qualified_expr("schema", "to_element_value_as"), [
-    make_ident_expr(name),
-  ])
-}
-
-///|
-/// Generates the `DataValue` expression containing all serialized method parameters for RPC.
-/// Principal parameters are excluded — they are auto-injected by the runtime.
-fn build_rpc_params_expr(meth : MethodInfo) -> @syntax.Expr {
-  let vis = visible_params(meth.params)
-  // Check if the method has a single multimodal parameter
-  let has_multimodal = vis.length() == 1 && is_multimodal_type(vis[0].1)
-  if has_multimodal {
-    let param_name = vis[0].0
-    make_dot_apply(make_ident_expr(param_name), "to_data_value", [])
-  } else {
-    make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
-      make_array(vis.map(build_rpc_param_expr)),
-    ])
+  let ret = match meth.return_type {
+    None => "Unit"
+    Some(pt) => param_type_to_type_string(pt)
   }
-}
-
-///|
-/// Generates an invoke-and-await method on the client that calls the remote agent and returns the result.
-fn build_client_method_invoke(
-  agent : AgentInfo,
-  meth : MethodInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let rpc_name = rpc_function_name(agent.name, meth.name)
-  let has_return = meth.return_type is Some(_)
-  let vis = visible_params(meth.params)
-  let has_multimodal_input = vis.length() == 1 && is_multimodal_type(vis[0].1)
-  let params : Array[@syntax.Parameter] = [make_self_param(client_name)]
-  for p in vis {
-    params.push(make_typed_param(p.0, param_type_to_ast_type(p.1)))
-  }
-  let rpc_params = build_rpc_params_expr(meth)
-  let invoke_expr = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "invoke_and_await",
-    [make_string_expr(rpc_name), rpc_params],
+  // awaited invoke
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} raise @common.AgentError {\n",
   )
-  let body = if has_return {
-    let is_multimodal_output = match meth.return_type {
-      Some(rt) => is_multimodal_type(rt)
-      None => false
-    }
-    let decode_expr = if is_multimodal_output {
-      make_apply(
-        make_qualified_method_ref("types", "Multimodal", "from_data_value"),
-        [make_ident_expr("result")],
+  buf.write_string("  let input = \{input_expr}\n")
+  match meth.return_type {
+    None =>
+      buf.write_string(
+        "  let _ = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
       )
-    } else {
-      make_let(
-        "elements",
-        make_apply(make_qualified_expr("extractor", "extract_tuple"), [
-          make_ident_expr("result"),
-        ]),
-        make_apply(make_qualified_expr("schema", "from_element_value_as"), [
-          make_array_get(make_ident_expr("elements"), make_int_expr(0)),
-        ]),
+    Some(_) => {
+      buf.write_string(
+        "  let result = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
       )
+      buf.write_string("  match result {\n")
+      buf.write_string(
+        "    Some(tree) => @agents.decode_output(tree, \"\{ctx}\")\n",
+      )
+      buf.write_string(
+        "    None => raise @common.AgentError::InvalidType(\"\{ctx}: expected a return value, got none\")\n",
+      )
+      buf.write_string("  }\n")
     }
-    make_let("result", invoke_expr, decode_expr)
-  } else {
-    make_let("_", invoke_expr, make_tuple([]))
   }
-  let return_type = match meth.return_type {
-    Some(pt) => Some(param_type_to_ast_type(pt))
-    None => Some(make_type("Unit"))
-  }
-  make_top_func(
-    Some(client_name),
-    meth.name,
-    params,
-    return_type,
-    has_return || has_multimodal_input || vis.length() > 0,
-    body,
+  buf.write_string("}\n\n")
+  // trigger
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::trigger_\{meth.name}(\n  \{self_args},\n) -> Unit raise @common.AgentError {\n",
+  )
+  buf.write_string("  let input = \{input_expr}\n")
+  buf.write_string(
+    "  self.client.invoke(\"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+  )
+  // schedule
+  let sched_args = "self : \{client}, scheduled_at : @wallClock.Datetime" +
+    (if arg_sig.is_empty() { "" } else { ", " + arg_sig })
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::schedule_\{meth.name}(\n  \{sched_args},\n) -> Unit raise @common.AgentError {\n",
+  )
+  buf.write_string("  let input = \{input_expr}\n")
+  buf.write_string(
+    "  self.client.schedule_invocation(scheduled_at, \"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+  )
+  // schedule_cancelable
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::schedule_cancelable_\{meth.name}(\n  \{sched_args},\n) -> @agentHost.CancellationToken raise @common.AgentError {\n",
+  )
+  buf.write_string("  let input = \{input_expr}\n")
+  buf.write_string(
+    "  self.client.schedule_cancelable_invocation(scheduled_at, \"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
   )
 }
 
 ///|
-/// Generates a fire-and-forget trigger method on the client that invokes without waiting for a result.
-fn build_client_method_trigger(
+/// Emits the `*_with_config` client variants for agents with overridable config.
+fn emit_client_config_variants(
+  buf : StringBuilder,
   agent : AgentInfo,
-  meth : MethodInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let rpc_name = rpc_function_name(agent.name, meth.name)
-  let vis = visible_params(meth.params)
-  let has_params = vis.length() > 0
-  let params : Array[@syntax.Parameter] = [make_self_param(client_name)]
-  for p in vis {
-    params.push(make_typed_param(p.0, param_type_to_ast_type(p.1)))
+  client : String,
+  vis : Array[(String, ParamType)],
+  override_name : String,
+  walker : String,
+  durable : Bool,
+) -> Unit {
+  let ctor_input = encode_input_expr(vis)
+  let ctor_sig = params_sig(vis)
+  let comma_sig = if ctor_sig.is_empty() { "" } else { ctor_sig + ",\n  " }
+  // get_with_config (durable only)
+  if durable {
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub fn \{client}::get_with_config(\n  \{comma_sig}config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
+    )
+    buf.write_string("  let constructor_input = \{ctor_input}\n")
+    buf.write_string("  let agent_config = \{walker}(config, [])\n")
+    buf.write_string(
+      "  let client = @rpc.AgentClient::get_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, agent_config)\n",
+    )
+    buf.write_string("  { client, }\n}\n\n")
   }
-  let rpc_params = build_rpc_params_expr(meth)
-  let body = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "invoke",
-    [make_string_expr(rpc_name), rpc_params],
+  // new_phantom_with_config
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::new_phantom_with_config(\n  \{comma_sig}config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
   )
-  make_top_func(
-    Some(client_name),
-    "trigger_" + meth.name,
-    params,
-    Some(make_type("Unit")),
-    has_params,
-    body,
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string("  let agent_config = \{walker}(config, [])\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::new_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, agent_config)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
+  // get_phantom_with_config
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string("  let agent_config = \{walker}(config, [])\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
+  // scoped variants
+  if durable {
+    emit_client_scoped_with_config(
+      buf,
+      client,
+      "scoped_with_config",
+      "get_with_config",
+      vis,
+      [],
+      override_name,
+    )
+  }
+  emit_client_scoped_with_config(
+    buf,
+    client,
+    "scoped_new_phantom_with_config",
+    "new_phantom_with_config",
+    vis,
+    [],
+    override_name,
+  )
+  emit_client_scoped_with_config(
+    buf,
+    client,
+    "scoped_get_phantom_with_config",
+    "get_phantom_with_config",
+    vis,
+    [("phantom_id", "@types.Uuid")],
+    override_name,
   )
 }
 
 ///|
-/// Generates a scheduled invocation method on the client that triggers at a specified time.
-fn build_client_method_schedule(
-  agent : AgentInfo,
-  meth : MethodInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let rpc_name = rpc_function_name(agent.name, meth.name)
-  let vis = visible_params(meth.params)
-  let has_params = vis.length() > 0
-  let params : Array[@syntax.Parameter] = [make_self_param(client_name)]
-  params.push(
-    make_typed_param(
-      "scheduled_at",
-      make_qualified_parameterized_type("wallClock", "Datetime", []),
-    ),
-  )
+/// Emits a `scoped*_with_config` convenience method.
+fn emit_client_scoped_with_config(
+  buf : StringBuilder,
+  client : String,
+  fn_name : String,
+  ctor_name : String,
+  vis : Array[(String, ParamType)],
+  extra : Array[(String, String)],
+  override_name : String,
+) -> Unit {
+  let sig_parts : Array[String] = []
   for p in vis {
-    params.push(make_typed_param(p.0, param_type_to_ast_type(p.1)))
+    sig_parts.push("\{p.0} : \{param_type_to_type_string(p.1)}")
   }
-  let rpc_params = build_rpc_params_expr(meth)
-  let body = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "schedule_invocation",
-    [make_ident_expr("scheduled_at"), make_string_expr(rpc_name), rpc_params],
+  for e in extra {
+    sig_parts.push("\{e.0} : \{e.1}")
+  }
+  sig_parts.push("config : \{override_name}")
+  sig_parts.push("f : (\{client}) -> T raise @common.AgentError")
+  let call_args : Array[String] = []
+  for p in vis {
+    call_args.push(p.0)
+  }
+  for e in extra {
+    call_args.push(e.0)
+  }
+  call_args.push("config")
+  let sig = sig_parts.join(",\n  ")
+  let call = call_args.join(", ")
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T raise @common.AgentError {\n",
   )
-  make_top_func(
-    Some(client_name),
-    "schedule_" + meth.name,
-    params,
-    Some(make_type("Unit")),
-    has_params,
-    body,
-  )
+  buf.write_string("  let client = \{client}::\{ctor_name}(\{call})\n")
+  buf.write_string("  defer client.drop()\n")
+  buf.write_string("  f(client)\n}\n\n")
 }
 
 ///|
-/// Generates a cancelable scheduled invocation method on the client that returns a CancellationToken.
-fn build_client_method_schedule_cancelable(
-  agent : AgentInfo,
-  meth : MethodInfo,
-  client_name : String,
-) -> @syntax.Impl {
-  let rpc_name = rpc_function_name(agent.name, meth.name)
-  let vis = visible_params(meth.params)
-  let has_params = vis.length() > 0
-  let params : Array[@syntax.Parameter] = [make_self_param(client_name)]
-  params.push(
-    make_typed_param(
-      "scheduled_at",
-      make_qualified_parameterized_type("wallClock", "Datetime", []),
-    ),
-  )
-  for p in vis {
-    params.push(make_typed_param(p.0, param_type_to_ast_type(p.1)))
-  }
-  let rpc_params = build_rpc_params_expr(meth)
-  let body = make_dot_apply(
-    make_field_access(make_ident_expr("self"), "client"),
-    "schedule_cancelable_invocation",
-    [make_ident_expr("scheduled_at"), make_string_expr(rpc_name), rpc_params],
-  )
-  make_top_func(
-    Some(client_name),
-    "schedule_cancelable_" + meth.name,
-    params,
-    Some(
-      make_qualified_parameterized_type("agentHost", "CancellationToken", []),
-    ),
-    has_params,
-    body,
-  )
-}
-
-///|
-/// Resolves the ConfigTypeInfo for an agent's config_type reference.
+/// Resolves the `ConfigTypeInfo` for an agent's `config_type` reference.
 fn resolve_config_type(
   agent : AgentInfo,
   config_types : Array[ConfigTypeInfo],
@@ -651,260 +446,4 @@ fn resolve_config_type(
         None
       }
   }
-}
-
-///|
-fn has_non_secret_config_fields(ct : ConfigTypeInfo) -> Bool {
-  ct.fields.iter().any(fn(f) { not(is_secret_type(f.1)) })
-}
-
-///|
-fn build_config_walker_expr(walker_name : String) -> @syntax.Expr {
-  make_apply_with_exclamation(make_ident_expr(walker_name), [
-    make_ident_expr("config"),
-    make_array([]),
-  ])
-}
-
-///|
-fn build_client_get_with_config(
-  agent : AgentInfo,
-  client_name : String,
-  override_name : String,
-  walker_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(make_typed_param("config", make_type(override_name)))
-  let body = make_let(
-    "constructor_data",
-    build_constructor_data_expr(agent),
-    make_let(
-      "agent_config",
-      build_config_walker_expr(walker_name),
-      make_let(
-        "client",
-        make_apply(
-          make_qualified_method_ref("rpc", "AgentClient", "get_with_config"),
-          [
-            make_string_expr(agent.name),
-            make_ident_expr("constructor_data"),
-            make_ident_expr("agent_config"),
-          ],
-        ),
-        make_record([make_field("client", make_ident_expr("client"))]),
-      ),
-    ),
-  )
-  make_top_func(
-    Some(client_name),
-    "get_with_config",
-    params,
-    Some(make_type(client_name)),
-    true,
-    body,
-  )
-}
-
-///|
-fn build_client_new_phantom_with_config(
-  agent : AgentInfo,
-  client_name : String,
-  override_name : String,
-  walker_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(make_typed_param("config", make_type(override_name)))
-  let body = make_let(
-    "constructor_data",
-    build_constructor_data_expr(agent),
-    make_let(
-      "agent_config",
-      build_config_walker_expr(walker_name),
-      make_let(
-        "client",
-        make_apply(
-          make_qualified_method_ref(
-            "rpc", "AgentClient", "new_phantom_with_config",
-          ),
-          [
-            make_string_expr(agent.name),
-            make_ident_expr("constructor_data"),
-            make_ident_expr("agent_config"),
-          ],
-        ),
-        make_record([make_field("client", make_ident_expr("client"))]),
-      ),
-    ),
-  )
-  make_top_func(
-    Some(client_name),
-    "new_phantom_with_config",
-    params,
-    Some(make_type(client_name)),
-    true,
-    body,
-  )
-}
-
-///|
-fn build_client_get_phantom_with_config(
-  agent : AgentInfo,
-  client_name : String,
-  override_name : String,
-  walker_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(
-    make_typed_param(
-      "phantom_id",
-      make_qualified_parameterized_type("rpcTypes", "Uuid", []),
-    ),
-  )
-  params.push(make_typed_param("config", make_type(override_name)))
-  let body = make_let(
-    "constructor_data",
-    build_constructor_data_expr(agent),
-    make_let(
-      "agent_config",
-      build_config_walker_expr(walker_name),
-      make_let(
-        "client",
-        make_apply(
-          make_qualified_method_ref(
-            "rpc", "AgentClient", "get_phantom_with_config",
-          ),
-          [
-            make_string_expr(agent.name),
-            make_ident_expr("constructor_data"),
-            make_ident_expr("phantom_id"),
-            make_ident_expr("agent_config"),
-          ],
-        ),
-        make_record([make_field("client", make_ident_expr("client"))]),
-      ),
-    ),
-  )
-  make_top_func(
-    Some(client_name),
-    "get_phantom_with_config",
-    params,
-    Some(make_type(client_name)),
-    true,
-    body,
-  )
-}
-
-///|
-fn build_client_scoped_with_config(
-  agent : AgentInfo,
-  client_name : String,
-  override_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(make_typed_param("config", make_type(override_name)))
-  params.push(make_typed_param("f", make_callback_type(client_name)))
-  let get_args : Array[@syntax.Expr] = vis.map(fn(p) { make_ident_expr(p.0) })
-  get_args.push(make_ident_expr("config"))
-  let body = make_let(
-    "client",
-    make_apply(make_method_ref(client_name, "get_with_config"), get_args),
-    make_defer(
-      make_dot_apply(make_ident_expr("client"), "drop", []),
-      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
-    ),
-  )
-  make_top_func_generic(
-    Some(client_name),
-    "scoped_with_config",
-    ["T"],
-    params,
-    Some(make_type("T")),
-    true,
-    body,
-  )
-}
-
-///|
-fn build_client_scoped_new_phantom_with_config(
-  agent : AgentInfo,
-  client_name : String,
-  override_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(make_typed_param("config", make_type(override_name)))
-  params.push(make_typed_param("f", make_callback_type(client_name)))
-  let args : Array[@syntax.Expr] = vis.map(fn(p) { make_ident_expr(p.0) })
-  args.push(make_ident_expr("config"))
-  let body = make_let(
-    "client",
-    make_apply(make_method_ref(client_name, "new_phantom_with_config"), args),
-    make_defer(
-      make_dot_apply(make_ident_expr("client"), "drop", []),
-      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
-    ),
-  )
-  make_top_func_generic(
-    Some(client_name),
-    "scoped_new_phantom_with_config",
-    ["T"],
-    params,
-    Some(make_type("T")),
-    true,
-    body,
-  )
-}
-
-///|
-fn build_client_scoped_get_phantom_with_config(
-  agent : AgentInfo,
-  client_name : String,
-  override_name : String,
-) -> @syntax.Impl {
-  let vis = visible_params(agent.constructor_params)
-  let params : Array[@syntax.Parameter] = vis.map(fn(p) {
-    make_typed_param(p.0, param_type_to_ast_type(p.1))
-  })
-  params.push(
-    make_typed_param(
-      "phantom_id",
-      make_qualified_parameterized_type("rpcTypes", "Uuid", []),
-    ),
-  )
-  params.push(make_typed_param("config", make_type(override_name)))
-  params.push(make_typed_param("f", make_callback_type(client_name)))
-  let args : Array[@syntax.Expr] = vis.map(fn(p) { make_ident_expr(p.0) })
-  args.push(make_ident_expr("phantom_id"))
-  args.push(make_ident_expr("config"))
-  let body = make_let(
-    "client",
-    make_apply(make_method_ref(client_name, "get_phantom_with_config"), args),
-    make_defer(
-      make_dot_apply(make_ident_expr("client"), "drop", []),
-      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
-    ),
-  )
-  make_top_func_generic(
-    Some(client_name),
-    "scoped_get_phantom_with_config",
-    ["T"],
-    params,
-    Some(make_type("T")),
-    true,
-    body,
-  )
 }
