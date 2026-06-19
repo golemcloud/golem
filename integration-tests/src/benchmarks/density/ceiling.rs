@@ -100,6 +100,18 @@ impl TerminatedReason {
         self as u64
     }
 
+    /// Human-readable name for log/summary output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerminatedReason::OomKill => "oom-kill",
+            TerminatedReason::PodRestart => "pod-restart",
+            TerminatedReason::ConnectionLost => "connection-lost",
+            TerminatedReason::UpperBoundHit => "upper-bound-hit",
+            TerminatedReason::LagRunaway => "lag-runaway",
+            TerminatedReason::Overloaded => "overloaded",
+        }
+    }
+
     /// Whether the cell stopped because the platform broke (as opposed to
     /// reaching its ramp upper bound healthily).
     pub fn is_catastrophic(self) -> bool {

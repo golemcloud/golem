@@ -612,7 +612,34 @@ pub async fn run_cell(
 
     cleanup_cell_agents(config, &user, &components, &outcome).await;
 
+    log_cell_summary(config, &outcome);
+
     Ok(outcome.into_benchmark_result(config))
+}
+
+/// Emits a single human-readable summary line for the cell, so the raw
+/// `Results for '<key>'` count tables (which render bare numbers such as
+/// `terminated-reason: 2`) are preceded by something interpretable: the stop
+/// reason by name, how far the ramp got, and where each ceiling was crossed.
+fn log_cell_summary(config: &CellConfig, outcome: &CellOutcome) {
+    fn ceiling(label: &str, value: Option<u32>) -> String {
+        match value {
+            Some(n) => format!("{label}={n}"),
+            None => format!("{label}=none"),
+        }
+    }
+
+    info!(
+        "Density-agent[{}]: stopped — reason {} (code {}), max-agents-reached {}, {}, {}, {}, {}",
+        config.cell_name(),
+        outcome.terminated_reason.as_str(),
+        outcome.terminated_reason.code(),
+        outcome.max_agents_reached,
+        ceiling("soft-ceiling", outcome.soft_ceiling_agents),
+        ceiling("usability-ceiling", outcome.usability_ceiling_agents),
+        ceiling("hard-ceiling", outcome.hard_ceiling_agents),
+        ceiling("catastrophic-ceiling", outcome.catastrophic_ceiling_agents),
+    );
 }
 
 /// Deletes every durable agent this cell created so the next cell starts from a
