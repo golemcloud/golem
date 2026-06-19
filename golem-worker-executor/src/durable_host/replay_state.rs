@@ -2260,4 +2260,698 @@ mod tests {
             "consuming the target entry must emit exactly one ReplayFinished, got {events:?}"
         );
     }
+
+    /// How a generated concurrent call terminates in the fabricated oplog.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CallKind {
+        /// Recorded an `End` (successful completion).
+        Completed,
+        /// Recorded a `Cancelled` (dropped before completion).
+        Cancelled,
+        /// No terminal at all: a committed `Start` whose `End`/`Cancelled` never made it to disk
+        /// (the forced-commit / crash window). Replay must report this as `Incomplete`.
+        Incomplete,
+    }
+
+    fn cancelled_for(start_index: u64) -> OplogEntry {
+        OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+            partial: None,
+        }
+    }
+
+    fn end_atomic_region(begin_index: u64) -> OplogEntry {
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            begin_index: OplogIndex::from_u64(begin_index),
+        }
+    }
+
+    fn change_persistence_smart() -> OplogEntry {
+        OplogEntry::ChangePersistenceLevel {
+            timestamp: Timestamp::now_utc(),
+            persistence_level: PersistenceLevel::Smart,
+        }
+    }
+
+    fn pre_commit_remote_transaction(begin_index: u64) -> OplogEntry {
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index: OplogIndex::from_u64(begin_index),
+        }
+    }
+
+    fn committed_remote_transaction(begin_index: u64) -> OplogEntry {
+        OplogEntry::CommittedRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index: OplogIndex::from_u64(begin_index),
+        }
+    }
+
+    /// A non-hint *positional* marker entry (atomic-region boundary, persistence-level switch, or an
+    /// rdbms-transaction internal marker). These are never claimed and never auto-drained; a
+    /// positional reader must consume them, and an overlapping awaiter parks on them until then.
+    fn random_positional_marker(rng: &mut rand::rngs::StdRng) -> OplogEntry {
+        use rand::Rng;
+        match rng.random_range(0..6) {
+            0 => begin_atomic_region(),
+            1 => end_atomic_region(1),
+            2 => change_persistence_smart(),
+            3 => pre_commit_remote_transaction(1),
+            4 => committed_remote_transaction(1),
+            // `NoOp` is non-hint, so it too must be consumed by a positional reader (unlike the
+            // `Log` hint entries, which are skipped transparently).
+            _ => noop(),
+        }
+    }
+
+    /// A generated item in a fabricated overlap layout: either a concurrent call (claimed +
+    /// awaited) or a positional scope (a `Start`/`End` pair consumed by positional reads, standing
+    /// in for a durable scope / rdbms transaction span).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ItemKind {
+        Call(CallKind),
+        Scope,
+    }
+
+    /// The role of a single fabricated oplog entry, aligned by index, so the replay driver knows how
+    /// to consume each entry as the cursor reaches it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Role {
+        Placeholder,
+        CallStart(usize),
+        CallTerminal(usize),
+        ScopeStart,
+        ScopeEnd,
+        Marker,
+        Hint,
+    }
+
+    /// Seam 1 of the concurrent-durability validation plan: a randomized generator over
+    /// host-call-only oplog layouts. Each case builds
+    /// `[<placeholder>, Start_1 .. Start_n, <terminals in a random completion order>]` with `Log`
+    /// hint entries optionally interleaved everywhere, where each call independently completes (`End`), is
+    /// cancelled (`Cancelled`), or is left incomplete (a committed `Start` with no terminal). It then
+    /// claims every `Start` and awaits each call's resolution in a random order, asserting that:
+    ///
+    /// - the k-th positional claim returns the k-th `Start`;
+    /// - every call resolves to exactly its recorded terminal *by oplog index*, independent of the
+    ///   completion order recorded in the oplog and the order the calls are awaited in (a single
+    ///   await drains all awaited terminals at the cursor head, buffering siblings' outcomes);
+    /// - an incomplete `Start` reports `Incomplete` rather than erroring or stealing a sibling's
+    ///   terminal;
+    /// - interleaved hint entries (`Log`) are skipped transparently, whether they land between
+    ///   `Start`s, between a sibling's `Start` and `End`, or among the terminals;
+    /// - once all calls resolve, replay is live with no awaiter left registered.
+    ///
+    /// This generalizes the hand-written `n = 2/3` overlap tests above to the full
+    /// call/completion/await permutation space. Seeds are deterministic so any failure reproduces.
+    #[test]
+    async fn concurrent_replay_call_permutation_fuzz() {
+        use rand::rngs::StdRng;
+        use rand::seq::SliceRandom;
+        use rand::{Rng, SeedableRng};
+
+        const CASES: u64 = 2000;
+
+        for seed in 0..CASES {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let n = rng.random_range(1..=5usize);
+
+            let kinds: Vec<CallKind> = (0..n)
+                .map(|_| match rng.random_range(0..3) {
+                    0 => CallKind::Completed,
+                    1 => CallKind::Cancelled,
+                    _ => CallKind::Incomplete,
+                })
+                .collect();
+
+            // Index 1 is the mandatory placeholder consumed unconditionally at construction (it
+            // stands in for the `Create` worker entry), so the first Start is at index 2.
+            let mut entries = vec![noop()];
+            let mut start_idx = Vec::with_capacity(n);
+            for _ in 0..n {
+                if rng.random_bool(0.3) {
+                    entries.push(log_entry());
+                }
+                entries.push(start_now());
+                start_idx.push(entries.len() as u64);
+            }
+
+            // Terminals for the non-incomplete calls, recorded in a random completion order.
+            let mut terminal_calls: Vec<usize> = (0..n)
+                .filter(|&i| kinds[i] != CallKind::Incomplete)
+                .collect();
+            terminal_calls.shuffle(&mut rng);
+
+            let mut terminal_oplog_idx: Vec<Option<u64>> = vec![None; n];
+            let mut nanos = 0u64;
+            for &i in &terminal_calls {
+                if rng.random_bool(0.3) {
+                    entries.push(log_entry());
+                }
+                let entry = match kinds[i] {
+                    CallKind::Completed => {
+                        nanos += 1;
+                        end_for(start_idx[i], nanos)
+                    }
+                    CallKind::Cancelled => cancelled_for(start_idx[i]),
+                    CallKind::Incomplete => unreachable!("incomplete calls have no terminal"),
+                };
+                entries.push(entry);
+                terminal_oplog_idx[i] = Some(entries.len() as u64);
+            }
+            if rng.random_bool(0.3) {
+                entries.push(log_entry());
+            }
+
+            let rs = replay_state_over(entries).await;
+
+            // Claim every Start positionally; the k-th claim returns the k-th Start.
+            let mut handles: Vec<Option<ReplayCallHandle>> = Vec::with_capacity(n);
+            for (i, expected) in start_idx.iter().enumerate() {
+                let handle = rs
+                    .claim_concurrent_start(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("seed {seed}: claim {i} failed: {e}"));
+                assert_eq!(
+                    handle.start_idx(),
+                    OplogIndex::from_u64(*expected),
+                    "seed {seed}: claim {i} returned the wrong Start"
+                );
+                handles.push(Some(handle));
+            }
+
+            // Await resolutions in a random order; out-of-order awaiting must still resolve each call
+            // to its own recorded terminal.
+            let mut await_order: Vec<usize> = (0..n).collect();
+            await_order.shuffle(&mut rng);
+            for i in await_order {
+                let handle = handles[i]
+                    .take()
+                    .expect("each handle is awaited exactly once");
+                let outcome = rs
+                    .await_resolution_outcome(handle)
+                    .await
+                    .unwrap_or_else(|e| panic!("seed {seed}: await {i} failed: {e}"));
+                match (kinds[i], outcome) {
+                    (
+                        CallKind::Completed,
+                        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }),
+                    ) => {
+                        assert_eq!(
+                            end_idx,
+                            OplogIndex::from_u64(terminal_oplog_idx[i].unwrap()),
+                            "seed {seed}: call {i} resolved to the wrong End index"
+                        );
+                    }
+                    (
+                        CallKind::Cancelled,
+                        ResolutionOutcome::Resolved(Resolution::Cancelled {
+                            cancelled_idx, ..
+                        }),
+                    ) => {
+                        assert_eq!(
+                            cancelled_idx,
+                            OplogIndex::from_u64(terminal_oplog_idx[i].unwrap()),
+                            "seed {seed}: call {i} resolved to the wrong Cancelled index"
+                        );
+                    }
+                    (CallKind::Incomplete, ResolutionOutcome::Incomplete) => {}
+                    (kind, other) => panic!(
+                        "seed {seed}: call {i} (kind {kind:?}) resolved unexpectedly: {other:?}"
+                    ),
+                }
+            }
+
+            assert!(
+                rs.is_live(),
+                "seed {seed}: replay did not reach live after all calls resolved"
+            );
+            let internal = rs.cursor.state.lock().await;
+            for (i, &si) in start_idx.iter().enumerate() {
+                assert!(
+                    !internal
+                        .concurrent_resolver
+                        .is_pending(OplogIndex::from_u64(si)),
+                    "seed {seed}: call {i} left a registered awaiter"
+                );
+            }
+        }
+    }
+
+    /// Seam 1, full layout space: a randomized generator over fabricated overlap layouts that mix
+    /// concurrent calls (completed / cancelled / incomplete) with **positional** scopes (`Start`/`End`
+    /// pairs consumed by positional reads) and non-hint positional **markers** (atomic-region
+    /// boundaries, persistence-level switches, rdbms-transaction internal markers), all freely
+    /// interleaved with `Log` hints, so that a sibling's scope `End` or a marker can land between
+    /// another call's `Start` and `End` — the headline overlap layout generalized.
+    ///
+    /// Each call's resolution is awaited on its **own concurrently-suspended task** (`tokio::spawn`),
+    /// mirroring the production model where the worker drives the replay cursor (claims + positional
+    /// reads) while several call futures are suspended; this is what exercises the genuine
+    /// suspend/resume path (`await_resolution_outcome` parking on a positional blocker and resuming on
+    /// cursor progress), not just the auto-drain-at-head path. A single driver walks the oplog
+    /// left-to-right, claiming call `Start`s, positionally reading scope `Start`/`End`s and markers,
+    /// and leaving call terminals to be auto-drained. It asserts that:
+    ///
+    /// - each positional claim / read returns exactly the entry at the expected oplog index,
+    ///   independent of how the suspended awaiter tasks are scheduled (auto-drains only ever consume
+    ///   awaited call terminals, never a positional entry a reader owns);
+    /// - every call resolves to exactly its recorded terminal (`End`/`Cancelled` by index) or, for a
+    ///   committed `Start` with no terminal, `Incomplete`;
+    /// - replay ends live with no awaiter left registered.
+    ///
+    /// Only final per-call outcomes and positional indices are asserted, both of which are
+    /// timing-independent, so the test is deterministic despite the concurrent tasks. Seeds are
+    /// fixed, so any failure reproduces.
+    #[test]
+    async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        const CASES: u64 = 1000;
+
+        for seed in 0..CASES {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let num_items = rng.random_range(1..=5usize);
+
+            let items: Vec<ItemKind> = (0..num_items)
+                .map(|_| match rng.random_range(0..4) {
+                    0 => ItemKind::Call(CallKind::Completed),
+                    1 => ItemKind::Call(CallKind::Cancelled),
+                    2 => ItemKind::Call(CallKind::Incomplete),
+                    _ => ItemKind::Scope,
+                })
+                .collect();
+
+            let is_incomplete = |i: usize| matches!(items[i], ItemKind::Call(CallKind::Incomplete));
+
+            // Build a valid random interleaving: each item's Start precedes its End; incomplete
+            // calls have no End; scopes and completed/cancelled calls do. Markers and hints are
+            // sprinkled in from a budget so they can land between any sibling's Start and End.
+            let mut entries = vec![noop()];
+            let mut roles = vec![Role::Placeholder];
+            let mut start_idx = vec![0u64; num_items];
+            let mut terminal_idx = vec![None; num_items];
+            let mut opened = vec![false; num_items];
+            let mut closed = vec![false; num_items];
+            let mut markers_left = rng.random_range(0..=4u32);
+            let mut hints_left = rng.random_range(0..=3u32);
+            let mut nanos = 0u64;
+
+            loop {
+                let can_open: Vec<usize> = (0..num_items).filter(|&i| !opened[i]).collect();
+                let can_close: Vec<usize> = (0..num_items)
+                    .filter(|&i| opened[i] && !closed[i] && !is_incomplete(i))
+                    .collect();
+
+                #[derive(Clone, Copy)]
+                enum Cat {
+                    Open,
+                    Close,
+                    Marker,
+                    Hint,
+                }
+                let mut cats = Vec::new();
+                if !can_open.is_empty() {
+                    cats.push(Cat::Open);
+                }
+                if !can_close.is_empty() {
+                    cats.push(Cat::Close);
+                }
+                if markers_left > 0 {
+                    cats.push(Cat::Marker);
+                }
+                if hints_left > 0 {
+                    cats.push(Cat::Hint);
+                }
+                if cats.is_empty() {
+                    break;
+                }
+
+                match cats[rng.random_range(0..cats.len())] {
+                    Cat::Open => {
+                        let item = can_open[rng.random_range(0..can_open.len())];
+                        entries.push(start_now());
+                        start_idx[item] = entries.len() as u64;
+                        opened[item] = true;
+                        roles.push(match items[item] {
+                            ItemKind::Call(_) => Role::CallStart(item),
+                            ItemKind::Scope => Role::ScopeStart,
+                        });
+                    }
+                    Cat::Close => {
+                        let item = can_close[rng.random_range(0..can_close.len())];
+                        let si = start_idx[item];
+                        let (entry, role) = match items[item] {
+                            ItemKind::Call(CallKind::Completed) => {
+                                nanos += 1;
+                                (end_for(si, nanos), Role::CallTerminal(item))
+                            }
+                            ItemKind::Call(CallKind::Cancelled) => {
+                                (cancelled_for(si), Role::CallTerminal(item))
+                            }
+                            ItemKind::Scope => {
+                                nanos += 1;
+                                (end_for(si, nanos), Role::ScopeEnd)
+                            }
+                            ItemKind::Call(CallKind::Incomplete) => {
+                                unreachable!("incomplete calls are never closed")
+                            }
+                        };
+                        entries.push(entry);
+                        terminal_idx[item] = Some(entries.len() as u64);
+                        closed[item] = true;
+                        roles.push(role);
+                    }
+                    Cat::Marker => {
+                        entries.push(random_positional_marker(&mut rng));
+                        roles.push(Role::Marker);
+                        markers_left -= 1;
+                    }
+                    Cat::Hint => {
+                        entries.push(log_entry());
+                        roles.push(Role::Hint);
+                        hints_left -= 1;
+                    }
+                }
+            }
+
+            let rs = Arc::new(replay_state_over(entries).await);
+
+            // Walk the oplog left-to-right, consuming each entry by its role. Each claimed call's
+            // resolution is awaited on its own suspended task.
+            let mut tasks: Vec<(usize, tokio::task::JoinHandle<_>)> = Vec::new();
+            for (zero_based, role) in roles.iter().enumerate().skip(1) {
+                let idx = (zero_based + 1) as u64;
+                match *role {
+                    Role::CallStart(item) => {
+                        let handle = rs
+                            .claim_concurrent_start(
+                                &HostFunctionName::MonotonicClockNow,
+                                &DurableFunctionType::ReadLocal,
+                            )
+                            .await
+                            .unwrap_or_else(|e| {
+                                panic!("seed {seed}: claim of item {item} at {idx} failed: {e}")
+                            });
+                        assert_eq!(
+                            handle.start_idx(),
+                            OplogIndex::from_u64(idx),
+                            "seed {seed}: claim of item {item} returned the wrong Start"
+                        );
+                        let rs2 = rs.clone();
+                        tasks.push((
+                            item,
+                            tokio::spawn(async move { rs2.await_resolution_outcome(handle).await }),
+                        ));
+                    }
+                    Role::ScopeStart | Role::ScopeEnd | Role::Marker => {
+                        let (got, _) = rs.get_oplog_entry().await.unwrap_or_else(|e| {
+                            panic!("seed {seed}: positional read at {idx} ({role:?}) failed: {e}")
+                        });
+                        assert_eq!(
+                            got,
+                            OplogIndex::from_u64(idx),
+                            "seed {seed}: positional read ({role:?}) returned the wrong index"
+                        );
+                    }
+                    // Call terminals are auto-drained to their awaiter; hints are skipped by the
+                    // preceding consume's skip_forward. Neither is walked explicitly.
+                    Role::CallTerminal(_) | Role::Hint => {}
+                    Role::Placeholder => unreachable!("placeholder is skipped"),
+                }
+            }
+
+            // Join the suspended awaiter tasks and check each call resolved to its recorded terminal.
+            for (item, task) in tasks {
+                let outcome = task
+                    .await
+                    .expect("awaiter task panicked")
+                    .unwrap_or_else(|e| panic!("seed {seed}: await of item {item} failed: {e}"));
+                let kind = match items[item] {
+                    ItemKind::Call(kind) => kind,
+                    ItemKind::Scope => unreachable!("scopes are not awaited"),
+                };
+                match (kind, outcome) {
+                    (
+                        CallKind::Completed,
+                        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }),
+                    ) => assert_eq!(
+                        end_idx,
+                        OplogIndex::from_u64(terminal_idx[item].unwrap()),
+                        "seed {seed}: item {item} resolved to the wrong End index"
+                    ),
+                    (
+                        CallKind::Cancelled,
+                        ResolutionOutcome::Resolved(Resolution::Cancelled {
+                            cancelled_idx, ..
+                        }),
+                    ) => assert_eq!(
+                        cancelled_idx,
+                        OplogIndex::from_u64(terminal_idx[item].unwrap()),
+                        "seed {seed}: item {item} resolved to the wrong Cancelled index"
+                    ),
+                    (CallKind::Incomplete, ResolutionOutcome::Incomplete) => {}
+                    (kind, other) => panic!(
+                        "seed {seed}: item {item} (kind {kind:?}) resolved unexpectedly: {other:?}"
+                    ),
+                }
+            }
+
+            assert!(
+                rs.is_live(),
+                "seed {seed}: replay did not reach live after the full walk"
+            );
+            let internal = rs.cursor.state.lock().await;
+            for (i, &si) in start_idx.iter().enumerate() {
+                if matches!(items[i], ItemKind::Call(_)) {
+                    assert!(
+                        !internal
+                            .concurrent_resolver
+                            .is_pending(OplogIndex::from_u64(si)),
+                        "seed {seed}: item {i} left a registered awaiter"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Seam 1, deleted/jump regions: a randomized generator that records a run of contiguous
+    /// `Start`/`End` call pairs and then marks a random subset of those pairs as belonging to deleted
+    /// oplog regions (as a `Jump`/revert would leave behind). The deleted entries must be skipped by
+    /// the replay cursor entirely — never claimed, never read — and the calls outside the deleted
+    /// regions must still claim at their true indices and resolve. Deleting a leading region exercises
+    /// the construction-time jump; deleting a trailing region exercises the jump-to-target transition
+    /// into live. Seeds are fixed, so any failure reproduces.
+    #[test]
+    async fn replay_skips_deleted_regions_fuzz() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        const CASES: u64 = 500;
+
+        for seed in 0..CASES {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let num_calls = rng.random_range(1..=6usize);
+
+            // Contiguous call pairs after the placeholder: [Start, End, Start, End, ...].
+            let mut entries = vec![noop()];
+            let mut start_idx = Vec::with_capacity(num_calls);
+            let mut end_idx = Vec::with_capacity(num_calls);
+            let mut deleted = Vec::with_capacity(num_calls);
+            let mut nanos = 0u64;
+            for _ in 0..num_calls {
+                entries.push(start_now());
+                let si = entries.len() as u64;
+                nanos += 1;
+                entries.push(end_for(si, nanos));
+                let ei = entries.len() as u64;
+                start_idx.push(si);
+                end_idx.push(ei);
+                deleted.push(rng.random_bool(0.4));
+            }
+
+            // Coalesce the deleted entry indices into contiguous regions.
+            let mut deleted_indices: std::collections::BTreeSet<u64> =
+                std::collections::BTreeSet::new();
+            for i in 0..num_calls {
+                if deleted[i] {
+                    deleted_indices.insert(start_idx[i]);
+                    deleted_indices.insert(end_idx[i]);
+                }
+            }
+            let mut regions = Vec::new();
+            let mut run: Option<(u64, u64)> = None;
+            for &idx in &deleted_indices {
+                match run {
+                    Some((s, e)) if idx == e + 1 => run = Some((s, idx)),
+                    Some((s, e)) => {
+                        regions.push((s, e));
+                        run = Some((idx, idx));
+                    }
+                    None => run = Some((idx, idx)),
+                }
+            }
+            if let Some((s, e)) = run {
+                regions.push((s, e));
+            }
+
+            let oplog = Arc::new(InMemoryOplog::new());
+            for entry in entries {
+                oplog.add(entry).await;
+            }
+            let oplog: Arc<dyn Oplog> = oplog;
+            let skipped = DeletedRegions::from_regions(regions.iter().map(|&(s, e)| OplogRegion {
+                start: OplogIndex::from_u64(s),
+                end: OplogIndex::from_u64(e),
+            }));
+            let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+                .await
+                .expect("failed to build replay state");
+
+            // Claim only the kept calls, in order; the cursor must jump over every deleted region.
+            let mut handles = Vec::new();
+            for i in 0..num_calls {
+                if deleted[i] {
+                    continue;
+                }
+                let handle = rs
+                    .claim_concurrent_start(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("seed {seed}: claim of kept call {i} failed: {e}"));
+                assert_eq!(
+                    handle.start_idx(),
+                    OplogIndex::from_u64(start_idx[i]),
+                    "seed {seed}: kept call {i} claimed a wrong (possibly deleted) Start"
+                );
+                handles.push((i, handle));
+            }
+
+            for (i, handle) in handles {
+                match rs
+                    .await_resolution(handle)
+                    .await
+                    .unwrap_or_else(|e| panic!("seed {seed}: await of kept call {i} failed: {e}"))
+                {
+                    Resolution::Completed { end_idx: ei, .. } => assert_eq!(
+                        ei,
+                        OplogIndex::from_u64(end_idx[i]),
+                        "seed {seed}: kept call {i} resolved to the wrong End"
+                    ),
+                    other => panic!("seed {seed}: kept call {i} expected Completed, got {other:?}"),
+                }
+            }
+
+            assert!(
+                rs.is_live(),
+                "seed {seed}: replay did not reach live after skipping deleted regions"
+            );
+        }
+    }
+
+    /// Seam 1, persist-nothing zones: a randomized generator that wraps a contiguous block of call
+    /// pairs (and a `NoOp`) in a `ChangePersistenceLevel(PersistNothing)` … `ChangePersistenceLevel`
+    /// zone. Everything recorded inside the zone is observability-only and must be skipped by the
+    /// replay cursor (never claimed, never read), while the calls outside the zone claim at their
+    /// true indices and resolve. A leading zone exercises the construction-time skip. Seeds are
+    /// fixed, so any failure reproduces.
+    #[test]
+    async fn replay_skips_persist_nothing_zones_fuzz() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        const CASES: u64 = 500;
+
+        for seed in 0..CASES {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let before = rng.random_range(0..=2usize);
+            let inside = rng.random_range(0..=2usize);
+            let after = rng.random_range(0..=2usize);
+            // Need at least one observable call so the assertions are meaningful.
+            if before + after == 0 {
+                continue;
+            }
+
+            let mut entries = vec![noop()];
+            let mut kept_start = Vec::new();
+            let mut kept_end = Vec::new();
+            let mut nanos = 0u64;
+
+            let push_call = |entries: &mut Vec<OplogEntry>, nanos: &mut u64| -> (u64, u64) {
+                entries.push(start_now());
+                let si = entries.len() as u64;
+                *nanos += 1;
+                entries.push(end_for(si, *nanos));
+                (si, entries.len() as u64)
+            };
+
+            for _ in 0..before {
+                let (si, ei) = push_call(&mut entries, &mut nanos);
+                kept_start.push(si);
+                kept_end.push(ei);
+            }
+
+            // Open the persist-nothing zone, record skipped filler, then close it.
+            entries.push(change_persistence_nothing());
+            entries.push(noop());
+            for _ in 0..inside {
+                push_call(&mut entries, &mut nanos);
+            }
+            entries.push(change_persistence_smart());
+
+            for _ in 0..after {
+                let (si, ei) = push_call(&mut entries, &mut nanos);
+                kept_start.push(si);
+                kept_end.push(ei);
+            }
+
+            let rs = replay_state_over(entries).await;
+
+            let mut handles = Vec::new();
+            for (k, &si) in kept_start.iter().enumerate() {
+                let handle = rs
+                    .claim_concurrent_start(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("seed {seed}: claim of kept call {k} failed: {e}"));
+                assert_eq!(
+                    handle.start_idx(),
+                    OplogIndex::from_u64(si),
+                    "seed {seed}: kept call {k} claimed a Start inside the persist-nothing zone"
+                );
+                handles.push((k, handle));
+            }
+
+            for (k, handle) in handles {
+                match rs
+                    .await_resolution(handle)
+                    .await
+                    .unwrap_or_else(|e| panic!("seed {seed}: await of kept call {k} failed: {e}"))
+                {
+                    Resolution::Completed { end_idx: ei, .. } => assert_eq!(
+                        ei,
+                        OplogIndex::from_u64(kept_end[k]),
+                        "seed {seed}: kept call {k} resolved to the wrong End"
+                    ),
+                    other => panic!("seed {seed}: kept call {k} expected Completed, got {other:?}"),
+                }
+            }
+
+            assert!(
+                rs.is_live(),
+                "seed {seed}: replay did not reach live after skipping the persist-nothing zone"
+            );
+        }
+    }
 }
