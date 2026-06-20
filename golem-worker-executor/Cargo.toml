@@ -31,7 +31,11 @@ default = ["mimalloc"]
 # Switches the worker-executor binary from mimalloc to jemalloc with heap
 # profiling support and installs a SIGUSR2 handler that writes a heap profile.
 # Off by default; intended only for explicitly tagged profiling Docker images.
-jemalloc-prof = ["dep:tikv-jemalloc-ctl", "dep:tikv-jemallocator"]
+jemalloc-prof = [
+  "dep:tikv-jemalloc-ctl",
+  "dep:tikv-jemallocator",
+  "tikv-jemallocator/profiling",
+]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
