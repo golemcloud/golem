@@ -4,6 +4,11 @@ name: debug-jemalloc-profile-executor
 # jemalloc heap profiling enabled. The image is published under a distinct
 # suffix tag and is intended for short-lived EKS investigations only.
 on:
+  # Temporary branch trigger so GitHub detects and runs this workflow before it
+  # exists on the default branch. Remove before merging.
+  push:
+    branches:
+      - 1.5.x-cloud-benchmarks
   workflow_dispatch:
     inputs:
       image_name:
@@ -39,10 +44,12 @@ jobs:
           rust-targets: aarch64-unknown-linux-gnu
 
       - name: Prepare rustflags
+        env:
+          TARGET_CPU: ${{ github.event.inputs.target_cpu || 'neoverse-v1' }}
         run: |
           RUSTFLAGS="-C force-frame-pointers=yes"
-          if [ -n "${{ github.event.inputs.target_cpu }}" ]; then
-            RUSTFLAGS="${RUSTFLAGS} -C target-cpu=${{ github.event.inputs.target_cpu }}"
+          if [ -n "${TARGET_CPU}" ]; then
+            RUSTFLAGS="${RUSTFLAGS} -C target-cpu=${TARGET_CPU}"
           fi
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=${RUSTFLAGS}" >> $GITHUB_ENV
 
@@ -99,10 +106,13 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Compute image tag
+        env:
+          INPUT_IMAGE_NAME: ${{ github.event.inputs.image_name || 'golemservices/golem-worker-executor' }}
+          INPUT_TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || 'jemalloc-profile' }}
         run: |
           SHORT=$(git rev-parse --short=7 HEAD)
-          echo "IMAGE_NAME=${{ github.event.inputs.image_name }}" >> $GITHUB_ENV
-          echo "IMAGE_TAG=${SHORT}-${{ github.event.inputs.tag_suffix }}" >> $GITHUB_ENV
+          echo "IMAGE_NAME=${INPUT_IMAGE_NAME}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${SHORT}-${INPUT_TAG_SUFFIX}" >> $GITHUB_ENV
 
       - name: Build and push profiling image
         uses: docker/build-push-action@v6
@@ -114,8 +124,10 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
       - name: Report
+        env:
+          LG_PROF_SAMPLE: ${{ github.event.inputs.lg_prof_sample || '21' }}
         run: |
           echo "Pushed ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "Recommended pod env:"
-          echo "MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:${{ github.event.inputs.lg_prof_sample }},prof_prefix:/heap/worker-executor"
+          echo "MALLOC_CONF=prof:true,prof_active:true,lg_prof_sample:${LG_PROF_SAMPLE},prof_prefix:/heap/worker-executor"
           echo "Mount a writable /heap volume, then dump with: kubectl exec <pod> -- kill -USR2 1"
