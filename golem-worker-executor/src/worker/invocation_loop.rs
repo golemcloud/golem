@@ -16,7 +16,7 @@ use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -117,6 +117,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
+            let mut remove_from_active_workers = false;
 
             if let Some((kind, decision)) = self.pending_interrupt().await {
                 debug!(
@@ -145,7 +146,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     resume_replay_pending: self.resume_replay_pending.clone(),
                 };
 
-                final_decision = inner_loop.run().await;
+                let result = inner_loop.run().await;
+                final_decision = result.retry_decision;
+                remove_from_active_workers = result.remove_from_active_workers;
             }
 
             self.suspend_worker(&store).await;
@@ -171,6 +174,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             },
                         )
                         .await;
+                    if remove_from_active_workers {
+                        self.parent
+                            .deps
+                            .active_workers()
+                            .remove(&self.owned_agent_id.agent_id())
+                            .await;
+                    }
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -411,10 +421,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///   underlying retry logic.
     ///
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
-    pub async fn run(&mut self) -> Option<RetryDecision> {
+    pub async fn run(&mut self) -> InnerInvocationLoopResult {
         debug!("Invocation queue loop started");
 
         let mut final_decision = None;
+        let mut remove_from_active_workers = false;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
@@ -472,6 +483,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     final_decision = Some(decision);
                     break;
                 }
+                CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(decision) => {
+                    final_decision = Some(decision);
+                    remove_from_active_workers = true;
+                    break;
+                }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
             }
 
@@ -484,7 +500,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
-        final_decision
+        InnerInvocationLoopResult {
+            retry_decision: final_decision,
+            remove_from_active_workers,
+        }
     }
 
     /// Release the concurrent-agent permit back to the semaphore pool.
@@ -968,7 +987,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     {
                         CommandOutcome::Continue
                     } else {
-                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                        CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(
+                            RetryDecision::None,
+                        )
                     }
                 } else {
                     CommandOutcome::Continue
@@ -1397,10 +1418,17 @@ enum CommandOutcome {
     BreakOuterLoop,
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
+    /// Break from the inner loop and remove the stopped worker from active workers.
+    BreakInnerLoopAndRemoveFromActiveWorkers(RetryDecision),
     /// Continue processing in the inner loop
     Continue,
     /// Stop draining for now and wait for the next command or idle timer wakeup
     WaitForWakeup,
+}
+
+struct InnerInvocationLoopResult {
+    retry_decision: Option<RetryDecision>,
+    remove_from_active_workers: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
