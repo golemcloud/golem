@@ -90,8 +90,7 @@ jobs:
       - name: Extract target
         run: |
           ls -R target
-          cd target
-          for f in *.tar; do tar xvf "$f"; done
+          for f in target/*.tar; do tar xvf "$f"; done
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
