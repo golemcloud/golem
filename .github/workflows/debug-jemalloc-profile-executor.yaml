@@ -47,7 +47,7 @@ jobs:
         env:
           TARGET_CPU: ${{ github.event.inputs.target_cpu || 'neoverse-v1' }}
         run: |
-          RUSTFLAGS="-C force-frame-pointers=yes"
+          RUSTFLAGS="-C force-frame-pointers=yes -C debuginfo=1"
           if [ -n "${TARGET_CPU}" ]; then
             RUSTFLAGS="${RUSTFLAGS} -C target-cpu=${TARGET_CPU}"
           fi
