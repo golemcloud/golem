@@ -192,12 +192,16 @@ impl TryFrom<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
 #[cfg(feature = "full")]
 impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
     fn from(value: TypedAgentConfigEntry) -> Self {
-        let (_graph, schema_value) = value.value.into_parts();
+        let (graph, schema_value) = value.value.into_parts();
+        // The DTO carries plain (schema-guided) user JSON, not the
+        // adjacently-tagged `SchemaValue` wire form. Render it through the
+        // schema graph so it round-trips with
+        // `parse_worker_creation_agent_config` (`from_json_value`).
+        let json = crate::schema::render::to_json_value(&graph, &graph.root, &schema_value)
+            .expect("SchemaValue in TypedAgentConfigEntry must render to JSON");
         Self {
             path: value.path,
-            value: serde_json::to_value(&schema_value)
-                .expect("SchemaValue in TypedAgentConfigEntry must serialize to JSON")
-                .into(),
+            value: json.into(),
         }
     }
 }

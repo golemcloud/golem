@@ -3408,13 +3408,12 @@ async fn delete_worker_during_invocation(
     let result_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    // `sleep` returns `Result<(), String>`; in the schema-native model the Rust
-    // unit `()` is an empty tuple, so the `Ok` payload is `Some(Tuple([]))`.
+    // `sleep` returns `Result<(), String>`; in the schema-native model the unit
+    // `()` ok branch carries no payload (`result<_, string>`), so the `Ok`
+    // payload is `None`.
     assert_eq!(
         result_value,
-        SchemaValue::Result(ResultValuePayload::Ok {
-            value: Some(Box::new(SchemaValue::Tuple { elements: vec![] }))
-        })
+        SchemaValue::Result(ResultValuePayload::Ok { value: None })
     );
     assert_eq!(metadata.pending_invocation_count, 0);
     Ok(())

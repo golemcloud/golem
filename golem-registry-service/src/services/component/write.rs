@@ -51,6 +51,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -878,21 +879,21 @@ fn validate_and_transform_config_entries(
             );
         }
 
-        // The DTO carries the config value as a bare `SchemaValue` JSON. Decode
-        // it and validate it against the declaration's schema-native
-        // `value_type` (resolving refs against the agent graph), then store the
-        // schema-native `TypedSchemaValue` directly.
-        let schema_value: SchemaValue = serde_json::from_value(config_value.value.0.clone())
+        // The DTO carries the config value as plain user JSON. Decode it with
+        // the schema graph (schema-guided), resolving refs against the agent
+        // graph, then validate it against the declaration's schema-native
+        // `value_type` and store the schema-native `TypedSchemaValue` directly.
+        let graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: matching_declaration.value_type.clone(),
+        };
+
+        let schema_value: SchemaValue = from_json_value(&graph, &graph.root, &config_value.value.0)
             .map_err(|err| ComponentError::AgentConfigTypeMismatch {
                 agent: agent_type.type_name.clone(),
                 key: config_value.path.clone(),
                 errors: vec![format!("config value is not a valid schema value: {err}")],
             })?;
-
-        let graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: matching_declaration.value_type.clone(),
-        };
 
         validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
             ComponentError::AgentConfigTypeMismatch {

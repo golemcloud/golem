@@ -170,15 +170,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .into_iter()
             .map(|c| {
                 // The config value travels as a self-contained
-                // `golem:core@2.0.0` typed-schema-value. Decode it and
-                // serialize the inner `SchemaValue` as adjacently-tagged JSON,
-                // matching the `AgentConfigEntryDto` service-boundary contract
-                // (`parse_worker_creation_agent_config` parses `value` as a
-                // `SchemaValue`, mirroring `From<TypedAgentConfigEntry>`).
+                // `golem:core@2.0.0` typed-schema-value. Decode it and render
+                // the inner `SchemaValue` as plain (schema-guided) JSON,
+                // matching the `AgentConfigEntryDto` service-boundary contract:
+                // the DTO carries plain user JSON which
+                // `parse_worker_creation_agent_config` decodes with the schema
+                // graph (`from_json_value`).
                 let typed = decode_typed(&c.value)
                     .map_err(|err| anyhow::anyhow!("Invalid agent config value: {err}"))?;
-                let encoded = serde_json::to_value(typed.value())
-                    .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
+                let encoded = golem_common::schema::render::to_json_value(
+                    typed.graph(),
+                    typed.root_type(),
+                    typed.value(),
+                )
+                .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
 
                 Ok::<_, anyhow::Error>(AgentConfigEntryDto {
                     path: c.path,

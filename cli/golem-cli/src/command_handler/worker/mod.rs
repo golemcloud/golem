@@ -3113,7 +3113,7 @@ mod tests {
         let ty = SchemaType::text(Default::default());
         let graph = SchemaGraph::anonymous(ty.clone());
         let parsed = parse_method_argument_schema_value(
-            r#"Text(\"hello\")"#,
+            r#"Text("hello")"#,
             &graph,
             &ty,
             &SourceLanguage::Rust,
@@ -3128,7 +3128,7 @@ mod tests {
         let ty = SchemaType::binary(Default::default());
         let graph = SchemaGraph::anonymous(ty.clone());
         let parsed = parse_method_argument_schema_value(
-            r#"Binary(\"data:application/octet-stream;base64,SGVsbG8\")"#,
+            r#"Binary("data:application/octet-stream;base64,SGVsbG8")"#,
             &graph,
             &ty,
             &SourceLanguage::Rust,

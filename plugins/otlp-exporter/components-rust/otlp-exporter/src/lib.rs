@@ -17,7 +17,7 @@ use processing::process_entries;
 use state::WORKER_STATES;
 
 use golem_rust::bindings::golem::api::oplog::{OplogEntry, OplogIndex};
-use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
 
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
         config: Vec<(String, String)>,
         component_id: ComponentId,
         worker_id: AgentId,
-        metadata: golem_rust::bindings::golem::api::host::AgentMetadata,
+        metadata: golem_rust::oplog_processor::host::AgentMetadata,
         _first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), String> {

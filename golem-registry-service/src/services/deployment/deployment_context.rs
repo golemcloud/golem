@@ -44,6 +44,7 @@ use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::render;
+use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
@@ -364,7 +365,18 @@ impl DeploymentContext {
                         e.insert(config_secret_schema.clone());
                     }
                     hash_map::Entry::Occupied(e) => {
-                        if *e.get() != config_secret_schema {
+                        let seen_secret_schema = e.get();
+                        // Compare the two agent-declared secret types
+                        // structurally across their own graphs: each agent type
+                        // carries its own `defs`, so a raw `SchemaGraph` equality
+                        // would spuriously differ even when the secret type is
+                        // logically identical.
+                        if !is_equivalent_cross_graph(
+                            seen_secret_schema,
+                            &seen_secret_schema.root,
+                            &config_secret_schema,
+                            &config_secret_schema.root,
+                        ) {
                             ok_or_continue!(
                                 Err(DeployValidationError::AgentSecretTypeConflict {
                                     path: canonical_agent_secret_path
@@ -381,7 +393,12 @@ impl DeploymentContext {
                     env_secrets.get(&canonical_agent_secret_path)
                 {
                     // secret does exist in environment, we need to check that types are compatible with deployment
-                    if environment_agent_secret_declaration.secret_type != config_secret_schema {
+                    if !is_equivalent_cross_graph(
+                        &environment_agent_secret_declaration.secret_type,
+                        &environment_agent_secret_declaration.secret_type.root,
+                        &config_secret_schema,
+                        &config_secret_schema.root,
+                    ) {
                         if replace_incompatible_agent_secrets {
                             let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 

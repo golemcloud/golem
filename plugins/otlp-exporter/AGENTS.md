@@ -5,6 +5,8 @@
 
 This project includes coding-agent skills in `.agents/skills/`. Load a skill when the task matches its description.
 
+**Activation cues for `golem.yaml` edits**: whenever a task involves editing `golem.yaml`, load `golem-edit-manifest` for the manifest schema, and also load the section-specific skill — `golem-add-env-vars` for `env`/`envDefaults`/`secretDefaults` changes, `golem-add-initial-files` for `files:` blocks, `golem-profiles-and-environments` for `presets`/environment-scoped sections, `golem-manage-plugins` for `plugins:` entries, `golem-configure-api-domain` for `httpApi`, and `golem-configure-mcp-server` for `mcp`.
+
 | Skill | Description |
 |-------|-------------|
 | `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
@@ -14,7 +16,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
-| `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
+| `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
 | `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent new` |
@@ -165,6 +167,19 @@ To enable AI features, add the relevant golem-ai provider crate as a dependency 
 cargo fmt                            # Format code
 cargo clippy --target wasm32-wasip2  # Lint (must target wasm32-wasip2)
 ```
+
+## Running Golem CLI commands non-interactively
+
+The `golem` CLI prompts for confirmation when it needs to apply changes such as syncing project skill files, updating dependency configurations, or recreating deployments. In non-interactive contexts (CI, scripts, coding agents) **always pass `--yes` (or `-y`) to mutating commands** so the CLI auto-confirms instead of aborting:
+
+```shell
+golem build --yes
+golem deploy --yes
+golem new --yes --template <LANGUAGE> <APPLICATION_PATH>
+golem agent update --yes <AGENT>
+```
+
+If you see `This action requires confirmation, but the current shell is non-interactive.` (older CLI versions: `The current input device is not an interactive one, defaulting to "false"`) followed by `Failed to build application`, re-run the same command with `--yes`.
 
 ## Documentation
 

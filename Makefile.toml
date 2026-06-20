@@ -1356,9 +1356,13 @@ dependencies = ["build"]
 description = "Builds built-in plugins (requires golem CLI to be built first)"
 script_runner = "@duckscript"
 script = '''
+# Resolve the cargo target directory robustly so this works even when the target
+# dir is redirected (e.g. via CARGO_TARGET_DIR, cargo config, or a cargo wrapper).
+# cargo-make computes CARGO_MAKE_CRATE_TARGET_DIRECTORY for us cross-platform.
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd plugins/otlp-exporter
-exec --fail-on-error ../../target/debug/golem build -P release --force-build --yes
-exec --fail-on-error ../../target/debug/golem exec -P release copy
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 

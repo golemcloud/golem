@@ -47,6 +47,7 @@ use golem_common::model::plan::PlanId;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -169,7 +170,63 @@ impl EnvBasedTestDependenciesConfig {
     }
 
     fn debug_targets_dirs(&self) -> PathBuf {
-        self.golem_repo_root.join("target/debug")
+        resolve_cargo_target_dir(&self.golem_repo_root).join("debug")
+    }
+}
+
+/// Resolves the cargo target directory for the workspace rooted at `repo_root`.
+///
+/// Instead of assuming `<repo_root>/target`, this asks cargo itself via `cargo metadata`,
+/// so it honors `CARGO_TARGET_DIR`, `build.target-dir` in cargo config, and cargo wrapper
+/// scripts that redirect the target directory. If cargo cannot be queried it falls back to
+/// the legacy `<repo_root>/target` location.
+///
+/// The result is memoized per `repo_root` for the lifetime of the process.
+fn resolve_cargo_target_dir(repo_root: &Path) -> PathBuf {
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(cached) = cache.lock().unwrap().get(repo_root) {
+        return cached.clone();
+    }
+
+    let resolved = resolve_cargo_target_dir_uncached(repo_root);
+    cache
+        .lock()
+        .unwrap()
+        .insert(repo_root.to_path_buf(), resolved.clone());
+    resolved
+}
+
+fn resolve_cargo_target_dir_uncached(repo_root: &Path) -> PathBuf {
+    let fallback = || repo_root.join("target");
+
+    let manifest_path = repo_root.join("Cargo.toml");
+    if !manifest_path.exists() {
+        return fallback();
+    }
+
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .current_dir(repo_root)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                Ok(metadata) => metadata
+                    .get("target_directory")
+                    .and_then(|value| value.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(fallback),
+                Err(_) => fallback(),
+            }
+        }
+        _ => fallback(),
     }
 }
 

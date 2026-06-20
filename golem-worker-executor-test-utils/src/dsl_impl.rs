@@ -47,6 +47,7 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_common::widen_infallible;
@@ -1194,18 +1195,18 @@ fn parse_provision_config_from_agent_type_schema(
                     )
                 })?;
 
-            let schema_value: SchemaValue =
-                serde_json::from_value(entry.value.0.clone()).map_err(|err| {
+            let graph = SchemaGraph {
+                defs: agent_type.schema.defs.clone(),
+                root: declaration.value_type.clone(),
+            };
+
+            let schema_value: SchemaValue = from_json_value(&graph, &graph.root, &entry.value.0)
+                .map_err(|err| {
                     anyhow!(
                         "config value for path {} is not a valid schema value: {err}",
                         entry.path.join(".")
                     )
                 })?;
-
-            let graph = SchemaGraph {
-                defs: agent_type.schema.defs.clone(),
-                root: declaration.value_type.clone(),
-            };
 
             validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
                 anyhow!(

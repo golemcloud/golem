@@ -365,6 +365,11 @@ impl Display for PromiseId {
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
 )]
 #[cfg_attr(feature = "full", desert(transparent))]
+// Newtype over `u64`: represent it transparently in the schema so it matches the
+// WIT/guest representation (plain `u64`), consistent with `desert(transparent)`
+// and the OpenAPI `NewType`. Without this the schema derive would encode it as a
+// single-element tuple, which fails to decode guest-produced `u64` values.
+#[schema(transparent)]
 pub struct OplogIndex(pub(crate) u64);
 
 impl OplogIndex {

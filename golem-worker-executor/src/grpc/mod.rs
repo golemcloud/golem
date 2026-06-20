@@ -298,9 +298,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if existing_entry.path != request_entry.path {
                 return false;
             }
-            // Compare the existing entry's bare schema value JSON (the same form
-            // the request DTO carries) against the requested value.
-            let existing_json = serde_json::to_value(existing_entry.value.value()).ok();
+            // Compare the existing entry's plain (schema-guided) JSON (the same
+            // form the request DTO carries) against the requested value.
+            let existing_json = golem_common::schema::render::to_json_value(
+                existing_entry.value.graph(),
+                existing_entry.value.root_type(),
+                existing_entry.value.value(),
+            )
+            .ok();
             if existing_json.as_ref() != Some(&request_entry.value.0) {
                 return false;
             }
