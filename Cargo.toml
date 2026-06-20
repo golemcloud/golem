@@ -250,6 +250,8 @@ testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", 
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
+tikv-jemalloc-ctl = "0.7.0"
+tikv-jemallocator = { version = "0.7.0", features = ["profiling"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
 tokio-metrics = { version = "0.5.0", features = ["metrics-rs-integration"] }
 tokio-postgres = "0.7.13"
