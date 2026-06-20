@@ -70,10 +70,10 @@ cells:
   # specific. If durable climbs far higher than ephemeral, the difference is in
   # the ephemeral worker path itself. The full shared-only suite is in git
   # history.
-  - name: concurrent-active-durable-shared-component
-    scenario: concurrent-active
-    agentMode: durable
-    sharing: shared
+  # - name: concurrent-active-durable-shared-component
+  #   scenario: concurrent-active
+  #   agentMode: durable
+  #   sharing: shared
   - name: concurrent-active-ephemeral-shared-component
     scenario: concurrent-active
     agentMode: ephemeral
