@@ -512,10 +512,6 @@ impl OplogArchive for CompressedOplogArchive {
             })
             .await;
         }
-        {
-            let mut cache = self.cache.write().await;
-            *cache = EvictingCacheMap::new();
-        }
         let remaining = self.length().await;
         if remaining == 0 {
             let is = self.indexed_storage.clone();
