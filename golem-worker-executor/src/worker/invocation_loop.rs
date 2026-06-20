@@ -15,7 +15,7 @@
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
@@ -175,6 +175,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         )
                         .await;
                     if remove_from_active_workers {
+                        self.archive_ephemeral_oplog().await;
                         self.parent
                             .deps
                             .active_workers()
@@ -318,6 +319,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 None
             }
         }
+    }
+
+    async fn archive_ephemeral_oplog(&self) {
+        while matches!(
+            EphemeralOplog::try_archive_blocking(&self.parent.oplog).await,
+            Some(true)
+        ) {}
     }
 
     /// Prepares the instance for running by recovering its persisted state
