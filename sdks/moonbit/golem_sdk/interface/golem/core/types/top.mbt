@@ -70,6 +70,8 @@ pub(all) struct SchemaTypeDef {
 /// Open registry; unknown roles fall back to structural handling.
 pub(all) enum Role {
   Multimodal
+  UnstructuredText
+  UnstructuredBinary
   Other(String)
 } derive(Show, Eq)
 

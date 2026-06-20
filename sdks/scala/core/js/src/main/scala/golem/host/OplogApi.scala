@@ -68,6 +68,27 @@ object OplogApi {
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
 
+  final case class StartParameters(
+    timestamp: ContextApi.DateTime,
+    parentStartIndex: Option[OplogIndex],
+    functionName: String,
+    request: Option[WitValueTypes.ValueAndType],
+    wrappedFunctionType: DurabilityApi.DurableFunctionType
+  )
+
+  final case class EndParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex,
+    response: Option[WitValueTypes.ValueAndType],
+    forcedCommit: Boolean
+  )
+
+  final case class CancelledParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex,
+    partial: Option[WitValueTypes.ValueAndType]
+  )
+
   final case class LocalSpanData(
     spanId: String,
     start: ContextApi.DateTime,
@@ -438,6 +459,15 @@ object OplogApi {
     final case class OplogProcessorCheckpoint(params: OplogProcessorCheckpointParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class Start(params: StartParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class End(params: EndParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class Cancelled(params: CancelledParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
 
     // --- Parsing ---
 
@@ -447,6 +477,9 @@ object OplogApi {
       def v     = entry.asInstanceOf[JsPublicOplogEntryWithValue].value
       tag match {
         case "create"                                  => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
+        case "start"                                   => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
+        case "end"                                     => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
+        case "cancelled"                               => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
         case "host-call" | "imported-function-invoked" =>
           HostCall(parseHostCallParameters(v.asInstanceOf[JsHostCallParameters]))
         case "agent-invocation-started" | "exported-function-invoked" =>
@@ -592,6 +625,30 @@ object OplogApi {
       request = typedFromJs(raw.request),
       response = typedFromJs(raw.response),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
+    )
+
+  private def parseStartParameters(raw: JsStartParameters): StartParameters =
+    StartParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
+      functionName = raw.functionName,
+      request = raw.request.toOption.map(WitValueTypes.ValueAndType.fromJs),
+      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
+    )
+
+  private def parseEndParameters(raw: JsEndParameters): EndParameters =
+    EndParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString),
+      response = raw.response.toOption.map(WitValueTypes.ValueAndType.fromJs),
+      forcedCommit = raw.forcedCommit
+    )
+
+  private def parseCancelledParameters(raw: JsCancelledParameters): CancelledParameters =
+    CancelledParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString),
+      partial = raw.partial.toOption.map(WitValueTypes.ValueAndType.fromJs)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =

@@ -59,7 +59,7 @@ async fn create_permission_share(
 }
 
 fn environment_view_grant(owner: &str, app_name: &str, env_name: &str, recipient: &str) -> String {
-    format!("environment({owner}/{app_name}) @ {recipient} : view : {env_name}")
+    format!("environment({owner}/{app_name}/{env_name}) @ {recipient} : view :")
 }
 
 fn environment_plugin_grant_grant(
@@ -194,7 +194,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     // both users can see the plugin grant when getting by id
     for client in [&client_1, &client_2] {
         let fetched = client
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
+            .get_environment_plugin_grant(&plugin_grant.id.0)
             .await?;
 
         assert_eq!(fetched.id, plugin_grant.id);
@@ -238,7 +238,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     // both users cannot get the plugin grant by id anymore
     for client in [&client_1, &client_2] {
         let result = client
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
+            .get_environment_plugin_grant(&plugin_grant.id.0)
             .await;
         assert!(matches!(
             result,
@@ -246,18 +246,6 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
                 RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
             ))
         ));
-    }
-
-    // both users can see the plugin grant when explicitly fetching deleted
-    for client in [&client_1, &client_2] {
-        let fetched = client
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(true))
-            .await?;
-
-        assert_eq!(fetched.id, plugin_grant.id);
-        assert_eq!(fetched.environment_id, shared_env.id);
-        assert_eq!(fetched.plugin.id, plugin.id);
-        assert_eq!(fetched.plugin_account.id, user_1.account_id);
     }
 
     Ok(())
@@ -400,7 +388,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
     // But can see it via the grant
     {
         let fetched = client_2
-            .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
+            .get_environment_plugin_grant(&plugin_grant.id.0)
             .await?;
 
         assert_eq!(fetched.plugin.id, plugin.id);
@@ -692,188 +680,6 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
 
 #[test]
 #[tracing::instrument]
-async fn environment_owner_can_fetch_deleted_grant_with_include_deleted(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
-    let owner = deps.user().await?;
-    let client_owner = owner.registry_service_client().await;
-
-    let (_, env) = owner.app_and_env().await?;
-    let component = owner
-        .component(&env.id, "oplog_processor_release")
-        .store()
-        .await?;
-
-    let plugin = client_owner
-        .create_plugin(
-            &owner.account_id.0,
-            &PluginRegistrationCreation {
-                name: "plugin".into(),
-                version: "1.0.0".into(),
-                description: "desc".into(),
-                icon: Base64(vec![]),
-                homepage: "https://golem.cloud".into(),
-                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                }),
-            },
-        )
-        .await?;
-
-    let grant = client_owner
-        .create_environment_plugin_grant(
-            &env.id.0,
-            &EnvironmentPluginGrantCreation {
-                plugin_registration_id: plugin.id,
-            },
-        )
-        .await?;
-
-    client_owner
-        .delete_environment_plugin_grant(&grant.id.0)
-        .await?;
-
-    let fetched = client_owner
-        .get_environment_plugin_grant(&grant.id.0, Some(true))
-        .await?;
-
-    assert_eq!(fetched.id, grant.id);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
-    let owner = deps.user().await?;
-    let shared = deps.user().await?;
-
-    let client_owner = owner.registry_service_client().await;
-    let client_shared = shared.registry_service_client().await;
-
-    let (_, env) = owner.app_and_env().await?;
-    create_permission_share(
-        &client_owner,
-        owner.account_id,
-        shared.account_email.clone(),
-        "fetch-deleted-grant-access",
-        vec![
-            environment_view_grant(
-                owner.account_email.as_str(),
-                &env.application_name.0,
-                &env.name.0,
-                shared.account_email.as_str(),
-            ),
-            environment_plugin_grant_grant(
-                owner.account_email.as_str(),
-                &env.application_name.0,
-                &env.name.0,
-                shared.account_email.as_str(),
-                "view",
-            ),
-        ],
-    )
-    .await?;
-
-    let component = owner
-        .component(&env.id, "oplog_processor_release")
-        .store()
-        .await?;
-    let plugin = client_owner
-        .create_plugin(
-            &owner.account_id.0,
-            &PluginRegistrationCreation {
-                name: "plugin".into(),
-                version: "1.0.0".into(),
-                description: "desc".into(),
-                icon: Base64(vec![]),
-                homepage: "https://golem.cloud".into(),
-                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                }),
-            },
-        )
-        .await?;
-
-    let grant = client_owner
-        .create_environment_plugin_grant(
-            &env.id.0,
-            &EnvironmentPluginGrantCreation {
-                plugin_registration_id: plugin.id,
-            },
-        )
-        .await?;
-
-    client_owner
-        .delete_environment_plugin_grant(&grant.id.0)
-        .await?;
-
-    let fetched = client_shared
-        .get_environment_plugin_grant(&grant.id.0, Some(true))
-        .await?;
-    assert_eq!(fetched.id, grant.id);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn fetch_deleted_grant_with_deleted_plugin_and_account(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
-    let owner = deps.user().await?;
-    let client_owner = owner.registry_service_client().await;
-
-    let (_, env) = owner.app_and_env().await?;
-    let component = owner
-        .component(&env.id, "oplog_processor_release")
-        .store()
-        .await?;
-
-    let plugin = client_owner
-        .create_plugin(
-            &owner.account_id.0,
-            &PluginRegistrationCreation {
-                name: "plugin".into(),
-                version: "1.0.0".into(),
-                description: "desc".into(),
-                icon: Base64(vec![]),
-                homepage: "https://golem.cloud".into(),
-                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                }),
-            },
-        )
-        .await?;
-
-    let grant = client_owner
-        .create_environment_plugin_grant(
-            &env.id.0,
-            &EnvironmentPluginGrantCreation {
-                plugin_registration_id: plugin.id,
-            },
-        )
-        .await?;
-
-    client_owner.delete_plugin(&plugin.id.0).await?;
-
-    let fetched = client_owner
-        .get_environment_plugin_grant(&grant.id.0, Some(true))
-        .await?;
-
-    assert_eq!(fetched.id, grant.id);
-    assert_eq!(fetched.plugin.id, plugin.id);
-    assert_eq!(fetched.plugin_account.id, owner.account_id);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
 async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let owner = deps.user().await?;
     let revoked_user = deps.user().await?;
@@ -939,18 +745,15 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         .delete_permission_share(&permission_share.id.0, permission_share.revision.into())
         .await?;
 
-    for include_deleted in [false, true] {
-        let result = client_revoked
-            .get_environment_plugin_grant(&grant.id.0, Some(include_deleted))
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(golem_client::Error::Item(
-                RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
-            ))
-        ));
-    }
+    let result = client_revoked
+        .get_environment_plugin_grant(&grant.id.0)
+        .await;
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
+        ))
+    ));
 
     Ok(())
 }

@@ -121,6 +121,12 @@ pub(all) struct CancelPendingInvocationParameters {
   idempotency_key : String
 } derive(Eq, Show)
 
+pub(all) struct CancelledParameters {
+  timestamp : @wallClock.Datetime
+  start_index : UInt64
+  partial : @types.TypedSchemaValue?
+} derive(Eq, Show)
+
 pub(all) struct ChangePersistenceLevelParameters {
   timestamp : @wallClock.Datetime
   persistence_level : @host.PersistenceLevel
@@ -172,9 +178,11 @@ pub(all) struct EndAtomicRegionParameters {
   begin_index : UInt64
 } derive(Eq, Show)
 
-pub(all) struct EndRemoteWriteParameters {
+pub(all) struct EndParameters {
   timestamp : @wallClock.Datetime
-  begin_index : UInt64
+  start_index : UInt64
+  response : @types.TypedSchemaValue?
+  forced_commit : Bool
 } derive(Eq, Show)
 
 pub(all) struct EnvironmentPluginGrantId {
@@ -236,14 +244,6 @@ pub(all) struct GrowMemoryParameters {
   delta : UInt64
 } derive(Eq, Show)
 
-pub(all) struct HostCallParameters {
-  timestamp : @wallClock.Datetime
-  function_name : String
-  request : @types.TypedSchemaValue
-  response : @types.TypedSchemaValue
-  durable_function_type : WrappedFunctionType
-} derive(Eq, Show)
-
 pub(all) struct JumpParameters {
   timestamp : @wallClock.Datetime
   jump : OplogRegion
@@ -293,7 +293,9 @@ pub(all) struct ManualUpdateParameters {
 
 pub(all) enum OplogEntry {
   Create(RawCreateParameters)
-  HostCall(RawHostCallParameters)
+  Start(RawStartParameters)
+  End(RawEndParameters)
+  Cancelled(RawCancelledParameters)
   AgentInvocationStarted(RawAgentInvocationStartedParameters)
   AgentInvocationFinished(RawAgentInvocationFinishedParameters)
   Suspend(Timestamp)
@@ -304,8 +306,6 @@ pub(all) enum OplogEntry {
   Exited(Timestamp)
   BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
-  BeginRemoteWrite(Timestamp)
-  EndRemoteWrite(EndRemoteWriteParameters)
   PendingAgentInvocation(RawPendingAgentInvocationParameters)
   PendingUpdate(RawPendingUpdateParameters)
   SuccessfulUpdate(RawSuccessfulUpdateParameters)
@@ -389,7 +389,9 @@ pub(all) struct ProcessOplogEntriesParameters {
 
 pub(all) enum PublicOplogEntry {
   Create(CreateParameters)
-  HostCall(HostCallParameters)
+  Start(StartParameters)
+  End(EndParameters)
+  Cancelled(CancelledParameters)
   AgentInvocationStarted(AgentInvocationStartedParameters)
   AgentInvocationFinished(AgentInvocationFinishedParameters)
   Suspend(Timestamp)
@@ -400,8 +402,6 @@ pub(all) enum PublicOplogEntry {
   Exited(Timestamp)
   BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
-  BeginRemoteWrite(Timestamp)
-  EndRemoteWrite(EndRemoteWriteParameters)
   PendingAgentInvocation(PendingAgentInvocationParameters)
   PendingUpdate(PendingUpdateParameters)
   SuccessfulUpdate(SuccessfulUpdateParameters)
@@ -459,6 +459,12 @@ pub(all) struct RawBeginRemoteTransactionParameters {
   original_begin_index : UInt64?
 } derive(Eq, Show)
 
+pub(all) struct RawCancelledParameters {
+  timestamp : @wallClock.Datetime
+  start_index : UInt64
+  partial : OplogPayload?
+} derive(Eq, Show)
+
 pub(all) struct RawCreateParameters {
   timestamp : @wallClock.Datetime
   agent_id : @types.AgentId
@@ -493,20 +499,19 @@ pub(all) struct RawDropResourceParameters {
   resource_type_id : ResourceTypeId
 } derive(Eq, Show)
 
+pub(all) struct RawEndParameters {
+  timestamp : @wallClock.Datetime
+  start_index : UInt64
+  response : OplogPayload?
+  forced_commit : Bool
+} derive(Eq, Show)
+
 pub(all) struct RawErrorParameters {
   timestamp : @wallClock.Datetime
   error : WorkerError
   retry_from : UInt64
   inside_atomic_region : Bool
   retry_policy_state : RetryPolicyState?
-} derive(Eq, Show)
-
-pub(all) struct RawHostCallParameters {
-  timestamp : @wallClock.Datetime
-  function_name : String
-  request : OplogPayload
-  response : OplogPayload
-  durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
 
 pub(all) struct RawLocalAgentConfigEntry {
@@ -547,6 +552,14 @@ pub(all) struct RawSnapshotParameters {
   timestamp : @wallClock.Datetime
   data : OplogPayload
   mime_type : String
+} derive(Eq, Show)
+
+pub(all) struct RawStartParameters {
+  timestamp : @wallClock.Datetime
+  parent_start_index : UInt64?
+  function_name : String
+  request : OplogPayload?
+  durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
 
 pub(all) struct RawSuccessfulUpdateParameters {
@@ -624,6 +637,14 @@ pub(all) struct SnapshotParameters {
 pub(all) enum SpanData {
   LocalSpan(LocalSpanData)
   ExternalSpan(ExternalSpanData)
+} derive(Eq, Show)
+
+pub(all) struct StartParameters {
+  timestamp : @wallClock.Datetime
+  parent_start_index : UInt64?
+  function_name : String
+  request : @types.TypedSchemaValue?
+  durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
 
 pub(all) struct StartSpanParameters {

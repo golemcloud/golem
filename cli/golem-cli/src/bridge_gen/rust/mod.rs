@@ -30,16 +30,16 @@ use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
-use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::unstructured::{
-    unstructured_binary_restrictions, unstructured_text_restrictions,
-};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
+};
+use golem_common::schema::unstructured::{
+    unstructured_binary_restrictions, unstructured_text_restrictions,
 };
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -63,6 +63,7 @@ enum RustInput {
 }
 
 /// Output shape for a method.
+#[allow(clippy::large_enum_variant)]
 enum RustOutput {
     /// No return value.
     Unit,
@@ -442,12 +443,11 @@ impl RustBridgeGenerator {
 
     fn rust_input(&self, input: &InputSchema) -> anyhow::Result<RustInput> {
         let fields = user_supplied_fields(input);
-        if let [field] = fields.as_slice() {
-            if let Some(cases) = multimodal_variant_cases(self.type_naming.graph(), &field.schema)?
+        if let [field] = fields.as_slice()
+            && let Some(cases) = multimodal_variant_cases(self.type_naming.graph(), &field.schema)?
                 .map(|c| c.to_vec())
-            {
-                return Ok(RustInput::Multimodal(self.multimodal_pairs(&cases)?));
-            }
+        {
+            return Ok(RustInput::Multimodal(self.multimodal_pairs(&cases)?));
         }
         Ok(RustInput::Params(
             fields

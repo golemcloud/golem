@@ -28,7 +28,6 @@ use golem_common::model::environment::{
     EnvironmentName, EnvironmentRevision, EnvironmentSummary, EnvironmentWithDetails,
 };
 use golem_service_base::repo::RepoError;
-use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -56,6 +55,21 @@ pub struct EnvironmentExtRecord {
 
     pub owner_account_id: Uuid,
     pub owner_account_email: String,
+
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct EnvironmentScopedRecord {
+    pub environment_id: Uuid,
+    pub name: String,
+    pub application_id: Uuid,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
+    pub current_revision_id: i64,
 
     pub current_deployment_revision: Option<i64>,
     pub current_deployment_deployment_revision: Option<i64>,
@@ -144,6 +158,41 @@ pub struct EnvironmentExtRevisionRecord {
     pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct EnvironmentScopedExtRevisionRecord {
+    pub application_id: Uuid,
+
+    #[sqlx(flatten)]
+    pub revision: EnvironmentRevisionRecord,
+
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_version: Option<String>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
+}
+
+impl EnvironmentScopedExtRevisionRecord {
+    pub fn try_into_model(
+        self,
+        application_name: ApplicationName,
+        owner_account_id: AccountId,
+        owner_account_email: AccountEmail,
+    ) -> Result<Environment, EnvironmentRepoError> {
+        EnvironmentExtRevisionRecord {
+            application_id: self.application_id,
+            application_name: application_name.0,
+            revision: self.revision,
+            owner_account_id: owner_account_id.0,
+            owner_account_email: owner_account_email.into_inner(),
+            current_deployment_revision: self.current_deployment_revision,
+            current_deployment_deployment_revision: self.current_deployment_deployment_revision,
+            current_deployment_deployment_version: self.current_deployment_deployment_version,
+            current_deployment_deployment_hash: self.current_deployment_deployment_hash,
+        }
+        .try_into()
+    }
+}
+
 impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
     type Error = EnvironmentRepoError;
     fn try_from(value: EnvironmentExtRevisionRecord) -> Result<Self, Self::Error> {
@@ -180,81 +229,6 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
                 }),
                 _ => None,
             },
-        })
-    }
-}
-
-// Special record for listing environments. Parent context is mandatory while the environment itself and all children are optional
-// Simplify when https://github.com/launchbadge/sqlx/issues/2934 is fixed
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct OptionalEnvironmentExtRevisionRecord {
-    pub application_id: Uuid,
-    pub application_name: String,
-    pub environment_id: Option<Uuid>,
-    pub revision_id: Option<i64>,
-    pub name: Option<String>,
-    pub hash: Option<SqlBlake3Hash>,
-    pub created_at: Option<SqlDateTime>,
-    pub created_by: Option<Uuid>,
-    pub deleted: Option<bool>,
-    pub compatibility_check: Option<bool>,
-    pub version_check: Option<bool>,
-    pub security_overrides: Option<bool>,
-
-    pub owner_account_id: Uuid,
-    pub owner_account_email: String,
-
-    pub current_deployment_revision: Option<i64>,
-    pub current_deployment_deployment_revision: Option<i64>,
-    pub current_deployment_deployment_version: Option<String>,
-    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
-}
-
-impl OptionalEnvironmentExtRevisionRecord {
-    pub fn owner_account_id(&self) -> AccountId {
-        AccountId(self.owner_account_id)
-    }
-
-    pub fn owner_account_email(&self) -> AccountEmail {
-        AccountEmail::new(self.owner_account_email.clone())
-    }
-
-    pub fn into_revision_record(self) -> Option<EnvironmentExtRevisionRecord> {
-        let environment_id = self.environment_id?;
-        let revision_id = self.revision_id?;
-        let name = self.name?;
-        let hash = self.hash?;
-        let created_at = self.created_at?;
-        let created_by = self.created_by?;
-        let deleted = self.deleted?;
-        let compatibility_check = self.compatibility_check?;
-        let version_check = self.version_check?;
-        let security_overrides = self.security_overrides?;
-        Some(EnvironmentExtRevisionRecord {
-            application_id: self.application_id,
-            application_name: self.application_name,
-            revision: EnvironmentRevisionRecord {
-                environment_id,
-                revision_id,
-                name,
-                hash,
-                audit: DeletableRevisionAuditFields {
-                    created_at,
-                    created_by,
-                    deleted,
-                },
-                compatibility_check,
-                version_check,
-                security_overrides,
-            },
-
-            owner_account_id: self.owner_account_id,
-            owner_account_email: self.owner_account_email,
-
-            current_deployment_revision: self.current_deployment_revision,
-            current_deployment_deployment_revision: self.current_deployment_deployment_revision,
-            current_deployment_deployment_version: self.current_deployment_deployment_version,
-            current_deployment_deployment_hash: self.current_deployment_deployment_hash,
         })
     }
 }

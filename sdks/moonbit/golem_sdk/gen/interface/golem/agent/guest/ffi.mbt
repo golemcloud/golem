@@ -515,14 +515,14 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
         CustomError(payload57) => {
           mbt_ffi_store8(return_area + 4, 4)
 
-          let address260 = mbt_ffi_malloc(
+          let address268 = mbt_ffi_malloc(
             payload57.graph.type_nodes.length() * 144,
           )
-          for index261 = 0
-              index261 < payload57.graph.type_nodes.length()
-              index261 = index261 + 1 {
-            let iter_elem : @types.SchemaTypeNode = payload57.graph.type_nodes[index261]
-            let iter_base = address260 + index261 * 144
+          for index269 = 0
+              index269 < payload57.graph.type_nodes.length()
+              index269 = index269 + 1 {
+            let iter_elem : @types.SchemaTypeNode = payload57.graph.type_nodes[index269]
+            let iter_base = address268 + index269 * 144
 
             match iter_elem.body {
               RefType(payload58) => {
@@ -599,12 +599,12 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
               RecordType(payload72) => {
                 mbt_ffi_store8(iter_base + 0, 14)
 
-                let address90 = mbt_ffi_malloc(payload72.length() * 68)
-                for index91 = 0
-                    index91 < payload72.length()
-                    index91 = index91 + 1 {
-                  let iter_elem : @types.NamedFieldType = payload72[index91]
-                  let iter_base = address90 + index91 * 68
+                let address92 = mbt_ffi_malloc(payload72.length() * 68)
+                for index93 = 0
+                    index93 < payload72.length()
+                    index93 = index93 + 1 {
+                  let iter_elem : @types.NamedFieldType = payload72[index93]
+                  let iter_base = address92 + index93 * 68
 
                   let ptr73 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
@@ -698,12 +698,22 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                           ()
                         }
-                        Other(payload88) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 56, 1)
 
-                          let ptr89 = mbt_ffi_str2ptr(payload88)
-                          mbt_ffi_store32(iter_base + 64, payload88.length())
-                          mbt_ffi_store32(iter_base + 60, ptr89)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 56, 2)
+
+                          ()
+                        }
+                        Other(payload90) => {
+                          mbt_ffi_store8(iter_base + 56, 3)
+
+                          let ptr91 = mbt_ffi_str2ptr(payload90)
+                          mbt_ffi_store32(iter_base + 64, payload90.length())
+                          mbt_ffi_store32(iter_base + 60, ptr91)
 
                           ()
                         }
@@ -714,23 +724,23 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
                   }
                 }
                 mbt_ffi_store32(iter_base + 12, payload72.length())
-                mbt_ffi_store32(iter_base + 8, address90)
+                mbt_ffi_store32(iter_base + 8, address92)
 
                 ()
               }
-              VariantType(payload92) => {
+              VariantType(payload94) => {
                 mbt_ffi_store8(iter_base + 0, 15)
 
-                let address113 = mbt_ffi_malloc(payload92.length() * 72)
-                for index114 = 0
-                    index114 < payload92.length()
-                    index114 = index114 + 1 {
-                  let iter_elem : @types.VariantCaseType = payload92[index114]
-                  let iter_base = address113 + index114 * 72
+                let address117 = mbt_ffi_malloc(payload94.length() * 72)
+                for index118 = 0
+                    index118 < payload94.length()
+                    index118 = index118 + 1 {
+                  let iter_elem : @types.VariantCaseType = payload94[index118]
+                  let iter_base = address117 + index118 * 72
 
-                  let ptr93 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr95 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr93)
+                  mbt_ffi_store32(iter_base + 0, ptr95)
 
                   match iter_elem.payload {
                     None => {
@@ -738,9 +748,9 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload95) => {
+                    Some(payload97) => {
                       mbt_ffi_store8(iter_base + 8, 1)
-                      mbt_ffi_store32(iter_base + 12, payload95)
+                      mbt_ffi_store32(iter_base + 12, payload97)
 
                       ()
                     }
@@ -752,54 +762,54 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload97) => {
+                    Some(payload99) => {
                       mbt_ffi_store8(iter_base + 16, 1)
 
-                      let ptr98 = mbt_ffi_str2ptr(payload97)
-                      mbt_ffi_store32(iter_base + 24, payload97.length())
-                      mbt_ffi_store32(iter_base + 20, ptr98)
+                      let ptr100 = mbt_ffi_str2ptr(payload99)
+                      mbt_ffi_store32(iter_base + 24, payload99.length())
+                      mbt_ffi_store32(iter_base + 20, ptr100)
 
                       ()
                     }
                   }
 
-                  let address100 = mbt_ffi_malloc(
+                  let address102 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index101 = 0
-                      index101 < iter_elem.metadata.aliases.length()
-                      index101 = index101 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index101]
-                    let iter_base = address100 + index101 * 8
+                  for index103 = 0
+                      index103 < iter_elem.metadata.aliases.length()
+                      index103 = index103 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index103]
+                    let iter_base = address102 + index103 * 8
 
-                    let ptr99 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr101 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr99)
+                    mbt_ffi_store32(iter_base + 0, ptr101)
                   }
                   mbt_ffi_store32(
                     iter_base + 32,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 28, address100)
+                  mbt_ffi_store32(iter_base + 28, address102)
 
-                  let address103 = mbt_ffi_malloc(
+                  let address105 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index104 = 0
-                      index104 < iter_elem.metadata.examples.length()
-                      index104 = index104 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index104]
-                    let iter_base = address103 + index104 * 8
+                  for index106 = 0
+                      index106 < iter_elem.metadata.examples.length()
+                      index106 = index106 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index106]
+                    let iter_base = address105 + index106 * 8
 
-                    let ptr102 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr104 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr102)
+                    mbt_ffi_store32(iter_base + 0, ptr104)
                   }
                   mbt_ffi_store32(
                     iter_base + 40,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 36, address103)
+                  mbt_ffi_store32(iter_base + 36, address105)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -807,12 +817,12 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload106) => {
+                    Some(payload108) => {
                       mbt_ffi_store8(iter_base + 44, 1)
 
-                      let ptr107 = mbt_ffi_str2ptr(payload106)
-                      mbt_ffi_store32(iter_base + 52, payload106.length())
-                      mbt_ffi_store32(iter_base + 48, ptr107)
+                      let ptr109 = mbt_ffi_str2ptr(payload108)
+                      mbt_ffi_store32(iter_base + 52, payload108.length())
+                      mbt_ffi_store32(iter_base + 48, ptr109)
 
                       ()
                     }
@@ -824,21 +834,31 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload109) => {
+                    Some(payload111) => {
                       mbt_ffi_store8(iter_base + 56, 1)
 
-                      match payload109 {
+                      match payload111 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 60, 0)
 
                           ()
                         }
-                        Other(payload111) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 60, 1)
 
-                          let ptr112 = mbt_ffi_str2ptr(payload111)
-                          mbt_ffi_store32(iter_base + 68, payload111.length())
-                          mbt_ffi_store32(iter_base + 64, ptr112)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 60, 2)
+
+                          ()
+                        }
+                        Other(payload115) => {
+                          mbt_ffi_store8(iter_base + 60, 3)
+
+                          let ptr116 = mbt_ffi_str2ptr(payload115)
+                          mbt_ffi_store32(iter_base + 68, payload115.length())
+                          mbt_ffi_store32(iter_base + 64, ptr116)
 
                           ()
                         }
@@ -848,32 +868,13 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload92.length())
-                mbt_ffi_store32(iter_base + 8, address113)
-
-                ()
-              }
-              EnumType(payload115) => {
-                mbt_ffi_store8(iter_base + 0, 16)
-
-                let address117 = mbt_ffi_malloc(payload115.length() * 8)
-                for index118 = 0
-                    index118 < payload115.length()
-                    index118 = index118 + 1 {
-                  let iter_elem : String = payload115[index118]
-                  let iter_base = address117 + index118 * 8
-
-                  let ptr116 = mbt_ffi_str2ptr(iter_elem)
-                  mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr116)
-                }
-                mbt_ffi_store32(iter_base + 12, payload115.length())
+                mbt_ffi_store32(iter_base + 12, payload94.length())
                 mbt_ffi_store32(iter_base + 8, address117)
 
                 ()
               }
-              FlagsType(payload119) => {
-                mbt_ffi_store8(iter_base + 0, 17)
+              EnumType(payload119) => {
+                mbt_ffi_store8(iter_base + 0, 16)
 
                 let address121 = mbt_ffi_malloc(payload119.length() * 8)
                 for index122 = 0
@@ -891,77 +892,96 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              TupleType(payload123) => {
-                mbt_ffi_store8(iter_base + 0, 18)
+              FlagsType(payload123) => {
+                mbt_ffi_store8(iter_base + 0, 17)
 
-                let address124 = mbt_ffi_malloc(payload123.length() * 4)
-                for index125 = 0
-                    index125 < payload123.length()
-                    index125 = index125 + 1 {
-                  let iter_elem : Int = payload123[index125]
-                  let iter_base = address124 + index125 * 4
-                  mbt_ffi_store32(iter_base + 0, iter_elem)
+                let address125 = mbt_ffi_malloc(payload123.length() * 8)
+                for index126 = 0
+                    index126 < payload123.length()
+                    index126 = index126 + 1 {
+                  let iter_elem : String = payload123[index126]
+                  let iter_base = address125 + index126 * 8
+
+                  let ptr124 = mbt_ffi_str2ptr(iter_elem)
+                  mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                  mbt_ffi_store32(iter_base + 0, ptr124)
                 }
                 mbt_ffi_store32(iter_base + 12, payload123.length())
-                mbt_ffi_store32(iter_base + 8, address124)
+                mbt_ffi_store32(iter_base + 8, address125)
 
                 ()
               }
-              ListType(payload126) => {
+              TupleType(payload127) => {
+                mbt_ffi_store8(iter_base + 0, 18)
+
+                let address128 = mbt_ffi_malloc(payload127.length() * 4)
+                for index129 = 0
+                    index129 < payload127.length()
+                    index129 = index129 + 1 {
+                  let iter_elem : Int = payload127[index129]
+                  let iter_base = address128 + index129 * 4
+                  mbt_ffi_store32(iter_base + 0, iter_elem)
+                }
+                mbt_ffi_store32(iter_base + 12, payload127.length())
+                mbt_ffi_store32(iter_base + 8, address128)
+
+                ()
+              }
+              ListType(payload130) => {
                 mbt_ffi_store8(iter_base + 0, 19)
-                mbt_ffi_store32(iter_base + 8, payload126)
+                mbt_ffi_store32(iter_base + 8, payload130)
 
                 ()
               }
-              FixedListType(payload127) => {
+              FixedListType(payload131) => {
                 mbt_ffi_store8(iter_base + 0, 20)
-                mbt_ffi_store32(iter_base + 8, payload127.element)
+                mbt_ffi_store32(iter_base + 8, payload131.element)
                 mbt_ffi_store32(
                   iter_base + 12,
-                  payload127.length.reinterpret_as_int(),
+                  payload131.length.reinterpret_as_int(),
                 )
 
                 ()
               }
-              MapType(payload128) => {
+              MapType(payload132) => {
                 mbt_ffi_store8(iter_base + 0, 21)
-                mbt_ffi_store32(iter_base + 8, payload128.key)
-                mbt_ffi_store32(iter_base + 12, payload128.value)
+                mbt_ffi_store32(iter_base + 8, payload132.key)
+                mbt_ffi_store32(iter_base + 12, payload132.value)
 
                 ()
               }
-              OptionType(payload129) => {
+              OptionType(payload133) => {
                 mbt_ffi_store8(iter_base + 0, 22)
-                mbt_ffi_store32(iter_base + 8, payload129)
+                mbt_ffi_store32(iter_base + 8, payload133)
 
                 ()
               }
-              ResultType(payload130) => {
+              ResultType(payload134) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                match payload130.ok {
+                match payload134.ok {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload132) => {
+                  Some(payload136) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload132)
+                    mbt_ffi_store32(iter_base + 12, payload136)
 
                     ()
                   }
                 }
 
-                match payload130.err {
+                match payload134.err {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload134) => {
+                  Some(payload138) => {
                     mbt_ffi_store8(iter_base + 16, 1)
-                    mbt_ffi_store32(iter_base + 20, payload134)
+                    mbt_ffi_store32(iter_base + 20, payload138)
 
                     ()
                   }
@@ -969,82 +989,82 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              TextType(payload135) => {
+              TextType(payload139) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                match payload135.languages {
+                match payload139.languages {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload137) => {
+                  Some(payload141) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address139 = mbt_ffi_malloc(payload137.length() * 8)
-                    for index140 = 0
-                        index140 < payload137.length()
-                        index140 = index140 + 1 {
-                      let iter_elem : String = payload137[index140]
-                      let iter_base = address139 + index140 * 8
+                    let address143 = mbt_ffi_malloc(payload141.length() * 8)
+                    for index144 = 0
+                        index144 < payload141.length()
+                        index144 = index144 + 1 {
+                      let iter_elem : String = payload141[index144]
+                      let iter_base = address143 + index144 * 8
 
-                      let ptr138 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr142 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr138)
+                      mbt_ffi_store32(iter_base + 0, ptr142)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload137.length())
-                    mbt_ffi_store32(iter_base + 12, address139)
+                    mbt_ffi_store32(iter_base + 16, payload141.length())
+                    mbt_ffi_store32(iter_base + 12, address143)
 
                     ()
                   }
                 }
 
-                match payload135.min_length {
+                match payload139.min_length {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload142) => {
+                  Some(payload146) => {
                     mbt_ffi_store8(iter_base + 20, 1)
                     mbt_ffi_store32(
                       iter_base + 24,
-                      payload142.reinterpret_as_int(),
+                      payload146.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload135.max_length {
+                match payload139.max_length {
                   None => {
                     mbt_ffi_store8(iter_base + 28, 0)
 
                     ()
                   }
-                  Some(payload144) => {
+                  Some(payload148) => {
                     mbt_ffi_store8(iter_base + 28, 1)
                     mbt_ffi_store32(
                       iter_base + 32,
-                      payload144.reinterpret_as_int(),
+                      payload148.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload135.regex {
+                match payload139.regex {
                   None => {
                     mbt_ffi_store8(iter_base + 36, 0)
 
                     ()
                   }
-                  Some(payload146) => {
+                  Some(payload150) => {
                     mbt_ffi_store8(iter_base + 36, 1)
 
-                    let ptr147 = mbt_ffi_str2ptr(payload146)
-                    mbt_ffi_store32(iter_base + 44, payload146.length())
-                    mbt_ffi_store32(iter_base + 40, ptr147)
+                    let ptr151 = mbt_ffi_str2ptr(payload150)
+                    mbt_ffi_store32(iter_base + 44, payload150.length())
+                    mbt_ffi_store32(iter_base + 40, ptr151)
 
                     ()
                   }
@@ -1052,64 +1072,64 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              BinaryType(payload148) => {
+              BinaryType(payload152) => {
                 mbt_ffi_store8(iter_base + 0, 25)
 
-                match payload148.mime_types {
+                match payload152.mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload150) => {
+                  Some(payload154) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address152 = mbt_ffi_malloc(payload150.length() * 8)
-                    for index153 = 0
-                        index153 < payload150.length()
-                        index153 = index153 + 1 {
-                      let iter_elem : String = payload150[index153]
-                      let iter_base = address152 + index153 * 8
+                    let address156 = mbt_ffi_malloc(payload154.length() * 8)
+                    for index157 = 0
+                        index157 < payload154.length()
+                        index157 = index157 + 1 {
+                      let iter_elem : String = payload154[index157]
+                      let iter_base = address156 + index157 * 8
 
-                      let ptr151 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr155 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr151)
+                      mbt_ffi_store32(iter_base + 0, ptr155)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload150.length())
-                    mbt_ffi_store32(iter_base + 12, address152)
+                    mbt_ffi_store32(iter_base + 16, payload154.length())
+                    mbt_ffi_store32(iter_base + 12, address156)
 
                     ()
                   }
                 }
 
-                match payload148.min_bytes {
+                match payload152.min_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload155) => {
+                  Some(payload159) => {
                     mbt_ffi_store8(iter_base + 20, 1)
                     mbt_ffi_store32(
                       iter_base + 24,
-                      payload155.reinterpret_as_int(),
+                      payload159.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload148.max_bytes {
+                match payload152.max_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 28, 0)
 
                     ()
                   }
-                  Some(payload157) => {
+                  Some(payload161) => {
                     mbt_ffi_store8(iter_base + 28, 1)
                     mbt_ffi_store32(
                       iter_base + 32,
-                      payload157.reinterpret_as_int(),
+                      payload161.reinterpret_as_int(),
                     )
 
                     ()
@@ -1118,60 +1138,60 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              PathType(payload158) => {
+              PathType(payload162) => {
                 mbt_ffi_store8(iter_base + 0, 26)
-                mbt_ffi_store8(iter_base + 8, payload158.direction.ordinal())
-                mbt_ffi_store8(iter_base + 9, payload158.kind.ordinal())
+                mbt_ffi_store8(iter_base + 8, payload162.direction.ordinal())
+                mbt_ffi_store8(iter_base + 9, payload162.kind.ordinal())
 
-                match payload158.allowed_mime_types {
+                match payload162.allowed_mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 12, 0)
 
                     ()
                   }
-                  Some(payload160) => {
+                  Some(payload164) => {
                     mbt_ffi_store8(iter_base + 12, 1)
 
-                    let address162 = mbt_ffi_malloc(payload160.length() * 8)
-                    for index163 = 0
-                        index163 < payload160.length()
-                        index163 = index163 + 1 {
-                      let iter_elem : String = payload160[index163]
-                      let iter_base = address162 + index163 * 8
+                    let address166 = mbt_ffi_malloc(payload164.length() * 8)
+                    for index167 = 0
+                        index167 < payload164.length()
+                        index167 = index167 + 1 {
+                      let iter_elem : String = payload164[index167]
+                      let iter_base = address166 + index167 * 8
 
-                      let ptr161 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr165 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr161)
+                      mbt_ffi_store32(iter_base + 0, ptr165)
                     }
-                    mbt_ffi_store32(iter_base + 20, payload160.length())
-                    mbt_ffi_store32(iter_base + 16, address162)
+                    mbt_ffi_store32(iter_base + 20, payload164.length())
+                    mbt_ffi_store32(iter_base + 16, address166)
 
                     ()
                   }
                 }
 
-                match payload158.allowed_extensions {
+                match payload162.allowed_extensions {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload165) => {
+                  Some(payload169) => {
                     mbt_ffi_store8(iter_base + 24, 1)
 
-                    let address167 = mbt_ffi_malloc(payload165.length() * 8)
-                    for index168 = 0
-                        index168 < payload165.length()
-                        index168 = index168 + 1 {
-                      let iter_elem : String = payload165[index168]
-                      let iter_base = address167 + index168 * 8
+                    let address171 = mbt_ffi_malloc(payload169.length() * 8)
+                    for index172 = 0
+                        index172 < payload169.length()
+                        index172 = index172 + 1 {
+                      let iter_elem : String = payload169[index172]
+                      let iter_base = address171 + index172 * 8
 
-                      let ptr166 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr170 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr166)
+                      mbt_ffi_store32(iter_base + 0, ptr170)
                     }
-                    mbt_ffi_store32(iter_base + 32, payload165.length())
-                    mbt_ffi_store32(iter_base + 28, address167)
+                    mbt_ffi_store32(iter_base + 32, payload169.length())
+                    mbt_ffi_store32(iter_base + 28, address171)
 
                     ()
                   }
@@ -1179,58 +1199,58 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              UrlType(payload169) => {
+              UrlType(payload173) => {
                 mbt_ffi_store8(iter_base + 0, 27)
 
-                match payload169.allowed_schemes {
+                match payload173.allowed_schemes {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload171) => {
+                  Some(payload175) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address173 = mbt_ffi_malloc(payload171.length() * 8)
-                    for index174 = 0
-                        index174 < payload171.length()
-                        index174 = index174 + 1 {
-                      let iter_elem : String = payload171[index174]
-                      let iter_base = address173 + index174 * 8
+                    let address177 = mbt_ffi_malloc(payload175.length() * 8)
+                    for index178 = 0
+                        index178 < payload175.length()
+                        index178 = index178 + 1 {
+                      let iter_elem : String = payload175[index178]
+                      let iter_base = address177 + index178 * 8
 
-                      let ptr172 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr176 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr172)
+                      mbt_ffi_store32(iter_base + 0, ptr176)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload171.length())
-                    mbt_ffi_store32(iter_base + 12, address173)
+                    mbt_ffi_store32(iter_base + 16, payload175.length())
+                    mbt_ffi_store32(iter_base + 12, address177)
 
                     ()
                   }
                 }
 
-                match payload169.allowed_hosts {
+                match payload173.allowed_hosts {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload176) => {
+                  Some(payload180) => {
                     mbt_ffi_store8(iter_base + 20, 1)
 
-                    let address178 = mbt_ffi_malloc(payload176.length() * 8)
-                    for index179 = 0
-                        index179 < payload176.length()
-                        index179 = index179 + 1 {
-                      let iter_elem : String = payload176[index179]
-                      let iter_base = address178 + index179 * 8
+                    let address182 = mbt_ffi_malloc(payload180.length() * 8)
+                    for index183 = 0
+                        index183 < payload180.length()
+                        index183 = index183 + 1 {
+                      let iter_elem : String = payload180[index183]
+                      let iter_base = address182 + index183 * 8
 
-                      let ptr177 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr181 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr177)
+                      mbt_ffi_store32(iter_base + 0, ptr181)
                     }
-                    mbt_ffi_store32(iter_base + 28, payload176.length())
-                    mbt_ffi_store32(iter_base + 24, address178)
+                    mbt_ffi_store32(iter_base + 28, payload180.length())
+                    mbt_ffi_store32(iter_base + 24, address182)
 
                     ()
                   }
@@ -1248,65 +1268,65 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              QuantityType(payload182) => {
+              QuantityType(payload186) => {
                 mbt_ffi_store8(iter_base + 0, 30)
 
-                let ptr183 = mbt_ffi_str2ptr(payload182.base_unit)
-                mbt_ffi_store32(iter_base + 12, payload182.base_unit.length())
-                mbt_ffi_store32(iter_base + 8, ptr183)
+                let ptr187 = mbt_ffi_str2ptr(payload186.base_unit)
+                mbt_ffi_store32(iter_base + 12, payload186.base_unit.length())
+                mbt_ffi_store32(iter_base + 8, ptr187)
 
-                let address185 = mbt_ffi_malloc(
-                  payload182.allowed_suffixes.length() * 8,
+                let address189 = mbt_ffi_malloc(
+                  payload186.allowed_suffixes.length() * 8,
                 )
-                for index186 = 0
-                    index186 < payload182.allowed_suffixes.length()
-                    index186 = index186 + 1 {
-                  let iter_elem : String = payload182.allowed_suffixes[index186]
-                  let iter_base = address185 + index186 * 8
+                for index190 = 0
+                    index190 < payload186.allowed_suffixes.length()
+                    index190 = index190 + 1 {
+                  let iter_elem : String = payload186.allowed_suffixes[index190]
+                  let iter_base = address189 + index190 * 8
 
-                  let ptr184 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr188 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr184)
+                  mbt_ffi_store32(iter_base + 0, ptr188)
                 }
                 mbt_ffi_store32(
                   iter_base + 20,
-                  payload182.allowed_suffixes.length(),
+                  payload186.allowed_suffixes.length(),
                 )
-                mbt_ffi_store32(iter_base + 16, address185)
+                mbt_ffi_store32(iter_base + 16, address189)
 
-                match payload182.min {
+                match payload186.min {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload188) => {
+                  Some(payload192) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(iter_base + 32, payload188.mantissa)
-                    mbt_ffi_store32(iter_base + 40, payload188.scale)
+                    mbt_ffi_store64(iter_base + 32, payload192.mantissa)
+                    mbt_ffi_store32(iter_base + 40, payload192.scale)
 
-                    let ptr189 = mbt_ffi_str2ptr(payload188.unit)
-                    mbt_ffi_store32(iter_base + 48, payload188.unit.length())
-                    mbt_ffi_store32(iter_base + 44, ptr189)
+                    let ptr193 = mbt_ffi_str2ptr(payload192.unit)
+                    mbt_ffi_store32(iter_base + 48, payload192.unit.length())
+                    mbt_ffi_store32(iter_base + 44, ptr193)
 
                     ()
                   }
                 }
 
-                match payload182.max {
+                match payload186.max {
                   None => {
                     mbt_ffi_store8(iter_base + 56, 0)
 
                     ()
                   }
-                  Some(payload191) => {
+                  Some(payload195) => {
                     mbt_ffi_store8(iter_base + 56, 1)
-                    mbt_ffi_store64(iter_base + 64, payload191.mantissa)
-                    mbt_ffi_store32(iter_base + 72, payload191.scale)
+                    mbt_ffi_store64(iter_base + 64, payload195.mantissa)
+                    mbt_ffi_store32(iter_base + 72, payload195.scale)
 
-                    let ptr192 = mbt_ffi_str2ptr(payload191.unit)
-                    mbt_ffi_store32(iter_base + 80, payload191.unit.length())
-                    mbt_ffi_store32(iter_base + 76, ptr192)
+                    let ptr196 = mbt_ffi_str2ptr(payload195.unit)
+                    mbt_ffi_store32(iter_base + 80, payload195.unit.length())
+                    mbt_ffi_store32(iter_base + 76, ptr196)
 
                     ()
                   }
@@ -1314,44 +1334,26 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              UnionType(payload193) => {
+              UnionType(payload197) => {
                 mbt_ffi_store8(iter_base + 0, 31)
 
-                let address227 = mbt_ffi_malloc(
-                  payload193.branches.length() * 92,
+                let address233 = mbt_ffi_malloc(
+                  payload197.branches.length() * 92,
                 )
-                for index228 = 0
-                    index228 < payload193.branches.length()
-                    index228 = index228 + 1 {
-                  let iter_elem : @types.UnionBranch = payload193.branches[index228]
-                  let iter_base = address227 + index228 * 92
+                for index234 = 0
+                    index234 < payload197.branches.length()
+                    index234 = index234 + 1 {
+                  let iter_elem : @types.UnionBranch = payload197.branches[index234]
+                  let iter_base = address233 + index234 * 92
 
-                  let ptr194 = mbt_ffi_str2ptr(iter_elem.tag)
+                  let ptr198 = mbt_ffi_str2ptr(iter_elem.tag)
                   mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-                  mbt_ffi_store32(iter_base + 0, ptr194)
+                  mbt_ffi_store32(iter_base + 0, ptr198)
                   mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                   match iter_elem.discriminator {
-                    Prefix(payload195) => {
+                    Prefix(payload199) => {
                       mbt_ffi_store8(iter_base + 12, 0)
-
-                      let ptr196 = mbt_ffi_str2ptr(payload195)
-                      mbt_ffi_store32(iter_base + 20, payload195.length())
-                      mbt_ffi_store32(iter_base + 16, ptr196)
-
-                      ()
-                    }
-                    Suffix(payload197) => {
-                      mbt_ffi_store8(iter_base + 12, 1)
-
-                      let ptr198 = mbt_ffi_str2ptr(payload197)
-                      mbt_ffi_store32(iter_base + 20, payload197.length())
-                      mbt_ffi_store32(iter_base + 16, ptr198)
-
-                      ()
-                    }
-                    Contains(payload199) => {
-                      mbt_ffi_store8(iter_base + 12, 2)
 
                       let ptr200 = mbt_ffi_str2ptr(payload199)
                       mbt_ffi_store32(iter_base + 20, payload199.length())
@@ -1359,8 +1361,8 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Regex(payload201) => {
-                      mbt_ffi_store8(iter_base + 12, 3)
+                    Suffix(payload201) => {
+                      mbt_ffi_store8(iter_base + 12, 1)
 
                       let ptr202 = mbt_ffi_str2ptr(payload201)
                       mbt_ffi_store32(iter_base + 20, payload201.length())
@@ -1368,28 +1370,46 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    FieldEquals(payload203) => {
-                      mbt_ffi_store8(iter_base + 12, 4)
+                    Contains(payload203) => {
+                      mbt_ffi_store8(iter_base + 12, 2)
 
-                      let ptr204 = mbt_ffi_str2ptr(payload203.field_name)
-                      mbt_ffi_store32(
-                        iter_base + 20,
-                        payload203.field_name.length(),
-                      )
+                      let ptr204 = mbt_ffi_str2ptr(payload203)
+                      mbt_ffi_store32(iter_base + 20, payload203.length())
                       mbt_ffi_store32(iter_base + 16, ptr204)
 
-                      match payload203.literal {
+                      ()
+                    }
+                    Regex(payload205) => {
+                      mbt_ffi_store8(iter_base + 12, 3)
+
+                      let ptr206 = mbt_ffi_str2ptr(payload205)
+                      mbt_ffi_store32(iter_base + 20, payload205.length())
+                      mbt_ffi_store32(iter_base + 16, ptr206)
+
+                      ()
+                    }
+                    FieldEquals(payload207) => {
+                      mbt_ffi_store8(iter_base + 12, 4)
+
+                      let ptr208 = mbt_ffi_str2ptr(payload207.field_name)
+                      mbt_ffi_store32(
+                        iter_base + 20,
+                        payload207.field_name.length(),
+                      )
+                      mbt_ffi_store32(iter_base + 16, ptr208)
+
+                      match payload207.literal {
                         None => {
                           mbt_ffi_store8(iter_base + 24, 0)
 
                           ()
                         }
-                        Some(payload206) => {
+                        Some(payload210) => {
                           mbt_ffi_store8(iter_base + 24, 1)
 
-                          let ptr207 = mbt_ffi_str2ptr(payload206)
-                          mbt_ffi_store32(iter_base + 32, payload206.length())
-                          mbt_ffi_store32(iter_base + 28, ptr207)
+                          let ptr211 = mbt_ffi_str2ptr(payload210)
+                          mbt_ffi_store32(iter_base + 32, payload210.length())
+                          mbt_ffi_store32(iter_base + 28, ptr211)
 
                           ()
                         }
@@ -1397,12 +1417,12 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    FieldAbsent(payload208) => {
+                    FieldAbsent(payload212) => {
                       mbt_ffi_store8(iter_base + 12, 5)
 
-                      let ptr209 = mbt_ffi_str2ptr(payload208)
-                      mbt_ffi_store32(iter_base + 20, payload208.length())
-                      mbt_ffi_store32(iter_base + 16, ptr209)
+                      let ptr213 = mbt_ffi_str2ptr(payload212)
+                      mbt_ffi_store32(iter_base + 20, payload212.length())
+                      mbt_ffi_store32(iter_base + 16, ptr213)
 
                       ()
                     }
@@ -1414,54 +1434,54 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload211) => {
+                    Some(payload215) => {
                       mbt_ffi_store8(iter_base + 36, 1)
 
-                      let ptr212 = mbt_ffi_str2ptr(payload211)
-                      mbt_ffi_store32(iter_base + 44, payload211.length())
-                      mbt_ffi_store32(iter_base + 40, ptr212)
+                      let ptr216 = mbt_ffi_str2ptr(payload215)
+                      mbt_ffi_store32(iter_base + 44, payload215.length())
+                      mbt_ffi_store32(iter_base + 40, ptr216)
 
                       ()
                     }
                   }
 
-                  let address214 = mbt_ffi_malloc(
+                  let address218 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index215 = 0
-                      index215 < iter_elem.metadata.aliases.length()
-                      index215 = index215 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index215]
-                    let iter_base = address214 + index215 * 8
+                  for index219 = 0
+                      index219 < iter_elem.metadata.aliases.length()
+                      index219 = index219 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index219]
+                    let iter_base = address218 + index219 * 8
 
-                    let ptr213 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr217 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr213)
+                    mbt_ffi_store32(iter_base + 0, ptr217)
                   }
                   mbt_ffi_store32(
                     iter_base + 52,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 48, address214)
+                  mbt_ffi_store32(iter_base + 48, address218)
 
-                  let address217 = mbt_ffi_malloc(
+                  let address221 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index218 = 0
-                      index218 < iter_elem.metadata.examples.length()
-                      index218 = index218 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index218]
-                    let iter_base = address217 + index218 * 8
+                  for index222 = 0
+                      index222 < iter_elem.metadata.examples.length()
+                      index222 = index222 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index222]
+                    let iter_base = address221 + index222 * 8
 
-                    let ptr216 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr220 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr216)
+                    mbt_ffi_store32(iter_base + 0, ptr220)
                   }
                   mbt_ffi_store32(
                     iter_base + 60,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 56, address217)
+                  mbt_ffi_store32(iter_base + 56, address221)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -1469,12 +1489,12 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload220) => {
+                    Some(payload224) => {
                       mbt_ffi_store8(iter_base + 64, 1)
 
-                      let ptr221 = mbt_ffi_str2ptr(payload220)
-                      mbt_ffi_store32(iter_base + 72, payload220.length())
-                      mbt_ffi_store32(iter_base + 68, ptr221)
+                      let ptr225 = mbt_ffi_str2ptr(payload224)
+                      mbt_ffi_store32(iter_base + 72, payload224.length())
+                      mbt_ffi_store32(iter_base + 68, ptr225)
 
                       ()
                     }
@@ -1486,21 +1506,31 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload223) => {
+                    Some(payload227) => {
                       mbt_ffi_store8(iter_base + 76, 1)
 
-                      match payload223 {
+                      match payload227 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 80, 0)
 
                           ()
                         }
-                        Other(payload225) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 80, 1)
 
-                          let ptr226 = mbt_ffi_str2ptr(payload225)
-                          mbt_ffi_store32(iter_base + 88, payload225.length())
-                          mbt_ffi_store32(iter_base + 84, ptr226)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 80, 2)
+
+                          ()
+                        }
+                        Other(payload231) => {
+                          mbt_ffi_store8(iter_base + 80, 3)
+
+                          let ptr232 = mbt_ffi_str2ptr(payload231)
+                          mbt_ffi_store32(iter_base + 88, payload231.length())
+                          mbt_ffi_store32(iter_base + 84, ptr232)
 
                           ()
                         }
@@ -1510,26 +1540,26 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload193.branches.length())
-                mbt_ffi_store32(iter_base + 8, address227)
+                mbt_ffi_store32(iter_base + 12, payload197.branches.length())
+                mbt_ffi_store32(iter_base + 8, address233)
 
                 ()
               }
-              SecretType(payload229) => {
+              SecretType(payload235) => {
                 mbt_ffi_store8(iter_base + 0, 32)
 
-                match payload229.category {
+                match payload235.category {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload231) => {
+                  Some(payload237) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr232 = mbt_ffi_str2ptr(payload231)
-                    mbt_ffi_store32(iter_base + 16, payload231.length())
-                    mbt_ffi_store32(iter_base + 12, ptr232)
+                    let ptr238 = mbt_ffi_str2ptr(payload237)
+                    mbt_ffi_store32(iter_base + 16, payload237.length())
+                    mbt_ffi_store32(iter_base + 12, ptr238)
 
                     ()
                   }
@@ -1537,21 +1567,21 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              QuotaTokenType(payload233) => {
+              QuotaTokenType(payload239) => {
                 mbt_ffi_store8(iter_base + 0, 33)
 
-                match payload233.resource_name {
+                match payload239.resource_name {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload235) => {
+                  Some(payload241) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr236 = mbt_ffi_str2ptr(payload235)
-                    mbt_ffi_store32(iter_base + 16, payload235.length())
-                    mbt_ffi_store32(iter_base + 12, ptr236)
+                    let ptr242 = mbt_ffi_str2ptr(payload241)
+                    mbt_ffi_store32(iter_base + 16, payload241.length())
+                    mbt_ffi_store32(iter_base + 12, ptr242)
 
                     ()
                   }
@@ -1559,18 +1589,18 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              FutureType(payload237) => {
+              FutureType(payload243) => {
                 mbt_ffi_store8(iter_base + 0, 34)
 
-                match payload237 {
+                match payload243 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload239) => {
+                  Some(payload245) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload239)
+                    mbt_ffi_store32(iter_base + 12, payload245)
 
                     ()
                   }
@@ -1578,18 +1608,18 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              StreamType(payload240) => {
+              StreamType(payload246) => {
                 mbt_ffi_store8(iter_base + 0, 35)
 
-                match payload240 {
+                match payload246 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload242) => {
+                  Some(payload248) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload242)
+                    mbt_ffi_store32(iter_base + 12, payload248)
 
                     ()
                   }
@@ -1605,54 +1635,54 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload244) => {
+              Some(payload250) => {
                 mbt_ffi_store8(iter_base + 88, 1)
 
-                let ptr245 = mbt_ffi_str2ptr(payload244)
-                mbt_ffi_store32(iter_base + 96, payload244.length())
-                mbt_ffi_store32(iter_base + 92, ptr245)
+                let ptr251 = mbt_ffi_str2ptr(payload250)
+                mbt_ffi_store32(iter_base + 96, payload250.length())
+                mbt_ffi_store32(iter_base + 92, ptr251)
 
                 ()
               }
             }
 
-            let address247 = mbt_ffi_malloc(
+            let address253 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index248 = 0
-                index248 < iter_elem.metadata.aliases.length()
-                index248 = index248 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index248]
-              let iter_base = address247 + index248 * 8
+            for index254 = 0
+                index254 < iter_elem.metadata.aliases.length()
+                index254 = index254 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index254]
+              let iter_base = address253 + index254 * 8
 
-              let ptr246 = mbt_ffi_str2ptr(iter_elem)
+              let ptr252 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr246)
+              mbt_ffi_store32(iter_base + 0, ptr252)
             }
             mbt_ffi_store32(
               iter_base + 104,
               iter_elem.metadata.aliases.length(),
             )
-            mbt_ffi_store32(iter_base + 100, address247)
+            mbt_ffi_store32(iter_base + 100, address253)
 
-            let address250 = mbt_ffi_malloc(
+            let address256 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index251 = 0
-                index251 < iter_elem.metadata.examples.length()
-                index251 = index251 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index251]
-              let iter_base = address250 + index251 * 8
+            for index257 = 0
+                index257 < iter_elem.metadata.examples.length()
+                index257 = index257 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index257]
+              let iter_base = address256 + index257 * 8
 
-              let ptr249 = mbt_ffi_str2ptr(iter_elem)
+              let ptr255 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr249)
+              mbt_ffi_store32(iter_base + 0, ptr255)
             }
             mbt_ffi_store32(
               iter_base + 112,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 108, address250)
+            mbt_ffi_store32(iter_base + 108, address256)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -1660,12 +1690,12 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload253) => {
+              Some(payload259) => {
                 mbt_ffi_store8(iter_base + 116, 1)
 
-                let ptr254 = mbt_ffi_str2ptr(payload253)
-                mbt_ffi_store32(iter_base + 124, payload253.length())
-                mbt_ffi_store32(iter_base + 120, ptr254)
+                let ptr260 = mbt_ffi_str2ptr(payload259)
+                mbt_ffi_store32(iter_base + 124, payload259.length())
+                mbt_ffi_store32(iter_base + 120, ptr260)
 
                 ()
               }
@@ -1677,21 +1707,31 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload256) => {
+              Some(payload262) => {
                 mbt_ffi_store8(iter_base + 128, 1)
 
-                match payload256 {
+                match payload262 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 132, 0)
 
                     ()
                   }
-                  Other(payload258) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 132, 1)
 
-                    let ptr259 = mbt_ffi_str2ptr(payload258)
-                    mbt_ffi_store32(iter_base + 140, payload258.length())
-                    mbt_ffi_store32(iter_base + 136, ptr259)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 132, 2)
+
+                    ()
+                  }
+                  Other(payload266) => {
+                    mbt_ffi_store8(iter_base + 132, 3)
+
+                    let ptr267 = mbt_ffi_str2ptr(payload266)
+                    mbt_ffi_store32(iter_base + 140, payload266.length())
+                    mbt_ffi_store32(iter_base + 136, ptr267)
 
                     ()
                   }
@@ -1702,18 +1742,18 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
             }
           }
           mbt_ffi_store32(return_area + 12, payload57.graph.type_nodes.length())
-          mbt_ffi_store32(return_area + 8, address260)
+          mbt_ffi_store32(return_area + 8, address268)
 
-          let address266 = mbt_ffi_malloc(payload57.graph.defs.length() * 24)
-          for index267 = 0
-              index267 < payload57.graph.defs.length()
-              index267 = index267 + 1 {
-            let iter_elem : @types.SchemaTypeDef = payload57.graph.defs[index267]
-            let iter_base = address266 + index267 * 24
+          let address274 = mbt_ffi_malloc(payload57.graph.defs.length() * 24)
+          for index275 = 0
+              index275 < payload57.graph.defs.length()
+              index275 = index275 + 1 {
+            let iter_elem : @types.SchemaTypeDef = payload57.graph.defs[index275]
+            let iter_base = address274 + index275 * 24
 
-            let ptr262 = mbt_ffi_str2ptr(iter_elem.id)
+            let ptr270 = mbt_ffi_str2ptr(iter_elem.id)
             mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-            mbt_ffi_store32(iter_base + 0, ptr262)
+            mbt_ffi_store32(iter_base + 0, ptr270)
 
             match iter_elem.name {
               None => {
@@ -1721,12 +1761,12 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload264) => {
+              Some(payload272) => {
                 mbt_ffi_store8(iter_base + 8, 1)
 
-                let ptr265 = mbt_ffi_str2ptr(payload264)
-                mbt_ffi_store32(iter_base + 16, payload264.length())
-                mbt_ffi_store32(iter_base + 12, ptr265)
+                let ptr273 = mbt_ffi_str2ptr(payload272)
+                mbt_ffi_store32(iter_base + 16, payload272.length())
+                mbt_ffi_store32(iter_base + 12, ptr273)
 
                 ()
               }
@@ -1734,135 +1774,135 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
             mbt_ffi_store32(iter_base + 20, iter_elem.body)
           }
           mbt_ffi_store32(return_area + 20, payload57.graph.defs.length())
-          mbt_ffi_store32(return_area + 16, address266)
+          mbt_ffi_store32(return_area + 16, address274)
           mbt_ffi_store32(return_area + 24, payload57.graph.root)
 
-          let address338 = mbt_ffi_malloc(
+          let address346 = mbt_ffi_malloc(
             payload57.value.value_nodes.length() * 64,
           )
-          for index339 = 0
-              index339 < payload57.value.value_nodes.length()
-              index339 = index339 + 1 {
-            let iter_elem : @types.SchemaValueNode = payload57.value.value_nodes[index339]
-            let iter_base = address338 + index339 * 64
+          for index347 = 0
+              index347 < payload57.value.value_nodes.length()
+              index347 = index347 + 1 {
+            let iter_elem : @types.SchemaValueNode = payload57.value.value_nodes[index347]
+            let iter_base = address346 + index347 * 64
 
             match iter_elem {
-              BoolValue(payload268) => {
+              BoolValue(payload276) => {
                 mbt_ffi_store8(iter_base + 0, 0)
-                mbt_ffi_store8(iter_base + 8, if payload268 { 1 } else { 0 })
+                mbt_ffi_store8(iter_base + 8, if payload276 { 1 } else { 0 })
 
                 ()
               }
-              S8Value(payload269) => {
+              S8Value(payload277) => {
                 mbt_ffi_store8(iter_base + 0, 1)
-                mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload269))
+                mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload277))
 
                 ()
               }
-              S16Value(payload270) => {
+              S16Value(payload278) => {
                 mbt_ffi_store8(iter_base + 0, 2)
-                mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload270))
+                mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload278))
 
                 ()
               }
-              S32Value(payload271) => {
+              S32Value(payload279) => {
                 mbt_ffi_store8(iter_base + 0, 3)
-                mbt_ffi_store32(iter_base + 8, payload271)
+                mbt_ffi_store32(iter_base + 8, payload279)
 
                 ()
               }
-              S64Value(payload272) => {
+              S64Value(payload280) => {
                 mbt_ffi_store8(iter_base + 0, 4)
-                mbt_ffi_store64(iter_base + 8, payload272)
+                mbt_ffi_store64(iter_base + 8, payload280)
 
                 ()
               }
-              U8Value(payload273) => {
+              U8Value(payload281) => {
                 mbt_ffi_store8(iter_base + 0, 5)
-                mbt_ffi_store8(iter_base + 8, payload273.to_int())
+                mbt_ffi_store8(iter_base + 8, payload281.to_int())
 
                 ()
               }
-              U16Value(payload274) => {
+              U16Value(payload282) => {
                 mbt_ffi_store8(iter_base + 0, 6)
-                mbt_ffi_store16(iter_base + 8, payload274.reinterpret_as_int())
+                mbt_ffi_store16(iter_base + 8, payload282.reinterpret_as_int())
 
                 ()
               }
-              U32Value(payload275) => {
+              U32Value(payload283) => {
                 mbt_ffi_store8(iter_base + 0, 7)
-                mbt_ffi_store32(iter_base + 8, payload275.reinterpret_as_int())
+                mbt_ffi_store32(iter_base + 8, payload283.reinterpret_as_int())
 
                 ()
               }
-              U64Value(payload276) => {
+              U64Value(payload284) => {
                 mbt_ffi_store8(iter_base + 0, 8)
                 mbt_ffi_store64(
                   iter_base + 8,
-                  payload276.reinterpret_as_int64(),
+                  payload284.reinterpret_as_int64(),
                 )
 
                 ()
               }
-              F32Value(payload277) => {
+              F32Value(payload285) => {
                 mbt_ffi_store8(iter_base + 0, 9)
-                mbt_ffi_storef32(iter_base + 8, payload277)
+                mbt_ffi_storef32(iter_base + 8, payload285)
 
                 ()
               }
-              F64Value(payload278) => {
+              F64Value(payload286) => {
                 mbt_ffi_store8(iter_base + 0, 10)
-                mbt_ffi_storef64(iter_base + 8, payload278)
+                mbt_ffi_storef64(iter_base + 8, payload286)
 
                 ()
               }
-              CharValue(payload279) => {
+              CharValue(payload287) => {
                 mbt_ffi_store8(iter_base + 0, 11)
-                mbt_ffi_store32(iter_base + 8, payload279.to_int())
+                mbt_ffi_store32(iter_base + 8, payload287.to_int())
 
                 ()
               }
-              StringValue(payload280) => {
+              StringValue(payload288) => {
                 mbt_ffi_store8(iter_base + 0, 12)
 
-                let ptr281 = mbt_ffi_str2ptr(payload280)
-                mbt_ffi_store32(iter_base + 12, payload280.length())
-                mbt_ffi_store32(iter_base + 8, ptr281)
+                let ptr289 = mbt_ffi_str2ptr(payload288)
+                mbt_ffi_store32(iter_base + 12, payload288.length())
+                mbt_ffi_store32(iter_base + 8, ptr289)
 
                 ()
               }
-              RecordValue(payload282) => {
+              RecordValue(payload290) => {
                 mbt_ffi_store8(iter_base + 0, 13)
 
-                let address283 = mbt_ffi_malloc(payload282.length() * 4)
-                for index284 = 0
-                    index284 < payload282.length()
-                    index284 = index284 + 1 {
-                  let iter_elem : Int = payload282[index284]
-                  let iter_base = address283 + index284 * 4
+                let address291 = mbt_ffi_malloc(payload290.length() * 4)
+                for index292 = 0
+                    index292 < payload290.length()
+                    index292 = index292 + 1 {
+                  let iter_elem : Int = payload290[index292]
+                  let iter_base = address291 + index292 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload282.length())
-                mbt_ffi_store32(iter_base + 8, address283)
+                mbt_ffi_store32(iter_base + 12, payload290.length())
+                mbt_ffi_store32(iter_base + 8, address291)
 
                 ()
               }
-              VariantValue(payload285) => {
+              VariantValue(payload293) => {
                 mbt_ffi_store8(iter_base + 0, 14)
                 mbt_ffi_store32(
                   iter_base + 8,
-                  payload285.case.reinterpret_as_int(),
+                  payload293.case.reinterpret_as_int(),
                 )
 
-                match payload285.payload {
+                match payload293.payload {
                   None => {
                     mbt_ffi_store8(iter_base + 12, 0)
 
                     ()
                   }
-                  Some(payload287) => {
+                  Some(payload295) => {
                     mbt_ffi_store8(iter_base + 12, 1)
-                    mbt_ffi_store32(iter_base + 16, payload287)
+                    mbt_ffi_store32(iter_base + 16, payload295)
 
                     ()
                   }
@@ -1870,105 +1910,105 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              EnumValue(payload288) => {
+              EnumValue(payload296) => {
                 mbt_ffi_store8(iter_base + 0, 15)
-                mbt_ffi_store32(iter_base + 8, payload288.reinterpret_as_int())
+                mbt_ffi_store32(iter_base + 8, payload296.reinterpret_as_int())
 
                 ()
               }
-              FlagsValue(payload289) => {
+              FlagsValue(payload297) => {
                 mbt_ffi_store8(iter_base + 0, 16)
 
-                let address290 = mbt_ffi_malloc(payload289.length() * 1)
-                for index291 = 0
-                    index291 < payload289.length()
-                    index291 = index291 + 1 {
-                  let iter_elem : Bool = payload289[index291]
-                  let iter_base = address290 + index291 * 1
+                let address298 = mbt_ffi_malloc(payload297.length() * 1)
+                for index299 = 0
+                    index299 < payload297.length()
+                    index299 = index299 + 1 {
+                  let iter_elem : Bool = payload297[index299]
+                  let iter_base = address298 + index299 * 1
                   mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
                 }
-                mbt_ffi_store32(iter_base + 12, payload289.length())
-                mbt_ffi_store32(iter_base + 8, address290)
+                mbt_ffi_store32(iter_base + 12, payload297.length())
+                mbt_ffi_store32(iter_base + 8, address298)
 
                 ()
               }
-              TupleValue(payload292) => {
+              TupleValue(payload300) => {
                 mbt_ffi_store8(iter_base + 0, 17)
 
-                let address293 = mbt_ffi_malloc(payload292.length() * 4)
-                for index294 = 0
-                    index294 < payload292.length()
-                    index294 = index294 + 1 {
-                  let iter_elem : Int = payload292[index294]
-                  let iter_base = address293 + index294 * 4
+                let address301 = mbt_ffi_malloc(payload300.length() * 4)
+                for index302 = 0
+                    index302 < payload300.length()
+                    index302 = index302 + 1 {
+                  let iter_elem : Int = payload300[index302]
+                  let iter_base = address301 + index302 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload292.length())
-                mbt_ffi_store32(iter_base + 8, address293)
+                mbt_ffi_store32(iter_base + 12, payload300.length())
+                mbt_ffi_store32(iter_base + 8, address301)
 
                 ()
               }
-              ListValue(payload295) => {
+              ListValue(payload303) => {
                 mbt_ffi_store8(iter_base + 0, 18)
 
-                let address296 = mbt_ffi_malloc(payload295.length() * 4)
-                for index297 = 0
-                    index297 < payload295.length()
-                    index297 = index297 + 1 {
-                  let iter_elem : Int = payload295[index297]
-                  let iter_base = address296 + index297 * 4
+                let address304 = mbt_ffi_malloc(payload303.length() * 4)
+                for index305 = 0
+                    index305 < payload303.length()
+                    index305 = index305 + 1 {
+                  let iter_elem : Int = payload303[index305]
+                  let iter_base = address304 + index305 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload295.length())
-                mbt_ffi_store32(iter_base + 8, address296)
+                mbt_ffi_store32(iter_base + 12, payload303.length())
+                mbt_ffi_store32(iter_base + 8, address304)
 
                 ()
               }
-              FixedListValue(payload298) => {
+              FixedListValue(payload306) => {
                 mbt_ffi_store8(iter_base + 0, 19)
 
-                let address299 = mbt_ffi_malloc(payload298.length() * 4)
-                for index300 = 0
-                    index300 < payload298.length()
-                    index300 = index300 + 1 {
-                  let iter_elem : Int = payload298[index300]
-                  let iter_base = address299 + index300 * 4
+                let address307 = mbt_ffi_malloc(payload306.length() * 4)
+                for index308 = 0
+                    index308 < payload306.length()
+                    index308 = index308 + 1 {
+                  let iter_elem : Int = payload306[index308]
+                  let iter_base = address307 + index308 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload298.length())
-                mbt_ffi_store32(iter_base + 8, address299)
+                mbt_ffi_store32(iter_base + 12, payload306.length())
+                mbt_ffi_store32(iter_base + 8, address307)
 
                 ()
               }
-              MapValue(payload301) => {
+              MapValue(payload309) => {
                 mbt_ffi_store8(iter_base + 0, 20)
 
-                let address302 = mbt_ffi_malloc(payload301.length() * 8)
-                for index303 = 0
-                    index303 < payload301.length()
-                    index303 = index303 + 1 {
-                  let iter_elem : @types.MapEntry = payload301[index303]
-                  let iter_base = address302 + index303 * 8
+                let address310 = mbt_ffi_malloc(payload309.length() * 8)
+                for index311 = 0
+                    index311 < payload309.length()
+                    index311 = index311 + 1 {
+                  let iter_elem : @types.MapEntry = payload309[index311]
+                  let iter_base = address310 + index311 * 8
                   mbt_ffi_store32(iter_base + 0, iter_elem.key)
                   mbt_ffi_store32(iter_base + 4, iter_elem.value)
                 }
-                mbt_ffi_store32(iter_base + 12, payload301.length())
-                mbt_ffi_store32(iter_base + 8, address302)
+                mbt_ffi_store32(iter_base + 12, payload309.length())
+                mbt_ffi_store32(iter_base + 8, address310)
 
                 ()
               }
-              OptionValue(payload304) => {
+              OptionValue(payload312) => {
                 mbt_ffi_store8(iter_base + 0, 21)
 
-                match payload304 {
+                match payload312 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload306) => {
+                  Some(payload314) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload306)
+                    mbt_ffi_store32(iter_base + 12, payload314)
 
                     ()
                   }
@@ -1976,22 +2016,22 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              ResultValue(payload307) => {
+              ResultValue(payload315) => {
                 mbt_ffi_store8(iter_base + 0, 22)
 
-                match payload307 {
-                  OkValue(payload308) => {
+                match payload315 {
+                  OkValue(payload316) => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
-                    match payload308 {
+                    match payload316 {
                       None => {
                         mbt_ffi_store8(iter_base + 12, 0)
 
                         ()
                       }
-                      Some(payload310) => {
+                      Some(payload318) => {
                         mbt_ffi_store8(iter_base + 12, 1)
-                        mbt_ffi_store32(iter_base + 16, payload310)
+                        mbt_ffi_store32(iter_base + 16, payload318)
 
                         ()
                       }
@@ -1999,18 +2039,18 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                     ()
                   }
-                  ErrValue(payload311) => {
+                  ErrValue(payload319) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    match payload311 {
+                    match payload319 {
                       None => {
                         mbt_ffi_store8(iter_base + 12, 0)
 
                         ()
                       }
-                      Some(payload313) => {
+                      Some(payload321) => {
                         mbt_ffi_store8(iter_base + 12, 1)
-                        mbt_ffi_store32(iter_base + 16, payload313)
+                        mbt_ffi_store32(iter_base + 16, payload321)
 
                         ()
                       }
@@ -2022,25 +2062,25 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              TextValue(payload314) => {
+              TextValue(payload322) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                let ptr315 = mbt_ffi_str2ptr(payload314.text)
-                mbt_ffi_store32(iter_base + 12, payload314.text.length())
-                mbt_ffi_store32(iter_base + 8, ptr315)
+                let ptr323 = mbt_ffi_str2ptr(payload322.text)
+                mbt_ffi_store32(iter_base + 12, payload322.text.length())
+                mbt_ffi_store32(iter_base + 8, ptr323)
 
-                match payload314.language {
+                match payload322.language {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload317) => {
+                  Some(payload325) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr318 = mbt_ffi_str2ptr(payload317)
-                    mbt_ffi_store32(iter_base + 24, payload317.length())
-                    mbt_ffi_store32(iter_base + 20, ptr318)
+                    let ptr326 = mbt_ffi_str2ptr(payload325)
+                    mbt_ffi_store32(iter_base + 24, payload325.length())
+                    mbt_ffi_store32(iter_base + 20, ptr326)
 
                     ()
                   }
@@ -2048,26 +2088,26 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              BinaryValue(payload319) => {
+              BinaryValue(payload327) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                let ptr320 = mbt_ffi_bytes2ptr(payload319.bytes)
+                let ptr328 = mbt_ffi_bytes2ptr(payload327.bytes)
 
-                mbt_ffi_store32(iter_base + 12, payload319.bytes.length())
-                mbt_ffi_store32(iter_base + 8, ptr320)
+                mbt_ffi_store32(iter_base + 12, payload327.bytes.length())
+                mbt_ffi_store32(iter_base + 8, ptr328)
 
-                match payload319.mime_type {
+                match payload327.mime_type {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload322) => {
+                  Some(payload330) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr323 = mbt_ffi_str2ptr(payload322)
-                    mbt_ffi_store32(iter_base + 24, payload322.length())
-                    mbt_ffi_store32(iter_base + 20, ptr323)
+                    let ptr331 = mbt_ffi_str2ptr(payload330)
+                    mbt_ffi_store32(iter_base + 24, payload330.length())
+                    mbt_ffi_store32(iter_base + 20, ptr331)
 
                     ()
                   }
@@ -2075,99 +2115,99 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
                 ()
               }
-              PathValue(payload324) => {
+              PathValue(payload332) => {
                 mbt_ffi_store8(iter_base + 0, 25)
 
-                let ptr325 = mbt_ffi_str2ptr(payload324)
-                mbt_ffi_store32(iter_base + 12, payload324.length())
-                mbt_ffi_store32(iter_base + 8, ptr325)
+                let ptr333 = mbt_ffi_str2ptr(payload332)
+                mbt_ffi_store32(iter_base + 12, payload332.length())
+                mbt_ffi_store32(iter_base + 8, ptr333)
 
                 ()
               }
-              UrlValue(payload326) => {
+              UrlValue(payload334) => {
                 mbt_ffi_store8(iter_base + 0, 26)
 
-                let ptr327 = mbt_ffi_str2ptr(payload326)
-                mbt_ffi_store32(iter_base + 12, payload326.length())
-                mbt_ffi_store32(iter_base + 8, ptr327)
-
-                ()
-              }
-              DatetimeValue(payload328) => {
-                mbt_ffi_store8(iter_base + 0, 27)
-                mbt_ffi_store64(iter_base + 8, payload328.seconds)
-                mbt_ffi_store32(
-                  iter_base + 16,
-                  payload328.nanoseconds.reinterpret_as_int(),
-                )
-
-                ()
-              }
-              DurationValue(payload329) => {
-                mbt_ffi_store8(iter_base + 0, 28)
-                mbt_ffi_store64(iter_base + 8, payload329.nanoseconds)
-
-                ()
-              }
-              QuantityValueNode(payload330) => {
-                mbt_ffi_store8(iter_base + 0, 29)
-                mbt_ffi_store64(iter_base + 8, payload330.mantissa)
-                mbt_ffi_store32(iter_base + 16, payload330.scale)
-
-                let ptr331 = mbt_ffi_str2ptr(payload330.unit)
-                mbt_ffi_store32(iter_base + 24, payload330.unit.length())
-                mbt_ffi_store32(iter_base + 20, ptr331)
-
-                ()
-              }
-              UnionValue(payload332) => {
-                mbt_ffi_store8(iter_base + 0, 30)
-
-                let ptr333 = mbt_ffi_str2ptr(payload332.tag)
-                mbt_ffi_store32(iter_base + 12, payload332.tag.length())
-                mbt_ffi_store32(iter_base + 8, ptr333)
-                mbt_ffi_store32(iter_base + 16, payload332.body)
-
-                ()
-              }
-              SecretValue(payload334) => {
-                mbt_ffi_store8(iter_base + 0, 31)
-
-                let ptr335 = mbt_ffi_str2ptr(payload334.secret_ref)
-                mbt_ffi_store32(iter_base + 12, payload334.secret_ref.length())
+                let ptr335 = mbt_ffi_str2ptr(payload334)
+                mbt_ffi_store32(iter_base + 12, payload334.length())
                 mbt_ffi_store32(iter_base + 8, ptr335)
 
                 ()
               }
-              QuotaTokenValue(payload336) => {
+              DatetimeValue(payload336) => {
+                mbt_ffi_store8(iter_base + 0, 27)
+                mbt_ffi_store64(iter_base + 8, payload336.seconds)
+                mbt_ffi_store32(
+                  iter_base + 16,
+                  payload336.nanoseconds.reinterpret_as_int(),
+                )
+
+                ()
+              }
+              DurationValue(payload337) => {
+                mbt_ffi_store8(iter_base + 0, 28)
+                mbt_ffi_store64(iter_base + 8, payload337.nanoseconds)
+
+                ()
+              }
+              QuantityValueNode(payload338) => {
+                mbt_ffi_store8(iter_base + 0, 29)
+                mbt_ffi_store64(iter_base + 8, payload338.mantissa)
+                mbt_ffi_store32(iter_base + 16, payload338.scale)
+
+                let ptr339 = mbt_ffi_str2ptr(payload338.unit)
+                mbt_ffi_store32(iter_base + 24, payload338.unit.length())
+                mbt_ffi_store32(iter_base + 20, ptr339)
+
+                ()
+              }
+              UnionValue(payload340) => {
+                mbt_ffi_store8(iter_base + 0, 30)
+
+                let ptr341 = mbt_ffi_str2ptr(payload340.tag)
+                mbt_ffi_store32(iter_base + 12, payload340.tag.length())
+                mbt_ffi_store32(iter_base + 8, ptr341)
+                mbt_ffi_store32(iter_base + 16, payload340.body)
+
+                ()
+              }
+              SecretValue(payload342) => {
+                mbt_ffi_store8(iter_base + 0, 31)
+
+                let ptr343 = mbt_ffi_str2ptr(payload342.secret_ref)
+                mbt_ffi_store32(iter_base + 12, payload342.secret_ref.length())
+                mbt_ffi_store32(iter_base + 8, ptr343)
+
+                ()
+              }
+              QuotaTokenValue(payload344) => {
                 mbt_ffi_store8(iter_base + 0, 32)
                 mbt_ffi_store64(
                   iter_base + 8,
-                  payload336.environment_id.uuid.high_bits.reinterpret_as_int64(),
+                  payload344.environment_id.uuid.high_bits.reinterpret_as_int64(),
                 )
                 mbt_ffi_store64(
                   iter_base + 16,
-                  payload336.environment_id.uuid.low_bits.reinterpret_as_int64(),
+                  payload344.environment_id.uuid.low_bits.reinterpret_as_int64(),
                 )
 
-                let ptr337 = mbt_ffi_str2ptr(payload336.resource_name)
+                let ptr345 = mbt_ffi_str2ptr(payload344.resource_name)
                 mbt_ffi_store32(
                   iter_base + 28,
-                  payload336.resource_name.length(),
+                  payload344.resource_name.length(),
                 )
-                mbt_ffi_store32(iter_base + 24, ptr337)
+                mbt_ffi_store32(iter_base + 24, ptr345)
                 mbt_ffi_store64(
                   iter_base + 32,
-                  payload336.expected_use.reinterpret_as_int64(),
+                  payload344.expected_use.reinterpret_as_int64(),
                 )
-                mbt_ffi_store64(iter_base + 40, payload336.last_credit)
+                mbt_ffi_store64(iter_base + 40, payload344.last_credit)
                 mbt_ffi_store64(
                   iter_base + 48,
-                  payload336.last_credit_at.seconds,
+                  payload344.last_credit_at.seconds,
                 )
                 mbt_ffi_store32(
                   iter_base + 56,
-                  payload336.last_credit_at.nanoseconds.reinterpret_as_int(),
+                  payload344.last_credit_at.nanoseconds.reinterpret_as_int(),
                 )
 
                 ()
@@ -2178,7 +2218,7 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
             return_area + 32,
             payload57.value.value_nodes.length(),
           )
-          mbt_ffi_store32(return_area + 28, address338)
+          mbt_ffi_store32(return_area + 28, address346)
           mbt_ffi_store32(return_area + 36, payload57.value.root)
 
           ()
@@ -2264,7 +2304,9 @@ pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 56) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                         _ => panic()
                       }
                     _ => panic()
@@ -2312,7 +2354,9 @@ pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 60) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                         _ => panic()
                       }
                     _ => panic()
@@ -2526,7 +2570,9 @@ pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 80) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                         _ => panic()
                       }
                     _ => panic()
@@ -2584,7 +2630,9 @@ pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 132) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
                   _ => panic()
                 }
               _ => panic()
@@ -3636,14 +3684,14 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
         CustomError(payload130) => {
           mbt_ffi_store8(return_area + 4, 4)
 
-          let address334 = mbt_ffi_malloc(
+          let address342 = mbt_ffi_malloc(
             payload130.graph.type_nodes.length() * 144,
           )
-          for index335 = 0
-              index335 < payload130.graph.type_nodes.length()
-              index335 = index335 + 1 {
-            let iter_elem : @types.SchemaTypeNode = payload130.graph.type_nodes[index335]
-            let iter_base = address334 + index335 * 144
+          for index343 = 0
+              index343 < payload130.graph.type_nodes.length()
+              index343 = index343 + 1 {
+            let iter_elem : @types.SchemaTypeNode = payload130.graph.type_nodes[index343]
+            let iter_base = address342 + index343 * 144
 
             match iter_elem.body {
               RefType(payload131) => {
@@ -3720,12 +3768,12 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
               RecordType(payload145) => {
                 mbt_ffi_store8(iter_base + 0, 14)
 
-                let address164 = mbt_ffi_malloc(payload145.length() * 68)
-                for index165 = 0
-                    index165 < payload145.length()
-                    index165 = index165 + 1 {
-                  let iter_elem : @types.NamedFieldType = payload145[index165]
-                  let iter_base = address164 + index165 * 68
+                let address166 = mbt_ffi_malloc(payload145.length() * 68)
+                for index167 = 0
+                    index167 < payload145.length()
+                    index167 = index167 + 1 {
+                  let iter_elem : @types.NamedFieldType = payload145[index167]
+                  let iter_base = address166 + index167 * 68
 
                   let ptr146 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
@@ -3819,12 +3867,22 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                           ()
                         }
-                        Other(payload162) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 56, 1)
 
-                          let ptr163 = mbt_ffi_str2ptr(payload162)
-                          mbt_ffi_store32(iter_base + 64, payload162.length())
-                          mbt_ffi_store32(iter_base + 60, ptr163)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 56, 2)
+
+                          ()
+                        }
+                        Other(payload164) => {
+                          mbt_ffi_store8(iter_base + 56, 3)
+
+                          let ptr165 = mbt_ffi_str2ptr(payload164)
+                          mbt_ffi_store32(iter_base + 64, payload164.length())
+                          mbt_ffi_store32(iter_base + 60, ptr165)
 
                           ()
                         }
@@ -3835,23 +3893,23 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
                   }
                 }
                 mbt_ffi_store32(iter_base + 12, payload145.length())
-                mbt_ffi_store32(iter_base + 8, address164)
+                mbt_ffi_store32(iter_base + 8, address166)
 
                 ()
               }
-              VariantType(payload166) => {
+              VariantType(payload168) => {
                 mbt_ffi_store8(iter_base + 0, 15)
 
-                let address187 = mbt_ffi_malloc(payload166.length() * 72)
-                for index188 = 0
-                    index188 < payload166.length()
-                    index188 = index188 + 1 {
-                  let iter_elem : @types.VariantCaseType = payload166[index188]
-                  let iter_base = address187 + index188 * 72
+                let address191 = mbt_ffi_malloc(payload168.length() * 72)
+                for index192 = 0
+                    index192 < payload168.length()
+                    index192 = index192 + 1 {
+                  let iter_elem : @types.VariantCaseType = payload168[index192]
+                  let iter_base = address191 + index192 * 72
 
-                  let ptr167 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr169 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr167)
+                  mbt_ffi_store32(iter_base + 0, ptr169)
 
                   match iter_elem.payload {
                     None => {
@@ -3859,9 +3917,9 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload169) => {
+                    Some(payload171) => {
                       mbt_ffi_store8(iter_base + 8, 1)
-                      mbt_ffi_store32(iter_base + 12, payload169)
+                      mbt_ffi_store32(iter_base + 12, payload171)
 
                       ()
                     }
@@ -3873,54 +3931,54 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload171) => {
+                    Some(payload173) => {
                       mbt_ffi_store8(iter_base + 16, 1)
 
-                      let ptr172 = mbt_ffi_str2ptr(payload171)
-                      mbt_ffi_store32(iter_base + 24, payload171.length())
-                      mbt_ffi_store32(iter_base + 20, ptr172)
+                      let ptr174 = mbt_ffi_str2ptr(payload173)
+                      mbt_ffi_store32(iter_base + 24, payload173.length())
+                      mbt_ffi_store32(iter_base + 20, ptr174)
 
                       ()
                     }
                   }
 
-                  let address174 = mbt_ffi_malloc(
+                  let address176 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index175 = 0
-                      index175 < iter_elem.metadata.aliases.length()
-                      index175 = index175 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index175]
-                    let iter_base = address174 + index175 * 8
+                  for index177 = 0
+                      index177 < iter_elem.metadata.aliases.length()
+                      index177 = index177 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index177]
+                    let iter_base = address176 + index177 * 8
 
-                    let ptr173 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr175 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr173)
+                    mbt_ffi_store32(iter_base + 0, ptr175)
                   }
                   mbt_ffi_store32(
                     iter_base + 32,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 28, address174)
+                  mbt_ffi_store32(iter_base + 28, address176)
 
-                  let address177 = mbt_ffi_malloc(
+                  let address179 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index178 = 0
-                      index178 < iter_elem.metadata.examples.length()
-                      index178 = index178 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index178]
-                    let iter_base = address177 + index178 * 8
+                  for index180 = 0
+                      index180 < iter_elem.metadata.examples.length()
+                      index180 = index180 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index180]
+                    let iter_base = address179 + index180 * 8
 
-                    let ptr176 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr178 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr176)
+                    mbt_ffi_store32(iter_base + 0, ptr178)
                   }
                   mbt_ffi_store32(
                     iter_base + 40,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 36, address177)
+                  mbt_ffi_store32(iter_base + 36, address179)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -3928,12 +3986,12 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload180) => {
+                    Some(payload182) => {
                       mbt_ffi_store8(iter_base + 44, 1)
 
-                      let ptr181 = mbt_ffi_str2ptr(payload180)
-                      mbt_ffi_store32(iter_base + 52, payload180.length())
-                      mbt_ffi_store32(iter_base + 48, ptr181)
+                      let ptr183 = mbt_ffi_str2ptr(payload182)
+                      mbt_ffi_store32(iter_base + 52, payload182.length())
+                      mbt_ffi_store32(iter_base + 48, ptr183)
 
                       ()
                     }
@@ -3945,21 +4003,31 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload183) => {
+                    Some(payload185) => {
                       mbt_ffi_store8(iter_base + 56, 1)
 
-                      match payload183 {
+                      match payload185 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 60, 0)
 
                           ()
                         }
-                        Other(payload185) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 60, 1)
 
-                          let ptr186 = mbt_ffi_str2ptr(payload185)
-                          mbt_ffi_store32(iter_base + 68, payload185.length())
-                          mbt_ffi_store32(iter_base + 64, ptr186)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 60, 2)
+
+                          ()
+                        }
+                        Other(payload189) => {
+                          mbt_ffi_store8(iter_base + 60, 3)
+
+                          let ptr190 = mbt_ffi_str2ptr(payload189)
+                          mbt_ffi_store32(iter_base + 68, payload189.length())
+                          mbt_ffi_store32(iter_base + 64, ptr190)
 
                           ()
                         }
@@ -3969,32 +4037,13 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload166.length())
-                mbt_ffi_store32(iter_base + 8, address187)
-
-                ()
-              }
-              EnumType(payload189) => {
-                mbt_ffi_store8(iter_base + 0, 16)
-
-                let address191 = mbt_ffi_malloc(payload189.length() * 8)
-                for index192 = 0
-                    index192 < payload189.length()
-                    index192 = index192 + 1 {
-                  let iter_elem : String = payload189[index192]
-                  let iter_base = address191 + index192 * 8
-
-                  let ptr190 = mbt_ffi_str2ptr(iter_elem)
-                  mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr190)
-                }
-                mbt_ffi_store32(iter_base + 12, payload189.length())
+                mbt_ffi_store32(iter_base + 12, payload168.length())
                 mbt_ffi_store32(iter_base + 8, address191)
 
                 ()
               }
-              FlagsType(payload193) => {
-                mbt_ffi_store8(iter_base + 0, 17)
+              EnumType(payload193) => {
+                mbt_ffi_store8(iter_base + 0, 16)
 
                 let address195 = mbt_ffi_malloc(payload193.length() * 8)
                 for index196 = 0
@@ -4012,77 +4061,96 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              TupleType(payload197) => {
-                mbt_ffi_store8(iter_base + 0, 18)
+              FlagsType(payload197) => {
+                mbt_ffi_store8(iter_base + 0, 17)
 
-                let address198 = mbt_ffi_malloc(payload197.length() * 4)
-                for index199 = 0
-                    index199 < payload197.length()
-                    index199 = index199 + 1 {
-                  let iter_elem : Int = payload197[index199]
-                  let iter_base = address198 + index199 * 4
-                  mbt_ffi_store32(iter_base + 0, iter_elem)
+                let address199 = mbt_ffi_malloc(payload197.length() * 8)
+                for index200 = 0
+                    index200 < payload197.length()
+                    index200 = index200 + 1 {
+                  let iter_elem : String = payload197[index200]
+                  let iter_base = address199 + index200 * 8
+
+                  let ptr198 = mbt_ffi_str2ptr(iter_elem)
+                  mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                  mbt_ffi_store32(iter_base + 0, ptr198)
                 }
                 mbt_ffi_store32(iter_base + 12, payload197.length())
-                mbt_ffi_store32(iter_base + 8, address198)
+                mbt_ffi_store32(iter_base + 8, address199)
 
                 ()
               }
-              ListType(payload200) => {
+              TupleType(payload201) => {
+                mbt_ffi_store8(iter_base + 0, 18)
+
+                let address202 = mbt_ffi_malloc(payload201.length() * 4)
+                for index203 = 0
+                    index203 < payload201.length()
+                    index203 = index203 + 1 {
+                  let iter_elem : Int = payload201[index203]
+                  let iter_base = address202 + index203 * 4
+                  mbt_ffi_store32(iter_base + 0, iter_elem)
+                }
+                mbt_ffi_store32(iter_base + 12, payload201.length())
+                mbt_ffi_store32(iter_base + 8, address202)
+
+                ()
+              }
+              ListType(payload204) => {
                 mbt_ffi_store8(iter_base + 0, 19)
-                mbt_ffi_store32(iter_base + 8, payload200)
+                mbt_ffi_store32(iter_base + 8, payload204)
 
                 ()
               }
-              FixedListType(payload201) => {
+              FixedListType(payload205) => {
                 mbt_ffi_store8(iter_base + 0, 20)
-                mbt_ffi_store32(iter_base + 8, payload201.element)
+                mbt_ffi_store32(iter_base + 8, payload205.element)
                 mbt_ffi_store32(
                   iter_base + 12,
-                  payload201.length.reinterpret_as_int(),
+                  payload205.length.reinterpret_as_int(),
                 )
 
                 ()
               }
-              MapType(payload202) => {
+              MapType(payload206) => {
                 mbt_ffi_store8(iter_base + 0, 21)
-                mbt_ffi_store32(iter_base + 8, payload202.key)
-                mbt_ffi_store32(iter_base + 12, payload202.value)
+                mbt_ffi_store32(iter_base + 8, payload206.key)
+                mbt_ffi_store32(iter_base + 12, payload206.value)
 
                 ()
               }
-              OptionType(payload203) => {
+              OptionType(payload207) => {
                 mbt_ffi_store8(iter_base + 0, 22)
-                mbt_ffi_store32(iter_base + 8, payload203)
+                mbt_ffi_store32(iter_base + 8, payload207)
 
                 ()
               }
-              ResultType(payload204) => {
+              ResultType(payload208) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                match payload204.ok {
+                match payload208.ok {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload206) => {
+                  Some(payload210) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload206)
+                    mbt_ffi_store32(iter_base + 12, payload210)
 
                     ()
                   }
                 }
 
-                match payload204.err {
+                match payload208.err {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload208) => {
+                  Some(payload212) => {
                     mbt_ffi_store8(iter_base + 16, 1)
-                    mbt_ffi_store32(iter_base + 20, payload208)
+                    mbt_ffi_store32(iter_base + 20, payload212)
 
                     ()
                   }
@@ -4090,82 +4158,82 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              TextType(payload209) => {
+              TextType(payload213) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                match payload209.languages {
+                match payload213.languages {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload211) => {
+                  Some(payload215) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address213 = mbt_ffi_malloc(payload211.length() * 8)
-                    for index214 = 0
-                        index214 < payload211.length()
-                        index214 = index214 + 1 {
-                      let iter_elem : String = payload211[index214]
-                      let iter_base = address213 + index214 * 8
+                    let address217 = mbt_ffi_malloc(payload215.length() * 8)
+                    for index218 = 0
+                        index218 < payload215.length()
+                        index218 = index218 + 1 {
+                      let iter_elem : String = payload215[index218]
+                      let iter_base = address217 + index218 * 8
 
-                      let ptr212 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr216 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr212)
+                      mbt_ffi_store32(iter_base + 0, ptr216)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload211.length())
-                    mbt_ffi_store32(iter_base + 12, address213)
+                    mbt_ffi_store32(iter_base + 16, payload215.length())
+                    mbt_ffi_store32(iter_base + 12, address217)
 
                     ()
                   }
                 }
 
-                match payload209.min_length {
+                match payload213.min_length {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload216) => {
+                  Some(payload220) => {
                     mbt_ffi_store8(iter_base + 20, 1)
                     mbt_ffi_store32(
                       iter_base + 24,
-                      payload216.reinterpret_as_int(),
+                      payload220.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload209.max_length {
+                match payload213.max_length {
                   None => {
                     mbt_ffi_store8(iter_base + 28, 0)
 
                     ()
                   }
-                  Some(payload218) => {
+                  Some(payload222) => {
                     mbt_ffi_store8(iter_base + 28, 1)
                     mbt_ffi_store32(
                       iter_base + 32,
-                      payload218.reinterpret_as_int(),
+                      payload222.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload209.regex {
+                match payload213.regex {
                   None => {
                     mbt_ffi_store8(iter_base + 36, 0)
 
                     ()
                   }
-                  Some(payload220) => {
+                  Some(payload224) => {
                     mbt_ffi_store8(iter_base + 36, 1)
 
-                    let ptr221 = mbt_ffi_str2ptr(payload220)
-                    mbt_ffi_store32(iter_base + 44, payload220.length())
-                    mbt_ffi_store32(iter_base + 40, ptr221)
+                    let ptr225 = mbt_ffi_str2ptr(payload224)
+                    mbt_ffi_store32(iter_base + 44, payload224.length())
+                    mbt_ffi_store32(iter_base + 40, ptr225)
 
                     ()
                   }
@@ -4173,64 +4241,64 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              BinaryType(payload222) => {
+              BinaryType(payload226) => {
                 mbt_ffi_store8(iter_base + 0, 25)
 
-                match payload222.mime_types {
+                match payload226.mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload224) => {
+                  Some(payload228) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address226 = mbt_ffi_malloc(payload224.length() * 8)
-                    for index227 = 0
-                        index227 < payload224.length()
-                        index227 = index227 + 1 {
-                      let iter_elem : String = payload224[index227]
-                      let iter_base = address226 + index227 * 8
+                    let address230 = mbt_ffi_malloc(payload228.length() * 8)
+                    for index231 = 0
+                        index231 < payload228.length()
+                        index231 = index231 + 1 {
+                      let iter_elem : String = payload228[index231]
+                      let iter_base = address230 + index231 * 8
 
-                      let ptr225 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr229 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr225)
+                      mbt_ffi_store32(iter_base + 0, ptr229)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload224.length())
-                    mbt_ffi_store32(iter_base + 12, address226)
+                    mbt_ffi_store32(iter_base + 16, payload228.length())
+                    mbt_ffi_store32(iter_base + 12, address230)
 
                     ()
                   }
                 }
 
-                match payload222.min_bytes {
+                match payload226.min_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload229) => {
+                  Some(payload233) => {
                     mbt_ffi_store8(iter_base + 20, 1)
                     mbt_ffi_store32(
                       iter_base + 24,
-                      payload229.reinterpret_as_int(),
+                      payload233.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload222.max_bytes {
+                match payload226.max_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 28, 0)
 
                     ()
                   }
-                  Some(payload231) => {
+                  Some(payload235) => {
                     mbt_ffi_store8(iter_base + 28, 1)
                     mbt_ffi_store32(
                       iter_base + 32,
-                      payload231.reinterpret_as_int(),
+                      payload235.reinterpret_as_int(),
                     )
 
                     ()
@@ -4239,60 +4307,60 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              PathType(payload232) => {
+              PathType(payload236) => {
                 mbt_ffi_store8(iter_base + 0, 26)
-                mbt_ffi_store8(iter_base + 8, payload232.direction.ordinal())
-                mbt_ffi_store8(iter_base + 9, payload232.kind.ordinal())
+                mbt_ffi_store8(iter_base + 8, payload236.direction.ordinal())
+                mbt_ffi_store8(iter_base + 9, payload236.kind.ordinal())
 
-                match payload232.allowed_mime_types {
+                match payload236.allowed_mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 12, 0)
 
                     ()
                   }
-                  Some(payload234) => {
+                  Some(payload238) => {
                     mbt_ffi_store8(iter_base + 12, 1)
 
-                    let address236 = mbt_ffi_malloc(payload234.length() * 8)
-                    for index237 = 0
-                        index237 < payload234.length()
-                        index237 = index237 + 1 {
-                      let iter_elem : String = payload234[index237]
-                      let iter_base = address236 + index237 * 8
+                    let address240 = mbt_ffi_malloc(payload238.length() * 8)
+                    for index241 = 0
+                        index241 < payload238.length()
+                        index241 = index241 + 1 {
+                      let iter_elem : String = payload238[index241]
+                      let iter_base = address240 + index241 * 8
 
-                      let ptr235 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr239 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr235)
+                      mbt_ffi_store32(iter_base + 0, ptr239)
                     }
-                    mbt_ffi_store32(iter_base + 20, payload234.length())
-                    mbt_ffi_store32(iter_base + 16, address236)
+                    mbt_ffi_store32(iter_base + 20, payload238.length())
+                    mbt_ffi_store32(iter_base + 16, address240)
 
                     ()
                   }
                 }
 
-                match payload232.allowed_extensions {
+                match payload236.allowed_extensions {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload239) => {
+                  Some(payload243) => {
                     mbt_ffi_store8(iter_base + 24, 1)
 
-                    let address241 = mbt_ffi_malloc(payload239.length() * 8)
-                    for index242 = 0
-                        index242 < payload239.length()
-                        index242 = index242 + 1 {
-                      let iter_elem : String = payload239[index242]
-                      let iter_base = address241 + index242 * 8
+                    let address245 = mbt_ffi_malloc(payload243.length() * 8)
+                    for index246 = 0
+                        index246 < payload243.length()
+                        index246 = index246 + 1 {
+                      let iter_elem : String = payload243[index246]
+                      let iter_base = address245 + index246 * 8
 
-                      let ptr240 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr244 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr240)
+                      mbt_ffi_store32(iter_base + 0, ptr244)
                     }
-                    mbt_ffi_store32(iter_base + 32, payload239.length())
-                    mbt_ffi_store32(iter_base + 28, address241)
+                    mbt_ffi_store32(iter_base + 32, payload243.length())
+                    mbt_ffi_store32(iter_base + 28, address245)
 
                     ()
                   }
@@ -4300,58 +4368,58 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              UrlType(payload243) => {
+              UrlType(payload247) => {
                 mbt_ffi_store8(iter_base + 0, 27)
 
-                match payload243.allowed_schemes {
+                match payload247.allowed_schemes {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload245) => {
+                  Some(payload249) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address247 = mbt_ffi_malloc(payload245.length() * 8)
-                    for index248 = 0
-                        index248 < payload245.length()
-                        index248 = index248 + 1 {
-                      let iter_elem : String = payload245[index248]
-                      let iter_base = address247 + index248 * 8
+                    let address251 = mbt_ffi_malloc(payload249.length() * 8)
+                    for index252 = 0
+                        index252 < payload249.length()
+                        index252 = index252 + 1 {
+                      let iter_elem : String = payload249[index252]
+                      let iter_base = address251 + index252 * 8
 
-                      let ptr246 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr250 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr246)
+                      mbt_ffi_store32(iter_base + 0, ptr250)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload245.length())
-                    mbt_ffi_store32(iter_base + 12, address247)
+                    mbt_ffi_store32(iter_base + 16, payload249.length())
+                    mbt_ffi_store32(iter_base + 12, address251)
 
                     ()
                   }
                 }
 
-                match payload243.allowed_hosts {
+                match payload247.allowed_hosts {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload250) => {
+                  Some(payload254) => {
                     mbt_ffi_store8(iter_base + 20, 1)
 
-                    let address252 = mbt_ffi_malloc(payload250.length() * 8)
-                    for index253 = 0
-                        index253 < payload250.length()
-                        index253 = index253 + 1 {
-                      let iter_elem : String = payload250[index253]
-                      let iter_base = address252 + index253 * 8
+                    let address256 = mbt_ffi_malloc(payload254.length() * 8)
+                    for index257 = 0
+                        index257 < payload254.length()
+                        index257 = index257 + 1 {
+                      let iter_elem : String = payload254[index257]
+                      let iter_base = address256 + index257 * 8
 
-                      let ptr251 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr255 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr251)
+                      mbt_ffi_store32(iter_base + 0, ptr255)
                     }
-                    mbt_ffi_store32(iter_base + 28, payload250.length())
-                    mbt_ffi_store32(iter_base + 24, address252)
+                    mbt_ffi_store32(iter_base + 28, payload254.length())
+                    mbt_ffi_store32(iter_base + 24, address256)
 
                     ()
                   }
@@ -4369,65 +4437,65 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              QuantityType(payload256) => {
+              QuantityType(payload260) => {
                 mbt_ffi_store8(iter_base + 0, 30)
 
-                let ptr257 = mbt_ffi_str2ptr(payload256.base_unit)
-                mbt_ffi_store32(iter_base + 12, payload256.base_unit.length())
-                mbt_ffi_store32(iter_base + 8, ptr257)
+                let ptr261 = mbt_ffi_str2ptr(payload260.base_unit)
+                mbt_ffi_store32(iter_base + 12, payload260.base_unit.length())
+                mbt_ffi_store32(iter_base + 8, ptr261)
 
-                let address259 = mbt_ffi_malloc(
-                  payload256.allowed_suffixes.length() * 8,
+                let address263 = mbt_ffi_malloc(
+                  payload260.allowed_suffixes.length() * 8,
                 )
-                for index260 = 0
-                    index260 < payload256.allowed_suffixes.length()
-                    index260 = index260 + 1 {
-                  let iter_elem : String = payload256.allowed_suffixes[index260]
-                  let iter_base = address259 + index260 * 8
+                for index264 = 0
+                    index264 < payload260.allowed_suffixes.length()
+                    index264 = index264 + 1 {
+                  let iter_elem : String = payload260.allowed_suffixes[index264]
+                  let iter_base = address263 + index264 * 8
 
-                  let ptr258 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr262 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr258)
+                  mbt_ffi_store32(iter_base + 0, ptr262)
                 }
                 mbt_ffi_store32(
                   iter_base + 20,
-                  payload256.allowed_suffixes.length(),
+                  payload260.allowed_suffixes.length(),
                 )
-                mbt_ffi_store32(iter_base + 16, address259)
+                mbt_ffi_store32(iter_base + 16, address263)
 
-                match payload256.min {
+                match payload260.min {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload262) => {
+                  Some(payload266) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(iter_base + 32, payload262.mantissa)
-                    mbt_ffi_store32(iter_base + 40, payload262.scale)
+                    mbt_ffi_store64(iter_base + 32, payload266.mantissa)
+                    mbt_ffi_store32(iter_base + 40, payload266.scale)
 
-                    let ptr263 = mbt_ffi_str2ptr(payload262.unit)
-                    mbt_ffi_store32(iter_base + 48, payload262.unit.length())
-                    mbt_ffi_store32(iter_base + 44, ptr263)
+                    let ptr267 = mbt_ffi_str2ptr(payload266.unit)
+                    mbt_ffi_store32(iter_base + 48, payload266.unit.length())
+                    mbt_ffi_store32(iter_base + 44, ptr267)
 
                     ()
                   }
                 }
 
-                match payload256.max {
+                match payload260.max {
                   None => {
                     mbt_ffi_store8(iter_base + 56, 0)
 
                     ()
                   }
-                  Some(payload265) => {
+                  Some(payload269) => {
                     mbt_ffi_store8(iter_base + 56, 1)
-                    mbt_ffi_store64(iter_base + 64, payload265.mantissa)
-                    mbt_ffi_store32(iter_base + 72, payload265.scale)
+                    mbt_ffi_store64(iter_base + 64, payload269.mantissa)
+                    mbt_ffi_store32(iter_base + 72, payload269.scale)
 
-                    let ptr266 = mbt_ffi_str2ptr(payload265.unit)
-                    mbt_ffi_store32(iter_base + 80, payload265.unit.length())
-                    mbt_ffi_store32(iter_base + 76, ptr266)
+                    let ptr270 = mbt_ffi_str2ptr(payload269.unit)
+                    mbt_ffi_store32(iter_base + 80, payload269.unit.length())
+                    mbt_ffi_store32(iter_base + 76, ptr270)
 
                     ()
                   }
@@ -4435,44 +4503,26 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              UnionType(payload267) => {
+              UnionType(payload271) => {
                 mbt_ffi_store8(iter_base + 0, 31)
 
-                let address301 = mbt_ffi_malloc(
-                  payload267.branches.length() * 92,
+                let address307 = mbt_ffi_malloc(
+                  payload271.branches.length() * 92,
                 )
-                for index302 = 0
-                    index302 < payload267.branches.length()
-                    index302 = index302 + 1 {
-                  let iter_elem : @types.UnionBranch = payload267.branches[index302]
-                  let iter_base = address301 + index302 * 92
+                for index308 = 0
+                    index308 < payload271.branches.length()
+                    index308 = index308 + 1 {
+                  let iter_elem : @types.UnionBranch = payload271.branches[index308]
+                  let iter_base = address307 + index308 * 92
 
-                  let ptr268 = mbt_ffi_str2ptr(iter_elem.tag)
+                  let ptr272 = mbt_ffi_str2ptr(iter_elem.tag)
                   mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-                  mbt_ffi_store32(iter_base + 0, ptr268)
+                  mbt_ffi_store32(iter_base + 0, ptr272)
                   mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                   match iter_elem.discriminator {
-                    Prefix(payload269) => {
+                    Prefix(payload273) => {
                       mbt_ffi_store8(iter_base + 12, 0)
-
-                      let ptr270 = mbt_ffi_str2ptr(payload269)
-                      mbt_ffi_store32(iter_base + 20, payload269.length())
-                      mbt_ffi_store32(iter_base + 16, ptr270)
-
-                      ()
-                    }
-                    Suffix(payload271) => {
-                      mbt_ffi_store8(iter_base + 12, 1)
-
-                      let ptr272 = mbt_ffi_str2ptr(payload271)
-                      mbt_ffi_store32(iter_base + 20, payload271.length())
-                      mbt_ffi_store32(iter_base + 16, ptr272)
-
-                      ()
-                    }
-                    Contains(payload273) => {
-                      mbt_ffi_store8(iter_base + 12, 2)
 
                       let ptr274 = mbt_ffi_str2ptr(payload273)
                       mbt_ffi_store32(iter_base + 20, payload273.length())
@@ -4480,8 +4530,8 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Regex(payload275) => {
-                      mbt_ffi_store8(iter_base + 12, 3)
+                    Suffix(payload275) => {
+                      mbt_ffi_store8(iter_base + 12, 1)
 
                       let ptr276 = mbt_ffi_str2ptr(payload275)
                       mbt_ffi_store32(iter_base + 20, payload275.length())
@@ -4489,28 +4539,46 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    FieldEquals(payload277) => {
-                      mbt_ffi_store8(iter_base + 12, 4)
+                    Contains(payload277) => {
+                      mbt_ffi_store8(iter_base + 12, 2)
 
-                      let ptr278 = mbt_ffi_str2ptr(payload277.field_name)
-                      mbt_ffi_store32(
-                        iter_base + 20,
-                        payload277.field_name.length(),
-                      )
+                      let ptr278 = mbt_ffi_str2ptr(payload277)
+                      mbt_ffi_store32(iter_base + 20, payload277.length())
                       mbt_ffi_store32(iter_base + 16, ptr278)
 
-                      match payload277.literal {
+                      ()
+                    }
+                    Regex(payload279) => {
+                      mbt_ffi_store8(iter_base + 12, 3)
+
+                      let ptr280 = mbt_ffi_str2ptr(payload279)
+                      mbt_ffi_store32(iter_base + 20, payload279.length())
+                      mbt_ffi_store32(iter_base + 16, ptr280)
+
+                      ()
+                    }
+                    FieldEquals(payload281) => {
+                      mbt_ffi_store8(iter_base + 12, 4)
+
+                      let ptr282 = mbt_ffi_str2ptr(payload281.field_name)
+                      mbt_ffi_store32(
+                        iter_base + 20,
+                        payload281.field_name.length(),
+                      )
+                      mbt_ffi_store32(iter_base + 16, ptr282)
+
+                      match payload281.literal {
                         None => {
                           mbt_ffi_store8(iter_base + 24, 0)
 
                           ()
                         }
-                        Some(payload280) => {
+                        Some(payload284) => {
                           mbt_ffi_store8(iter_base + 24, 1)
 
-                          let ptr281 = mbt_ffi_str2ptr(payload280)
-                          mbt_ffi_store32(iter_base + 32, payload280.length())
-                          mbt_ffi_store32(iter_base + 28, ptr281)
+                          let ptr285 = mbt_ffi_str2ptr(payload284)
+                          mbt_ffi_store32(iter_base + 32, payload284.length())
+                          mbt_ffi_store32(iter_base + 28, ptr285)
 
                           ()
                         }
@@ -4518,12 +4586,12 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    FieldAbsent(payload282) => {
+                    FieldAbsent(payload286) => {
                       mbt_ffi_store8(iter_base + 12, 5)
 
-                      let ptr283 = mbt_ffi_str2ptr(payload282)
-                      mbt_ffi_store32(iter_base + 20, payload282.length())
-                      mbt_ffi_store32(iter_base + 16, ptr283)
+                      let ptr287 = mbt_ffi_str2ptr(payload286)
+                      mbt_ffi_store32(iter_base + 20, payload286.length())
+                      mbt_ffi_store32(iter_base + 16, ptr287)
 
                       ()
                     }
@@ -4535,54 +4603,54 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload285) => {
+                    Some(payload289) => {
                       mbt_ffi_store8(iter_base + 36, 1)
 
-                      let ptr286 = mbt_ffi_str2ptr(payload285)
-                      mbt_ffi_store32(iter_base + 44, payload285.length())
-                      mbt_ffi_store32(iter_base + 40, ptr286)
+                      let ptr290 = mbt_ffi_str2ptr(payload289)
+                      mbt_ffi_store32(iter_base + 44, payload289.length())
+                      mbt_ffi_store32(iter_base + 40, ptr290)
 
                       ()
                     }
                   }
 
-                  let address288 = mbt_ffi_malloc(
+                  let address292 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index289 = 0
-                      index289 < iter_elem.metadata.aliases.length()
-                      index289 = index289 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index289]
-                    let iter_base = address288 + index289 * 8
+                  for index293 = 0
+                      index293 < iter_elem.metadata.aliases.length()
+                      index293 = index293 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index293]
+                    let iter_base = address292 + index293 * 8
 
-                    let ptr287 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr291 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr287)
+                    mbt_ffi_store32(iter_base + 0, ptr291)
                   }
                   mbt_ffi_store32(
                     iter_base + 52,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 48, address288)
+                  mbt_ffi_store32(iter_base + 48, address292)
 
-                  let address291 = mbt_ffi_malloc(
+                  let address295 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index292 = 0
-                      index292 < iter_elem.metadata.examples.length()
-                      index292 = index292 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index292]
-                    let iter_base = address291 + index292 * 8
+                  for index296 = 0
+                      index296 < iter_elem.metadata.examples.length()
+                      index296 = index296 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index296]
+                    let iter_base = address295 + index296 * 8
 
-                    let ptr290 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr294 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr290)
+                    mbt_ffi_store32(iter_base + 0, ptr294)
                   }
                   mbt_ffi_store32(
                     iter_base + 60,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 56, address291)
+                  mbt_ffi_store32(iter_base + 56, address295)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -4590,12 +4658,12 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload294) => {
+                    Some(payload298) => {
                       mbt_ffi_store8(iter_base + 64, 1)
 
-                      let ptr295 = mbt_ffi_str2ptr(payload294)
-                      mbt_ffi_store32(iter_base + 72, payload294.length())
-                      mbt_ffi_store32(iter_base + 68, ptr295)
+                      let ptr299 = mbt_ffi_str2ptr(payload298)
+                      mbt_ffi_store32(iter_base + 72, payload298.length())
+                      mbt_ffi_store32(iter_base + 68, ptr299)
 
                       ()
                     }
@@ -4607,21 +4675,31 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                       ()
                     }
-                    Some(payload297) => {
+                    Some(payload301) => {
                       mbt_ffi_store8(iter_base + 76, 1)
 
-                      match payload297 {
+                      match payload301 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 80, 0)
 
                           ()
                         }
-                        Other(payload299) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 80, 1)
 
-                          let ptr300 = mbt_ffi_str2ptr(payload299)
-                          mbt_ffi_store32(iter_base + 88, payload299.length())
-                          mbt_ffi_store32(iter_base + 84, ptr300)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 80, 2)
+
+                          ()
+                        }
+                        Other(payload305) => {
+                          mbt_ffi_store8(iter_base + 80, 3)
+
+                          let ptr306 = mbt_ffi_str2ptr(payload305)
+                          mbt_ffi_store32(iter_base + 88, payload305.length())
+                          mbt_ffi_store32(iter_base + 84, ptr306)
 
                           ()
                         }
@@ -4631,26 +4709,26 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload267.branches.length())
-                mbt_ffi_store32(iter_base + 8, address301)
+                mbt_ffi_store32(iter_base + 12, payload271.branches.length())
+                mbt_ffi_store32(iter_base + 8, address307)
 
                 ()
               }
-              SecretType(payload303) => {
+              SecretType(payload309) => {
                 mbt_ffi_store8(iter_base + 0, 32)
 
-                match payload303.category {
+                match payload309.category {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload305) => {
+                  Some(payload311) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr306 = mbt_ffi_str2ptr(payload305)
-                    mbt_ffi_store32(iter_base + 16, payload305.length())
-                    mbt_ffi_store32(iter_base + 12, ptr306)
+                    let ptr312 = mbt_ffi_str2ptr(payload311)
+                    mbt_ffi_store32(iter_base + 16, payload311.length())
+                    mbt_ffi_store32(iter_base + 12, ptr312)
 
                     ()
                   }
@@ -4658,21 +4736,21 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              QuotaTokenType(payload307) => {
+              QuotaTokenType(payload313) => {
                 mbt_ffi_store8(iter_base + 0, 33)
 
-                match payload307.resource_name {
+                match payload313.resource_name {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload309) => {
+                  Some(payload315) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr310 = mbt_ffi_str2ptr(payload309)
-                    mbt_ffi_store32(iter_base + 16, payload309.length())
-                    mbt_ffi_store32(iter_base + 12, ptr310)
+                    let ptr316 = mbt_ffi_str2ptr(payload315)
+                    mbt_ffi_store32(iter_base + 16, payload315.length())
+                    mbt_ffi_store32(iter_base + 12, ptr316)
 
                     ()
                   }
@@ -4680,18 +4758,18 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              FutureType(payload311) => {
+              FutureType(payload317) => {
                 mbt_ffi_store8(iter_base + 0, 34)
 
-                match payload311 {
+                match payload317 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload313) => {
+                  Some(payload319) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload313)
+                    mbt_ffi_store32(iter_base + 12, payload319)
 
                     ()
                   }
@@ -4699,18 +4777,18 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              StreamType(payload314) => {
+              StreamType(payload320) => {
                 mbt_ffi_store8(iter_base + 0, 35)
 
-                match payload314 {
+                match payload320 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload316) => {
+                  Some(payload322) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload316)
+                    mbt_ffi_store32(iter_base + 12, payload322)
 
                     ()
                   }
@@ -4726,54 +4804,54 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload318) => {
+              Some(payload324) => {
                 mbt_ffi_store8(iter_base + 88, 1)
 
-                let ptr319 = mbt_ffi_str2ptr(payload318)
-                mbt_ffi_store32(iter_base + 96, payload318.length())
-                mbt_ffi_store32(iter_base + 92, ptr319)
+                let ptr325 = mbt_ffi_str2ptr(payload324)
+                mbt_ffi_store32(iter_base + 96, payload324.length())
+                mbt_ffi_store32(iter_base + 92, ptr325)
 
                 ()
               }
             }
 
-            let address321 = mbt_ffi_malloc(
+            let address327 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index322 = 0
-                index322 < iter_elem.metadata.aliases.length()
-                index322 = index322 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index322]
-              let iter_base = address321 + index322 * 8
+            for index328 = 0
+                index328 < iter_elem.metadata.aliases.length()
+                index328 = index328 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index328]
+              let iter_base = address327 + index328 * 8
 
-              let ptr320 = mbt_ffi_str2ptr(iter_elem)
+              let ptr326 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr320)
+              mbt_ffi_store32(iter_base + 0, ptr326)
             }
             mbt_ffi_store32(
               iter_base + 104,
               iter_elem.metadata.aliases.length(),
             )
-            mbt_ffi_store32(iter_base + 100, address321)
+            mbt_ffi_store32(iter_base + 100, address327)
 
-            let address324 = mbt_ffi_malloc(
+            let address330 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index325 = 0
-                index325 < iter_elem.metadata.examples.length()
-                index325 = index325 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index325]
-              let iter_base = address324 + index325 * 8
+            for index331 = 0
+                index331 < iter_elem.metadata.examples.length()
+                index331 = index331 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index331]
+              let iter_base = address330 + index331 * 8
 
-              let ptr323 = mbt_ffi_str2ptr(iter_elem)
+              let ptr329 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr323)
+              mbt_ffi_store32(iter_base + 0, ptr329)
             }
             mbt_ffi_store32(
               iter_base + 112,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 108, address324)
+            mbt_ffi_store32(iter_base + 108, address330)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -4781,12 +4859,12 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload327) => {
+              Some(payload333) => {
                 mbt_ffi_store8(iter_base + 116, 1)
 
-                let ptr328 = mbt_ffi_str2ptr(payload327)
-                mbt_ffi_store32(iter_base + 124, payload327.length())
-                mbt_ffi_store32(iter_base + 120, ptr328)
+                let ptr334 = mbt_ffi_str2ptr(payload333)
+                mbt_ffi_store32(iter_base + 124, payload333.length())
+                mbt_ffi_store32(iter_base + 120, ptr334)
 
                 ()
               }
@@ -4798,21 +4876,31 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload330) => {
+              Some(payload336) => {
                 mbt_ffi_store8(iter_base + 128, 1)
 
-                match payload330 {
+                match payload336 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 132, 0)
 
                     ()
                   }
-                  Other(payload332) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 132, 1)
 
-                    let ptr333 = mbt_ffi_str2ptr(payload332)
-                    mbt_ffi_store32(iter_base + 140, payload332.length())
-                    mbt_ffi_store32(iter_base + 136, ptr333)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 132, 2)
+
+                    ()
+                  }
+                  Other(payload340) => {
+                    mbt_ffi_store8(iter_base + 132, 3)
+
+                    let ptr341 = mbt_ffi_str2ptr(payload340)
+                    mbt_ffi_store32(iter_base + 140, payload340.length())
+                    mbt_ffi_store32(iter_base + 136, ptr341)
 
                     ()
                   }
@@ -4826,18 +4914,18 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
             return_area + 12,
             payload130.graph.type_nodes.length(),
           )
-          mbt_ffi_store32(return_area + 8, address334)
+          mbt_ffi_store32(return_area + 8, address342)
 
-          let address340 = mbt_ffi_malloc(payload130.graph.defs.length() * 24)
-          for index341 = 0
-              index341 < payload130.graph.defs.length()
-              index341 = index341 + 1 {
-            let iter_elem : @types.SchemaTypeDef = payload130.graph.defs[index341]
-            let iter_base = address340 + index341 * 24
+          let address348 = mbt_ffi_malloc(payload130.graph.defs.length() * 24)
+          for index349 = 0
+              index349 < payload130.graph.defs.length()
+              index349 = index349 + 1 {
+            let iter_elem : @types.SchemaTypeDef = payload130.graph.defs[index349]
+            let iter_base = address348 + index349 * 24
 
-            let ptr336 = mbt_ffi_str2ptr(iter_elem.id)
+            let ptr344 = mbt_ffi_str2ptr(iter_elem.id)
             mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-            mbt_ffi_store32(iter_base + 0, ptr336)
+            mbt_ffi_store32(iter_base + 0, ptr344)
 
             match iter_elem.name {
               None => {
@@ -4845,12 +4933,12 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              Some(payload338) => {
+              Some(payload346) => {
                 mbt_ffi_store8(iter_base + 8, 1)
 
-                let ptr339 = mbt_ffi_str2ptr(payload338)
-                mbt_ffi_store32(iter_base + 16, payload338.length())
-                mbt_ffi_store32(iter_base + 12, ptr339)
+                let ptr347 = mbt_ffi_str2ptr(payload346)
+                mbt_ffi_store32(iter_base + 16, payload346.length())
+                mbt_ffi_store32(iter_base + 12, ptr347)
 
                 ()
               }
@@ -4858,135 +4946,135 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
             mbt_ffi_store32(iter_base + 20, iter_elem.body)
           }
           mbt_ffi_store32(return_area + 20, payload130.graph.defs.length())
-          mbt_ffi_store32(return_area + 16, address340)
+          mbt_ffi_store32(return_area + 16, address348)
           mbt_ffi_store32(return_area + 24, payload130.graph.root)
 
-          let address412 = mbt_ffi_malloc(
+          let address420 = mbt_ffi_malloc(
             payload130.value.value_nodes.length() * 64,
           )
-          for index413 = 0
-              index413 < payload130.value.value_nodes.length()
-              index413 = index413 + 1 {
-            let iter_elem : @types.SchemaValueNode = payload130.value.value_nodes[index413]
-            let iter_base = address412 + index413 * 64
+          for index421 = 0
+              index421 < payload130.value.value_nodes.length()
+              index421 = index421 + 1 {
+            let iter_elem : @types.SchemaValueNode = payload130.value.value_nodes[index421]
+            let iter_base = address420 + index421 * 64
 
             match iter_elem {
-              BoolValue(payload342) => {
+              BoolValue(payload350) => {
                 mbt_ffi_store8(iter_base + 0, 0)
-                mbt_ffi_store8(iter_base + 8, if payload342 { 1 } else { 0 })
+                mbt_ffi_store8(iter_base + 8, if payload350 { 1 } else { 0 })
 
                 ()
               }
-              S8Value(payload343) => {
+              S8Value(payload351) => {
                 mbt_ffi_store8(iter_base + 0, 1)
-                mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload343))
+                mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload351))
 
                 ()
               }
-              S16Value(payload344) => {
+              S16Value(payload352) => {
                 mbt_ffi_store8(iter_base + 0, 2)
-                mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload344))
+                mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload352))
 
                 ()
               }
-              S32Value(payload345) => {
+              S32Value(payload353) => {
                 mbt_ffi_store8(iter_base + 0, 3)
-                mbt_ffi_store32(iter_base + 8, payload345)
+                mbt_ffi_store32(iter_base + 8, payload353)
 
                 ()
               }
-              S64Value(payload346) => {
+              S64Value(payload354) => {
                 mbt_ffi_store8(iter_base + 0, 4)
-                mbt_ffi_store64(iter_base + 8, payload346)
+                mbt_ffi_store64(iter_base + 8, payload354)
 
                 ()
               }
-              U8Value(payload347) => {
+              U8Value(payload355) => {
                 mbt_ffi_store8(iter_base + 0, 5)
-                mbt_ffi_store8(iter_base + 8, payload347.to_int())
+                mbt_ffi_store8(iter_base + 8, payload355.to_int())
 
                 ()
               }
-              U16Value(payload348) => {
+              U16Value(payload356) => {
                 mbt_ffi_store8(iter_base + 0, 6)
-                mbt_ffi_store16(iter_base + 8, payload348.reinterpret_as_int())
+                mbt_ffi_store16(iter_base + 8, payload356.reinterpret_as_int())
 
                 ()
               }
-              U32Value(payload349) => {
+              U32Value(payload357) => {
                 mbt_ffi_store8(iter_base + 0, 7)
-                mbt_ffi_store32(iter_base + 8, payload349.reinterpret_as_int())
+                mbt_ffi_store32(iter_base + 8, payload357.reinterpret_as_int())
 
                 ()
               }
-              U64Value(payload350) => {
+              U64Value(payload358) => {
                 mbt_ffi_store8(iter_base + 0, 8)
                 mbt_ffi_store64(
                   iter_base + 8,
-                  payload350.reinterpret_as_int64(),
+                  payload358.reinterpret_as_int64(),
                 )
 
                 ()
               }
-              F32Value(payload351) => {
+              F32Value(payload359) => {
                 mbt_ffi_store8(iter_base + 0, 9)
-                mbt_ffi_storef32(iter_base + 8, payload351)
+                mbt_ffi_storef32(iter_base + 8, payload359)
 
                 ()
               }
-              F64Value(payload352) => {
+              F64Value(payload360) => {
                 mbt_ffi_store8(iter_base + 0, 10)
-                mbt_ffi_storef64(iter_base + 8, payload352)
+                mbt_ffi_storef64(iter_base + 8, payload360)
 
                 ()
               }
-              CharValue(payload353) => {
+              CharValue(payload361) => {
                 mbt_ffi_store8(iter_base + 0, 11)
-                mbt_ffi_store32(iter_base + 8, payload353.to_int())
+                mbt_ffi_store32(iter_base + 8, payload361.to_int())
 
                 ()
               }
-              StringValue(payload354) => {
+              StringValue(payload362) => {
                 mbt_ffi_store8(iter_base + 0, 12)
 
-                let ptr355 = mbt_ffi_str2ptr(payload354)
-                mbt_ffi_store32(iter_base + 12, payload354.length())
-                mbt_ffi_store32(iter_base + 8, ptr355)
+                let ptr363 = mbt_ffi_str2ptr(payload362)
+                mbt_ffi_store32(iter_base + 12, payload362.length())
+                mbt_ffi_store32(iter_base + 8, ptr363)
 
                 ()
               }
-              RecordValue(payload356) => {
+              RecordValue(payload364) => {
                 mbt_ffi_store8(iter_base + 0, 13)
 
-                let address357 = mbt_ffi_malloc(payload356.length() * 4)
-                for index358 = 0
-                    index358 < payload356.length()
-                    index358 = index358 + 1 {
-                  let iter_elem : Int = payload356[index358]
-                  let iter_base = address357 + index358 * 4
+                let address365 = mbt_ffi_malloc(payload364.length() * 4)
+                for index366 = 0
+                    index366 < payload364.length()
+                    index366 = index366 + 1 {
+                  let iter_elem : Int = payload364[index366]
+                  let iter_base = address365 + index366 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload356.length())
-                mbt_ffi_store32(iter_base + 8, address357)
+                mbt_ffi_store32(iter_base + 12, payload364.length())
+                mbt_ffi_store32(iter_base + 8, address365)
 
                 ()
               }
-              VariantValue(payload359) => {
+              VariantValue(payload367) => {
                 mbt_ffi_store8(iter_base + 0, 14)
                 mbt_ffi_store32(
                   iter_base + 8,
-                  payload359.case.reinterpret_as_int(),
+                  payload367.case.reinterpret_as_int(),
                 )
 
-                match payload359.payload {
+                match payload367.payload {
                   None => {
                     mbt_ffi_store8(iter_base + 12, 0)
 
                     ()
                   }
-                  Some(payload361) => {
+                  Some(payload369) => {
                     mbt_ffi_store8(iter_base + 12, 1)
-                    mbt_ffi_store32(iter_base + 16, payload361)
+                    mbt_ffi_store32(iter_base + 16, payload369)
 
                     ()
                   }
@@ -4994,105 +5082,105 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              EnumValue(payload362) => {
+              EnumValue(payload370) => {
                 mbt_ffi_store8(iter_base + 0, 15)
-                mbt_ffi_store32(iter_base + 8, payload362.reinterpret_as_int())
+                mbt_ffi_store32(iter_base + 8, payload370.reinterpret_as_int())
 
                 ()
               }
-              FlagsValue(payload363) => {
+              FlagsValue(payload371) => {
                 mbt_ffi_store8(iter_base + 0, 16)
 
-                let address364 = mbt_ffi_malloc(payload363.length() * 1)
-                for index365 = 0
-                    index365 < payload363.length()
-                    index365 = index365 + 1 {
-                  let iter_elem : Bool = payload363[index365]
-                  let iter_base = address364 + index365 * 1
+                let address372 = mbt_ffi_malloc(payload371.length() * 1)
+                for index373 = 0
+                    index373 < payload371.length()
+                    index373 = index373 + 1 {
+                  let iter_elem : Bool = payload371[index373]
+                  let iter_base = address372 + index373 * 1
                   mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
                 }
-                mbt_ffi_store32(iter_base + 12, payload363.length())
-                mbt_ffi_store32(iter_base + 8, address364)
+                mbt_ffi_store32(iter_base + 12, payload371.length())
+                mbt_ffi_store32(iter_base + 8, address372)
 
                 ()
               }
-              TupleValue(payload366) => {
+              TupleValue(payload374) => {
                 mbt_ffi_store8(iter_base + 0, 17)
 
-                let address367 = mbt_ffi_malloc(payload366.length() * 4)
-                for index368 = 0
-                    index368 < payload366.length()
-                    index368 = index368 + 1 {
-                  let iter_elem : Int = payload366[index368]
-                  let iter_base = address367 + index368 * 4
+                let address375 = mbt_ffi_malloc(payload374.length() * 4)
+                for index376 = 0
+                    index376 < payload374.length()
+                    index376 = index376 + 1 {
+                  let iter_elem : Int = payload374[index376]
+                  let iter_base = address375 + index376 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload366.length())
-                mbt_ffi_store32(iter_base + 8, address367)
+                mbt_ffi_store32(iter_base + 12, payload374.length())
+                mbt_ffi_store32(iter_base + 8, address375)
 
                 ()
               }
-              ListValue(payload369) => {
+              ListValue(payload377) => {
                 mbt_ffi_store8(iter_base + 0, 18)
 
-                let address370 = mbt_ffi_malloc(payload369.length() * 4)
-                for index371 = 0
-                    index371 < payload369.length()
-                    index371 = index371 + 1 {
-                  let iter_elem : Int = payload369[index371]
-                  let iter_base = address370 + index371 * 4
+                let address378 = mbt_ffi_malloc(payload377.length() * 4)
+                for index379 = 0
+                    index379 < payload377.length()
+                    index379 = index379 + 1 {
+                  let iter_elem : Int = payload377[index379]
+                  let iter_base = address378 + index379 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload369.length())
-                mbt_ffi_store32(iter_base + 8, address370)
+                mbt_ffi_store32(iter_base + 12, payload377.length())
+                mbt_ffi_store32(iter_base + 8, address378)
 
                 ()
               }
-              FixedListValue(payload372) => {
+              FixedListValue(payload380) => {
                 mbt_ffi_store8(iter_base + 0, 19)
 
-                let address373 = mbt_ffi_malloc(payload372.length() * 4)
-                for index374 = 0
-                    index374 < payload372.length()
-                    index374 = index374 + 1 {
-                  let iter_elem : Int = payload372[index374]
-                  let iter_base = address373 + index374 * 4
+                let address381 = mbt_ffi_malloc(payload380.length() * 4)
+                for index382 = 0
+                    index382 < payload380.length()
+                    index382 = index382 + 1 {
+                  let iter_elem : Int = payload380[index382]
+                  let iter_base = address381 + index382 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload372.length())
-                mbt_ffi_store32(iter_base + 8, address373)
+                mbt_ffi_store32(iter_base + 12, payload380.length())
+                mbt_ffi_store32(iter_base + 8, address381)
 
                 ()
               }
-              MapValue(payload375) => {
+              MapValue(payload383) => {
                 mbt_ffi_store8(iter_base + 0, 20)
 
-                let address376 = mbt_ffi_malloc(payload375.length() * 8)
-                for index377 = 0
-                    index377 < payload375.length()
-                    index377 = index377 + 1 {
-                  let iter_elem : @types.MapEntry = payload375[index377]
-                  let iter_base = address376 + index377 * 8
+                let address384 = mbt_ffi_malloc(payload383.length() * 8)
+                for index385 = 0
+                    index385 < payload383.length()
+                    index385 = index385 + 1 {
+                  let iter_elem : @types.MapEntry = payload383[index385]
+                  let iter_base = address384 + index385 * 8
                   mbt_ffi_store32(iter_base + 0, iter_elem.key)
                   mbt_ffi_store32(iter_base + 4, iter_elem.value)
                 }
-                mbt_ffi_store32(iter_base + 12, payload375.length())
-                mbt_ffi_store32(iter_base + 8, address376)
+                mbt_ffi_store32(iter_base + 12, payload383.length())
+                mbt_ffi_store32(iter_base + 8, address384)
 
                 ()
               }
-              OptionValue(payload378) => {
+              OptionValue(payload386) => {
                 mbt_ffi_store8(iter_base + 0, 21)
 
-                match payload378 {
+                match payload386 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload380) => {
+                  Some(payload388) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload380)
+                    mbt_ffi_store32(iter_base + 12, payload388)
 
                     ()
                   }
@@ -5100,22 +5188,22 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              ResultValue(payload381) => {
+              ResultValue(payload389) => {
                 mbt_ffi_store8(iter_base + 0, 22)
 
-                match payload381 {
-                  OkValue(payload382) => {
+                match payload389 {
+                  OkValue(payload390) => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
-                    match payload382 {
+                    match payload390 {
                       None => {
                         mbt_ffi_store8(iter_base + 12, 0)
 
                         ()
                       }
-                      Some(payload384) => {
+                      Some(payload392) => {
                         mbt_ffi_store8(iter_base + 12, 1)
-                        mbt_ffi_store32(iter_base + 16, payload384)
+                        mbt_ffi_store32(iter_base + 16, payload392)
 
                         ()
                       }
@@ -5123,18 +5211,18 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                     ()
                   }
-                  ErrValue(payload385) => {
+                  ErrValue(payload393) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    match payload385 {
+                    match payload393 {
                       None => {
                         mbt_ffi_store8(iter_base + 12, 0)
 
                         ()
                       }
-                      Some(payload387) => {
+                      Some(payload395) => {
                         mbt_ffi_store8(iter_base + 12, 1)
-                        mbt_ffi_store32(iter_base + 16, payload387)
+                        mbt_ffi_store32(iter_base + 16, payload395)
 
                         ()
                       }
@@ -5146,25 +5234,25 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              TextValue(payload388) => {
+              TextValue(payload396) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                let ptr389 = mbt_ffi_str2ptr(payload388.text)
-                mbt_ffi_store32(iter_base + 12, payload388.text.length())
-                mbt_ffi_store32(iter_base + 8, ptr389)
+                let ptr397 = mbt_ffi_str2ptr(payload396.text)
+                mbt_ffi_store32(iter_base + 12, payload396.text.length())
+                mbt_ffi_store32(iter_base + 8, ptr397)
 
-                match payload388.language {
+                match payload396.language {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload391) => {
+                  Some(payload399) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr392 = mbt_ffi_str2ptr(payload391)
-                    mbt_ffi_store32(iter_base + 24, payload391.length())
-                    mbt_ffi_store32(iter_base + 20, ptr392)
+                    let ptr400 = mbt_ffi_str2ptr(payload399)
+                    mbt_ffi_store32(iter_base + 24, payload399.length())
+                    mbt_ffi_store32(iter_base + 20, ptr400)
 
                     ()
                   }
@@ -5172,26 +5260,26 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              BinaryValue(payload393) => {
+              BinaryValue(payload401) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                let ptr394 = mbt_ffi_bytes2ptr(payload393.bytes)
+                let ptr402 = mbt_ffi_bytes2ptr(payload401.bytes)
 
-                mbt_ffi_store32(iter_base + 12, payload393.bytes.length())
-                mbt_ffi_store32(iter_base + 8, ptr394)
+                mbt_ffi_store32(iter_base + 12, payload401.bytes.length())
+                mbt_ffi_store32(iter_base + 8, ptr402)
 
-                match payload393.mime_type {
+                match payload401.mime_type {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload396) => {
+                  Some(payload404) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr397 = mbt_ffi_str2ptr(payload396)
-                    mbt_ffi_store32(iter_base + 24, payload396.length())
-                    mbt_ffi_store32(iter_base + 20, ptr397)
+                    let ptr405 = mbt_ffi_str2ptr(payload404)
+                    mbt_ffi_store32(iter_base + 24, payload404.length())
+                    mbt_ffi_store32(iter_base + 20, ptr405)
 
                     ()
                   }
@@ -5199,99 +5287,99 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
 
                 ()
               }
-              PathValue(payload398) => {
+              PathValue(payload406) => {
                 mbt_ffi_store8(iter_base + 0, 25)
 
-                let ptr399 = mbt_ffi_str2ptr(payload398)
-                mbt_ffi_store32(iter_base + 12, payload398.length())
-                mbt_ffi_store32(iter_base + 8, ptr399)
+                let ptr407 = mbt_ffi_str2ptr(payload406)
+                mbt_ffi_store32(iter_base + 12, payload406.length())
+                mbt_ffi_store32(iter_base + 8, ptr407)
 
                 ()
               }
-              UrlValue(payload400) => {
+              UrlValue(payload408) => {
                 mbt_ffi_store8(iter_base + 0, 26)
 
-                let ptr401 = mbt_ffi_str2ptr(payload400)
-                mbt_ffi_store32(iter_base + 12, payload400.length())
-                mbt_ffi_store32(iter_base + 8, ptr401)
-
-                ()
-              }
-              DatetimeValue(payload402) => {
-                mbt_ffi_store8(iter_base + 0, 27)
-                mbt_ffi_store64(iter_base + 8, payload402.seconds)
-                mbt_ffi_store32(
-                  iter_base + 16,
-                  payload402.nanoseconds.reinterpret_as_int(),
-                )
-
-                ()
-              }
-              DurationValue(payload403) => {
-                mbt_ffi_store8(iter_base + 0, 28)
-                mbt_ffi_store64(iter_base + 8, payload403.nanoseconds)
-
-                ()
-              }
-              QuantityValueNode(payload404) => {
-                mbt_ffi_store8(iter_base + 0, 29)
-                mbt_ffi_store64(iter_base + 8, payload404.mantissa)
-                mbt_ffi_store32(iter_base + 16, payload404.scale)
-
-                let ptr405 = mbt_ffi_str2ptr(payload404.unit)
-                mbt_ffi_store32(iter_base + 24, payload404.unit.length())
-                mbt_ffi_store32(iter_base + 20, ptr405)
-
-                ()
-              }
-              UnionValue(payload406) => {
-                mbt_ffi_store8(iter_base + 0, 30)
-
-                let ptr407 = mbt_ffi_str2ptr(payload406.tag)
-                mbt_ffi_store32(iter_base + 12, payload406.tag.length())
-                mbt_ffi_store32(iter_base + 8, ptr407)
-                mbt_ffi_store32(iter_base + 16, payload406.body)
-
-                ()
-              }
-              SecretValue(payload408) => {
-                mbt_ffi_store8(iter_base + 0, 31)
-
-                let ptr409 = mbt_ffi_str2ptr(payload408.secret_ref)
-                mbt_ffi_store32(iter_base + 12, payload408.secret_ref.length())
+                let ptr409 = mbt_ffi_str2ptr(payload408)
+                mbt_ffi_store32(iter_base + 12, payload408.length())
                 mbt_ffi_store32(iter_base + 8, ptr409)
 
                 ()
               }
-              QuotaTokenValue(payload410) => {
+              DatetimeValue(payload410) => {
+                mbt_ffi_store8(iter_base + 0, 27)
+                mbt_ffi_store64(iter_base + 8, payload410.seconds)
+                mbt_ffi_store32(
+                  iter_base + 16,
+                  payload410.nanoseconds.reinterpret_as_int(),
+                )
+
+                ()
+              }
+              DurationValue(payload411) => {
+                mbt_ffi_store8(iter_base + 0, 28)
+                mbt_ffi_store64(iter_base + 8, payload411.nanoseconds)
+
+                ()
+              }
+              QuantityValueNode(payload412) => {
+                mbt_ffi_store8(iter_base + 0, 29)
+                mbt_ffi_store64(iter_base + 8, payload412.mantissa)
+                mbt_ffi_store32(iter_base + 16, payload412.scale)
+
+                let ptr413 = mbt_ffi_str2ptr(payload412.unit)
+                mbt_ffi_store32(iter_base + 24, payload412.unit.length())
+                mbt_ffi_store32(iter_base + 20, ptr413)
+
+                ()
+              }
+              UnionValue(payload414) => {
+                mbt_ffi_store8(iter_base + 0, 30)
+
+                let ptr415 = mbt_ffi_str2ptr(payload414.tag)
+                mbt_ffi_store32(iter_base + 12, payload414.tag.length())
+                mbt_ffi_store32(iter_base + 8, ptr415)
+                mbt_ffi_store32(iter_base + 16, payload414.body)
+
+                ()
+              }
+              SecretValue(payload416) => {
+                mbt_ffi_store8(iter_base + 0, 31)
+
+                let ptr417 = mbt_ffi_str2ptr(payload416.secret_ref)
+                mbt_ffi_store32(iter_base + 12, payload416.secret_ref.length())
+                mbt_ffi_store32(iter_base + 8, ptr417)
+
+                ()
+              }
+              QuotaTokenValue(payload418) => {
                 mbt_ffi_store8(iter_base + 0, 32)
                 mbt_ffi_store64(
                   iter_base + 8,
-                  payload410.environment_id.uuid.high_bits.reinterpret_as_int64(),
+                  payload418.environment_id.uuid.high_bits.reinterpret_as_int64(),
                 )
                 mbt_ffi_store64(
                   iter_base + 16,
-                  payload410.environment_id.uuid.low_bits.reinterpret_as_int64(),
+                  payload418.environment_id.uuid.low_bits.reinterpret_as_int64(),
                 )
 
-                let ptr411 = mbt_ffi_str2ptr(payload410.resource_name)
+                let ptr419 = mbt_ffi_str2ptr(payload418.resource_name)
                 mbt_ffi_store32(
                   iter_base + 28,
-                  payload410.resource_name.length(),
+                  payload418.resource_name.length(),
                 )
-                mbt_ffi_store32(iter_base + 24, ptr411)
+                mbt_ffi_store32(iter_base + 24, ptr419)
                 mbt_ffi_store64(
                   iter_base + 32,
-                  payload410.expected_use.reinterpret_as_int64(),
+                  payload418.expected_use.reinterpret_as_int64(),
                 )
-                mbt_ffi_store64(iter_base + 40, payload410.last_credit)
+                mbt_ffi_store64(iter_base + 40, payload418.last_credit)
                 mbt_ffi_store64(
                   iter_base + 48,
-                  payload410.last_credit_at.seconds,
+                  payload418.last_credit_at.seconds,
                 )
                 mbt_ffi_store32(
                   iter_base + 56,
-                  payload410.last_credit_at.nanoseconds.reinterpret_as_int(),
+                  payload418.last_credit_at.nanoseconds.reinterpret_as_int(),
                 )
 
                 ()
@@ -5302,7 +5390,7 @@ pub fn wasmExportInvoke(p0 : Int) -> Int {
             return_area + 32,
             payload130.value.value_nodes.length(),
           )
-          mbt_ffi_store32(return_area + 28, address412)
+          mbt_ffi_store32(return_area + 28, address420)
           mbt_ffi_store32(return_area + 36, payload130.value.root)
 
           ()
@@ -5451,7 +5539,9 @@ pub fn wasmExportInvokePostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 56) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                         _ => panic()
                       }
                     _ => panic()
@@ -5499,7 +5589,9 @@ pub fn wasmExportInvokePostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 60) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                         _ => panic()
                       }
                     _ => panic()
@@ -5713,7 +5805,9 @@ pub fn wasmExportInvokePostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 80) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                         _ => panic()
                       }
                     _ => panic()
@@ -5771,7 +5865,9 @@ pub fn wasmExportInvokePostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 132) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
                   _ => panic()
                 }
               _ => panic()
@@ -5877,12 +5973,12 @@ pub fn wasmExportGetDefinition() -> Int {
   mbt_ffi_store32(return_area + 20, result.source_language.length())
   mbt_ffi_store32(return_area + 16, ptr1)
 
-  let address202 = mbt_ffi_malloc(result.schema.type_nodes.length() * 144)
-  for index203 = 0
-      index203 < result.schema.type_nodes.length()
-      index203 = index203 + 1 {
-    let iter_elem : @types.SchemaTypeNode = result.schema.type_nodes[index203]
-    let iter_base = address202 + index203 * 144
+  let address210 = mbt_ffi_malloc(result.schema.type_nodes.length() * 144)
+  for index211 = 0
+      index211 < result.schema.type_nodes.length()
+      index211 = index211 + 1 {
+    let iter_elem : @types.SchemaTypeNode = result.schema.type_nodes[index211]
+    let iter_base = address210 + index211 * 144
 
     match iter_elem.body {
       RefType(payload) => {
@@ -5959,10 +6055,10 @@ pub fn wasmExportGetDefinition() -> Int {
       RecordType(payload15) => {
         mbt_ffi_store8(iter_base + 0, 14)
 
-        let address32 = mbt_ffi_malloc(payload15.length() * 68)
-        for index33 = 0; index33 < payload15.length(); index33 = index33 + 1 {
-          let iter_elem : @types.NamedFieldType = payload15[index33]
-          let iter_base = address32 + index33 * 68
+        let address34 = mbt_ffi_malloc(payload15.length() * 68)
+        for index35 = 0; index35 < payload15.length(); index35 = index35 + 1 {
+          let iter_elem : @types.NamedFieldType = payload15[index35]
+          let iter_base = address34 + index35 * 68
 
           let ptr16 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
@@ -6048,12 +6144,22 @@ pub fn wasmExportGetDefinition() -> Int {
 
                   ()
                 }
-                Other(payload30) => {
+                UnstructuredText => {
                   mbt_ffi_store8(iter_base + 56, 1)
 
-                  let ptr31 = mbt_ffi_str2ptr(payload30)
-                  mbt_ffi_store32(iter_base + 64, payload30.length())
-                  mbt_ffi_store32(iter_base + 60, ptr31)
+                  ()
+                }
+                UnstructuredBinary => {
+                  mbt_ffi_store8(iter_base + 56, 2)
+
+                  ()
+                }
+                Other(payload32) => {
+                  mbt_ffi_store8(iter_base + 56, 3)
+
+                  let ptr33 = mbt_ffi_str2ptr(payload32)
+                  mbt_ffi_store32(iter_base + 64, payload32.length())
+                  mbt_ffi_store32(iter_base + 60, ptr33)
 
                   ()
                 }
@@ -6064,21 +6170,21 @@ pub fn wasmExportGetDefinition() -> Int {
           }
         }
         mbt_ffi_store32(iter_base + 12, payload15.length())
-        mbt_ffi_store32(iter_base + 8, address32)
+        mbt_ffi_store32(iter_base + 8, address34)
 
         ()
       }
-      VariantType(payload34) => {
+      VariantType(payload36) => {
         mbt_ffi_store8(iter_base + 0, 15)
 
-        let address55 = mbt_ffi_malloc(payload34.length() * 72)
-        for index56 = 0; index56 < payload34.length(); index56 = index56 + 1 {
-          let iter_elem : @types.VariantCaseType = payload34[index56]
-          let iter_base = address55 + index56 * 72
+        let address59 = mbt_ffi_malloc(payload36.length() * 72)
+        for index60 = 0; index60 < payload36.length(); index60 = index60 + 1 {
+          let iter_elem : @types.VariantCaseType = payload36[index60]
+          let iter_base = address59 + index60 * 72
 
-          let ptr35 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr37 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr35)
+          mbt_ffi_store32(iter_base + 0, ptr37)
 
           match iter_elem.payload {
             None => {
@@ -6086,9 +6192,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload37) => {
+            Some(payload39) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload37)
+              mbt_ffi_store32(iter_base + 12, payload39)
 
               ()
             }
@@ -6100,48 +6206,48 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload39) => {
+            Some(payload41) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr40 = mbt_ffi_str2ptr(payload39)
-              mbt_ffi_store32(iter_base + 24, payload39.length())
-              mbt_ffi_store32(iter_base + 20, ptr40)
+              let ptr42 = mbt_ffi_str2ptr(payload41)
+              mbt_ffi_store32(iter_base + 24, payload41.length())
+              mbt_ffi_store32(iter_base + 20, ptr42)
 
               ()
             }
           }
 
-          let address42 = mbt_ffi_malloc(
+          let address44 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index43 = 0
-              index43 < iter_elem.metadata.aliases.length()
-              index43 = index43 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index43]
-            let iter_base = address42 + index43 * 8
+          for index45 = 0
+              index45 < iter_elem.metadata.aliases.length()
+              index45 = index45 + 1 {
+            let iter_elem : String = iter_elem.metadata.aliases[index45]
+            let iter_base = address44 + index45 * 8
 
-            let ptr41 = mbt_ffi_str2ptr(iter_elem)
+            let ptr43 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr41)
+            mbt_ffi_store32(iter_base + 0, ptr43)
           }
           mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 28, address42)
+          mbt_ffi_store32(iter_base + 28, address44)
 
-          let address45 = mbt_ffi_malloc(
+          let address47 = mbt_ffi_malloc(
             iter_elem.metadata.examples.length() * 8,
           )
-          for index46 = 0
-              index46 < iter_elem.metadata.examples.length()
-              index46 = index46 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index46]
-            let iter_base = address45 + index46 * 8
+          for index48 = 0
+              index48 < iter_elem.metadata.examples.length()
+              index48 = index48 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index48]
+            let iter_base = address47 + index48 * 8
 
-            let ptr44 = mbt_ffi_str2ptr(iter_elem)
+            let ptr46 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr44)
+            mbt_ffi_store32(iter_base + 0, ptr46)
           }
           mbt_ffi_store32(iter_base + 40, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 36, address45)
+          mbt_ffi_store32(iter_base + 36, address47)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -6149,12 +6255,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload48) => {
+            Some(payload50) => {
               mbt_ffi_store8(iter_base + 44, 1)
 
-              let ptr49 = mbt_ffi_str2ptr(payload48)
-              mbt_ffi_store32(iter_base + 52, payload48.length())
-              mbt_ffi_store32(iter_base + 48, ptr49)
+              let ptr51 = mbt_ffi_str2ptr(payload50)
+              mbt_ffi_store32(iter_base + 52, payload50.length())
+              mbt_ffi_store32(iter_base + 48, ptr51)
 
               ()
             }
@@ -6166,21 +6272,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload51) => {
+            Some(payload53) => {
               mbt_ffi_store8(iter_base + 56, 1)
 
-              match payload51 {
+              match payload53 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 60, 0)
 
                   ()
                 }
-                Other(payload53) => {
+                UnstructuredText => {
                   mbt_ffi_store8(iter_base + 60, 1)
 
-                  let ptr54 = mbt_ffi_str2ptr(payload53)
-                  mbt_ffi_store32(iter_base + 68, payload53.length())
-                  mbt_ffi_store32(iter_base + 64, ptr54)
+                  ()
+                }
+                UnstructuredBinary => {
+                  mbt_ffi_store8(iter_base + 60, 2)
+
+                  ()
+                }
+                Other(payload57) => {
+                  mbt_ffi_store8(iter_base + 60, 3)
+
+                  let ptr58 = mbt_ffi_str2ptr(payload57)
+                  mbt_ffi_store32(iter_base + 68, payload57.length())
+                  mbt_ffi_store32(iter_base + 64, ptr58)
 
                   ()
                 }
@@ -6190,30 +6306,13 @@ pub fn wasmExportGetDefinition() -> Int {
             }
           }
         }
-        mbt_ffi_store32(iter_base + 12, payload34.length())
-        mbt_ffi_store32(iter_base + 8, address55)
-
-        ()
-      }
-      EnumType(payload57) => {
-        mbt_ffi_store8(iter_base + 0, 16)
-
-        let address59 = mbt_ffi_malloc(payload57.length() * 8)
-        for index60 = 0; index60 < payload57.length(); index60 = index60 + 1 {
-          let iter_elem : String = payload57[index60]
-          let iter_base = address59 + index60 * 8
-
-          let ptr58 = mbt_ffi_str2ptr(iter_elem)
-          mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr58)
-        }
-        mbt_ffi_store32(iter_base + 12, payload57.length())
+        mbt_ffi_store32(iter_base + 12, payload36.length())
         mbt_ffi_store32(iter_base + 8, address59)
 
         ()
       }
-      FlagsType(payload61) => {
-        mbt_ffi_store8(iter_base + 0, 17)
+      EnumType(payload61) => {
+        mbt_ffi_store8(iter_base + 0, 16)
 
         let address63 = mbt_ffi_malloc(payload61.length() * 8)
         for index64 = 0; index64 < payload61.length(); index64 = index64 + 1 {
@@ -6229,72 +6328,89 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      TupleType(payload65) => {
-        mbt_ffi_store8(iter_base + 0, 18)
+      FlagsType(payload65) => {
+        mbt_ffi_store8(iter_base + 0, 17)
 
-        let address66 = mbt_ffi_malloc(payload65.length() * 4)
-        for index67 = 0; index67 < payload65.length(); index67 = index67 + 1 {
-          let iter_elem : Int = payload65[index67]
-          let iter_base = address66 + index67 * 4
-          mbt_ffi_store32(iter_base + 0, iter_elem)
+        let address67 = mbt_ffi_malloc(payload65.length() * 8)
+        for index68 = 0; index68 < payload65.length(); index68 = index68 + 1 {
+          let iter_elem : String = payload65[index68]
+          let iter_base = address67 + index68 * 8
+
+          let ptr66 = mbt_ffi_str2ptr(iter_elem)
+          mbt_ffi_store32(iter_base + 4, iter_elem.length())
+          mbt_ffi_store32(iter_base + 0, ptr66)
         }
         mbt_ffi_store32(iter_base + 12, payload65.length())
-        mbt_ffi_store32(iter_base + 8, address66)
+        mbt_ffi_store32(iter_base + 8, address67)
 
         ()
       }
-      ListType(payload68) => {
+      TupleType(payload69) => {
+        mbt_ffi_store8(iter_base + 0, 18)
+
+        let address70 = mbt_ffi_malloc(payload69.length() * 4)
+        for index71 = 0; index71 < payload69.length(); index71 = index71 + 1 {
+          let iter_elem : Int = payload69[index71]
+          let iter_base = address70 + index71 * 4
+          mbt_ffi_store32(iter_base + 0, iter_elem)
+        }
+        mbt_ffi_store32(iter_base + 12, payload69.length())
+        mbt_ffi_store32(iter_base + 8, address70)
+
+        ()
+      }
+      ListType(payload72) => {
         mbt_ffi_store8(iter_base + 0, 19)
-        mbt_ffi_store32(iter_base + 8, payload68)
+        mbt_ffi_store32(iter_base + 8, payload72)
 
         ()
       }
-      FixedListType(payload69) => {
+      FixedListType(payload73) => {
         mbt_ffi_store8(iter_base + 0, 20)
-        mbt_ffi_store32(iter_base + 8, payload69.element)
-        mbt_ffi_store32(iter_base + 12, payload69.length.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload73.element)
+        mbt_ffi_store32(iter_base + 12, payload73.length.reinterpret_as_int())
 
         ()
       }
-      MapType(payload70) => {
+      MapType(payload74) => {
         mbt_ffi_store8(iter_base + 0, 21)
-        mbt_ffi_store32(iter_base + 8, payload70.key)
-        mbt_ffi_store32(iter_base + 12, payload70.value)
+        mbt_ffi_store32(iter_base + 8, payload74.key)
+        mbt_ffi_store32(iter_base + 12, payload74.value)
 
         ()
       }
-      OptionType(payload71) => {
+      OptionType(payload75) => {
         mbt_ffi_store8(iter_base + 0, 22)
-        mbt_ffi_store32(iter_base + 8, payload71)
+        mbt_ffi_store32(iter_base + 8, payload75)
 
         ()
       }
-      ResultType(payload72) => {
+      ResultType(payload76) => {
         mbt_ffi_store8(iter_base + 0, 23)
 
-        match payload72.ok {
+        match payload76.ok {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload74) => {
+          Some(payload78) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload74)
+            mbt_ffi_store32(iter_base + 12, payload78)
 
             ()
           }
         }
 
-        match payload72.err {
+        match payload76.err {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload76) => {
+          Some(payload80) => {
             mbt_ffi_store8(iter_base + 16, 1)
-            mbt_ffi_store32(iter_base + 20, payload76)
+            mbt_ffi_store32(iter_base + 20, payload80)
 
             ()
           }
@@ -6302,74 +6418,74 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      TextType(payload77) => {
+      TextType(payload81) => {
         mbt_ffi_store8(iter_base + 0, 24)
 
-        match payload77.languages {
+        match payload81.languages {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload79) => {
+          Some(payload83) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address81 = mbt_ffi_malloc(payload79.length() * 8)
-            for index82 = 0; index82 < payload79.length(); index82 = index82 + 1 {
-              let iter_elem : String = payload79[index82]
-              let iter_base = address81 + index82 * 8
+            let address85 = mbt_ffi_malloc(payload83.length() * 8)
+            for index86 = 0; index86 < payload83.length(); index86 = index86 + 1 {
+              let iter_elem : String = payload83[index86]
+              let iter_base = address85 + index86 * 8
 
-              let ptr80 = mbt_ffi_str2ptr(iter_elem)
+              let ptr84 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr80)
+              mbt_ffi_store32(iter_base + 0, ptr84)
             }
-            mbt_ffi_store32(iter_base + 16, payload79.length())
-            mbt_ffi_store32(iter_base + 12, address81)
+            mbt_ffi_store32(iter_base + 16, payload83.length())
+            mbt_ffi_store32(iter_base + 12, address85)
 
             ()
           }
         }
 
-        match payload77.min_length {
+        match payload81.min_length {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload84) => {
+          Some(payload88) => {
             mbt_ffi_store8(iter_base + 20, 1)
-            mbt_ffi_store32(iter_base + 24, payload84.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 24, payload88.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload77.max_length {
+        match payload81.max_length {
           None => {
             mbt_ffi_store8(iter_base + 28, 0)
 
             ()
           }
-          Some(payload86) => {
+          Some(payload90) => {
             mbt_ffi_store8(iter_base + 28, 1)
-            mbt_ffi_store32(iter_base + 32, payload86.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 32, payload90.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload77.regex {
+        match payload81.regex {
           None => {
             mbt_ffi_store8(iter_base + 36, 0)
 
             ()
           }
-          Some(payload88) => {
+          Some(payload92) => {
             mbt_ffi_store8(iter_base + 36, 1)
 
-            let ptr89 = mbt_ffi_str2ptr(payload88)
-            mbt_ffi_store32(iter_base + 44, payload88.length())
-            mbt_ffi_store32(iter_base + 40, ptr89)
+            let ptr93 = mbt_ffi_str2ptr(payload92)
+            mbt_ffi_store32(iter_base + 44, payload92.length())
+            mbt_ffi_store32(iter_base + 40, ptr93)
 
             ()
           }
@@ -6377,57 +6493,57 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      BinaryType(payload90) => {
+      BinaryType(payload94) => {
         mbt_ffi_store8(iter_base + 0, 25)
 
-        match payload90.mime_types {
+        match payload94.mime_types {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload92) => {
+          Some(payload96) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address94 = mbt_ffi_malloc(payload92.length() * 8)
-            for index95 = 0; index95 < payload92.length(); index95 = index95 + 1 {
-              let iter_elem : String = payload92[index95]
-              let iter_base = address94 + index95 * 8
+            let address98 = mbt_ffi_malloc(payload96.length() * 8)
+            for index99 = 0; index99 < payload96.length(); index99 = index99 + 1 {
+              let iter_elem : String = payload96[index99]
+              let iter_base = address98 + index99 * 8
 
-              let ptr93 = mbt_ffi_str2ptr(iter_elem)
+              let ptr97 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr93)
+              mbt_ffi_store32(iter_base + 0, ptr97)
             }
-            mbt_ffi_store32(iter_base + 16, payload92.length())
-            mbt_ffi_store32(iter_base + 12, address94)
+            mbt_ffi_store32(iter_base + 16, payload96.length())
+            mbt_ffi_store32(iter_base + 12, address98)
 
             ()
           }
         }
 
-        match payload90.min_bytes {
+        match payload94.min_bytes {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload97) => {
+          Some(payload101) => {
             mbt_ffi_store8(iter_base + 20, 1)
-            mbt_ffi_store32(iter_base + 24, payload97.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 24, payload101.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload90.max_bytes {
+        match payload94.max_bytes {
           None => {
             mbt_ffi_store8(iter_base + 28, 0)
 
             ()
           }
-          Some(payload99) => {
+          Some(payload103) => {
             mbt_ffi_store8(iter_base + 28, 1)
-            mbt_ffi_store32(iter_base + 32, payload99.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 32, payload103.reinterpret_as_int())
 
             ()
           }
@@ -6435,60 +6551,60 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      PathType(payload100) => {
+      PathType(payload104) => {
         mbt_ffi_store8(iter_base + 0, 26)
-        mbt_ffi_store8(iter_base + 8, payload100.direction.ordinal())
-        mbt_ffi_store8(iter_base + 9, payload100.kind.ordinal())
+        mbt_ffi_store8(iter_base + 8, payload104.direction.ordinal())
+        mbt_ffi_store8(iter_base + 9, payload104.kind.ordinal())
 
-        match payload100.allowed_mime_types {
+        match payload104.allowed_mime_types {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload102) => {
+          Some(payload106) => {
             mbt_ffi_store8(iter_base + 12, 1)
 
-            let address104 = mbt_ffi_malloc(payload102.length() * 8)
-            for index105 = 0
-                index105 < payload102.length()
-                index105 = index105 + 1 {
-              let iter_elem : String = payload102[index105]
-              let iter_base = address104 + index105 * 8
+            let address108 = mbt_ffi_malloc(payload106.length() * 8)
+            for index109 = 0
+                index109 < payload106.length()
+                index109 = index109 + 1 {
+              let iter_elem : String = payload106[index109]
+              let iter_base = address108 + index109 * 8
 
-              let ptr103 = mbt_ffi_str2ptr(iter_elem)
+              let ptr107 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr103)
+              mbt_ffi_store32(iter_base + 0, ptr107)
             }
-            mbt_ffi_store32(iter_base + 20, payload102.length())
-            mbt_ffi_store32(iter_base + 16, address104)
+            mbt_ffi_store32(iter_base + 20, payload106.length())
+            mbt_ffi_store32(iter_base + 16, address108)
 
             ()
           }
         }
 
-        match payload100.allowed_extensions {
+        match payload104.allowed_extensions {
           None => {
             mbt_ffi_store8(iter_base + 24, 0)
 
             ()
           }
-          Some(payload107) => {
+          Some(payload111) => {
             mbt_ffi_store8(iter_base + 24, 1)
 
-            let address109 = mbt_ffi_malloc(payload107.length() * 8)
-            for index110 = 0
-                index110 < payload107.length()
-                index110 = index110 + 1 {
-              let iter_elem : String = payload107[index110]
-              let iter_base = address109 + index110 * 8
+            let address113 = mbt_ffi_malloc(payload111.length() * 8)
+            for index114 = 0
+                index114 < payload111.length()
+                index114 = index114 + 1 {
+              let iter_elem : String = payload111[index114]
+              let iter_base = address113 + index114 * 8
 
-              let ptr108 = mbt_ffi_str2ptr(iter_elem)
+              let ptr112 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr108)
+              mbt_ffi_store32(iter_base + 0, ptr112)
             }
-            mbt_ffi_store32(iter_base + 32, payload107.length())
-            mbt_ffi_store32(iter_base + 28, address109)
+            mbt_ffi_store32(iter_base + 32, payload111.length())
+            mbt_ffi_store32(iter_base + 28, address113)
 
             ()
           }
@@ -6496,58 +6612,58 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      UrlType(payload111) => {
+      UrlType(payload115) => {
         mbt_ffi_store8(iter_base + 0, 27)
 
-        match payload111.allowed_schemes {
+        match payload115.allowed_schemes {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload113) => {
+          Some(payload117) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address115 = mbt_ffi_malloc(payload113.length() * 8)
-            for index116 = 0
-                index116 < payload113.length()
-                index116 = index116 + 1 {
-              let iter_elem : String = payload113[index116]
-              let iter_base = address115 + index116 * 8
+            let address119 = mbt_ffi_malloc(payload117.length() * 8)
+            for index120 = 0
+                index120 < payload117.length()
+                index120 = index120 + 1 {
+              let iter_elem : String = payload117[index120]
+              let iter_base = address119 + index120 * 8
 
-              let ptr114 = mbt_ffi_str2ptr(iter_elem)
+              let ptr118 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr114)
+              mbt_ffi_store32(iter_base + 0, ptr118)
             }
-            mbt_ffi_store32(iter_base + 16, payload113.length())
-            mbt_ffi_store32(iter_base + 12, address115)
+            mbt_ffi_store32(iter_base + 16, payload117.length())
+            mbt_ffi_store32(iter_base + 12, address119)
 
             ()
           }
         }
 
-        match payload111.allowed_hosts {
+        match payload115.allowed_hosts {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload118) => {
+          Some(payload122) => {
             mbt_ffi_store8(iter_base + 20, 1)
 
-            let address120 = mbt_ffi_malloc(payload118.length() * 8)
-            for index121 = 0
-                index121 < payload118.length()
-                index121 = index121 + 1 {
-              let iter_elem : String = payload118[index121]
-              let iter_base = address120 + index121 * 8
+            let address124 = mbt_ffi_malloc(payload122.length() * 8)
+            for index125 = 0
+                index125 < payload122.length()
+                index125 = index125 + 1 {
+              let iter_elem : String = payload122[index125]
+              let iter_base = address124 + index125 * 8
 
-              let ptr119 = mbt_ffi_str2ptr(iter_elem)
+              let ptr123 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr119)
+              mbt_ffi_store32(iter_base + 0, ptr123)
             }
-            mbt_ffi_store32(iter_base + 28, payload118.length())
-            mbt_ffi_store32(iter_base + 24, address120)
+            mbt_ffi_store32(iter_base + 28, payload122.length())
+            mbt_ffi_store32(iter_base + 24, address124)
 
             ()
           }
@@ -6565,62 +6681,62 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      QuantityType(payload124) => {
+      QuantityType(payload128) => {
         mbt_ffi_store8(iter_base + 0, 30)
 
-        let ptr125 = mbt_ffi_str2ptr(payload124.base_unit)
-        mbt_ffi_store32(iter_base + 12, payload124.base_unit.length())
-        mbt_ffi_store32(iter_base + 8, ptr125)
+        let ptr129 = mbt_ffi_str2ptr(payload128.base_unit)
+        mbt_ffi_store32(iter_base + 12, payload128.base_unit.length())
+        mbt_ffi_store32(iter_base + 8, ptr129)
 
-        let address127 = mbt_ffi_malloc(
-          payload124.allowed_suffixes.length() * 8,
+        let address131 = mbt_ffi_malloc(
+          payload128.allowed_suffixes.length() * 8,
         )
-        for index128 = 0
-            index128 < payload124.allowed_suffixes.length()
-            index128 = index128 + 1 {
-          let iter_elem : String = payload124.allowed_suffixes[index128]
-          let iter_base = address127 + index128 * 8
+        for index132 = 0
+            index132 < payload128.allowed_suffixes.length()
+            index132 = index132 + 1 {
+          let iter_elem : String = payload128.allowed_suffixes[index132]
+          let iter_base = address131 + index132 * 8
 
-          let ptr126 = mbt_ffi_str2ptr(iter_elem)
+          let ptr130 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr126)
+          mbt_ffi_store32(iter_base + 0, ptr130)
         }
-        mbt_ffi_store32(iter_base + 20, payload124.allowed_suffixes.length())
-        mbt_ffi_store32(iter_base + 16, address127)
+        mbt_ffi_store32(iter_base + 20, payload128.allowed_suffixes.length())
+        mbt_ffi_store32(iter_base + 16, address131)
 
-        match payload124.min {
+        match payload128.min {
           None => {
             mbt_ffi_store8(iter_base + 24, 0)
 
             ()
           }
-          Some(payload130) => {
+          Some(payload134) => {
             mbt_ffi_store8(iter_base + 24, 1)
-            mbt_ffi_store64(iter_base + 32, payload130.mantissa)
-            mbt_ffi_store32(iter_base + 40, payload130.scale)
+            mbt_ffi_store64(iter_base + 32, payload134.mantissa)
+            mbt_ffi_store32(iter_base + 40, payload134.scale)
 
-            let ptr131 = mbt_ffi_str2ptr(payload130.unit)
-            mbt_ffi_store32(iter_base + 48, payload130.unit.length())
-            mbt_ffi_store32(iter_base + 44, ptr131)
+            let ptr135 = mbt_ffi_str2ptr(payload134.unit)
+            mbt_ffi_store32(iter_base + 48, payload134.unit.length())
+            mbt_ffi_store32(iter_base + 44, ptr135)
 
             ()
           }
         }
 
-        match payload124.max {
+        match payload128.max {
           None => {
             mbt_ffi_store8(iter_base + 56, 0)
 
             ()
           }
-          Some(payload133) => {
+          Some(payload137) => {
             mbt_ffi_store8(iter_base + 56, 1)
-            mbt_ffi_store64(iter_base + 64, payload133.mantissa)
-            mbt_ffi_store32(iter_base + 72, payload133.scale)
+            mbt_ffi_store64(iter_base + 64, payload137.mantissa)
+            mbt_ffi_store32(iter_base + 72, payload137.scale)
 
-            let ptr134 = mbt_ffi_str2ptr(payload133.unit)
-            mbt_ffi_store32(iter_base + 80, payload133.unit.length())
-            mbt_ffi_store32(iter_base + 76, ptr134)
+            let ptr138 = mbt_ffi_str2ptr(payload137.unit)
+            mbt_ffi_store32(iter_base + 80, payload137.unit.length())
+            mbt_ffi_store32(iter_base + 76, ptr138)
 
             ()
           }
@@ -6628,42 +6744,24 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      UnionType(payload135) => {
+      UnionType(payload139) => {
         mbt_ffi_store8(iter_base + 0, 31)
 
-        let address169 = mbt_ffi_malloc(payload135.branches.length() * 92)
-        for index170 = 0
-            index170 < payload135.branches.length()
-            index170 = index170 + 1 {
-          let iter_elem : @types.UnionBranch = payload135.branches[index170]
-          let iter_base = address169 + index170 * 92
+        let address175 = mbt_ffi_malloc(payload139.branches.length() * 92)
+        for index176 = 0
+            index176 < payload139.branches.length()
+            index176 = index176 + 1 {
+          let iter_elem : @types.UnionBranch = payload139.branches[index176]
+          let iter_base = address175 + index176 * 92
 
-          let ptr136 = mbt_ffi_str2ptr(iter_elem.tag)
+          let ptr140 = mbt_ffi_str2ptr(iter_elem.tag)
           mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-          mbt_ffi_store32(iter_base + 0, ptr136)
+          mbt_ffi_store32(iter_base + 0, ptr140)
           mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
           match iter_elem.discriminator {
-            Prefix(payload137) => {
+            Prefix(payload141) => {
               mbt_ffi_store8(iter_base + 12, 0)
-
-              let ptr138 = mbt_ffi_str2ptr(payload137)
-              mbt_ffi_store32(iter_base + 20, payload137.length())
-              mbt_ffi_store32(iter_base + 16, ptr138)
-
-              ()
-            }
-            Suffix(payload139) => {
-              mbt_ffi_store8(iter_base + 12, 1)
-
-              let ptr140 = mbt_ffi_str2ptr(payload139)
-              mbt_ffi_store32(iter_base + 20, payload139.length())
-              mbt_ffi_store32(iter_base + 16, ptr140)
-
-              ()
-            }
-            Contains(payload141) => {
-              mbt_ffi_store8(iter_base + 12, 2)
 
               let ptr142 = mbt_ffi_str2ptr(payload141)
               mbt_ffi_store32(iter_base + 20, payload141.length())
@@ -6671,8 +6769,8 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Regex(payload143) => {
-              mbt_ffi_store8(iter_base + 12, 3)
+            Suffix(payload143) => {
+              mbt_ffi_store8(iter_base + 12, 1)
 
               let ptr144 = mbt_ffi_str2ptr(payload143)
               mbt_ffi_store32(iter_base + 20, payload143.length())
@@ -6680,25 +6778,43 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            FieldEquals(payload145) => {
-              mbt_ffi_store8(iter_base + 12, 4)
+            Contains(payload145) => {
+              mbt_ffi_store8(iter_base + 12, 2)
 
-              let ptr146 = mbt_ffi_str2ptr(payload145.field_name)
-              mbt_ffi_store32(iter_base + 20, payload145.field_name.length())
+              let ptr146 = mbt_ffi_str2ptr(payload145)
+              mbt_ffi_store32(iter_base + 20, payload145.length())
               mbt_ffi_store32(iter_base + 16, ptr146)
 
-              match payload145.literal {
+              ()
+            }
+            Regex(payload147) => {
+              mbt_ffi_store8(iter_base + 12, 3)
+
+              let ptr148 = mbt_ffi_str2ptr(payload147)
+              mbt_ffi_store32(iter_base + 20, payload147.length())
+              mbt_ffi_store32(iter_base + 16, ptr148)
+
+              ()
+            }
+            FieldEquals(payload149) => {
+              mbt_ffi_store8(iter_base + 12, 4)
+
+              let ptr150 = mbt_ffi_str2ptr(payload149.field_name)
+              mbt_ffi_store32(iter_base + 20, payload149.field_name.length())
+              mbt_ffi_store32(iter_base + 16, ptr150)
+
+              match payload149.literal {
                 None => {
                   mbt_ffi_store8(iter_base + 24, 0)
 
                   ()
                 }
-                Some(payload148) => {
+                Some(payload152) => {
                   mbt_ffi_store8(iter_base + 24, 1)
 
-                  let ptr149 = mbt_ffi_str2ptr(payload148)
-                  mbt_ffi_store32(iter_base + 32, payload148.length())
-                  mbt_ffi_store32(iter_base + 28, ptr149)
+                  let ptr153 = mbt_ffi_str2ptr(payload152)
+                  mbt_ffi_store32(iter_base + 32, payload152.length())
+                  mbt_ffi_store32(iter_base + 28, ptr153)
 
                   ()
                 }
@@ -6706,12 +6822,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            FieldAbsent(payload150) => {
+            FieldAbsent(payload154) => {
               mbt_ffi_store8(iter_base + 12, 5)
 
-              let ptr151 = mbt_ffi_str2ptr(payload150)
-              mbt_ffi_store32(iter_base + 20, payload150.length())
-              mbt_ffi_store32(iter_base + 16, ptr151)
+              let ptr155 = mbt_ffi_str2ptr(payload154)
+              mbt_ffi_store32(iter_base + 20, payload154.length())
+              mbt_ffi_store32(iter_base + 16, ptr155)
 
               ()
             }
@@ -6723,48 +6839,48 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload153) => {
+            Some(payload157) => {
               mbt_ffi_store8(iter_base + 36, 1)
 
-              let ptr154 = mbt_ffi_str2ptr(payload153)
-              mbt_ffi_store32(iter_base + 44, payload153.length())
-              mbt_ffi_store32(iter_base + 40, ptr154)
+              let ptr158 = mbt_ffi_str2ptr(payload157)
+              mbt_ffi_store32(iter_base + 44, payload157.length())
+              mbt_ffi_store32(iter_base + 40, ptr158)
 
               ()
             }
           }
 
-          let address156 = mbt_ffi_malloc(
+          let address160 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index157 = 0
-              index157 < iter_elem.metadata.aliases.length()
-              index157 = index157 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index157]
-            let iter_base = address156 + index157 * 8
+          for index161 = 0
+              index161 < iter_elem.metadata.aliases.length()
+              index161 = index161 + 1 {
+            let iter_elem : String = iter_elem.metadata.aliases[index161]
+            let iter_base = address160 + index161 * 8
 
-            let ptr155 = mbt_ffi_str2ptr(iter_elem)
+            let ptr159 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr155)
+            mbt_ffi_store32(iter_base + 0, ptr159)
           }
           mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 48, address156)
+          mbt_ffi_store32(iter_base + 48, address160)
 
-          let address159 = mbt_ffi_malloc(
+          let address163 = mbt_ffi_malloc(
             iter_elem.metadata.examples.length() * 8,
           )
-          for index160 = 0
-              index160 < iter_elem.metadata.examples.length()
-              index160 = index160 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index160]
-            let iter_base = address159 + index160 * 8
+          for index164 = 0
+              index164 < iter_elem.metadata.examples.length()
+              index164 = index164 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index164]
+            let iter_base = address163 + index164 * 8
 
-            let ptr158 = mbt_ffi_str2ptr(iter_elem)
+            let ptr162 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr158)
+            mbt_ffi_store32(iter_base + 0, ptr162)
           }
           mbt_ffi_store32(iter_base + 60, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 56, address159)
+          mbt_ffi_store32(iter_base + 56, address163)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -6772,12 +6888,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload162) => {
+            Some(payload166) => {
               mbt_ffi_store8(iter_base + 64, 1)
 
-              let ptr163 = mbt_ffi_str2ptr(payload162)
-              mbt_ffi_store32(iter_base + 72, payload162.length())
-              mbt_ffi_store32(iter_base + 68, ptr163)
+              let ptr167 = mbt_ffi_str2ptr(payload166)
+              mbt_ffi_store32(iter_base + 72, payload166.length())
+              mbt_ffi_store32(iter_base + 68, ptr167)
 
               ()
             }
@@ -6789,21 +6905,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload165) => {
+            Some(payload169) => {
               mbt_ffi_store8(iter_base + 76, 1)
 
-              match payload165 {
+              match payload169 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 80, 0)
 
                   ()
                 }
-                Other(payload167) => {
+                UnstructuredText => {
                   mbt_ffi_store8(iter_base + 80, 1)
 
-                  let ptr168 = mbt_ffi_str2ptr(payload167)
-                  mbt_ffi_store32(iter_base + 88, payload167.length())
-                  mbt_ffi_store32(iter_base + 84, ptr168)
+                  ()
+                }
+                UnstructuredBinary => {
+                  mbt_ffi_store8(iter_base + 80, 2)
+
+                  ()
+                }
+                Other(payload173) => {
+                  mbt_ffi_store8(iter_base + 80, 3)
+
+                  let ptr174 = mbt_ffi_str2ptr(payload173)
+                  mbt_ffi_store32(iter_base + 88, payload173.length())
+                  mbt_ffi_store32(iter_base + 84, ptr174)
 
                   ()
                 }
@@ -6813,26 +6939,26 @@ pub fn wasmExportGetDefinition() -> Int {
             }
           }
         }
-        mbt_ffi_store32(iter_base + 12, payload135.branches.length())
-        mbt_ffi_store32(iter_base + 8, address169)
+        mbt_ffi_store32(iter_base + 12, payload139.branches.length())
+        mbt_ffi_store32(iter_base + 8, address175)
 
         ()
       }
-      SecretType(payload171) => {
+      SecretType(payload177) => {
         mbt_ffi_store8(iter_base + 0, 32)
 
-        match payload171.category {
+        match payload177.category {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload173) => {
+          Some(payload179) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let ptr174 = mbt_ffi_str2ptr(payload173)
-            mbt_ffi_store32(iter_base + 16, payload173.length())
-            mbt_ffi_store32(iter_base + 12, ptr174)
+            let ptr180 = mbt_ffi_str2ptr(payload179)
+            mbt_ffi_store32(iter_base + 16, payload179.length())
+            mbt_ffi_store32(iter_base + 12, ptr180)
 
             ()
           }
@@ -6840,21 +6966,21 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      QuotaTokenType(payload175) => {
+      QuotaTokenType(payload181) => {
         mbt_ffi_store8(iter_base + 0, 33)
 
-        match payload175.resource_name {
+        match payload181.resource_name {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload177) => {
+          Some(payload183) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let ptr178 = mbt_ffi_str2ptr(payload177)
-            mbt_ffi_store32(iter_base + 16, payload177.length())
-            mbt_ffi_store32(iter_base + 12, ptr178)
+            let ptr184 = mbt_ffi_str2ptr(payload183)
+            mbt_ffi_store32(iter_base + 16, payload183.length())
+            mbt_ffi_store32(iter_base + 12, ptr184)
 
             ()
           }
@@ -6862,18 +6988,18 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      FutureType(payload179) => {
+      FutureType(payload185) => {
         mbt_ffi_store8(iter_base + 0, 34)
 
-        match payload179 {
+        match payload185 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload181) => {
+          Some(payload187) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload181)
+            mbt_ffi_store32(iter_base + 12, payload187)
 
             ()
           }
@@ -6881,18 +7007,18 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      StreamType(payload182) => {
+      StreamType(payload188) => {
         mbt_ffi_store8(iter_base + 0, 35)
 
-        match payload182 {
+        match payload188 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload184) => {
+          Some(payload190) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload184)
+            mbt_ffi_store32(iter_base + 12, payload190)
 
             ()
           }
@@ -6908,44 +7034,44 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload186) => {
+      Some(payload192) => {
         mbt_ffi_store8(iter_base + 88, 1)
 
-        let ptr187 = mbt_ffi_str2ptr(payload186)
-        mbt_ffi_store32(iter_base + 96, payload186.length())
-        mbt_ffi_store32(iter_base + 92, ptr187)
+        let ptr193 = mbt_ffi_str2ptr(payload192)
+        mbt_ffi_store32(iter_base + 96, payload192.length())
+        mbt_ffi_store32(iter_base + 92, ptr193)
 
         ()
       }
     }
 
-    let address189 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-    for index190 = 0
-        index190 < iter_elem.metadata.aliases.length()
-        index190 = index190 + 1 {
-      let iter_elem : String = iter_elem.metadata.aliases[index190]
-      let iter_base = address189 + index190 * 8
+    let address195 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
+    for index196 = 0
+        index196 < iter_elem.metadata.aliases.length()
+        index196 = index196 + 1 {
+      let iter_elem : String = iter_elem.metadata.aliases[index196]
+      let iter_base = address195 + index196 * 8
 
-      let ptr188 = mbt_ffi_str2ptr(iter_elem)
+      let ptr194 = mbt_ffi_str2ptr(iter_elem)
       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-      mbt_ffi_store32(iter_base + 0, ptr188)
+      mbt_ffi_store32(iter_base + 0, ptr194)
     }
     mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
-    mbt_ffi_store32(iter_base + 100, address189)
+    mbt_ffi_store32(iter_base + 100, address195)
 
-    let address192 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
-    for index193 = 0
-        index193 < iter_elem.metadata.examples.length()
-        index193 = index193 + 1 {
-      let iter_elem : String = iter_elem.metadata.examples[index193]
-      let iter_base = address192 + index193 * 8
+    let address198 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+    for index199 = 0
+        index199 < iter_elem.metadata.examples.length()
+        index199 = index199 + 1 {
+      let iter_elem : String = iter_elem.metadata.examples[index199]
+      let iter_base = address198 + index199 * 8
 
-      let ptr191 = mbt_ffi_str2ptr(iter_elem)
+      let ptr197 = mbt_ffi_str2ptr(iter_elem)
       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-      mbt_ffi_store32(iter_base + 0, ptr191)
+      mbt_ffi_store32(iter_base + 0, ptr197)
     }
     mbt_ffi_store32(iter_base + 112, iter_elem.metadata.examples.length())
-    mbt_ffi_store32(iter_base + 108, address192)
+    mbt_ffi_store32(iter_base + 108, address198)
 
     match iter_elem.metadata.deprecated {
       None => {
@@ -6953,12 +7079,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload195) => {
+      Some(payload201) => {
         mbt_ffi_store8(iter_base + 116, 1)
 
-        let ptr196 = mbt_ffi_str2ptr(payload195)
-        mbt_ffi_store32(iter_base + 124, payload195.length())
-        mbt_ffi_store32(iter_base + 120, ptr196)
+        let ptr202 = mbt_ffi_str2ptr(payload201)
+        mbt_ffi_store32(iter_base + 124, payload201.length())
+        mbt_ffi_store32(iter_base + 120, ptr202)
 
         ()
       }
@@ -6970,21 +7096,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload198) => {
+      Some(payload204) => {
         mbt_ffi_store8(iter_base + 128, 1)
 
-        match payload198 {
+        match payload204 {
           Multimodal => {
             mbt_ffi_store8(iter_base + 132, 0)
 
             ()
           }
-          Other(payload200) => {
+          UnstructuredText => {
             mbt_ffi_store8(iter_base + 132, 1)
 
-            let ptr201 = mbt_ffi_str2ptr(payload200)
-            mbt_ffi_store32(iter_base + 140, payload200.length())
-            mbt_ffi_store32(iter_base + 136, ptr201)
+            ()
+          }
+          UnstructuredBinary => {
+            mbt_ffi_store8(iter_base + 132, 2)
+
+            ()
+          }
+          Other(payload208) => {
+            mbt_ffi_store8(iter_base + 132, 3)
+
+            let ptr209 = mbt_ffi_str2ptr(payload208)
+            mbt_ffi_store32(iter_base + 140, payload208.length())
+            mbt_ffi_store32(iter_base + 136, ptr209)
 
             ()
           }
@@ -6995,18 +7131,18 @@ pub fn wasmExportGetDefinition() -> Int {
     }
   }
   mbt_ffi_store32(return_area + 28, result.schema.type_nodes.length())
-  mbt_ffi_store32(return_area + 24, address202)
+  mbt_ffi_store32(return_area + 24, address210)
 
-  let address208 = mbt_ffi_malloc(result.schema.defs.length() * 24)
-  for index209 = 0
-      index209 < result.schema.defs.length()
-      index209 = index209 + 1 {
-    let iter_elem : @types.SchemaTypeDef = result.schema.defs[index209]
-    let iter_base = address208 + index209 * 24
+  let address216 = mbt_ffi_malloc(result.schema.defs.length() * 24)
+  for index217 = 0
+      index217 < result.schema.defs.length()
+      index217 = index217 + 1 {
+    let iter_elem : @types.SchemaTypeDef = result.schema.defs[index217]
+    let iter_base = address216 + index217 * 24
 
-    let ptr204 = mbt_ffi_str2ptr(iter_elem.id)
+    let ptr212 = mbt_ffi_str2ptr(iter_elem.id)
     mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-    mbt_ffi_store32(iter_base + 0, ptr204)
+    mbt_ffi_store32(iter_base + 0, ptr212)
 
     match iter_elem.name {
       None => {
@@ -7014,12 +7150,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload206) => {
+      Some(payload214) => {
         mbt_ffi_store8(iter_base + 8, 1)
 
-        let ptr207 = mbt_ffi_str2ptr(payload206)
-        mbt_ffi_store32(iter_base + 16, payload206.length())
-        mbt_ffi_store32(iter_base + 12, ptr207)
+        let ptr215 = mbt_ffi_str2ptr(payload214)
+        mbt_ffi_store32(iter_base + 16, payload214.length())
+        mbt_ffi_store32(iter_base + 12, ptr215)
 
         ()
       }
@@ -7027,7 +7163,7 @@ pub fn wasmExportGetDefinition() -> Int {
     mbt_ffi_store32(iter_base + 20, iter_elem.body)
   }
   mbt_ffi_store32(return_area + 36, result.schema.defs.length())
-  mbt_ffi_store32(return_area + 32, address208)
+  mbt_ffi_store32(return_area + 32, address216)
   mbt_ffi_store32(return_area + 40, result.schema.root)
 
   match result.constructor_.name {
@@ -7036,20 +7172,20 @@ pub fn wasmExportGetDefinition() -> Int {
 
       ()
     }
-    Some(payload211) => {
+    Some(payload219) => {
       mbt_ffi_store8(return_area + 44, 1)
 
-      let ptr212 = mbt_ffi_str2ptr(payload211)
-      mbt_ffi_store32(return_area + 52, payload211.length())
-      mbt_ffi_store32(return_area + 48, ptr212)
+      let ptr220 = mbt_ffi_str2ptr(payload219)
+      mbt_ffi_store32(return_area + 52, payload219.length())
+      mbt_ffi_store32(return_area + 48, ptr220)
 
       ()
     }
   }
 
-  let ptr213 = mbt_ffi_str2ptr(result.constructor_.description)
+  let ptr221 = mbt_ffi_str2ptr(result.constructor_.description)
   mbt_ffi_store32(return_area + 60, result.constructor_.description.length())
-  mbt_ffi_store32(return_area + 56, ptr213)
+  mbt_ffi_store32(return_area + 56, ptr221)
 
   match result.constructor_.prompt_hint {
     None => {
@@ -7057,29 +7193,29 @@ pub fn wasmExportGetDefinition() -> Int {
 
       ()
     }
-    Some(payload215) => {
+    Some(payload223) => {
       mbt_ffi_store8(return_area + 64, 1)
 
-      let ptr216 = mbt_ffi_str2ptr(payload215)
-      mbt_ffi_store32(return_area + 72, payload215.length())
-      mbt_ffi_store32(return_area + 68, ptr216)
+      let ptr224 = mbt_ffi_str2ptr(payload223)
+      mbt_ffi_store32(return_area + 72, payload223.length())
+      mbt_ffi_store32(return_area + 68, ptr224)
 
       ()
     }
   }
 
   match result.constructor_.input_schema {
-    Parameters(payload217) => {
+    Parameters(payload225) => {
       mbt_ffi_store8(return_area + 76, 0)
 
-      let address238 = mbt_ffi_malloc(payload217.length() * 72)
-      for index239 = 0; index239 < payload217.length(); index239 = index239 + 1 {
-        let iter_elem : @common.NamedField = payload217[index239]
-        let iter_base = address238 + index239 * 72
+      let address248 = mbt_ffi_malloc(payload225.length() * 72)
+      for index249 = 0; index249 < payload225.length(); index249 = index249 + 1 {
+        let iter_elem : @common.NamedField = payload225[index249]
+        let iter_base = address248 + index249 * 72
 
-        let ptr218 = mbt_ffi_str2ptr(iter_elem.name)
+        let ptr226 = mbt_ffi_str2ptr(iter_elem.name)
         mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-        mbt_ffi_store32(iter_base + 0, ptr218)
+        mbt_ffi_store32(iter_base + 0, ptr226)
 
         match iter_elem.source {
           UserSupplied => {
@@ -7087,9 +7223,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          AutoInjected(payload220) => {
+          AutoInjected(payload228) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store8(iter_base + 9, payload220.ordinal())
+            mbt_ffi_store8(iter_base + 9, payload228.ordinal())
 
             ()
           }
@@ -7102,46 +7238,46 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          Some(payload222) => {
+          Some(payload230) => {
             mbt_ffi_store8(iter_base + 16, 1)
 
-            let ptr223 = mbt_ffi_str2ptr(payload222)
-            mbt_ffi_store32(iter_base + 24, payload222.length())
-            mbt_ffi_store32(iter_base + 20, ptr223)
+            let ptr231 = mbt_ffi_str2ptr(payload230)
+            mbt_ffi_store32(iter_base + 24, payload230.length())
+            mbt_ffi_store32(iter_base + 20, ptr231)
 
             ()
           }
         }
 
-        let address225 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-        for index226 = 0
-            index226 < iter_elem.metadata.aliases.length()
-            index226 = index226 + 1 {
-          let iter_elem : String = iter_elem.metadata.aliases[index226]
-          let iter_base = address225 + index226 * 8
+        let address233 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
+        for index234 = 0
+            index234 < iter_elem.metadata.aliases.length()
+            index234 = index234 + 1 {
+          let iter_elem : String = iter_elem.metadata.aliases[index234]
+          let iter_base = address233 + index234 * 8
 
-          let ptr224 = mbt_ffi_str2ptr(iter_elem)
+          let ptr232 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr224)
+          mbt_ffi_store32(iter_base + 0, ptr232)
         }
         mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-        mbt_ffi_store32(iter_base + 28, address225)
+        mbt_ffi_store32(iter_base + 28, address233)
 
-        let address228 = mbt_ffi_malloc(
+        let address236 = mbt_ffi_malloc(
           iter_elem.metadata.examples.length() * 8,
         )
-        for index229 = 0
-            index229 < iter_elem.metadata.examples.length()
-            index229 = index229 + 1 {
-          let iter_elem : String = iter_elem.metadata.examples[index229]
-          let iter_base = address228 + index229 * 8
+        for index237 = 0
+            index237 < iter_elem.metadata.examples.length()
+            index237 = index237 + 1 {
+          let iter_elem : String = iter_elem.metadata.examples[index237]
+          let iter_base = address236 + index237 * 8
 
-          let ptr227 = mbt_ffi_str2ptr(iter_elem)
+          let ptr235 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr227)
+          mbt_ffi_store32(iter_base + 0, ptr235)
         }
         mbt_ffi_store32(iter_base + 40, iter_elem.metadata.examples.length())
-        mbt_ffi_store32(iter_base + 36, address228)
+        mbt_ffi_store32(iter_base + 36, address236)
 
         match iter_elem.metadata.deprecated {
           None => {
@@ -7149,12 +7285,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          Some(payload231) => {
+          Some(payload239) => {
             mbt_ffi_store8(iter_base + 44, 1)
 
-            let ptr232 = mbt_ffi_str2ptr(payload231)
-            mbt_ffi_store32(iter_base + 52, payload231.length())
-            mbt_ffi_store32(iter_base + 48, ptr232)
+            let ptr240 = mbt_ffi_str2ptr(payload239)
+            mbt_ffi_store32(iter_base + 52, payload239.length())
+            mbt_ffi_store32(iter_base + 48, ptr240)
 
             ()
           }
@@ -7166,21 +7302,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          Some(payload234) => {
+          Some(payload242) => {
             mbt_ffi_store8(iter_base + 56, 1)
 
-            match payload234 {
+            match payload242 {
               Multimodal => {
                 mbt_ffi_store8(iter_base + 60, 0)
 
                 ()
               }
-              Other(payload236) => {
+              UnstructuredText => {
                 mbt_ffi_store8(iter_base + 60, 1)
 
-                let ptr237 = mbt_ffi_str2ptr(payload236)
-                mbt_ffi_store32(iter_base + 68, payload236.length())
-                mbt_ffi_store32(iter_base + 64, ptr237)
+                ()
+              }
+              UnstructuredBinary => {
+                mbt_ffi_store8(iter_base + 60, 2)
+
+                ()
+              }
+              Other(payload246) => {
+                mbt_ffi_store8(iter_base + 60, 3)
+
+                let ptr247 = mbt_ffi_str2ptr(payload246)
+                mbt_ffi_store32(iter_base + 68, payload246.length())
+                mbt_ffi_store32(iter_base + 64, ptr247)
 
                 ()
               }
@@ -7190,32 +7336,32 @@ pub fn wasmExportGetDefinition() -> Int {
           }
         }
       }
-      mbt_ffi_store32(return_area + 84, payload217.length())
-      mbt_ffi_store32(return_area + 80, address238)
+      mbt_ffi_store32(return_area + 84, payload225.length())
+      mbt_ffi_store32(return_area + 80, address248)
 
       ()
     }
   }
 
-  let address310 = mbt_ffi_malloc(result.methods.length() * 88)
-  for index311 = 0; index311 < result.methods.length(); index311 = index311 + 1 {
-    let iter_elem : @common.AgentMethod = result.methods[index311]
-    let iter_base = address310 + index311 * 88
+  let address322 = mbt_ffi_malloc(result.methods.length() * 88)
+  for index323 = 0; index323 < result.methods.length(); index323 = index323 + 1 {
+    let iter_elem : @common.AgentMethod = result.methods[index323]
+    let iter_base = address322 + index323 * 88
 
-    let ptr240 = mbt_ffi_str2ptr(iter_elem.name)
+    let ptr250 = mbt_ffi_str2ptr(iter_elem.name)
     mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-    mbt_ffi_store32(iter_base + 0, ptr240)
+    mbt_ffi_store32(iter_base + 0, ptr250)
 
-    let ptr241 = mbt_ffi_str2ptr(iter_elem.description)
+    let ptr251 = mbt_ffi_str2ptr(iter_elem.description)
     mbt_ffi_store32(iter_base + 12, iter_elem.description.length())
-    mbt_ffi_store32(iter_base + 8, ptr241)
+    mbt_ffi_store32(iter_base + 8, ptr251)
 
-    let address275 = mbt_ffi_malloc(iter_elem.http_endpoint.length() * 48)
-    for index276 = 0
-        index276 < iter_elem.http_endpoint.length()
-        index276 = index276 + 1 {
-      let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index276]
-      let iter_base = address275 + index276 * 48
+    let address285 = mbt_ffi_malloc(iter_elem.http_endpoint.length() * 48)
+    for index286 = 0
+        index286 < iter_elem.http_endpoint.length()
+        index286 = index286 + 1 {
+      let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index286]
+      let iter_base = address285 + index286 * 48
 
       match iter_elem.http_method {
         Get => {
@@ -7263,98 +7409,98 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Custom(payload251) => {
+        Custom(payload261) => {
           mbt_ffi_store8(iter_base + 0, 9)
 
-          let ptr252 = mbt_ffi_str2ptr(payload251)
-          mbt_ffi_store32(iter_base + 8, payload251.length())
-          mbt_ffi_store32(iter_base + 4, ptr252)
+          let ptr262 = mbt_ffi_str2ptr(payload261)
+          mbt_ffi_store32(iter_base + 8, payload261.length())
+          mbt_ffi_store32(iter_base + 4, ptr262)
 
           ()
         }
       }
 
-      let address260 = mbt_ffi_malloc(iter_elem.path_suffix.length() * 12)
-      for index261 = 0
-          index261 < iter_elem.path_suffix.length()
-          index261 = index261 + 1 {
-        let iter_elem : @common.PathSegment = iter_elem.path_suffix[index261]
-        let iter_base = address260 + index261 * 12
+      let address270 = mbt_ffi_malloc(iter_elem.path_suffix.length() * 12)
+      for index271 = 0
+          index271 < iter_elem.path_suffix.length()
+          index271 = index271 + 1 {
+        let iter_elem : @common.PathSegment = iter_elem.path_suffix[index271]
+        let iter_base = address270 + index271 * 12
 
         match iter_elem {
-          Literal(payload253) => {
+          Literal(payload263) => {
             mbt_ffi_store8(iter_base + 0, 0)
 
-            let ptr254 = mbt_ffi_str2ptr(payload253)
-            mbt_ffi_store32(iter_base + 8, payload253.length())
-            mbt_ffi_store32(iter_base + 4, ptr254)
+            let ptr264 = mbt_ffi_str2ptr(payload263)
+            mbt_ffi_store32(iter_base + 8, payload263.length())
+            mbt_ffi_store32(iter_base + 4, ptr264)
 
             ()
           }
-          SystemVariable(payload255) => {
+          SystemVariable(payload265) => {
             mbt_ffi_store8(iter_base + 0, 1)
-            mbt_ffi_store8(iter_base + 4, payload255.ordinal())
+            mbt_ffi_store8(iter_base + 4, payload265.ordinal())
 
             ()
           }
-          PathVariable(payload256) => {
+          PathVariable(payload266) => {
             mbt_ffi_store8(iter_base + 0, 2)
 
-            let ptr257 = mbt_ffi_str2ptr(payload256.variable_name)
-            mbt_ffi_store32(iter_base + 8, payload256.variable_name.length())
-            mbt_ffi_store32(iter_base + 4, ptr257)
+            let ptr267 = mbt_ffi_str2ptr(payload266.variable_name)
+            mbt_ffi_store32(iter_base + 8, payload266.variable_name.length())
+            mbt_ffi_store32(iter_base + 4, ptr267)
 
             ()
           }
-          RemainingPathVariable(payload258) => {
+          RemainingPathVariable(payload268) => {
             mbt_ffi_store8(iter_base + 0, 3)
 
-            let ptr259 = mbt_ffi_str2ptr(payload258.variable_name)
-            mbt_ffi_store32(iter_base + 8, payload258.variable_name.length())
-            mbt_ffi_store32(iter_base + 4, ptr259)
+            let ptr269 = mbt_ffi_str2ptr(payload268.variable_name)
+            mbt_ffi_store32(iter_base + 8, payload268.variable_name.length())
+            mbt_ffi_store32(iter_base + 4, ptr269)
 
             ()
           }
         }
       }
       mbt_ffi_store32(iter_base + 16, iter_elem.path_suffix.length())
-      mbt_ffi_store32(iter_base + 12, address260)
+      mbt_ffi_store32(iter_base + 12, address270)
 
-      let address264 = mbt_ffi_malloc(iter_elem.header_vars.length() * 16)
-      for index265 = 0
-          index265 < iter_elem.header_vars.length()
-          index265 = index265 + 1 {
-        let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index265]
-        let iter_base = address264 + index265 * 16
+      let address274 = mbt_ffi_malloc(iter_elem.header_vars.length() * 16)
+      for index275 = 0
+          index275 < iter_elem.header_vars.length()
+          index275 = index275 + 1 {
+        let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index275]
+        let iter_base = address274 + index275 * 16
 
-        let ptr262 = mbt_ffi_str2ptr(iter_elem.header_name)
+        let ptr272 = mbt_ffi_str2ptr(iter_elem.header_name)
         mbt_ffi_store32(iter_base + 4, iter_elem.header_name.length())
-        mbt_ffi_store32(iter_base + 0, ptr262)
+        mbt_ffi_store32(iter_base + 0, ptr272)
 
-        let ptr263 = mbt_ffi_str2ptr(iter_elem.variable_name)
+        let ptr273 = mbt_ffi_str2ptr(iter_elem.variable_name)
         mbt_ffi_store32(iter_base + 12, iter_elem.variable_name.length())
-        mbt_ffi_store32(iter_base + 8, ptr263)
+        mbt_ffi_store32(iter_base + 8, ptr273)
       }
       mbt_ffi_store32(iter_base + 24, iter_elem.header_vars.length())
-      mbt_ffi_store32(iter_base + 20, address264)
+      mbt_ffi_store32(iter_base + 20, address274)
 
-      let address268 = mbt_ffi_malloc(iter_elem.query_vars.length() * 16)
-      for index269 = 0
-          index269 < iter_elem.query_vars.length()
-          index269 = index269 + 1 {
-        let iter_elem : @common.QueryVariable = iter_elem.query_vars[index269]
-        let iter_base = address268 + index269 * 16
+      let address278 = mbt_ffi_malloc(iter_elem.query_vars.length() * 16)
+      for index279 = 0
+          index279 < iter_elem.query_vars.length()
+          index279 = index279 + 1 {
+        let iter_elem : @common.QueryVariable = iter_elem.query_vars[index279]
+        let iter_base = address278 + index279 * 16
 
-        let ptr266 = mbt_ffi_str2ptr(iter_elem.query_param_name)
+        let ptr276 = mbt_ffi_str2ptr(iter_elem.query_param_name)
         mbt_ffi_store32(iter_base + 4, iter_elem.query_param_name.length())
-        mbt_ffi_store32(iter_base + 0, ptr266)
+        mbt_ffi_store32(iter_base + 0, ptr276)
 
-        let ptr267 = mbt_ffi_str2ptr(iter_elem.variable_name)
+        let ptr277 = mbt_ffi_str2ptr(iter_elem.variable_name)
         mbt_ffi_store32(iter_base + 12, iter_elem.variable_name.length())
-        mbt_ffi_store32(iter_base + 8, ptr267)
+        mbt_ffi_store32(iter_base + 8, ptr277)
       }
       mbt_ffi_store32(iter_base + 32, iter_elem.query_vars.length())
-      mbt_ffi_store32(iter_base + 28, address268)
+      mbt_ffi_store32(iter_base + 28, address278)
 
       match iter_elem.auth_details {
         None => {
@@ -7362,11 +7508,11 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload271) => {
+        Some(payload281) => {
           mbt_ffi_store8(iter_base + 36, 1)
           mbt_ffi_store8(
             iter_base + 37,
-            if payload271.required {
+            if payload281.required {
               1
             } else {
               0
@@ -7377,27 +7523,27 @@ pub fn wasmExportGetDefinition() -> Int {
         }
       }
 
-      let address273 = mbt_ffi_malloc(
+      let address283 = mbt_ffi_malloc(
         iter_elem.cors_options.allowed_patterns.length() * 8,
       )
-      for index274 = 0
-          index274 < iter_elem.cors_options.allowed_patterns.length()
-          index274 = index274 + 1 {
-        let iter_elem : String = iter_elem.cors_options.allowed_patterns[index274]
-        let iter_base = address273 + index274 * 8
+      for index284 = 0
+          index284 < iter_elem.cors_options.allowed_patterns.length()
+          index284 = index284 + 1 {
+        let iter_elem : String = iter_elem.cors_options.allowed_patterns[index284]
+        let iter_base = address283 + index284 * 8
 
-        let ptr272 = mbt_ffi_str2ptr(iter_elem)
+        let ptr282 = mbt_ffi_str2ptr(iter_elem)
         mbt_ffi_store32(iter_base + 4, iter_elem.length())
-        mbt_ffi_store32(iter_base + 0, ptr272)
+        mbt_ffi_store32(iter_base + 0, ptr282)
       }
       mbt_ffi_store32(
         iter_base + 44,
         iter_elem.cors_options.allowed_patterns.length(),
       )
-      mbt_ffi_store32(iter_base + 40, address273)
+      mbt_ffi_store32(iter_base + 40, address283)
     }
     mbt_ffi_store32(iter_base + 20, iter_elem.http_endpoint.length())
-    mbt_ffi_store32(iter_base + 16, address275)
+    mbt_ffi_store32(iter_base + 16, address285)
 
     match iter_elem.prompt_hint {
       None => {
@@ -7405,31 +7551,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload278) => {
+      Some(payload288) => {
         mbt_ffi_store8(iter_base + 24, 1)
 
-        let ptr279 = mbt_ffi_str2ptr(payload278)
-        mbt_ffi_store32(iter_base + 32, payload278.length())
-        mbt_ffi_store32(iter_base + 28, ptr279)
+        let ptr289 = mbt_ffi_str2ptr(payload288)
+        mbt_ffi_store32(iter_base + 32, payload288.length())
+        mbt_ffi_store32(iter_base + 28, ptr289)
 
         ()
       }
     }
 
     match iter_elem.input_schema {
-      Parameters(payload280) => {
+      Parameters(payload290) => {
         mbt_ffi_store8(iter_base + 36, 0)
 
-        let address301 = mbt_ffi_malloc(payload280.length() * 72)
-        for index302 = 0
-            index302 < payload280.length()
-            index302 = index302 + 1 {
-          let iter_elem : @common.NamedField = payload280[index302]
-          let iter_base = address301 + index302 * 72
+        let address313 = mbt_ffi_malloc(payload290.length() * 72)
+        for index314 = 0
+            index314 < payload290.length()
+            index314 = index314 + 1 {
+          let iter_elem : @common.NamedField = payload290[index314]
+          let iter_base = address313 + index314 * 72
 
-          let ptr281 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr291 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr281)
+          mbt_ffi_store32(iter_base + 0, ptr291)
 
           match iter_elem.source {
             UserSupplied => {
@@ -7437,9 +7583,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            AutoInjected(payload283) => {
+            AutoInjected(payload293) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store8(iter_base + 9, payload283.ordinal())
+              mbt_ffi_store8(iter_base + 9, payload293.ordinal())
 
               ()
             }
@@ -7452,48 +7598,48 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload285) => {
+            Some(payload295) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr286 = mbt_ffi_str2ptr(payload285)
-              mbt_ffi_store32(iter_base + 24, payload285.length())
-              mbt_ffi_store32(iter_base + 20, ptr286)
+              let ptr296 = mbt_ffi_str2ptr(payload295)
+              mbt_ffi_store32(iter_base + 24, payload295.length())
+              mbt_ffi_store32(iter_base + 20, ptr296)
 
               ()
             }
           }
 
-          let address288 = mbt_ffi_malloc(
+          let address298 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index289 = 0
-              index289 < iter_elem.metadata.aliases.length()
-              index289 = index289 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index289]
-            let iter_base = address288 + index289 * 8
+          for index299 = 0
+              index299 < iter_elem.metadata.aliases.length()
+              index299 = index299 + 1 {
+            let iter_elem : String = iter_elem.metadata.aliases[index299]
+            let iter_base = address298 + index299 * 8
 
-            let ptr287 = mbt_ffi_str2ptr(iter_elem)
+            let ptr297 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr287)
+            mbt_ffi_store32(iter_base + 0, ptr297)
           }
           mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 28, address288)
+          mbt_ffi_store32(iter_base + 28, address298)
 
-          let address291 = mbt_ffi_malloc(
+          let address301 = mbt_ffi_malloc(
             iter_elem.metadata.examples.length() * 8,
           )
-          for index292 = 0
-              index292 < iter_elem.metadata.examples.length()
-              index292 = index292 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index292]
-            let iter_base = address291 + index292 * 8
+          for index302 = 0
+              index302 < iter_elem.metadata.examples.length()
+              index302 = index302 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index302]
+            let iter_base = address301 + index302 * 8
 
-            let ptr290 = mbt_ffi_str2ptr(iter_elem)
+            let ptr300 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr290)
+            mbt_ffi_store32(iter_base + 0, ptr300)
           }
           mbt_ffi_store32(iter_base + 40, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 36, address291)
+          mbt_ffi_store32(iter_base + 36, address301)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -7501,12 +7647,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload294) => {
+            Some(payload304) => {
               mbt_ffi_store8(iter_base + 44, 1)
 
-              let ptr295 = mbt_ffi_str2ptr(payload294)
-              mbt_ffi_store32(iter_base + 52, payload294.length())
-              mbt_ffi_store32(iter_base + 48, ptr295)
+              let ptr305 = mbt_ffi_str2ptr(payload304)
+              mbt_ffi_store32(iter_base + 52, payload304.length())
+              mbt_ffi_store32(iter_base + 48, ptr305)
 
               ()
             }
@@ -7518,21 +7664,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload297) => {
+            Some(payload307) => {
               mbt_ffi_store8(iter_base + 56, 1)
 
-              match payload297 {
+              match payload307 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 60, 0)
 
                   ()
                 }
-                Other(payload299) => {
+                UnstructuredText => {
                   mbt_ffi_store8(iter_base + 60, 1)
 
-                  let ptr300 = mbt_ffi_str2ptr(payload299)
-                  mbt_ffi_store32(iter_base + 68, payload299.length())
-                  mbt_ffi_store32(iter_base + 64, ptr300)
+                  ()
+                }
+                UnstructuredBinary => {
+                  mbt_ffi_store8(iter_base + 60, 2)
+
+                  ()
+                }
+                Other(payload311) => {
+                  mbt_ffi_store8(iter_base + 60, 3)
+
+                  let ptr312 = mbt_ffi_str2ptr(payload311)
+                  mbt_ffi_store32(iter_base + 68, payload311.length())
+                  mbt_ffi_store32(iter_base + 64, ptr312)
 
                   ()
                 }
@@ -7542,8 +7698,8 @@ pub fn wasmExportGetDefinition() -> Int {
             }
           }
         }
-        mbt_ffi_store32(iter_base + 44, payload280.length())
-        mbt_ffi_store32(iter_base + 40, address301)
+        mbt_ffi_store32(iter_base + 44, payload290.length())
+        mbt_ffi_store32(iter_base + 40, address313)
 
         ()
       }
@@ -7555,9 +7711,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Single(payload304) => {
+      Single(payload316) => {
         mbt_ffi_store8(iter_base + 48, 1)
-        mbt_ffi_store32(iter_base + 52, payload304)
+        mbt_ffi_store32(iter_base + 52, payload316)
 
         ()
       }
@@ -7569,10 +7725,10 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload306) => {
+      Some(payload318) => {
         mbt_ffi_store8(iter_base + 56, 1)
 
-        match payload306.cache_policy {
+        match payload318.cache_policy {
           NoCache => {
             mbt_ffi_store8(iter_base + 64, 0)
 
@@ -7583,16 +7739,16 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          Ttl(payload309) => {
+          Ttl(payload321) => {
             mbt_ffi_store8(iter_base + 64, 2)
-            mbt_ffi_store64(iter_base + 72, payload309.reinterpret_as_int64())
+            mbt_ffi_store64(iter_base + 72, payload321.reinterpret_as_int64())
 
             ()
           }
         }
         mbt_ffi_store8(
           iter_base + 80,
-          if payload306.uses_principal {
+          if payload318.uses_principal {
             1
           } else {
             0
@@ -7604,18 +7760,18 @@ pub fn wasmExportGetDefinition() -> Int {
     }
   }
   mbt_ffi_store32(return_area + 92, result.methods.length())
-  mbt_ffi_store32(return_area + 88, address310)
+  mbt_ffi_store32(return_area + 88, address322)
 
-  let address629 = mbt_ffi_malloc(result.dependencies.length() * 92)
-  for index630 = 0
-      index630 < result.dependencies.length()
-      index630 = index630 + 1 {
-    let iter_elem : @common.AgentDependency = result.dependencies[index630]
-    let iter_base = address629 + index630 * 92
+  let address653 = mbt_ffi_malloc(result.dependencies.length() * 92)
+  for index654 = 0
+      index654 < result.dependencies.length()
+      index654 = index654 + 1 {
+    let iter_elem : @common.AgentDependency = result.dependencies[index654]
+    let iter_base = address653 + index654 * 92
 
-    let ptr312 = mbt_ffi_str2ptr(iter_elem.type_name)
+    let ptr324 = mbt_ffi_str2ptr(iter_elem.type_name)
     mbt_ffi_store32(iter_base + 4, iter_elem.type_name.length())
-    mbt_ffi_store32(iter_base + 0, ptr312)
+    mbt_ffi_store32(iter_base + 0, ptr324)
 
     match iter_elem.description {
       None => {
@@ -7623,28 +7779,28 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload314) => {
+      Some(payload326) => {
         mbt_ffi_store8(iter_base + 8, 1)
 
-        let ptr315 = mbt_ffi_str2ptr(payload314)
-        mbt_ffi_store32(iter_base + 16, payload314.length())
-        mbt_ffi_store32(iter_base + 12, ptr315)
+        let ptr327 = mbt_ffi_str2ptr(payload326)
+        mbt_ffi_store32(iter_base + 16, payload326.length())
+        mbt_ffi_store32(iter_base + 12, ptr327)
 
         ()
       }
     }
 
-    let address519 = mbt_ffi_malloc(iter_elem.schema.type_nodes.length() * 144)
-    for index520 = 0
-        index520 < iter_elem.schema.type_nodes.length()
-        index520 = index520 + 1 {
-      let iter_elem : @types.SchemaTypeNode = iter_elem.schema.type_nodes[index520]
-      let iter_base = address519 + index520 * 144
+    let address539 = mbt_ffi_malloc(iter_elem.schema.type_nodes.length() * 144)
+    for index540 = 0
+        index540 < iter_elem.schema.type_nodes.length()
+        index540 = index540 + 1 {
+      let iter_elem : @types.SchemaTypeNode = iter_elem.schema.type_nodes[index540]
+      let iter_base = address539 + index540 * 144
 
       match iter_elem.body {
-        RefType(payload316) => {
+        RefType(payload328) => {
           mbt_ffi_store8(iter_base + 0, 0)
-          mbt_ffi_store32(iter_base + 8, payload316)
+          mbt_ffi_store32(iter_base + 8, payload328)
 
           ()
         }
@@ -7713,19 +7869,19 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        RecordType(payload330) => {
+        RecordType(payload342) => {
           mbt_ffi_store8(iter_base + 0, 14)
 
-          let address349 = mbt_ffi_malloc(payload330.length() * 68)
-          for index350 = 0
-              index350 < payload330.length()
-              index350 = index350 + 1 {
-            let iter_elem : @types.NamedFieldType = payload330[index350]
-            let iter_base = address349 + index350 * 68
+          let address363 = mbt_ffi_malloc(payload342.length() * 68)
+          for index364 = 0
+              index364 < payload342.length()
+              index364 = index364 + 1 {
+            let iter_elem : @types.NamedFieldType = payload342[index364]
+            let iter_base = address363 + index364 * 68
 
-            let ptr331 = mbt_ffi_str2ptr(iter_elem.name)
+            let ptr343 = mbt_ffi_str2ptr(iter_elem.name)
             mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-            mbt_ffi_store32(iter_base + 0, ptr331)
+            mbt_ffi_store32(iter_base + 0, ptr343)
             mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
             match iter_elem.metadata.doc {
@@ -7734,51 +7890,51 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload333) => {
+              Some(payload345) => {
                 mbt_ffi_store8(iter_base + 12, 1)
 
-                let ptr334 = mbt_ffi_str2ptr(payload333)
-                mbt_ffi_store32(iter_base + 20, payload333.length())
-                mbt_ffi_store32(iter_base + 16, ptr334)
+                let ptr346 = mbt_ffi_str2ptr(payload345)
+                mbt_ffi_store32(iter_base + 20, payload345.length())
+                mbt_ffi_store32(iter_base + 16, ptr346)
 
                 ()
               }
             }
 
-            let address336 = mbt_ffi_malloc(
+            let address348 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index337 = 0
-                index337 < iter_elem.metadata.aliases.length()
-                index337 = index337 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index337]
-              let iter_base = address336 + index337 * 8
+            for index349 = 0
+                index349 < iter_elem.metadata.aliases.length()
+                index349 = index349 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index349]
+              let iter_base = address348 + index349 * 8
 
-              let ptr335 = mbt_ffi_str2ptr(iter_elem)
+              let ptr347 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr335)
+              mbt_ffi_store32(iter_base + 0, ptr347)
             }
             mbt_ffi_store32(iter_base + 28, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 24, address336)
+            mbt_ffi_store32(iter_base + 24, address348)
 
-            let address339 = mbt_ffi_malloc(
+            let address351 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index340 = 0
-                index340 < iter_elem.metadata.examples.length()
-                index340 = index340 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index340]
-              let iter_base = address339 + index340 * 8
+            for index352 = 0
+                index352 < iter_elem.metadata.examples.length()
+                index352 = index352 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index352]
+              let iter_base = address351 + index352 * 8
 
-              let ptr338 = mbt_ffi_str2ptr(iter_elem)
+              let ptr350 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr338)
+              mbt_ffi_store32(iter_base + 0, ptr350)
             }
             mbt_ffi_store32(
               iter_base + 36,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 32, address339)
+            mbt_ffi_store32(iter_base + 32, address351)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -7786,12 +7942,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload342) => {
+              Some(payload354) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                let ptr343 = mbt_ffi_str2ptr(payload342)
-                mbt_ffi_store32(iter_base + 48, payload342.length())
-                mbt_ffi_store32(iter_base + 44, ptr343)
+                let ptr355 = mbt_ffi_str2ptr(payload354)
+                mbt_ffi_store32(iter_base + 48, payload354.length())
+                mbt_ffi_store32(iter_base + 44, ptr355)
 
                 ()
               }
@@ -7803,21 +7959,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload345) => {
+              Some(payload357) => {
                 mbt_ffi_store8(iter_base + 52, 1)
 
-                match payload345 {
+                match payload357 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 56, 0)
 
                     ()
                   }
-                  Other(payload347) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 56, 1)
 
-                    let ptr348 = mbt_ffi_str2ptr(payload347)
-                    mbt_ffi_store32(iter_base + 64, payload347.length())
-                    mbt_ffi_store32(iter_base + 60, ptr348)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 56, 2)
+
+                    ()
+                  }
+                  Other(payload361) => {
+                    mbt_ffi_store8(iter_base + 56, 3)
+
+                    let ptr362 = mbt_ffi_str2ptr(payload361)
+                    mbt_ffi_store32(iter_base + 64, payload361.length())
+                    mbt_ffi_store32(iter_base + 60, ptr362)
 
                     ()
                   }
@@ -7827,24 +7993,24 @@ pub fn wasmExportGetDefinition() -> Int {
               }
             }
           }
-          mbt_ffi_store32(iter_base + 12, payload330.length())
-          mbt_ffi_store32(iter_base + 8, address349)
+          mbt_ffi_store32(iter_base + 12, payload342.length())
+          mbt_ffi_store32(iter_base + 8, address363)
 
           ()
         }
-        VariantType(payload351) => {
+        VariantType(payload365) => {
           mbt_ffi_store8(iter_base + 0, 15)
 
-          let address372 = mbt_ffi_malloc(payload351.length() * 72)
-          for index373 = 0
-              index373 < payload351.length()
-              index373 = index373 + 1 {
-            let iter_elem : @types.VariantCaseType = payload351[index373]
-            let iter_base = address372 + index373 * 72
+          let address388 = mbt_ffi_malloc(payload365.length() * 72)
+          for index389 = 0
+              index389 < payload365.length()
+              index389 = index389 + 1 {
+            let iter_elem : @types.VariantCaseType = payload365[index389]
+            let iter_base = address388 + index389 * 72
 
-            let ptr352 = mbt_ffi_str2ptr(iter_elem.name)
+            let ptr366 = mbt_ffi_str2ptr(iter_elem.name)
             mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-            mbt_ffi_store32(iter_base + 0, ptr352)
+            mbt_ffi_store32(iter_base + 0, ptr366)
 
             match iter_elem.payload {
               None => {
@@ -7852,9 +8018,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload354) => {
+              Some(payload368) => {
                 mbt_ffi_store8(iter_base + 8, 1)
-                mbt_ffi_store32(iter_base + 12, payload354)
+                mbt_ffi_store32(iter_base + 12, payload368)
 
                 ()
               }
@@ -7866,51 +8032,51 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload356) => {
+              Some(payload370) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                let ptr357 = mbt_ffi_str2ptr(payload356)
-                mbt_ffi_store32(iter_base + 24, payload356.length())
-                mbt_ffi_store32(iter_base + 20, ptr357)
+                let ptr371 = mbt_ffi_str2ptr(payload370)
+                mbt_ffi_store32(iter_base + 24, payload370.length())
+                mbt_ffi_store32(iter_base + 20, ptr371)
 
                 ()
               }
             }
 
-            let address359 = mbt_ffi_malloc(
+            let address373 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index360 = 0
-                index360 < iter_elem.metadata.aliases.length()
-                index360 = index360 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index360]
-              let iter_base = address359 + index360 * 8
+            for index374 = 0
+                index374 < iter_elem.metadata.aliases.length()
+                index374 = index374 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index374]
+              let iter_base = address373 + index374 * 8
 
-              let ptr358 = mbt_ffi_str2ptr(iter_elem)
+              let ptr372 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr358)
+              mbt_ffi_store32(iter_base + 0, ptr372)
             }
             mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 28, address359)
+            mbt_ffi_store32(iter_base + 28, address373)
 
-            let address362 = mbt_ffi_malloc(
+            let address376 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index363 = 0
-                index363 < iter_elem.metadata.examples.length()
-                index363 = index363 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index363]
-              let iter_base = address362 + index363 * 8
+            for index377 = 0
+                index377 < iter_elem.metadata.examples.length()
+                index377 = index377 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index377]
+              let iter_base = address376 + index377 * 8
 
-              let ptr361 = mbt_ffi_str2ptr(iter_elem)
+              let ptr375 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr361)
+              mbt_ffi_store32(iter_base + 0, ptr375)
             }
             mbt_ffi_store32(
               iter_base + 40,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 36, address362)
+            mbt_ffi_store32(iter_base + 36, address376)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -7918,12 +8084,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload365) => {
+              Some(payload379) => {
                 mbt_ffi_store8(iter_base + 44, 1)
 
-                let ptr366 = mbt_ffi_str2ptr(payload365)
-                mbt_ffi_store32(iter_base + 52, payload365.length())
-                mbt_ffi_store32(iter_base + 48, ptr366)
+                let ptr380 = mbt_ffi_str2ptr(payload379)
+                mbt_ffi_store32(iter_base + 52, payload379.length())
+                mbt_ffi_store32(iter_base + 48, ptr380)
 
                 ()
               }
@@ -7935,21 +8101,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload368) => {
+              Some(payload382) => {
                 mbt_ffi_store8(iter_base + 56, 1)
 
-                match payload368 {
+                match payload382 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 60, 0)
 
                     ()
                   }
-                  Other(payload370) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 60, 1)
 
-                    let ptr371 = mbt_ffi_str2ptr(payload370)
-                    mbt_ffi_store32(iter_base + 68, payload370.length())
-                    mbt_ffi_store32(iter_base + 64, ptr371)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 60, 2)
+
+                    ()
+                  }
+                  Other(payload386) => {
+                    mbt_ffi_store8(iter_base + 60, 3)
+
+                    let ptr387 = mbt_ffi_str2ptr(payload386)
+                    mbt_ffi_store32(iter_base + 68, payload386.length())
+                    mbt_ffi_store32(iter_base + 64, ptr387)
 
                     ()
                   }
@@ -7959,120 +8135,120 @@ pub fn wasmExportGetDefinition() -> Int {
               }
             }
           }
-          mbt_ffi_store32(iter_base + 12, payload351.length())
-          mbt_ffi_store32(iter_base + 8, address372)
+          mbt_ffi_store32(iter_base + 12, payload365.length())
+          mbt_ffi_store32(iter_base + 8, address388)
 
           ()
         }
-        EnumType(payload374) => {
+        EnumType(payload390) => {
           mbt_ffi_store8(iter_base + 0, 16)
 
-          let address376 = mbt_ffi_malloc(payload374.length() * 8)
-          for index377 = 0
-              index377 < payload374.length()
-              index377 = index377 + 1 {
-            let iter_elem : String = payload374[index377]
-            let iter_base = address376 + index377 * 8
+          let address392 = mbt_ffi_malloc(payload390.length() * 8)
+          for index393 = 0
+              index393 < payload390.length()
+              index393 = index393 + 1 {
+            let iter_elem : String = payload390[index393]
+            let iter_base = address392 + index393 * 8
 
-            let ptr375 = mbt_ffi_str2ptr(iter_elem)
+            let ptr391 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr375)
+            mbt_ffi_store32(iter_base + 0, ptr391)
           }
-          mbt_ffi_store32(iter_base + 12, payload374.length())
-          mbt_ffi_store32(iter_base + 8, address376)
+          mbt_ffi_store32(iter_base + 12, payload390.length())
+          mbt_ffi_store32(iter_base + 8, address392)
 
           ()
         }
-        FlagsType(payload378) => {
+        FlagsType(payload394) => {
           mbt_ffi_store8(iter_base + 0, 17)
 
-          let address380 = mbt_ffi_malloc(payload378.length() * 8)
-          for index381 = 0
-              index381 < payload378.length()
-              index381 = index381 + 1 {
-            let iter_elem : String = payload378[index381]
-            let iter_base = address380 + index381 * 8
+          let address396 = mbt_ffi_malloc(payload394.length() * 8)
+          for index397 = 0
+              index397 < payload394.length()
+              index397 = index397 + 1 {
+            let iter_elem : String = payload394[index397]
+            let iter_base = address396 + index397 * 8
 
-            let ptr379 = mbt_ffi_str2ptr(iter_elem)
+            let ptr395 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr379)
+            mbt_ffi_store32(iter_base + 0, ptr395)
           }
-          mbt_ffi_store32(iter_base + 12, payload378.length())
-          mbt_ffi_store32(iter_base + 8, address380)
+          mbt_ffi_store32(iter_base + 12, payload394.length())
+          mbt_ffi_store32(iter_base + 8, address396)
 
           ()
         }
-        TupleType(payload382) => {
+        TupleType(payload398) => {
           mbt_ffi_store8(iter_base + 0, 18)
 
-          let address383 = mbt_ffi_malloc(payload382.length() * 4)
-          for index384 = 0
-              index384 < payload382.length()
-              index384 = index384 + 1 {
-            let iter_elem : Int = payload382[index384]
-            let iter_base = address383 + index384 * 4
+          let address399 = mbt_ffi_malloc(payload398.length() * 4)
+          for index400 = 0
+              index400 < payload398.length()
+              index400 = index400 + 1 {
+            let iter_elem : Int = payload398[index400]
+            let iter_base = address399 + index400 * 4
             mbt_ffi_store32(iter_base + 0, iter_elem)
           }
-          mbt_ffi_store32(iter_base + 12, payload382.length())
-          mbt_ffi_store32(iter_base + 8, address383)
+          mbt_ffi_store32(iter_base + 12, payload398.length())
+          mbt_ffi_store32(iter_base + 8, address399)
 
           ()
         }
-        ListType(payload385) => {
+        ListType(payload401) => {
           mbt_ffi_store8(iter_base + 0, 19)
-          mbt_ffi_store32(iter_base + 8, payload385)
+          mbt_ffi_store32(iter_base + 8, payload401)
 
           ()
         }
-        FixedListType(payload386) => {
+        FixedListType(payload402) => {
           mbt_ffi_store8(iter_base + 0, 20)
-          mbt_ffi_store32(iter_base + 8, payload386.element)
+          mbt_ffi_store32(iter_base + 8, payload402.element)
           mbt_ffi_store32(
             iter_base + 12,
-            payload386.length.reinterpret_as_int(),
+            payload402.length.reinterpret_as_int(),
           )
 
           ()
         }
-        MapType(payload387) => {
+        MapType(payload403) => {
           mbt_ffi_store8(iter_base + 0, 21)
-          mbt_ffi_store32(iter_base + 8, payload387.key)
-          mbt_ffi_store32(iter_base + 12, payload387.value)
+          mbt_ffi_store32(iter_base + 8, payload403.key)
+          mbt_ffi_store32(iter_base + 12, payload403.value)
 
           ()
         }
-        OptionType(payload388) => {
+        OptionType(payload404) => {
           mbt_ffi_store8(iter_base + 0, 22)
-          mbt_ffi_store32(iter_base + 8, payload388)
+          mbt_ffi_store32(iter_base + 8, payload404)
 
           ()
         }
-        ResultType(payload389) => {
+        ResultType(payload405) => {
           mbt_ffi_store8(iter_base + 0, 23)
 
-          match payload389.ok {
+          match payload405.ok {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload391) => {
+            Some(payload407) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload391)
+              mbt_ffi_store32(iter_base + 12, payload407)
 
               ()
             }
           }
 
-          match payload389.err {
+          match payload405.err {
             None => {
               mbt_ffi_store8(iter_base + 16, 0)
 
               ()
             }
-            Some(payload393) => {
+            Some(payload409) => {
               mbt_ffi_store8(iter_base + 16, 1)
-              mbt_ffi_store32(iter_base + 20, payload393)
+              mbt_ffi_store32(iter_base + 20, payload409)
 
               ()
             }
@@ -8080,76 +8256,76 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        TextType(payload394) => {
+        TextType(payload410) => {
           mbt_ffi_store8(iter_base + 0, 24)
 
-          match payload394.languages {
+          match payload410.languages {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload396) => {
+            Some(payload412) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let address398 = mbt_ffi_malloc(payload396.length() * 8)
-              for index399 = 0
-                  index399 < payload396.length()
-                  index399 = index399 + 1 {
-                let iter_elem : String = payload396[index399]
-                let iter_base = address398 + index399 * 8
+              let address414 = mbt_ffi_malloc(payload412.length() * 8)
+              for index415 = 0
+                  index415 < payload412.length()
+                  index415 = index415 + 1 {
+                let iter_elem : String = payload412[index415]
+                let iter_base = address414 + index415 * 8
 
-                let ptr397 = mbt_ffi_str2ptr(iter_elem)
+                let ptr413 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr397)
+                mbt_ffi_store32(iter_base + 0, ptr413)
               }
-              mbt_ffi_store32(iter_base + 16, payload396.length())
-              mbt_ffi_store32(iter_base + 12, address398)
+              mbt_ffi_store32(iter_base + 16, payload412.length())
+              mbt_ffi_store32(iter_base + 12, address414)
 
               ()
             }
           }
 
-          match payload394.min_length {
+          match payload410.min_length {
             None => {
               mbt_ffi_store8(iter_base + 20, 0)
 
               ()
             }
-            Some(payload401) => {
+            Some(payload417) => {
               mbt_ffi_store8(iter_base + 20, 1)
-              mbt_ffi_store32(iter_base + 24, payload401.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 24, payload417.reinterpret_as_int())
 
               ()
             }
           }
 
-          match payload394.max_length {
+          match payload410.max_length {
             None => {
               mbt_ffi_store8(iter_base + 28, 0)
 
               ()
             }
-            Some(payload403) => {
+            Some(payload419) => {
               mbt_ffi_store8(iter_base + 28, 1)
-              mbt_ffi_store32(iter_base + 32, payload403.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 32, payload419.reinterpret_as_int())
 
               ()
             }
           }
 
-          match payload394.regex {
+          match payload410.regex {
             None => {
               mbt_ffi_store8(iter_base + 36, 0)
 
               ()
             }
-            Some(payload405) => {
+            Some(payload421) => {
               mbt_ffi_store8(iter_base + 36, 1)
 
-              let ptr406 = mbt_ffi_str2ptr(payload405)
-              mbt_ffi_store32(iter_base + 44, payload405.length())
-              mbt_ffi_store32(iter_base + 40, ptr406)
+              let ptr422 = mbt_ffi_str2ptr(payload421)
+              mbt_ffi_store32(iter_base + 44, payload421.length())
+              mbt_ffi_store32(iter_base + 40, ptr422)
 
               ()
             }
@@ -8157,59 +8333,59 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        BinaryType(payload407) => {
+        BinaryType(payload423) => {
           mbt_ffi_store8(iter_base + 0, 25)
 
-          match payload407.mime_types {
+          match payload423.mime_types {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload409) => {
+            Some(payload425) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let address411 = mbt_ffi_malloc(payload409.length() * 8)
-              for index412 = 0
-                  index412 < payload409.length()
-                  index412 = index412 + 1 {
-                let iter_elem : String = payload409[index412]
-                let iter_base = address411 + index412 * 8
+              let address427 = mbt_ffi_malloc(payload425.length() * 8)
+              for index428 = 0
+                  index428 < payload425.length()
+                  index428 = index428 + 1 {
+                let iter_elem : String = payload425[index428]
+                let iter_base = address427 + index428 * 8
 
-                let ptr410 = mbt_ffi_str2ptr(iter_elem)
+                let ptr426 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr410)
+                mbt_ffi_store32(iter_base + 0, ptr426)
               }
-              mbt_ffi_store32(iter_base + 16, payload409.length())
-              mbt_ffi_store32(iter_base + 12, address411)
+              mbt_ffi_store32(iter_base + 16, payload425.length())
+              mbt_ffi_store32(iter_base + 12, address427)
 
               ()
             }
           }
 
-          match payload407.min_bytes {
+          match payload423.min_bytes {
             None => {
               mbt_ffi_store8(iter_base + 20, 0)
 
               ()
             }
-            Some(payload414) => {
+            Some(payload430) => {
               mbt_ffi_store8(iter_base + 20, 1)
-              mbt_ffi_store32(iter_base + 24, payload414.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 24, payload430.reinterpret_as_int())
 
               ()
             }
           }
 
-          match payload407.max_bytes {
+          match payload423.max_bytes {
             None => {
               mbt_ffi_store8(iter_base + 28, 0)
 
               ()
             }
-            Some(payload416) => {
+            Some(payload432) => {
               mbt_ffi_store8(iter_base + 28, 1)
-              mbt_ffi_store32(iter_base + 32, payload416.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 32, payload432.reinterpret_as_int())
 
               ()
             }
@@ -8217,105 +8393,19 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        PathType(payload417) => {
+        PathType(payload433) => {
           mbt_ffi_store8(iter_base + 0, 26)
-          mbt_ffi_store8(iter_base + 8, payload417.direction.ordinal())
-          mbt_ffi_store8(iter_base + 9, payload417.kind.ordinal())
+          mbt_ffi_store8(iter_base + 8, payload433.direction.ordinal())
+          mbt_ffi_store8(iter_base + 9, payload433.kind.ordinal())
 
-          match payload417.allowed_mime_types {
+          match payload433.allowed_mime_types {
             None => {
               mbt_ffi_store8(iter_base + 12, 0)
 
               ()
             }
-            Some(payload419) => {
-              mbt_ffi_store8(iter_base + 12, 1)
-
-              let address421 = mbt_ffi_malloc(payload419.length() * 8)
-              for index422 = 0
-                  index422 < payload419.length()
-                  index422 = index422 + 1 {
-                let iter_elem : String = payload419[index422]
-                let iter_base = address421 + index422 * 8
-
-                let ptr420 = mbt_ffi_str2ptr(iter_elem)
-                mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr420)
-              }
-              mbt_ffi_store32(iter_base + 20, payload419.length())
-              mbt_ffi_store32(iter_base + 16, address421)
-
-              ()
-            }
-          }
-
-          match payload417.allowed_extensions {
-            None => {
-              mbt_ffi_store8(iter_base + 24, 0)
-
-              ()
-            }
-            Some(payload424) => {
-              mbt_ffi_store8(iter_base + 24, 1)
-
-              let address426 = mbt_ffi_malloc(payload424.length() * 8)
-              for index427 = 0
-                  index427 < payload424.length()
-                  index427 = index427 + 1 {
-                let iter_elem : String = payload424[index427]
-                let iter_base = address426 + index427 * 8
-
-                let ptr425 = mbt_ffi_str2ptr(iter_elem)
-                mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr425)
-              }
-              mbt_ffi_store32(iter_base + 32, payload424.length())
-              mbt_ffi_store32(iter_base + 28, address426)
-
-              ()
-            }
-          }
-
-          ()
-        }
-        UrlType(payload428) => {
-          mbt_ffi_store8(iter_base + 0, 27)
-
-          match payload428.allowed_schemes {
-            None => {
-              mbt_ffi_store8(iter_base + 8, 0)
-
-              ()
-            }
-            Some(payload430) => {
-              mbt_ffi_store8(iter_base + 8, 1)
-
-              let address432 = mbt_ffi_malloc(payload430.length() * 8)
-              for index433 = 0
-                  index433 < payload430.length()
-                  index433 = index433 + 1 {
-                let iter_elem : String = payload430[index433]
-                let iter_base = address432 + index433 * 8
-
-                let ptr431 = mbt_ffi_str2ptr(iter_elem)
-                mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr431)
-              }
-              mbt_ffi_store32(iter_base + 16, payload430.length())
-              mbt_ffi_store32(iter_base + 12, address432)
-
-              ()
-            }
-          }
-
-          match payload428.allowed_hosts {
-            None => {
-              mbt_ffi_store8(iter_base + 20, 0)
-
-              ()
-            }
             Some(payload435) => {
-              mbt_ffi_store8(iter_base + 20, 1)
+              mbt_ffi_store8(iter_base + 12, 1)
 
               let address437 = mbt_ffi_malloc(payload435.length() * 8)
               for index438 = 0
@@ -8328,8 +8418,94 @@ pub fn wasmExportGetDefinition() -> Int {
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
                 mbt_ffi_store32(iter_base + 0, ptr436)
               }
-              mbt_ffi_store32(iter_base + 28, payload435.length())
-              mbt_ffi_store32(iter_base + 24, address437)
+              mbt_ffi_store32(iter_base + 20, payload435.length())
+              mbt_ffi_store32(iter_base + 16, address437)
+
+              ()
+            }
+          }
+
+          match payload433.allowed_extensions {
+            None => {
+              mbt_ffi_store8(iter_base + 24, 0)
+
+              ()
+            }
+            Some(payload440) => {
+              mbt_ffi_store8(iter_base + 24, 1)
+
+              let address442 = mbt_ffi_malloc(payload440.length() * 8)
+              for index443 = 0
+                  index443 < payload440.length()
+                  index443 = index443 + 1 {
+                let iter_elem : String = payload440[index443]
+                let iter_base = address442 + index443 * 8
+
+                let ptr441 = mbt_ffi_str2ptr(iter_elem)
+                mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                mbt_ffi_store32(iter_base + 0, ptr441)
+              }
+              mbt_ffi_store32(iter_base + 32, payload440.length())
+              mbt_ffi_store32(iter_base + 28, address442)
+
+              ()
+            }
+          }
+
+          ()
+        }
+        UrlType(payload444) => {
+          mbt_ffi_store8(iter_base + 0, 27)
+
+          match payload444.allowed_schemes {
+            None => {
+              mbt_ffi_store8(iter_base + 8, 0)
+
+              ()
+            }
+            Some(payload446) => {
+              mbt_ffi_store8(iter_base + 8, 1)
+
+              let address448 = mbt_ffi_malloc(payload446.length() * 8)
+              for index449 = 0
+                  index449 < payload446.length()
+                  index449 = index449 + 1 {
+                let iter_elem : String = payload446[index449]
+                let iter_base = address448 + index449 * 8
+
+                let ptr447 = mbt_ffi_str2ptr(iter_elem)
+                mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                mbt_ffi_store32(iter_base + 0, ptr447)
+              }
+              mbt_ffi_store32(iter_base + 16, payload446.length())
+              mbt_ffi_store32(iter_base + 12, address448)
+
+              ()
+            }
+          }
+
+          match payload444.allowed_hosts {
+            None => {
+              mbt_ffi_store8(iter_base + 20, 0)
+
+              ()
+            }
+            Some(payload451) => {
+              mbt_ffi_store8(iter_base + 20, 1)
+
+              let address453 = mbt_ffi_malloc(payload451.length() * 8)
+              for index454 = 0
+                  index454 < payload451.length()
+                  index454 = index454 + 1 {
+                let iter_elem : String = payload451[index454]
+                let iter_base = address453 + index454 * 8
+
+                let ptr452 = mbt_ffi_str2ptr(iter_elem)
+                mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                mbt_ffi_store32(iter_base + 0, ptr452)
+              }
+              mbt_ffi_store32(iter_base + 28, payload451.length())
+              mbt_ffi_store32(iter_base + 24, address453)
 
               ()
             }
@@ -8347,62 +8523,62 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        QuantityType(payload441) => {
+        QuantityType(payload457) => {
           mbt_ffi_store8(iter_base + 0, 30)
 
-          let ptr442 = mbt_ffi_str2ptr(payload441.base_unit)
-          mbt_ffi_store32(iter_base + 12, payload441.base_unit.length())
-          mbt_ffi_store32(iter_base + 8, ptr442)
+          let ptr458 = mbt_ffi_str2ptr(payload457.base_unit)
+          mbt_ffi_store32(iter_base + 12, payload457.base_unit.length())
+          mbt_ffi_store32(iter_base + 8, ptr458)
 
-          let address444 = mbt_ffi_malloc(
-            payload441.allowed_suffixes.length() * 8,
+          let address460 = mbt_ffi_malloc(
+            payload457.allowed_suffixes.length() * 8,
           )
-          for index445 = 0
-              index445 < payload441.allowed_suffixes.length()
-              index445 = index445 + 1 {
-            let iter_elem : String = payload441.allowed_suffixes[index445]
-            let iter_base = address444 + index445 * 8
+          for index461 = 0
+              index461 < payload457.allowed_suffixes.length()
+              index461 = index461 + 1 {
+            let iter_elem : String = payload457.allowed_suffixes[index461]
+            let iter_base = address460 + index461 * 8
 
-            let ptr443 = mbt_ffi_str2ptr(iter_elem)
+            let ptr459 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr443)
+            mbt_ffi_store32(iter_base + 0, ptr459)
           }
-          mbt_ffi_store32(iter_base + 20, payload441.allowed_suffixes.length())
-          mbt_ffi_store32(iter_base + 16, address444)
+          mbt_ffi_store32(iter_base + 20, payload457.allowed_suffixes.length())
+          mbt_ffi_store32(iter_base + 16, address460)
 
-          match payload441.min {
+          match payload457.min {
             None => {
               mbt_ffi_store8(iter_base + 24, 0)
 
               ()
             }
-            Some(payload447) => {
+            Some(payload463) => {
               mbt_ffi_store8(iter_base + 24, 1)
-              mbt_ffi_store64(iter_base + 32, payload447.mantissa)
-              mbt_ffi_store32(iter_base + 40, payload447.scale)
+              mbt_ffi_store64(iter_base + 32, payload463.mantissa)
+              mbt_ffi_store32(iter_base + 40, payload463.scale)
 
-              let ptr448 = mbt_ffi_str2ptr(payload447.unit)
-              mbt_ffi_store32(iter_base + 48, payload447.unit.length())
-              mbt_ffi_store32(iter_base + 44, ptr448)
+              let ptr464 = mbt_ffi_str2ptr(payload463.unit)
+              mbt_ffi_store32(iter_base + 48, payload463.unit.length())
+              mbt_ffi_store32(iter_base + 44, ptr464)
 
               ()
             }
           }
 
-          match payload441.max {
+          match payload457.max {
             None => {
               mbt_ffi_store8(iter_base + 56, 0)
 
               ()
             }
-            Some(payload450) => {
+            Some(payload466) => {
               mbt_ffi_store8(iter_base + 56, 1)
-              mbt_ffi_store64(iter_base + 64, payload450.mantissa)
-              mbt_ffi_store32(iter_base + 72, payload450.scale)
+              mbt_ffi_store64(iter_base + 64, payload466.mantissa)
+              mbt_ffi_store32(iter_base + 72, payload466.scale)
 
-              let ptr451 = mbt_ffi_str2ptr(payload450.unit)
-              mbt_ffi_store32(iter_base + 80, payload450.unit.length())
-              mbt_ffi_store32(iter_base + 76, ptr451)
+              let ptr467 = mbt_ffi_str2ptr(payload466.unit)
+              mbt_ffi_store32(iter_base + 80, payload466.unit.length())
+              mbt_ffi_store32(iter_base + 76, ptr467)
 
               ()
             }
@@ -8410,77 +8586,77 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        UnionType(payload452) => {
+        UnionType(payload468) => {
           mbt_ffi_store8(iter_base + 0, 31)
 
-          let address486 = mbt_ffi_malloc(payload452.branches.length() * 92)
-          for index487 = 0
-              index487 < payload452.branches.length()
-              index487 = index487 + 1 {
-            let iter_elem : @types.UnionBranch = payload452.branches[index487]
-            let iter_base = address486 + index487 * 92
+          let address504 = mbt_ffi_malloc(payload468.branches.length() * 92)
+          for index505 = 0
+              index505 < payload468.branches.length()
+              index505 = index505 + 1 {
+            let iter_elem : @types.UnionBranch = payload468.branches[index505]
+            let iter_base = address504 + index505 * 92
 
-            let ptr453 = mbt_ffi_str2ptr(iter_elem.tag)
+            let ptr469 = mbt_ffi_str2ptr(iter_elem.tag)
             mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-            mbt_ffi_store32(iter_base + 0, ptr453)
+            mbt_ffi_store32(iter_base + 0, ptr469)
             mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
             match iter_elem.discriminator {
-              Prefix(payload454) => {
+              Prefix(payload470) => {
                 mbt_ffi_store8(iter_base + 12, 0)
 
-                let ptr455 = mbt_ffi_str2ptr(payload454)
-                mbt_ffi_store32(iter_base + 20, payload454.length())
-                mbt_ffi_store32(iter_base + 16, ptr455)
+                let ptr471 = mbt_ffi_str2ptr(payload470)
+                mbt_ffi_store32(iter_base + 20, payload470.length())
+                mbt_ffi_store32(iter_base + 16, ptr471)
 
                 ()
               }
-              Suffix(payload456) => {
+              Suffix(payload472) => {
                 mbt_ffi_store8(iter_base + 12, 1)
 
-                let ptr457 = mbt_ffi_str2ptr(payload456)
-                mbt_ffi_store32(iter_base + 20, payload456.length())
-                mbt_ffi_store32(iter_base + 16, ptr457)
+                let ptr473 = mbt_ffi_str2ptr(payload472)
+                mbt_ffi_store32(iter_base + 20, payload472.length())
+                mbt_ffi_store32(iter_base + 16, ptr473)
 
                 ()
               }
-              Contains(payload458) => {
+              Contains(payload474) => {
                 mbt_ffi_store8(iter_base + 12, 2)
 
-                let ptr459 = mbt_ffi_str2ptr(payload458)
-                mbt_ffi_store32(iter_base + 20, payload458.length())
-                mbt_ffi_store32(iter_base + 16, ptr459)
+                let ptr475 = mbt_ffi_str2ptr(payload474)
+                mbt_ffi_store32(iter_base + 20, payload474.length())
+                mbt_ffi_store32(iter_base + 16, ptr475)
 
                 ()
               }
-              Regex(payload460) => {
+              Regex(payload476) => {
                 mbt_ffi_store8(iter_base + 12, 3)
 
-                let ptr461 = mbt_ffi_str2ptr(payload460)
-                mbt_ffi_store32(iter_base + 20, payload460.length())
-                mbt_ffi_store32(iter_base + 16, ptr461)
+                let ptr477 = mbt_ffi_str2ptr(payload476)
+                mbt_ffi_store32(iter_base + 20, payload476.length())
+                mbt_ffi_store32(iter_base + 16, ptr477)
 
                 ()
               }
-              FieldEquals(payload462) => {
+              FieldEquals(payload478) => {
                 mbt_ffi_store8(iter_base + 12, 4)
 
-                let ptr463 = mbt_ffi_str2ptr(payload462.field_name)
-                mbt_ffi_store32(iter_base + 20, payload462.field_name.length())
-                mbt_ffi_store32(iter_base + 16, ptr463)
+                let ptr479 = mbt_ffi_str2ptr(payload478.field_name)
+                mbt_ffi_store32(iter_base + 20, payload478.field_name.length())
+                mbt_ffi_store32(iter_base + 16, ptr479)
 
-                match payload462.literal {
+                match payload478.literal {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload465) => {
+                  Some(payload481) => {
                     mbt_ffi_store8(iter_base + 24, 1)
 
-                    let ptr466 = mbt_ffi_str2ptr(payload465)
-                    mbt_ffi_store32(iter_base + 32, payload465.length())
-                    mbt_ffi_store32(iter_base + 28, ptr466)
+                    let ptr482 = mbt_ffi_str2ptr(payload481)
+                    mbt_ffi_store32(iter_base + 32, payload481.length())
+                    mbt_ffi_store32(iter_base + 28, ptr482)
 
                     ()
                   }
@@ -8488,12 +8664,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              FieldAbsent(payload467) => {
+              FieldAbsent(payload483) => {
                 mbt_ffi_store8(iter_base + 12, 5)
 
-                let ptr468 = mbt_ffi_str2ptr(payload467)
-                mbt_ffi_store32(iter_base + 20, payload467.length())
-                mbt_ffi_store32(iter_base + 16, ptr468)
+                let ptr484 = mbt_ffi_str2ptr(payload483)
+                mbt_ffi_store32(iter_base + 20, payload483.length())
+                mbt_ffi_store32(iter_base + 16, ptr484)
 
                 ()
               }
@@ -8505,51 +8681,51 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload470) => {
+              Some(payload486) => {
                 mbt_ffi_store8(iter_base + 36, 1)
 
-                let ptr471 = mbt_ffi_str2ptr(payload470)
-                mbt_ffi_store32(iter_base + 44, payload470.length())
-                mbt_ffi_store32(iter_base + 40, ptr471)
+                let ptr487 = mbt_ffi_str2ptr(payload486)
+                mbt_ffi_store32(iter_base + 44, payload486.length())
+                mbt_ffi_store32(iter_base + 40, ptr487)
 
                 ()
               }
             }
 
-            let address473 = mbt_ffi_malloc(
+            let address489 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index474 = 0
-                index474 < iter_elem.metadata.aliases.length()
-                index474 = index474 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index474]
-              let iter_base = address473 + index474 * 8
+            for index490 = 0
+                index490 < iter_elem.metadata.aliases.length()
+                index490 = index490 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index490]
+              let iter_base = address489 + index490 * 8
 
-              let ptr472 = mbt_ffi_str2ptr(iter_elem)
+              let ptr488 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr472)
+              mbt_ffi_store32(iter_base + 0, ptr488)
             }
             mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 48, address473)
+            mbt_ffi_store32(iter_base + 48, address489)
 
-            let address476 = mbt_ffi_malloc(
+            let address492 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index477 = 0
-                index477 < iter_elem.metadata.examples.length()
-                index477 = index477 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index477]
-              let iter_base = address476 + index477 * 8
+            for index493 = 0
+                index493 < iter_elem.metadata.examples.length()
+                index493 = index493 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index493]
+              let iter_base = address492 + index493 * 8
 
-              let ptr475 = mbt_ffi_str2ptr(iter_elem)
+              let ptr491 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr475)
+              mbt_ffi_store32(iter_base + 0, ptr491)
             }
             mbt_ffi_store32(
               iter_base + 60,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 56, address476)
+            mbt_ffi_store32(iter_base + 56, address492)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -8557,12 +8733,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload479) => {
+              Some(payload495) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr480 = mbt_ffi_str2ptr(payload479)
-                mbt_ffi_store32(iter_base + 72, payload479.length())
-                mbt_ffi_store32(iter_base + 68, ptr480)
+                let ptr496 = mbt_ffi_str2ptr(payload495)
+                mbt_ffi_store32(iter_base + 72, payload495.length())
+                mbt_ffi_store32(iter_base + 68, ptr496)
 
                 ()
               }
@@ -8574,21 +8750,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload482) => {
+              Some(payload498) => {
                 mbt_ffi_store8(iter_base + 76, 1)
 
-                match payload482 {
+                match payload498 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 80, 0)
 
                     ()
                   }
-                  Other(payload484) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 80, 1)
 
-                    let ptr485 = mbt_ffi_str2ptr(payload484)
-                    mbt_ffi_store32(iter_base + 88, payload484.length())
-                    mbt_ffi_store32(iter_base + 84, ptr485)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 80, 2)
+
+                    ()
+                  }
+                  Other(payload502) => {
+                    mbt_ffi_store8(iter_base + 80, 3)
+
+                    let ptr503 = mbt_ffi_str2ptr(payload502)
+                    mbt_ffi_store32(iter_base + 88, payload502.length())
+                    mbt_ffi_store32(iter_base + 84, ptr503)
 
                     ()
                   }
@@ -8598,26 +8784,26 @@ pub fn wasmExportGetDefinition() -> Int {
               }
             }
           }
-          mbt_ffi_store32(iter_base + 12, payload452.branches.length())
-          mbt_ffi_store32(iter_base + 8, address486)
+          mbt_ffi_store32(iter_base + 12, payload468.branches.length())
+          mbt_ffi_store32(iter_base + 8, address504)
 
           ()
         }
-        SecretType(payload488) => {
+        SecretType(payload506) => {
           mbt_ffi_store8(iter_base + 0, 32)
 
-          match payload488.category {
+          match payload506.category {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload490) => {
+            Some(payload508) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let ptr491 = mbt_ffi_str2ptr(payload490)
-              mbt_ffi_store32(iter_base + 16, payload490.length())
-              mbt_ffi_store32(iter_base + 12, ptr491)
+              let ptr509 = mbt_ffi_str2ptr(payload508)
+              mbt_ffi_store32(iter_base + 16, payload508.length())
+              mbt_ffi_store32(iter_base + 12, ptr509)
 
               ()
             }
@@ -8625,21 +8811,21 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        QuotaTokenType(payload492) => {
+        QuotaTokenType(payload510) => {
           mbt_ffi_store8(iter_base + 0, 33)
 
-          match payload492.resource_name {
+          match payload510.resource_name {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload494) => {
+            Some(payload512) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let ptr495 = mbt_ffi_str2ptr(payload494)
-              mbt_ffi_store32(iter_base + 16, payload494.length())
-              mbt_ffi_store32(iter_base + 12, ptr495)
+              let ptr513 = mbt_ffi_str2ptr(payload512)
+              mbt_ffi_store32(iter_base + 16, payload512.length())
+              mbt_ffi_store32(iter_base + 12, ptr513)
 
               ()
             }
@@ -8647,18 +8833,18 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        FutureType(payload496) => {
+        FutureType(payload514) => {
           mbt_ffi_store8(iter_base + 0, 34)
 
-          match payload496 {
+          match payload514 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload498) => {
+            Some(payload516) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload498)
+              mbt_ffi_store32(iter_base + 12, payload516)
 
               ()
             }
@@ -8666,18 +8852,18 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        StreamType(payload499) => {
+        StreamType(payload517) => {
           mbt_ffi_store8(iter_base + 0, 35)
 
-          match payload499 {
+          match payload517 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload501) => {
+            Some(payload519) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload501)
+              mbt_ffi_store32(iter_base + 12, payload519)
 
               ()
             }
@@ -8693,44 +8879,44 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload503) => {
+        Some(payload521) => {
           mbt_ffi_store8(iter_base + 88, 1)
 
-          let ptr504 = mbt_ffi_str2ptr(payload503)
-          mbt_ffi_store32(iter_base + 96, payload503.length())
-          mbt_ffi_store32(iter_base + 92, ptr504)
+          let ptr522 = mbt_ffi_str2ptr(payload521)
+          mbt_ffi_store32(iter_base + 96, payload521.length())
+          mbt_ffi_store32(iter_base + 92, ptr522)
 
           ()
         }
       }
 
-      let address506 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-      for index507 = 0
-          index507 < iter_elem.metadata.aliases.length()
-          index507 = index507 + 1 {
-        let iter_elem : String = iter_elem.metadata.aliases[index507]
-        let iter_base = address506 + index507 * 8
+      let address524 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
+      for index525 = 0
+          index525 < iter_elem.metadata.aliases.length()
+          index525 = index525 + 1 {
+        let iter_elem : String = iter_elem.metadata.aliases[index525]
+        let iter_base = address524 + index525 * 8
 
-        let ptr505 = mbt_ffi_str2ptr(iter_elem)
+        let ptr523 = mbt_ffi_str2ptr(iter_elem)
         mbt_ffi_store32(iter_base + 4, iter_elem.length())
-        mbt_ffi_store32(iter_base + 0, ptr505)
+        mbt_ffi_store32(iter_base + 0, ptr523)
       }
       mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
-      mbt_ffi_store32(iter_base + 100, address506)
+      mbt_ffi_store32(iter_base + 100, address524)
 
-      let address509 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
-      for index510 = 0
-          index510 < iter_elem.metadata.examples.length()
-          index510 = index510 + 1 {
-        let iter_elem : String = iter_elem.metadata.examples[index510]
-        let iter_base = address509 + index510 * 8
+      let address527 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+      for index528 = 0
+          index528 < iter_elem.metadata.examples.length()
+          index528 = index528 + 1 {
+        let iter_elem : String = iter_elem.metadata.examples[index528]
+        let iter_base = address527 + index528 * 8
 
-        let ptr508 = mbt_ffi_str2ptr(iter_elem)
+        let ptr526 = mbt_ffi_str2ptr(iter_elem)
         mbt_ffi_store32(iter_base + 4, iter_elem.length())
-        mbt_ffi_store32(iter_base + 0, ptr508)
+        mbt_ffi_store32(iter_base + 0, ptr526)
       }
       mbt_ffi_store32(iter_base + 112, iter_elem.metadata.examples.length())
-      mbt_ffi_store32(iter_base + 108, address509)
+      mbt_ffi_store32(iter_base + 108, address527)
 
       match iter_elem.metadata.deprecated {
         None => {
@@ -8738,12 +8924,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload512) => {
+        Some(payload530) => {
           mbt_ffi_store8(iter_base + 116, 1)
 
-          let ptr513 = mbt_ffi_str2ptr(payload512)
-          mbt_ffi_store32(iter_base + 124, payload512.length())
-          mbt_ffi_store32(iter_base + 120, ptr513)
+          let ptr531 = mbt_ffi_str2ptr(payload530)
+          mbt_ffi_store32(iter_base + 124, payload530.length())
+          mbt_ffi_store32(iter_base + 120, ptr531)
 
           ()
         }
@@ -8755,21 +8941,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload515) => {
+        Some(payload533) => {
           mbt_ffi_store8(iter_base + 128, 1)
 
-          match payload515 {
+          match payload533 {
             Multimodal => {
               mbt_ffi_store8(iter_base + 132, 0)
 
               ()
             }
-            Other(payload517) => {
+            UnstructuredText => {
               mbt_ffi_store8(iter_base + 132, 1)
 
-              let ptr518 = mbt_ffi_str2ptr(payload517)
-              mbt_ffi_store32(iter_base + 140, payload517.length())
-              mbt_ffi_store32(iter_base + 136, ptr518)
+              ()
+            }
+            UnstructuredBinary => {
+              mbt_ffi_store8(iter_base + 132, 2)
+
+              ()
+            }
+            Other(payload537) => {
+              mbt_ffi_store8(iter_base + 132, 3)
+
+              let ptr538 = mbt_ffi_str2ptr(payload537)
+              mbt_ffi_store32(iter_base + 140, payload537.length())
+              mbt_ffi_store32(iter_base + 136, ptr538)
 
               ()
             }
@@ -8780,18 +8976,18 @@ pub fn wasmExportGetDefinition() -> Int {
       }
     }
     mbt_ffi_store32(iter_base + 24, iter_elem.schema.type_nodes.length())
-    mbt_ffi_store32(iter_base + 20, address519)
+    mbt_ffi_store32(iter_base + 20, address539)
 
-    let address525 = mbt_ffi_malloc(iter_elem.schema.defs.length() * 24)
-    for index526 = 0
-        index526 < iter_elem.schema.defs.length()
-        index526 = index526 + 1 {
-      let iter_elem : @types.SchemaTypeDef = iter_elem.schema.defs[index526]
-      let iter_base = address525 + index526 * 24
+    let address545 = mbt_ffi_malloc(iter_elem.schema.defs.length() * 24)
+    for index546 = 0
+        index546 < iter_elem.schema.defs.length()
+        index546 = index546 + 1 {
+      let iter_elem : @types.SchemaTypeDef = iter_elem.schema.defs[index546]
+      let iter_base = address545 + index546 * 24
 
-      let ptr521 = mbt_ffi_str2ptr(iter_elem.id)
+      let ptr541 = mbt_ffi_str2ptr(iter_elem.id)
       mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-      mbt_ffi_store32(iter_base + 0, ptr521)
+      mbt_ffi_store32(iter_base + 0, ptr541)
 
       match iter_elem.name {
         None => {
@@ -8799,12 +8995,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload523) => {
+        Some(payload543) => {
           mbt_ffi_store8(iter_base + 8, 1)
 
-          let ptr524 = mbt_ffi_str2ptr(payload523)
-          mbt_ffi_store32(iter_base + 16, payload523.length())
-          mbt_ffi_store32(iter_base + 12, ptr524)
+          let ptr544 = mbt_ffi_str2ptr(payload543)
+          mbt_ffi_store32(iter_base + 16, payload543.length())
+          mbt_ffi_store32(iter_base + 12, ptr544)
 
           ()
         }
@@ -8812,7 +9008,7 @@ pub fn wasmExportGetDefinition() -> Int {
       mbt_ffi_store32(iter_base + 20, iter_elem.body)
     }
     mbt_ffi_store32(iter_base + 32, iter_elem.schema.defs.length())
-    mbt_ffi_store32(iter_base + 28, address525)
+    mbt_ffi_store32(iter_base + 28, address545)
     mbt_ffi_store32(iter_base + 36, iter_elem.schema.root)
 
     match iter_elem.constructor_.name {
@@ -8821,20 +9017,20 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload528) => {
+      Some(payload548) => {
         mbt_ffi_store8(iter_base + 40, 1)
 
-        let ptr529 = mbt_ffi_str2ptr(payload528)
-        mbt_ffi_store32(iter_base + 48, payload528.length())
-        mbt_ffi_store32(iter_base + 44, ptr529)
+        let ptr549 = mbt_ffi_str2ptr(payload548)
+        mbt_ffi_store32(iter_base + 48, payload548.length())
+        mbt_ffi_store32(iter_base + 44, ptr549)
 
         ()
       }
     }
 
-    let ptr530 = mbt_ffi_str2ptr(iter_elem.constructor_.description)
+    let ptr550 = mbt_ffi_str2ptr(iter_elem.constructor_.description)
     mbt_ffi_store32(iter_base + 56, iter_elem.constructor_.description.length())
-    mbt_ffi_store32(iter_base + 52, ptr530)
+    mbt_ffi_store32(iter_base + 52, ptr550)
 
     match iter_elem.constructor_.prompt_hint {
       None => {
@@ -8842,31 +9038,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
         ()
       }
-      Some(payload532) => {
+      Some(payload552) => {
         mbt_ffi_store8(iter_base + 60, 1)
 
-        let ptr533 = mbt_ffi_str2ptr(payload532)
-        mbt_ffi_store32(iter_base + 68, payload532.length())
-        mbt_ffi_store32(iter_base + 64, ptr533)
+        let ptr553 = mbt_ffi_str2ptr(payload552)
+        mbt_ffi_store32(iter_base + 68, payload552.length())
+        mbt_ffi_store32(iter_base + 64, ptr553)
 
         ()
       }
     }
 
     match iter_elem.constructor_.input_schema {
-      Parameters(payload534) => {
+      Parameters(payload554) => {
         mbt_ffi_store8(iter_base + 72, 0)
 
-        let address555 = mbt_ffi_malloc(payload534.length() * 72)
-        for index556 = 0
-            index556 < payload534.length()
-            index556 = index556 + 1 {
-          let iter_elem : @common.NamedField = payload534[index556]
-          let iter_base = address555 + index556 * 72
+        let address577 = mbt_ffi_malloc(payload554.length() * 72)
+        for index578 = 0
+            index578 < payload554.length()
+            index578 = index578 + 1 {
+          let iter_elem : @common.NamedField = payload554[index578]
+          let iter_base = address577 + index578 * 72
 
-          let ptr535 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr555 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr535)
+          mbt_ffi_store32(iter_base + 0, ptr555)
 
           match iter_elem.source {
             UserSupplied => {
@@ -8874,9 +9070,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            AutoInjected(payload537) => {
+            AutoInjected(payload557) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store8(iter_base + 9, payload537.ordinal())
+              mbt_ffi_store8(iter_base + 9, payload557.ordinal())
 
               ()
             }
@@ -8889,48 +9085,48 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload539) => {
+            Some(payload559) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr540 = mbt_ffi_str2ptr(payload539)
-              mbt_ffi_store32(iter_base + 24, payload539.length())
-              mbt_ffi_store32(iter_base + 20, ptr540)
+              let ptr560 = mbt_ffi_str2ptr(payload559)
+              mbt_ffi_store32(iter_base + 24, payload559.length())
+              mbt_ffi_store32(iter_base + 20, ptr560)
 
               ()
             }
           }
 
-          let address542 = mbt_ffi_malloc(
+          let address562 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index543 = 0
-              index543 < iter_elem.metadata.aliases.length()
-              index543 = index543 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index543]
-            let iter_base = address542 + index543 * 8
+          for index563 = 0
+              index563 < iter_elem.metadata.aliases.length()
+              index563 = index563 + 1 {
+            let iter_elem : String = iter_elem.metadata.aliases[index563]
+            let iter_base = address562 + index563 * 8
 
-            let ptr541 = mbt_ffi_str2ptr(iter_elem)
+            let ptr561 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr541)
+            mbt_ffi_store32(iter_base + 0, ptr561)
           }
           mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 28, address542)
+          mbt_ffi_store32(iter_base + 28, address562)
 
-          let address545 = mbt_ffi_malloc(
+          let address565 = mbt_ffi_malloc(
             iter_elem.metadata.examples.length() * 8,
           )
-          for index546 = 0
-              index546 < iter_elem.metadata.examples.length()
-              index546 = index546 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index546]
-            let iter_base = address545 + index546 * 8
+          for index566 = 0
+              index566 < iter_elem.metadata.examples.length()
+              index566 = index566 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index566]
+            let iter_base = address565 + index566 * 8
 
-            let ptr544 = mbt_ffi_str2ptr(iter_elem)
+            let ptr564 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr544)
+            mbt_ffi_store32(iter_base + 0, ptr564)
           }
           mbt_ffi_store32(iter_base + 40, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 36, address545)
+          mbt_ffi_store32(iter_base + 36, address565)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -8938,12 +9134,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload548) => {
+            Some(payload568) => {
               mbt_ffi_store8(iter_base + 44, 1)
 
-              let ptr549 = mbt_ffi_str2ptr(payload548)
-              mbt_ffi_store32(iter_base + 52, payload548.length())
-              mbt_ffi_store32(iter_base + 48, ptr549)
+              let ptr569 = mbt_ffi_str2ptr(payload568)
+              mbt_ffi_store32(iter_base + 52, payload568.length())
+              mbt_ffi_store32(iter_base + 48, ptr569)
 
               ()
             }
@@ -8955,21 +9151,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Some(payload551) => {
+            Some(payload571) => {
               mbt_ffi_store8(iter_base + 56, 1)
 
-              match payload551 {
+              match payload571 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 60, 0)
 
                   ()
                 }
-                Other(payload553) => {
+                UnstructuredText => {
                   mbt_ffi_store8(iter_base + 60, 1)
 
-                  let ptr554 = mbt_ffi_str2ptr(payload553)
-                  mbt_ffi_store32(iter_base + 68, payload553.length())
-                  mbt_ffi_store32(iter_base + 64, ptr554)
+                  ()
+                }
+                UnstructuredBinary => {
+                  mbt_ffi_store8(iter_base + 60, 2)
+
+                  ()
+                }
+                Other(payload575) => {
+                  mbt_ffi_store8(iter_base + 60, 3)
+
+                  let ptr576 = mbt_ffi_str2ptr(payload575)
+                  mbt_ffi_store32(iter_base + 68, payload575.length())
+                  mbt_ffi_store32(iter_base + 64, ptr576)
 
                   ()
                 }
@@ -8979,34 +9185,34 @@ pub fn wasmExportGetDefinition() -> Int {
             }
           }
         }
-        mbt_ffi_store32(iter_base + 80, payload534.length())
-        mbt_ffi_store32(iter_base + 76, address555)
+        mbt_ffi_store32(iter_base + 80, payload554.length())
+        mbt_ffi_store32(iter_base + 76, address577)
 
         ()
       }
     }
 
-    let address627 = mbt_ffi_malloc(iter_elem.methods.length() * 88)
-    for index628 = 0
-        index628 < iter_elem.methods.length()
-        index628 = index628 + 1 {
-      let iter_elem : @common.AgentMethod = iter_elem.methods[index628]
-      let iter_base = address627 + index628 * 88
+    let address651 = mbt_ffi_malloc(iter_elem.methods.length() * 88)
+    for index652 = 0
+        index652 < iter_elem.methods.length()
+        index652 = index652 + 1 {
+      let iter_elem : @common.AgentMethod = iter_elem.methods[index652]
+      let iter_base = address651 + index652 * 88
 
-      let ptr557 = mbt_ffi_str2ptr(iter_elem.name)
+      let ptr579 = mbt_ffi_str2ptr(iter_elem.name)
       mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-      mbt_ffi_store32(iter_base + 0, ptr557)
+      mbt_ffi_store32(iter_base + 0, ptr579)
 
-      let ptr558 = mbt_ffi_str2ptr(iter_elem.description)
+      let ptr580 = mbt_ffi_str2ptr(iter_elem.description)
       mbt_ffi_store32(iter_base + 12, iter_elem.description.length())
-      mbt_ffi_store32(iter_base + 8, ptr558)
+      mbt_ffi_store32(iter_base + 8, ptr580)
 
-      let address592 = mbt_ffi_malloc(iter_elem.http_endpoint.length() * 48)
-      for index593 = 0
-          index593 < iter_elem.http_endpoint.length()
-          index593 = index593 + 1 {
-        let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index593]
-        let iter_base = address592 + index593 * 48
+      let address614 = mbt_ffi_malloc(iter_elem.http_endpoint.length() * 48)
+      for index615 = 0
+          index615 < iter_elem.http_endpoint.length()
+          index615 = index615 + 1 {
+        let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index615]
+        let iter_base = address614 + index615 * 48
 
         match iter_elem.http_method {
           Get => {
@@ -9054,98 +9260,98 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          Custom(payload568) => {
+          Custom(payload590) => {
             mbt_ffi_store8(iter_base + 0, 9)
 
-            let ptr569 = mbt_ffi_str2ptr(payload568)
-            mbt_ffi_store32(iter_base + 8, payload568.length())
-            mbt_ffi_store32(iter_base + 4, ptr569)
+            let ptr591 = mbt_ffi_str2ptr(payload590)
+            mbt_ffi_store32(iter_base + 8, payload590.length())
+            mbt_ffi_store32(iter_base + 4, ptr591)
 
             ()
           }
         }
 
-        let address577 = mbt_ffi_malloc(iter_elem.path_suffix.length() * 12)
-        for index578 = 0
-            index578 < iter_elem.path_suffix.length()
-            index578 = index578 + 1 {
-          let iter_elem : @common.PathSegment = iter_elem.path_suffix[index578]
-          let iter_base = address577 + index578 * 12
+        let address599 = mbt_ffi_malloc(iter_elem.path_suffix.length() * 12)
+        for index600 = 0
+            index600 < iter_elem.path_suffix.length()
+            index600 = index600 + 1 {
+          let iter_elem : @common.PathSegment = iter_elem.path_suffix[index600]
+          let iter_base = address599 + index600 * 12
 
           match iter_elem {
-            Literal(payload570) => {
+            Literal(payload592) => {
               mbt_ffi_store8(iter_base + 0, 0)
 
-              let ptr571 = mbt_ffi_str2ptr(payload570)
-              mbt_ffi_store32(iter_base + 8, payload570.length())
-              mbt_ffi_store32(iter_base + 4, ptr571)
+              let ptr593 = mbt_ffi_str2ptr(payload592)
+              mbt_ffi_store32(iter_base + 8, payload592.length())
+              mbt_ffi_store32(iter_base + 4, ptr593)
 
               ()
             }
-            SystemVariable(payload572) => {
+            SystemVariable(payload594) => {
               mbt_ffi_store8(iter_base + 0, 1)
-              mbt_ffi_store8(iter_base + 4, payload572.ordinal())
+              mbt_ffi_store8(iter_base + 4, payload594.ordinal())
 
               ()
             }
-            PathVariable(payload573) => {
+            PathVariable(payload595) => {
               mbt_ffi_store8(iter_base + 0, 2)
 
-              let ptr574 = mbt_ffi_str2ptr(payload573.variable_name)
-              mbt_ffi_store32(iter_base + 8, payload573.variable_name.length())
-              mbt_ffi_store32(iter_base + 4, ptr574)
+              let ptr596 = mbt_ffi_str2ptr(payload595.variable_name)
+              mbt_ffi_store32(iter_base + 8, payload595.variable_name.length())
+              mbt_ffi_store32(iter_base + 4, ptr596)
 
               ()
             }
-            RemainingPathVariable(payload575) => {
+            RemainingPathVariable(payload597) => {
               mbt_ffi_store8(iter_base + 0, 3)
 
-              let ptr576 = mbt_ffi_str2ptr(payload575.variable_name)
-              mbt_ffi_store32(iter_base + 8, payload575.variable_name.length())
-              mbt_ffi_store32(iter_base + 4, ptr576)
+              let ptr598 = mbt_ffi_str2ptr(payload597.variable_name)
+              mbt_ffi_store32(iter_base + 8, payload597.variable_name.length())
+              mbt_ffi_store32(iter_base + 4, ptr598)
 
               ()
             }
           }
         }
         mbt_ffi_store32(iter_base + 16, iter_elem.path_suffix.length())
-        mbt_ffi_store32(iter_base + 12, address577)
+        mbt_ffi_store32(iter_base + 12, address599)
 
-        let address581 = mbt_ffi_malloc(iter_elem.header_vars.length() * 16)
-        for index582 = 0
-            index582 < iter_elem.header_vars.length()
-            index582 = index582 + 1 {
-          let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index582]
-          let iter_base = address581 + index582 * 16
+        let address603 = mbt_ffi_malloc(iter_elem.header_vars.length() * 16)
+        for index604 = 0
+            index604 < iter_elem.header_vars.length()
+            index604 = index604 + 1 {
+          let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index604]
+          let iter_base = address603 + index604 * 16
 
-          let ptr579 = mbt_ffi_str2ptr(iter_elem.header_name)
+          let ptr601 = mbt_ffi_str2ptr(iter_elem.header_name)
           mbt_ffi_store32(iter_base + 4, iter_elem.header_name.length())
-          mbt_ffi_store32(iter_base + 0, ptr579)
+          mbt_ffi_store32(iter_base + 0, ptr601)
 
-          let ptr580 = mbt_ffi_str2ptr(iter_elem.variable_name)
+          let ptr602 = mbt_ffi_str2ptr(iter_elem.variable_name)
           mbt_ffi_store32(iter_base + 12, iter_elem.variable_name.length())
-          mbt_ffi_store32(iter_base + 8, ptr580)
+          mbt_ffi_store32(iter_base + 8, ptr602)
         }
         mbt_ffi_store32(iter_base + 24, iter_elem.header_vars.length())
-        mbt_ffi_store32(iter_base + 20, address581)
+        mbt_ffi_store32(iter_base + 20, address603)
 
-        let address585 = mbt_ffi_malloc(iter_elem.query_vars.length() * 16)
-        for index586 = 0
-            index586 < iter_elem.query_vars.length()
-            index586 = index586 + 1 {
-          let iter_elem : @common.QueryVariable = iter_elem.query_vars[index586]
-          let iter_base = address585 + index586 * 16
+        let address607 = mbt_ffi_malloc(iter_elem.query_vars.length() * 16)
+        for index608 = 0
+            index608 < iter_elem.query_vars.length()
+            index608 = index608 + 1 {
+          let iter_elem : @common.QueryVariable = iter_elem.query_vars[index608]
+          let iter_base = address607 + index608 * 16
 
-          let ptr583 = mbt_ffi_str2ptr(iter_elem.query_param_name)
+          let ptr605 = mbt_ffi_str2ptr(iter_elem.query_param_name)
           mbt_ffi_store32(iter_base + 4, iter_elem.query_param_name.length())
-          mbt_ffi_store32(iter_base + 0, ptr583)
+          mbt_ffi_store32(iter_base + 0, ptr605)
 
-          let ptr584 = mbt_ffi_str2ptr(iter_elem.variable_name)
+          let ptr606 = mbt_ffi_str2ptr(iter_elem.variable_name)
           mbt_ffi_store32(iter_base + 12, iter_elem.variable_name.length())
-          mbt_ffi_store32(iter_base + 8, ptr584)
+          mbt_ffi_store32(iter_base + 8, ptr606)
         }
         mbt_ffi_store32(iter_base + 32, iter_elem.query_vars.length())
-        mbt_ffi_store32(iter_base + 28, address585)
+        mbt_ffi_store32(iter_base + 28, address607)
 
         match iter_elem.auth_details {
           None => {
@@ -9153,11 +9359,11 @@ pub fn wasmExportGetDefinition() -> Int {
 
             ()
           }
-          Some(payload588) => {
+          Some(payload610) => {
             mbt_ffi_store8(iter_base + 36, 1)
             mbt_ffi_store8(
               iter_base + 37,
-              if payload588.required {
+              if payload610.required {
                 1
               } else {
                 0
@@ -9168,27 +9374,27 @@ pub fn wasmExportGetDefinition() -> Int {
           }
         }
 
-        let address590 = mbt_ffi_malloc(
+        let address612 = mbt_ffi_malloc(
           iter_elem.cors_options.allowed_patterns.length() * 8,
         )
-        for index591 = 0
-            index591 < iter_elem.cors_options.allowed_patterns.length()
-            index591 = index591 + 1 {
-          let iter_elem : String = iter_elem.cors_options.allowed_patterns[index591]
-          let iter_base = address590 + index591 * 8
+        for index613 = 0
+            index613 < iter_elem.cors_options.allowed_patterns.length()
+            index613 = index613 + 1 {
+          let iter_elem : String = iter_elem.cors_options.allowed_patterns[index613]
+          let iter_base = address612 + index613 * 8
 
-          let ptr589 = mbt_ffi_str2ptr(iter_elem)
+          let ptr611 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr589)
+          mbt_ffi_store32(iter_base + 0, ptr611)
         }
         mbt_ffi_store32(
           iter_base + 44,
           iter_elem.cors_options.allowed_patterns.length(),
         )
-        mbt_ffi_store32(iter_base + 40, address590)
+        mbt_ffi_store32(iter_base + 40, address612)
       }
       mbt_ffi_store32(iter_base + 20, iter_elem.http_endpoint.length())
-      mbt_ffi_store32(iter_base + 16, address592)
+      mbt_ffi_store32(iter_base + 16, address614)
 
       match iter_elem.prompt_hint {
         None => {
@@ -9196,31 +9402,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload595) => {
+        Some(payload617) => {
           mbt_ffi_store8(iter_base + 24, 1)
 
-          let ptr596 = mbt_ffi_str2ptr(payload595)
-          mbt_ffi_store32(iter_base + 32, payload595.length())
-          mbt_ffi_store32(iter_base + 28, ptr596)
+          let ptr618 = mbt_ffi_str2ptr(payload617)
+          mbt_ffi_store32(iter_base + 32, payload617.length())
+          mbt_ffi_store32(iter_base + 28, ptr618)
 
           ()
         }
       }
 
       match iter_elem.input_schema {
-        Parameters(payload597) => {
+        Parameters(payload619) => {
           mbt_ffi_store8(iter_base + 36, 0)
 
-          let address618 = mbt_ffi_malloc(payload597.length() * 72)
-          for index619 = 0
-              index619 < payload597.length()
-              index619 = index619 + 1 {
-            let iter_elem : @common.NamedField = payload597[index619]
-            let iter_base = address618 + index619 * 72
+          let address642 = mbt_ffi_malloc(payload619.length() * 72)
+          for index643 = 0
+              index643 < payload619.length()
+              index643 = index643 + 1 {
+            let iter_elem : @common.NamedField = payload619[index643]
+            let iter_base = address642 + index643 * 72
 
-            let ptr598 = mbt_ffi_str2ptr(iter_elem.name)
+            let ptr620 = mbt_ffi_str2ptr(iter_elem.name)
             mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-            mbt_ffi_store32(iter_base + 0, ptr598)
+            mbt_ffi_store32(iter_base + 0, ptr620)
 
             match iter_elem.source {
               UserSupplied => {
@@ -9228,9 +9434,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              AutoInjected(payload600) => {
+              AutoInjected(payload622) => {
                 mbt_ffi_store8(iter_base + 8, 1)
-                mbt_ffi_store8(iter_base + 9, payload600.ordinal())
+                mbt_ffi_store8(iter_base + 9, payload622.ordinal())
 
                 ()
               }
@@ -9243,51 +9449,51 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload602) => {
+              Some(payload624) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                let ptr603 = mbt_ffi_str2ptr(payload602)
-                mbt_ffi_store32(iter_base + 24, payload602.length())
-                mbt_ffi_store32(iter_base + 20, ptr603)
+                let ptr625 = mbt_ffi_str2ptr(payload624)
+                mbt_ffi_store32(iter_base + 24, payload624.length())
+                mbt_ffi_store32(iter_base + 20, ptr625)
 
                 ()
               }
             }
 
-            let address605 = mbt_ffi_malloc(
+            let address627 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index606 = 0
-                index606 < iter_elem.metadata.aliases.length()
-                index606 = index606 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index606]
-              let iter_base = address605 + index606 * 8
+            for index628 = 0
+                index628 < iter_elem.metadata.aliases.length()
+                index628 = index628 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index628]
+              let iter_base = address627 + index628 * 8
 
-              let ptr604 = mbt_ffi_str2ptr(iter_elem)
+              let ptr626 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr604)
+              mbt_ffi_store32(iter_base + 0, ptr626)
             }
             mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 28, address605)
+            mbt_ffi_store32(iter_base + 28, address627)
 
-            let address608 = mbt_ffi_malloc(
+            let address630 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index609 = 0
-                index609 < iter_elem.metadata.examples.length()
-                index609 = index609 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index609]
-              let iter_base = address608 + index609 * 8
+            for index631 = 0
+                index631 < iter_elem.metadata.examples.length()
+                index631 = index631 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index631]
+              let iter_base = address630 + index631 * 8
 
-              let ptr607 = mbt_ffi_str2ptr(iter_elem)
+              let ptr629 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr607)
+              mbt_ffi_store32(iter_base + 0, ptr629)
             }
             mbt_ffi_store32(
               iter_base + 40,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 36, address608)
+            mbt_ffi_store32(iter_base + 36, address630)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -9295,12 +9501,12 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload611) => {
+              Some(payload633) => {
                 mbt_ffi_store8(iter_base + 44, 1)
 
-                let ptr612 = mbt_ffi_str2ptr(payload611)
-                mbt_ffi_store32(iter_base + 52, payload611.length())
-                mbt_ffi_store32(iter_base + 48, ptr612)
+                let ptr634 = mbt_ffi_str2ptr(payload633)
+                mbt_ffi_store32(iter_base + 52, payload633.length())
+                mbt_ffi_store32(iter_base + 48, ptr634)
 
                 ()
               }
@@ -9312,21 +9518,31 @@ pub fn wasmExportGetDefinition() -> Int {
 
                 ()
               }
-              Some(payload614) => {
+              Some(payload636) => {
                 mbt_ffi_store8(iter_base + 56, 1)
 
-                match payload614 {
+                match payload636 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 60, 0)
 
                     ()
                   }
-                  Other(payload616) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 60, 1)
 
-                    let ptr617 = mbt_ffi_str2ptr(payload616)
-                    mbt_ffi_store32(iter_base + 68, payload616.length())
-                    mbt_ffi_store32(iter_base + 64, ptr617)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 60, 2)
+
+                    ()
+                  }
+                  Other(payload640) => {
+                    mbt_ffi_store8(iter_base + 60, 3)
+
+                    let ptr641 = mbt_ffi_str2ptr(payload640)
+                    mbt_ffi_store32(iter_base + 68, payload640.length())
+                    mbt_ffi_store32(iter_base + 64, ptr641)
 
                     ()
                   }
@@ -9336,8 +9552,8 @@ pub fn wasmExportGetDefinition() -> Int {
               }
             }
           }
-          mbt_ffi_store32(iter_base + 44, payload597.length())
-          mbt_ffi_store32(iter_base + 40, address618)
+          mbt_ffi_store32(iter_base + 44, payload619.length())
+          mbt_ffi_store32(iter_base + 40, address642)
 
           ()
         }
@@ -9349,9 +9565,9 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Single(payload621) => {
+        Single(payload645) => {
           mbt_ffi_store8(iter_base + 48, 1)
-          mbt_ffi_store32(iter_base + 52, payload621)
+          mbt_ffi_store32(iter_base + 52, payload645)
 
           ()
         }
@@ -9363,10 +9579,10 @@ pub fn wasmExportGetDefinition() -> Int {
 
           ()
         }
-        Some(payload623) => {
+        Some(payload647) => {
           mbt_ffi_store8(iter_base + 56, 1)
 
-          match payload623.cache_policy {
+          match payload647.cache_policy {
             NoCache => {
               mbt_ffi_store8(iter_base + 64, 0)
 
@@ -9377,16 +9593,16 @@ pub fn wasmExportGetDefinition() -> Int {
 
               ()
             }
-            Ttl(payload626) => {
+            Ttl(payload650) => {
               mbt_ffi_store8(iter_base + 64, 2)
-              mbt_ffi_store64(iter_base + 72, payload626.reinterpret_as_int64())
+              mbt_ffi_store64(iter_base + 72, payload650.reinterpret_as_int64())
 
               ()
             }
           }
           mbt_ffi_store8(
             iter_base + 80,
-            if payload623.uses_principal {
+            if payload647.uses_principal {
               1
             } else {
               0
@@ -9398,10 +9614,10 @@ pub fn wasmExportGetDefinition() -> Int {
       }
     }
     mbt_ffi_store32(iter_base + 88, iter_elem.methods.length())
-    mbt_ffi_store32(iter_base + 84, address627)
+    mbt_ffi_store32(iter_base + 84, address651)
   }
   mbt_ffi_store32(return_area + 100, result.dependencies.length())
-  mbt_ffi_store32(return_area + 96, address629)
+  mbt_ffi_store32(return_area + 96, address653)
   mbt_ffi_store8(return_area + 104, result.mode.ordinal())
 
   match result.http_mount {
@@ -9410,66 +9626,66 @@ pub fn wasmExportGetDefinition() -> Int {
 
       ()
     }
-    Some(payload632) => {
+    Some(payload656) => {
       mbt_ffi_store8(return_area + 108, 1)
 
-      let address640 = mbt_ffi_malloc(payload632.path_prefix.length() * 12)
-      for index641 = 0
-          index641 < payload632.path_prefix.length()
-          index641 = index641 + 1 {
-        let iter_elem : @common.PathSegment = payload632.path_prefix[index641]
-        let iter_base = address640 + index641 * 12
+      let address664 = mbt_ffi_malloc(payload656.path_prefix.length() * 12)
+      for index665 = 0
+          index665 < payload656.path_prefix.length()
+          index665 = index665 + 1 {
+        let iter_elem : @common.PathSegment = payload656.path_prefix[index665]
+        let iter_base = address664 + index665 * 12
 
         match iter_elem {
-          Literal(payload633) => {
+          Literal(payload657) => {
             mbt_ffi_store8(iter_base + 0, 0)
 
-            let ptr634 = mbt_ffi_str2ptr(payload633)
-            mbt_ffi_store32(iter_base + 8, payload633.length())
-            mbt_ffi_store32(iter_base + 4, ptr634)
+            let ptr658 = mbt_ffi_str2ptr(payload657)
+            mbt_ffi_store32(iter_base + 8, payload657.length())
+            mbt_ffi_store32(iter_base + 4, ptr658)
 
             ()
           }
-          SystemVariable(payload635) => {
+          SystemVariable(payload659) => {
             mbt_ffi_store8(iter_base + 0, 1)
-            mbt_ffi_store8(iter_base + 4, payload635.ordinal())
+            mbt_ffi_store8(iter_base + 4, payload659.ordinal())
 
             ()
           }
-          PathVariable(payload636) => {
+          PathVariable(payload660) => {
             mbt_ffi_store8(iter_base + 0, 2)
 
-            let ptr637 = mbt_ffi_str2ptr(payload636.variable_name)
-            mbt_ffi_store32(iter_base + 8, payload636.variable_name.length())
-            mbt_ffi_store32(iter_base + 4, ptr637)
+            let ptr661 = mbt_ffi_str2ptr(payload660.variable_name)
+            mbt_ffi_store32(iter_base + 8, payload660.variable_name.length())
+            mbt_ffi_store32(iter_base + 4, ptr661)
 
             ()
           }
-          RemainingPathVariable(payload638) => {
+          RemainingPathVariable(payload662) => {
             mbt_ffi_store8(iter_base + 0, 3)
 
-            let ptr639 = mbt_ffi_str2ptr(payload638.variable_name)
-            mbt_ffi_store32(iter_base + 8, payload638.variable_name.length())
-            mbt_ffi_store32(iter_base + 4, ptr639)
+            let ptr663 = mbt_ffi_str2ptr(payload662.variable_name)
+            mbt_ffi_store32(iter_base + 8, payload662.variable_name.length())
+            mbt_ffi_store32(iter_base + 4, ptr663)
 
             ()
           }
         }
       }
-      mbt_ffi_store32(return_area + 116, payload632.path_prefix.length())
-      mbt_ffi_store32(return_area + 112, address640)
+      mbt_ffi_store32(return_area + 116, payload656.path_prefix.length())
+      mbt_ffi_store32(return_area + 112, address664)
 
-      match payload632.auth_details {
+      match payload656.auth_details {
         None => {
           mbt_ffi_store8(return_area + 120, 0)
 
           ()
         }
-        Some(payload643) => {
+        Some(payload667) => {
           mbt_ffi_store8(return_area + 120, 1)
           mbt_ffi_store8(
             return_area + 121,
-            if payload643.required {
+            if payload667.required {
               1
             } else {
               0
@@ -9481,77 +9697,77 @@ pub fn wasmExportGetDefinition() -> Int {
       }
       mbt_ffi_store8(
         return_area + 122,
-        if payload632.phantom_agent {
+        if payload656.phantom_agent {
           1
         } else {
           0
         },
       )
 
-      let address645 = mbt_ffi_malloc(
-        payload632.cors_options.allowed_patterns.length() * 8,
+      let address669 = mbt_ffi_malloc(
+        payload656.cors_options.allowed_patterns.length() * 8,
       )
-      for index646 = 0
-          index646 < payload632.cors_options.allowed_patterns.length()
-          index646 = index646 + 1 {
-        let iter_elem : String = payload632.cors_options.allowed_patterns[index646]
-        let iter_base = address645 + index646 * 8
+      for index670 = 0
+          index670 < payload656.cors_options.allowed_patterns.length()
+          index670 = index670 + 1 {
+        let iter_elem : String = payload656.cors_options.allowed_patterns[index670]
+        let iter_base = address669 + index670 * 8
 
-        let ptr644 = mbt_ffi_str2ptr(iter_elem)
+        let ptr668 = mbt_ffi_str2ptr(iter_elem)
         mbt_ffi_store32(iter_base + 4, iter_elem.length())
-        mbt_ffi_store32(iter_base + 0, ptr644)
+        mbt_ffi_store32(iter_base + 0, ptr668)
       }
       mbt_ffi_store32(
         return_area + 128,
-        payload632.cors_options.allowed_patterns.length(),
+        payload656.cors_options.allowed_patterns.length(),
       )
-      mbt_ffi_store32(return_area + 124, address645)
+      mbt_ffi_store32(return_area + 124, address669)
 
-      let address654 = mbt_ffi_malloc(payload632.webhook_suffix.length() * 12)
-      for index655 = 0
-          index655 < payload632.webhook_suffix.length()
-          index655 = index655 + 1 {
-        let iter_elem : @common.PathSegment = payload632.webhook_suffix[index655]
-        let iter_base = address654 + index655 * 12
+      let address678 = mbt_ffi_malloc(payload656.webhook_suffix.length() * 12)
+      for index679 = 0
+          index679 < payload656.webhook_suffix.length()
+          index679 = index679 + 1 {
+        let iter_elem : @common.PathSegment = payload656.webhook_suffix[index679]
+        let iter_base = address678 + index679 * 12
 
         match iter_elem {
-          Literal(payload647) => {
+          Literal(payload671) => {
             mbt_ffi_store8(iter_base + 0, 0)
 
-            let ptr648 = mbt_ffi_str2ptr(payload647)
-            mbt_ffi_store32(iter_base + 8, payload647.length())
-            mbt_ffi_store32(iter_base + 4, ptr648)
+            let ptr672 = mbt_ffi_str2ptr(payload671)
+            mbt_ffi_store32(iter_base + 8, payload671.length())
+            mbt_ffi_store32(iter_base + 4, ptr672)
 
             ()
           }
-          SystemVariable(payload649) => {
+          SystemVariable(payload673) => {
             mbt_ffi_store8(iter_base + 0, 1)
-            mbt_ffi_store8(iter_base + 4, payload649.ordinal())
+            mbt_ffi_store8(iter_base + 4, payload673.ordinal())
 
             ()
           }
-          PathVariable(payload650) => {
+          PathVariable(payload674) => {
             mbt_ffi_store8(iter_base + 0, 2)
 
-            let ptr651 = mbt_ffi_str2ptr(payload650.variable_name)
-            mbt_ffi_store32(iter_base + 8, payload650.variable_name.length())
-            mbt_ffi_store32(iter_base + 4, ptr651)
+            let ptr675 = mbt_ffi_str2ptr(payload674.variable_name)
+            mbt_ffi_store32(iter_base + 8, payload674.variable_name.length())
+            mbt_ffi_store32(iter_base + 4, ptr675)
 
             ()
           }
-          RemainingPathVariable(payload652) => {
+          RemainingPathVariable(payload676) => {
             mbt_ffi_store8(iter_base + 0, 3)
 
-            let ptr653 = mbt_ffi_str2ptr(payload652.variable_name)
-            mbt_ffi_store32(iter_base + 8, payload652.variable_name.length())
-            mbt_ffi_store32(iter_base + 4, ptr653)
+            let ptr677 = mbt_ffi_str2ptr(payload676.variable_name)
+            mbt_ffi_store32(iter_base + 8, payload676.variable_name.length())
+            mbt_ffi_store32(iter_base + 4, ptr677)
 
             ()
           }
         }
       }
-      mbt_ffi_store32(return_area + 136, payload632.webhook_suffix.length())
-      mbt_ffi_store32(return_area + 132, address654)
+      mbt_ffi_store32(return_area + 136, payload656.webhook_suffix.length())
+      mbt_ffi_store32(return_area + 132, address678)
 
       ()
     }
@@ -9563,24 +9779,24 @@ pub fn wasmExportGetDefinition() -> Int {
 
       ()
     }
-    Enabled(payload657) => {
+    Enabled(payload681) => {
       mbt_ffi_store8(return_area + 144, 1)
 
-      match payload657 {
+      match payload681 {
         Default => {
           mbt_ffi_store8(return_area + 152, 0)
 
           ()
         }
-        Periodic(payload659) => {
+        Periodic(payload683) => {
           mbt_ffi_store8(return_area + 152, 1)
-          mbt_ffi_store64(return_area + 160, payload659.reinterpret_as_int64())
+          mbt_ffi_store64(return_area + 160, payload683.reinterpret_as_int64())
 
           ()
         }
-        EveryNInvocation(payload660) => {
+        EveryNInvocation(payload684) => {
           mbt_ffi_store8(return_area + 152, 2)
-          mbt_ffi_store16(return_area + 160, payload660.reinterpret_as_int())
+          mbt_ffi_store16(return_area + 160, payload684.reinterpret_as_int())
 
           ()
         }
@@ -9590,29 +9806,29 @@ pub fn wasmExportGetDefinition() -> Int {
     }
   }
 
-  let address664 = mbt_ffi_malloc(result.config.length() * 16)
-  for index665 = 0; index665 < result.config.length(); index665 = index665 + 1 {
-    let iter_elem : @common.AgentConfigDeclaration = result.config[index665]
-    let iter_base = address664 + index665 * 16
+  let address688 = mbt_ffi_malloc(result.config.length() * 16)
+  for index689 = 0; index689 < result.config.length(); index689 = index689 + 1 {
+    let iter_elem : @common.AgentConfigDeclaration = result.config[index689]
+    let iter_base = address688 + index689 * 16
     mbt_ffi_store8(iter_base + 0, iter_elem.source.ordinal())
 
-    let address662 = mbt_ffi_malloc(iter_elem.path.length() * 8)
-    for index663 = 0
-        index663 < iter_elem.path.length()
-        index663 = index663 + 1 {
-      let iter_elem : String = iter_elem.path[index663]
-      let iter_base = address662 + index663 * 8
+    let address686 = mbt_ffi_malloc(iter_elem.path.length() * 8)
+    for index687 = 0
+        index687 < iter_elem.path.length()
+        index687 = index687 + 1 {
+      let iter_elem : String = iter_elem.path[index687]
+      let iter_base = address686 + index687 * 8
 
-      let ptr661 = mbt_ffi_str2ptr(iter_elem)
+      let ptr685 = mbt_ffi_str2ptr(iter_elem)
       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-      mbt_ffi_store32(iter_base + 0, ptr661)
+      mbt_ffi_store32(iter_base + 0, ptr685)
     }
     mbt_ffi_store32(iter_base + 8, iter_elem.path.length())
-    mbt_ffi_store32(iter_base + 4, address662)
+    mbt_ffi_store32(iter_base + 4, address686)
     mbt_ffi_store32(iter_base + 12, iter_elem.value_type)
   }
   mbt_ffi_store32(return_area + 172, result.config.length())
-  mbt_ffi_store32(return_area + 168, address664)
+  mbt_ffi_store32(return_area + 168, address688)
   let ret = return_area
   return ret
 }
@@ -9682,7 +9898,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
             1 =>
               match mbt_ffi_load8_u(iter_base + 56) {
                 0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                1 => ()
+                2 => ()
+                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                 _ => panic()
               }
             _ => panic()
@@ -9730,7 +9948,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
             1 =>
               match mbt_ffi_load8_u(iter_base + 60) {
                 0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                1 => ()
+                2 => ()
+                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                 _ => panic()
               }
             _ => panic()
@@ -9938,7 +10158,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
             1 =>
               match mbt_ffi_load8_u(iter_base + 80) {
                 0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                1 => ()
+                2 => ()
+                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                 _ => panic()
               }
             _ => panic()
@@ -9996,7 +10218,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
       1 =>
         match mbt_ffi_load8_u(iter_base + 132) {
           0 => ()
-          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+          1 => ()
+          2 => ()
+          3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
           _ => panic()
         }
       _ => panic()
@@ -10068,7 +10292,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
           1 =>
             match mbt_ffi_load8_u(iter_base + 60) {
               0 => ()
-              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+              1 => ()
+              2 => ()
+              3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
               _ => panic()
             }
           _ => panic()
@@ -10193,7 +10419,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
             1 =>
               match mbt_ffi_load8_u(iter_base + 60) {
                 0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                1 => ()
+                2 => ()
+                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                 _ => panic()
               }
             _ => panic()
@@ -10276,7 +10504,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 56) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                   _ => panic()
                 }
               _ => panic()
@@ -10324,7 +10554,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 60) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                   _ => panic()
                 }
               _ => panic()
@@ -10532,7 +10764,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 80) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                   _ => panic()
                 }
               _ => panic()
@@ -10590,7 +10824,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
         1 =>
           match mbt_ffi_load8_u(iter_base + 132) {
             0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+            1 => ()
+            2 => ()
+            3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
             _ => panic()
           }
         _ => panic()
@@ -10666,7 +10902,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
             1 =>
               match mbt_ffi_load8_u(iter_base + 60) {
                 0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                1 => ()
+                2 => ()
+                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                 _ => panic()
               }
             _ => panic()
@@ -10793,7 +11031,9 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 60) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                   _ => panic()
                 }
               _ => panic()
@@ -10870,10 +11110,10 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
     Ok(payload) => {
       mbt_ffi_store8(return_area + 0, 0)
 
-      let address667 = mbt_ffi_malloc(payload.length() * 176)
-      for index668 = 0; index668 < payload.length(); index668 = index668 + 1 {
-        let iter_elem : @common.AgentType = payload[index668]
-        let iter_base = address667 + index668 * 176
+      let address691 = mbt_ffi_malloc(payload.length() * 176)
+      for index692 = 0; index692 < payload.length(); index692 = index692 + 1 {
+        let iter_elem : @common.AgentType = payload[index692]
+        let iter_base = address691 + index692 * 176
 
         let ptr = mbt_ffi_str2ptr(iter_elem.type_name)
         mbt_ffi_store32(iter_base + 4, iter_elem.type_name.length())
@@ -10887,14 +11127,14 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
         mbt_ffi_store32(iter_base + 20, iter_elem.source_language.length())
         mbt_ffi_store32(iter_base + 16, ptr1)
 
-        let address203 = mbt_ffi_malloc(
+        let address211 = mbt_ffi_malloc(
           iter_elem.schema.type_nodes.length() * 144,
         )
-        for index204 = 0
-            index204 < iter_elem.schema.type_nodes.length()
-            index204 = index204 + 1 {
-          let iter_elem : @types.SchemaTypeNode = iter_elem.schema.type_nodes[index204]
-          let iter_base = address203 + index204 * 144
+        for index212 = 0
+            index212 < iter_elem.schema.type_nodes.length()
+            index212 = index212 + 1 {
+          let iter_elem : @types.SchemaTypeNode = iter_elem.schema.type_nodes[index212]
+          let iter_base = address211 + index212 * 144
 
           match iter_elem.body {
             RefType(payload2) => {
@@ -10971,12 +11211,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
             RecordType(payload16) => {
               mbt_ffi_store8(iter_base + 0, 14)
 
-              let address33 = mbt_ffi_malloc(payload16.length() * 68)
-              for index34 = 0
-                  index34 < payload16.length()
-                  index34 = index34 + 1 {
-                let iter_elem : @types.NamedFieldType = payload16[index34]
-                let iter_base = address33 + index34 * 68
+              let address35 = mbt_ffi_malloc(payload16.length() * 68)
+              for index36 = 0
+                  index36 < payload16.length()
+                  index36 = index36 + 1 {
+                let iter_elem : @types.NamedFieldType = payload16[index36]
+                let iter_base = address35 + index36 * 68
 
                 let ptr17 = mbt_ffi_str2ptr(iter_elem.name)
                 mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
@@ -11070,12 +11310,22 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                         ()
                       }
-                      Other(payload31) => {
+                      UnstructuredText => {
                         mbt_ffi_store8(iter_base + 56, 1)
 
-                        let ptr32 = mbt_ffi_str2ptr(payload31)
-                        mbt_ffi_store32(iter_base + 64, payload31.length())
-                        mbt_ffi_store32(iter_base + 60, ptr32)
+                        ()
+                      }
+                      UnstructuredBinary => {
+                        mbt_ffi_store8(iter_base + 56, 2)
+
+                        ()
+                      }
+                      Other(payload33) => {
+                        mbt_ffi_store8(iter_base + 56, 3)
+
+                        let ptr34 = mbt_ffi_str2ptr(payload33)
+                        mbt_ffi_store32(iter_base + 64, payload33.length())
+                        mbt_ffi_store32(iter_base + 60, ptr34)
 
                         ()
                       }
@@ -11086,23 +11336,23 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                 }
               }
               mbt_ffi_store32(iter_base + 12, payload16.length())
-              mbt_ffi_store32(iter_base + 8, address33)
+              mbt_ffi_store32(iter_base + 8, address35)
 
               ()
             }
-            VariantType(payload35) => {
+            VariantType(payload37) => {
               mbt_ffi_store8(iter_base + 0, 15)
 
-              let address56 = mbt_ffi_malloc(payload35.length() * 72)
-              for index57 = 0
-                  index57 < payload35.length()
-                  index57 = index57 + 1 {
-                let iter_elem : @types.VariantCaseType = payload35[index57]
-                let iter_base = address56 + index57 * 72
+              let address60 = mbt_ffi_malloc(payload37.length() * 72)
+              for index61 = 0
+                  index61 < payload37.length()
+                  index61 = index61 + 1 {
+                let iter_elem : @types.VariantCaseType = payload37[index61]
+                let iter_base = address60 + index61 * 72
 
-                let ptr36 = mbt_ffi_str2ptr(iter_elem.name)
+                let ptr38 = mbt_ffi_str2ptr(iter_elem.name)
                 mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                mbt_ffi_store32(iter_base + 0, ptr36)
+                mbt_ffi_store32(iter_base + 0, ptr38)
 
                 match iter_elem.payload {
                   None => {
@@ -11110,9 +11360,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload38) => {
+                  Some(payload40) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload38)
+                    mbt_ffi_store32(iter_base + 12, payload40)
 
                     ()
                   }
@@ -11124,54 +11374,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload40) => {
+                  Some(payload42) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr41 = mbt_ffi_str2ptr(payload40)
-                    mbt_ffi_store32(iter_base + 24, payload40.length())
-                    mbt_ffi_store32(iter_base + 20, ptr41)
+                    let ptr43 = mbt_ffi_str2ptr(payload42)
+                    mbt_ffi_store32(iter_base + 24, payload42.length())
+                    mbt_ffi_store32(iter_base + 20, ptr43)
 
                     ()
                   }
                 }
 
-                let address43 = mbt_ffi_malloc(
+                let address45 = mbt_ffi_malloc(
                   iter_elem.metadata.aliases.length() * 8,
                 )
-                for index44 = 0
-                    index44 < iter_elem.metadata.aliases.length()
-                    index44 = index44 + 1 {
-                  let iter_elem : String = iter_elem.metadata.aliases[index44]
-                  let iter_base = address43 + index44 * 8
+                for index46 = 0
+                    index46 < iter_elem.metadata.aliases.length()
+                    index46 = index46 + 1 {
+                  let iter_elem : String = iter_elem.metadata.aliases[index46]
+                  let iter_base = address45 + index46 * 8
 
-                  let ptr42 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr44 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr42)
+                  mbt_ffi_store32(iter_base + 0, ptr44)
                 }
                 mbt_ffi_store32(
                   iter_base + 32,
                   iter_elem.metadata.aliases.length(),
                 )
-                mbt_ffi_store32(iter_base + 28, address43)
+                mbt_ffi_store32(iter_base + 28, address45)
 
-                let address46 = mbt_ffi_malloc(
+                let address48 = mbt_ffi_malloc(
                   iter_elem.metadata.examples.length() * 8,
                 )
-                for index47 = 0
-                    index47 < iter_elem.metadata.examples.length()
-                    index47 = index47 + 1 {
-                  let iter_elem : String = iter_elem.metadata.examples[index47]
-                  let iter_base = address46 + index47 * 8
+                for index49 = 0
+                    index49 < iter_elem.metadata.examples.length()
+                    index49 = index49 + 1 {
+                  let iter_elem : String = iter_elem.metadata.examples[index49]
+                  let iter_base = address48 + index49 * 8
 
-                  let ptr45 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr47 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr45)
+                  mbt_ffi_store32(iter_base + 0, ptr47)
                 }
                 mbt_ffi_store32(
                   iter_base + 40,
                   iter_elem.metadata.examples.length(),
                 )
-                mbt_ffi_store32(iter_base + 36, address46)
+                mbt_ffi_store32(iter_base + 36, address48)
 
                 match iter_elem.metadata.deprecated {
                   None => {
@@ -11179,12 +11429,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload49) => {
+                  Some(payload51) => {
                     mbt_ffi_store8(iter_base + 44, 1)
 
-                    let ptr50 = mbt_ffi_str2ptr(payload49)
-                    mbt_ffi_store32(iter_base + 52, payload49.length())
-                    mbt_ffi_store32(iter_base + 48, ptr50)
+                    let ptr52 = mbt_ffi_str2ptr(payload51)
+                    mbt_ffi_store32(iter_base + 52, payload51.length())
+                    mbt_ffi_store32(iter_base + 48, ptr52)
 
                     ()
                   }
@@ -11196,21 +11446,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload52) => {
+                  Some(payload54) => {
                     mbt_ffi_store8(iter_base + 56, 1)
 
-                    match payload52 {
+                    match payload54 {
                       Multimodal => {
                         mbt_ffi_store8(iter_base + 60, 0)
 
                         ()
                       }
-                      Other(payload54) => {
+                      UnstructuredText => {
                         mbt_ffi_store8(iter_base + 60, 1)
 
-                        let ptr55 = mbt_ffi_str2ptr(payload54)
-                        mbt_ffi_store32(iter_base + 68, payload54.length())
-                        mbt_ffi_store32(iter_base + 64, ptr55)
+                        ()
+                      }
+                      UnstructuredBinary => {
+                        mbt_ffi_store8(iter_base + 60, 2)
+
+                        ()
+                      }
+                      Other(payload58) => {
+                        mbt_ffi_store8(iter_base + 60, 3)
+
+                        let ptr59 = mbt_ffi_str2ptr(payload58)
+                        mbt_ffi_store32(iter_base + 68, payload58.length())
+                        mbt_ffi_store32(iter_base + 64, ptr59)
 
                         ()
                       }
@@ -11220,32 +11480,13 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                   }
                 }
               }
-              mbt_ffi_store32(iter_base + 12, payload35.length())
-              mbt_ffi_store32(iter_base + 8, address56)
-
-              ()
-            }
-            EnumType(payload58) => {
-              mbt_ffi_store8(iter_base + 0, 16)
-
-              let address60 = mbt_ffi_malloc(payload58.length() * 8)
-              for index61 = 0
-                  index61 < payload58.length()
-                  index61 = index61 + 1 {
-                let iter_elem : String = payload58[index61]
-                let iter_base = address60 + index61 * 8
-
-                let ptr59 = mbt_ffi_str2ptr(iter_elem)
-                mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr59)
-              }
-              mbt_ffi_store32(iter_base + 12, payload58.length())
+              mbt_ffi_store32(iter_base + 12, payload37.length())
               mbt_ffi_store32(iter_base + 8, address60)
 
               ()
             }
-            FlagsType(payload62) => {
-              mbt_ffi_store8(iter_base + 0, 17)
+            EnumType(payload62) => {
+              mbt_ffi_store8(iter_base + 0, 16)
 
               let address64 = mbt_ffi_malloc(payload62.length() * 8)
               for index65 = 0
@@ -11263,77 +11504,96 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            TupleType(payload66) => {
-              mbt_ffi_store8(iter_base + 0, 18)
+            FlagsType(payload66) => {
+              mbt_ffi_store8(iter_base + 0, 17)
 
-              let address67 = mbt_ffi_malloc(payload66.length() * 4)
-              for index68 = 0
-                  index68 < payload66.length()
-                  index68 = index68 + 1 {
-                let iter_elem : Int = payload66[index68]
-                let iter_base = address67 + index68 * 4
-                mbt_ffi_store32(iter_base + 0, iter_elem)
+              let address68 = mbt_ffi_malloc(payload66.length() * 8)
+              for index69 = 0
+                  index69 < payload66.length()
+                  index69 = index69 + 1 {
+                let iter_elem : String = payload66[index69]
+                let iter_base = address68 + index69 * 8
+
+                let ptr67 = mbt_ffi_str2ptr(iter_elem)
+                mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                mbt_ffi_store32(iter_base + 0, ptr67)
               }
               mbt_ffi_store32(iter_base + 12, payload66.length())
-              mbt_ffi_store32(iter_base + 8, address67)
+              mbt_ffi_store32(iter_base + 8, address68)
 
               ()
             }
-            ListType(payload69) => {
+            TupleType(payload70) => {
+              mbt_ffi_store8(iter_base + 0, 18)
+
+              let address71 = mbt_ffi_malloc(payload70.length() * 4)
+              for index72 = 0
+                  index72 < payload70.length()
+                  index72 = index72 + 1 {
+                let iter_elem : Int = payload70[index72]
+                let iter_base = address71 + index72 * 4
+                mbt_ffi_store32(iter_base + 0, iter_elem)
+              }
+              mbt_ffi_store32(iter_base + 12, payload70.length())
+              mbt_ffi_store32(iter_base + 8, address71)
+
+              ()
+            }
+            ListType(payload73) => {
               mbt_ffi_store8(iter_base + 0, 19)
-              mbt_ffi_store32(iter_base + 8, payload69)
+              mbt_ffi_store32(iter_base + 8, payload73)
 
               ()
             }
-            FixedListType(payload70) => {
+            FixedListType(payload74) => {
               mbt_ffi_store8(iter_base + 0, 20)
-              mbt_ffi_store32(iter_base + 8, payload70.element)
+              mbt_ffi_store32(iter_base + 8, payload74.element)
               mbt_ffi_store32(
                 iter_base + 12,
-                payload70.length.reinterpret_as_int(),
+                payload74.length.reinterpret_as_int(),
               )
 
               ()
             }
-            MapType(payload71) => {
+            MapType(payload75) => {
               mbt_ffi_store8(iter_base + 0, 21)
-              mbt_ffi_store32(iter_base + 8, payload71.key)
-              mbt_ffi_store32(iter_base + 12, payload71.value)
+              mbt_ffi_store32(iter_base + 8, payload75.key)
+              mbt_ffi_store32(iter_base + 12, payload75.value)
 
               ()
             }
-            OptionType(payload72) => {
+            OptionType(payload76) => {
               mbt_ffi_store8(iter_base + 0, 22)
-              mbt_ffi_store32(iter_base + 8, payload72)
+              mbt_ffi_store32(iter_base + 8, payload76)
 
               ()
             }
-            ResultType(payload73) => {
+            ResultType(payload77) => {
               mbt_ffi_store8(iter_base + 0, 23)
 
-              match payload73.ok {
+              match payload77.ok {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload75) => {
+                Some(payload79) => {
                   mbt_ffi_store8(iter_base + 8, 1)
-                  mbt_ffi_store32(iter_base + 12, payload75)
+                  mbt_ffi_store32(iter_base + 12, payload79)
 
                   ()
                 }
               }
 
-              match payload73.err {
+              match payload77.err {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload77) => {
+                Some(payload81) => {
                   mbt_ffi_store8(iter_base + 16, 1)
-                  mbt_ffi_store32(iter_base + 20, payload77)
+                  mbt_ffi_store32(iter_base + 20, payload81)
 
                   ()
                 }
@@ -11341,82 +11601,82 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            TextType(payload78) => {
+            TextType(payload82) => {
               mbt_ffi_store8(iter_base + 0, 24)
 
-              match payload78.languages {
+              match payload82.languages {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload80) => {
+                Some(payload84) => {
                   mbt_ffi_store8(iter_base + 8, 1)
 
-                  let address82 = mbt_ffi_malloc(payload80.length() * 8)
-                  for index83 = 0
-                      index83 < payload80.length()
-                      index83 = index83 + 1 {
-                    let iter_elem : String = payload80[index83]
-                    let iter_base = address82 + index83 * 8
+                  let address86 = mbt_ffi_malloc(payload84.length() * 8)
+                  for index87 = 0
+                      index87 < payload84.length()
+                      index87 = index87 + 1 {
+                    let iter_elem : String = payload84[index87]
+                    let iter_base = address86 + index87 * 8
 
-                    let ptr81 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr85 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr81)
+                    mbt_ffi_store32(iter_base + 0, ptr85)
                   }
-                  mbt_ffi_store32(iter_base + 16, payload80.length())
-                  mbt_ffi_store32(iter_base + 12, address82)
+                  mbt_ffi_store32(iter_base + 16, payload84.length())
+                  mbt_ffi_store32(iter_base + 12, address86)
 
                   ()
                 }
               }
 
-              match payload78.min_length {
+              match payload82.min_length {
                 None => {
                   mbt_ffi_store8(iter_base + 20, 0)
 
                   ()
                 }
-                Some(payload85) => {
+                Some(payload89) => {
                   mbt_ffi_store8(iter_base + 20, 1)
                   mbt_ffi_store32(
                     iter_base + 24,
-                    payload85.reinterpret_as_int(),
+                    payload89.reinterpret_as_int(),
                   )
 
                   ()
                 }
               }
 
-              match payload78.max_length {
+              match payload82.max_length {
                 None => {
                   mbt_ffi_store8(iter_base + 28, 0)
 
                   ()
                 }
-                Some(payload87) => {
+                Some(payload91) => {
                   mbt_ffi_store8(iter_base + 28, 1)
                   mbt_ffi_store32(
                     iter_base + 32,
-                    payload87.reinterpret_as_int(),
+                    payload91.reinterpret_as_int(),
                   )
 
                   ()
                 }
               }
 
-              match payload78.regex {
+              match payload82.regex {
                 None => {
                   mbt_ffi_store8(iter_base + 36, 0)
 
                   ()
                 }
-                Some(payload89) => {
+                Some(payload93) => {
                   mbt_ffi_store8(iter_base + 36, 1)
 
-                  let ptr90 = mbt_ffi_str2ptr(payload89)
-                  mbt_ffi_store32(iter_base + 44, payload89.length())
-                  mbt_ffi_store32(iter_base + 40, ptr90)
+                  let ptr94 = mbt_ffi_str2ptr(payload93)
+                  mbt_ffi_store32(iter_base + 44, payload93.length())
+                  mbt_ffi_store32(iter_base + 40, ptr94)
 
                   ()
                 }
@@ -11424,64 +11684,64 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            BinaryType(payload91) => {
+            BinaryType(payload95) => {
               mbt_ffi_store8(iter_base + 0, 25)
 
-              match payload91.mime_types {
+              match payload95.mime_types {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload93) => {
+                Some(payload97) => {
                   mbt_ffi_store8(iter_base + 8, 1)
 
-                  let address95 = mbt_ffi_malloc(payload93.length() * 8)
-                  for index96 = 0
-                      index96 < payload93.length()
-                      index96 = index96 + 1 {
-                    let iter_elem : String = payload93[index96]
-                    let iter_base = address95 + index96 * 8
+                  let address99 = mbt_ffi_malloc(payload97.length() * 8)
+                  for index100 = 0
+                      index100 < payload97.length()
+                      index100 = index100 + 1 {
+                    let iter_elem : String = payload97[index100]
+                    let iter_base = address99 + index100 * 8
 
-                    let ptr94 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr98 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr94)
+                    mbt_ffi_store32(iter_base + 0, ptr98)
                   }
-                  mbt_ffi_store32(iter_base + 16, payload93.length())
-                  mbt_ffi_store32(iter_base + 12, address95)
+                  mbt_ffi_store32(iter_base + 16, payload97.length())
+                  mbt_ffi_store32(iter_base + 12, address99)
 
                   ()
                 }
               }
 
-              match payload91.min_bytes {
+              match payload95.min_bytes {
                 None => {
                   mbt_ffi_store8(iter_base + 20, 0)
 
                   ()
                 }
-                Some(payload98) => {
+                Some(payload102) => {
                   mbt_ffi_store8(iter_base + 20, 1)
                   mbt_ffi_store32(
                     iter_base + 24,
-                    payload98.reinterpret_as_int(),
+                    payload102.reinterpret_as_int(),
                   )
 
                   ()
                 }
               }
 
-              match payload91.max_bytes {
+              match payload95.max_bytes {
                 None => {
                   mbt_ffi_store8(iter_base + 28, 0)
 
                   ()
                 }
-                Some(payload100) => {
+                Some(payload104) => {
                   mbt_ffi_store8(iter_base + 28, 1)
                   mbt_ffi_store32(
                     iter_base + 32,
-                    payload100.reinterpret_as_int(),
+                    payload104.reinterpret_as_int(),
                   )
 
                   ()
@@ -11490,60 +11750,60 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            PathType(payload101) => {
+            PathType(payload105) => {
               mbt_ffi_store8(iter_base + 0, 26)
-              mbt_ffi_store8(iter_base + 8, payload101.direction.ordinal())
-              mbt_ffi_store8(iter_base + 9, payload101.kind.ordinal())
+              mbt_ffi_store8(iter_base + 8, payload105.direction.ordinal())
+              mbt_ffi_store8(iter_base + 9, payload105.kind.ordinal())
 
-              match payload101.allowed_mime_types {
+              match payload105.allowed_mime_types {
                 None => {
                   mbt_ffi_store8(iter_base + 12, 0)
 
                   ()
                 }
-                Some(payload103) => {
+                Some(payload107) => {
                   mbt_ffi_store8(iter_base + 12, 1)
 
-                  let address105 = mbt_ffi_malloc(payload103.length() * 8)
-                  for index106 = 0
-                      index106 < payload103.length()
-                      index106 = index106 + 1 {
-                    let iter_elem : String = payload103[index106]
-                    let iter_base = address105 + index106 * 8
+                  let address109 = mbt_ffi_malloc(payload107.length() * 8)
+                  for index110 = 0
+                      index110 < payload107.length()
+                      index110 = index110 + 1 {
+                    let iter_elem : String = payload107[index110]
+                    let iter_base = address109 + index110 * 8
 
-                    let ptr104 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr108 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr104)
+                    mbt_ffi_store32(iter_base + 0, ptr108)
                   }
-                  mbt_ffi_store32(iter_base + 20, payload103.length())
-                  mbt_ffi_store32(iter_base + 16, address105)
+                  mbt_ffi_store32(iter_base + 20, payload107.length())
+                  mbt_ffi_store32(iter_base + 16, address109)
 
                   ()
                 }
               }
 
-              match payload101.allowed_extensions {
+              match payload105.allowed_extensions {
                 None => {
                   mbt_ffi_store8(iter_base + 24, 0)
 
                   ()
                 }
-                Some(payload108) => {
+                Some(payload112) => {
                   mbt_ffi_store8(iter_base + 24, 1)
 
-                  let address110 = mbt_ffi_malloc(payload108.length() * 8)
-                  for index111 = 0
-                      index111 < payload108.length()
-                      index111 = index111 + 1 {
-                    let iter_elem : String = payload108[index111]
-                    let iter_base = address110 + index111 * 8
+                  let address114 = mbt_ffi_malloc(payload112.length() * 8)
+                  for index115 = 0
+                      index115 < payload112.length()
+                      index115 = index115 + 1 {
+                    let iter_elem : String = payload112[index115]
+                    let iter_base = address114 + index115 * 8
 
-                    let ptr109 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr113 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr109)
+                    mbt_ffi_store32(iter_base + 0, ptr113)
                   }
-                  mbt_ffi_store32(iter_base + 32, payload108.length())
-                  mbt_ffi_store32(iter_base + 28, address110)
+                  mbt_ffi_store32(iter_base + 32, payload112.length())
+                  mbt_ffi_store32(iter_base + 28, address114)
 
                   ()
                 }
@@ -11551,58 +11811,58 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            UrlType(payload112) => {
+            UrlType(payload116) => {
               mbt_ffi_store8(iter_base + 0, 27)
 
-              match payload112.allowed_schemes {
+              match payload116.allowed_schemes {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload114) => {
+                Some(payload118) => {
                   mbt_ffi_store8(iter_base + 8, 1)
 
-                  let address116 = mbt_ffi_malloc(payload114.length() * 8)
-                  for index117 = 0
-                      index117 < payload114.length()
-                      index117 = index117 + 1 {
-                    let iter_elem : String = payload114[index117]
-                    let iter_base = address116 + index117 * 8
+                  let address120 = mbt_ffi_malloc(payload118.length() * 8)
+                  for index121 = 0
+                      index121 < payload118.length()
+                      index121 = index121 + 1 {
+                    let iter_elem : String = payload118[index121]
+                    let iter_base = address120 + index121 * 8
 
-                    let ptr115 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr119 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr115)
+                    mbt_ffi_store32(iter_base + 0, ptr119)
                   }
-                  mbt_ffi_store32(iter_base + 16, payload114.length())
-                  mbt_ffi_store32(iter_base + 12, address116)
+                  mbt_ffi_store32(iter_base + 16, payload118.length())
+                  mbt_ffi_store32(iter_base + 12, address120)
 
                   ()
                 }
               }
 
-              match payload112.allowed_hosts {
+              match payload116.allowed_hosts {
                 None => {
                   mbt_ffi_store8(iter_base + 20, 0)
 
                   ()
                 }
-                Some(payload119) => {
+                Some(payload123) => {
                   mbt_ffi_store8(iter_base + 20, 1)
 
-                  let address121 = mbt_ffi_malloc(payload119.length() * 8)
-                  for index122 = 0
-                      index122 < payload119.length()
-                      index122 = index122 + 1 {
-                    let iter_elem : String = payload119[index122]
-                    let iter_base = address121 + index122 * 8
+                  let address125 = mbt_ffi_malloc(payload123.length() * 8)
+                  for index126 = 0
+                      index126 < payload123.length()
+                      index126 = index126 + 1 {
+                    let iter_elem : String = payload123[index126]
+                    let iter_base = address125 + index126 * 8
 
-                    let ptr120 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr124 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr120)
+                    mbt_ffi_store32(iter_base + 0, ptr124)
                   }
-                  mbt_ffi_store32(iter_base + 28, payload119.length())
-                  mbt_ffi_store32(iter_base + 24, address121)
+                  mbt_ffi_store32(iter_base + 28, payload123.length())
+                  mbt_ffi_store32(iter_base + 24, address125)
 
                   ()
                 }
@@ -11620,65 +11880,65 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            QuantityType(payload125) => {
+            QuantityType(payload129) => {
               mbt_ffi_store8(iter_base + 0, 30)
 
-              let ptr126 = mbt_ffi_str2ptr(payload125.base_unit)
-              mbt_ffi_store32(iter_base + 12, payload125.base_unit.length())
-              mbt_ffi_store32(iter_base + 8, ptr126)
+              let ptr130 = mbt_ffi_str2ptr(payload129.base_unit)
+              mbt_ffi_store32(iter_base + 12, payload129.base_unit.length())
+              mbt_ffi_store32(iter_base + 8, ptr130)
 
-              let address128 = mbt_ffi_malloc(
-                payload125.allowed_suffixes.length() * 8,
+              let address132 = mbt_ffi_malloc(
+                payload129.allowed_suffixes.length() * 8,
               )
-              for index129 = 0
-                  index129 < payload125.allowed_suffixes.length()
-                  index129 = index129 + 1 {
-                let iter_elem : String = payload125.allowed_suffixes[index129]
-                let iter_base = address128 + index129 * 8
+              for index133 = 0
+                  index133 < payload129.allowed_suffixes.length()
+                  index133 = index133 + 1 {
+                let iter_elem : String = payload129.allowed_suffixes[index133]
+                let iter_base = address132 + index133 * 8
 
-                let ptr127 = mbt_ffi_str2ptr(iter_elem)
+                let ptr131 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr127)
+                mbt_ffi_store32(iter_base + 0, ptr131)
               }
               mbt_ffi_store32(
                 iter_base + 20,
-                payload125.allowed_suffixes.length(),
+                payload129.allowed_suffixes.length(),
               )
-              mbt_ffi_store32(iter_base + 16, address128)
+              mbt_ffi_store32(iter_base + 16, address132)
 
-              match payload125.min {
+              match payload129.min {
                 None => {
                   mbt_ffi_store8(iter_base + 24, 0)
 
                   ()
                 }
-                Some(payload131) => {
+                Some(payload135) => {
                   mbt_ffi_store8(iter_base + 24, 1)
-                  mbt_ffi_store64(iter_base + 32, payload131.mantissa)
-                  mbt_ffi_store32(iter_base + 40, payload131.scale)
+                  mbt_ffi_store64(iter_base + 32, payload135.mantissa)
+                  mbt_ffi_store32(iter_base + 40, payload135.scale)
 
-                  let ptr132 = mbt_ffi_str2ptr(payload131.unit)
-                  mbt_ffi_store32(iter_base + 48, payload131.unit.length())
-                  mbt_ffi_store32(iter_base + 44, ptr132)
+                  let ptr136 = mbt_ffi_str2ptr(payload135.unit)
+                  mbt_ffi_store32(iter_base + 48, payload135.unit.length())
+                  mbt_ffi_store32(iter_base + 44, ptr136)
 
                   ()
                 }
               }
 
-              match payload125.max {
+              match payload129.max {
                 None => {
                   mbt_ffi_store8(iter_base + 56, 0)
 
                   ()
                 }
-                Some(payload134) => {
+                Some(payload138) => {
                   mbt_ffi_store8(iter_base + 56, 1)
-                  mbt_ffi_store64(iter_base + 64, payload134.mantissa)
-                  mbt_ffi_store32(iter_base + 72, payload134.scale)
+                  mbt_ffi_store64(iter_base + 64, payload138.mantissa)
+                  mbt_ffi_store32(iter_base + 72, payload138.scale)
 
-                  let ptr135 = mbt_ffi_str2ptr(payload134.unit)
-                  mbt_ffi_store32(iter_base + 80, payload134.unit.length())
-                  mbt_ffi_store32(iter_base + 76, ptr135)
+                  let ptr139 = mbt_ffi_str2ptr(payload138.unit)
+                  mbt_ffi_store32(iter_base + 80, payload138.unit.length())
+                  mbt_ffi_store32(iter_base + 76, ptr139)
 
                   ()
                 }
@@ -11686,42 +11946,24 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            UnionType(payload136) => {
+            UnionType(payload140) => {
               mbt_ffi_store8(iter_base + 0, 31)
 
-              let address170 = mbt_ffi_malloc(payload136.branches.length() * 92)
-              for index171 = 0
-                  index171 < payload136.branches.length()
-                  index171 = index171 + 1 {
-                let iter_elem : @types.UnionBranch = payload136.branches[index171]
-                let iter_base = address170 + index171 * 92
+              let address176 = mbt_ffi_malloc(payload140.branches.length() * 92)
+              for index177 = 0
+                  index177 < payload140.branches.length()
+                  index177 = index177 + 1 {
+                let iter_elem : @types.UnionBranch = payload140.branches[index177]
+                let iter_base = address176 + index177 * 92
 
-                let ptr137 = mbt_ffi_str2ptr(iter_elem.tag)
+                let ptr141 = mbt_ffi_str2ptr(iter_elem.tag)
                 mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-                mbt_ffi_store32(iter_base + 0, ptr137)
+                mbt_ffi_store32(iter_base + 0, ptr141)
                 mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                 match iter_elem.discriminator {
-                  Prefix(payload138) => {
+                  Prefix(payload142) => {
                     mbt_ffi_store8(iter_base + 12, 0)
-
-                    let ptr139 = mbt_ffi_str2ptr(payload138)
-                    mbt_ffi_store32(iter_base + 20, payload138.length())
-                    mbt_ffi_store32(iter_base + 16, ptr139)
-
-                    ()
-                  }
-                  Suffix(payload140) => {
-                    mbt_ffi_store8(iter_base + 12, 1)
-
-                    let ptr141 = mbt_ffi_str2ptr(payload140)
-                    mbt_ffi_store32(iter_base + 20, payload140.length())
-                    mbt_ffi_store32(iter_base + 16, ptr141)
-
-                    ()
-                  }
-                  Contains(payload142) => {
-                    mbt_ffi_store8(iter_base + 12, 2)
 
                     let ptr143 = mbt_ffi_str2ptr(payload142)
                     mbt_ffi_store32(iter_base + 20, payload142.length())
@@ -11729,8 +11971,8 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Regex(payload144) => {
-                    mbt_ffi_store8(iter_base + 12, 3)
+                  Suffix(payload144) => {
+                    mbt_ffi_store8(iter_base + 12, 1)
 
                     let ptr145 = mbt_ffi_str2ptr(payload144)
                     mbt_ffi_store32(iter_base + 20, payload144.length())
@@ -11738,28 +11980,46 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  FieldEquals(payload146) => {
-                    mbt_ffi_store8(iter_base + 12, 4)
+                  Contains(payload146) => {
+                    mbt_ffi_store8(iter_base + 12, 2)
 
-                    let ptr147 = mbt_ffi_str2ptr(payload146.field_name)
-                    mbt_ffi_store32(
-                      iter_base + 20,
-                      payload146.field_name.length(),
-                    )
+                    let ptr147 = mbt_ffi_str2ptr(payload146)
+                    mbt_ffi_store32(iter_base + 20, payload146.length())
                     mbt_ffi_store32(iter_base + 16, ptr147)
 
-                    match payload146.literal {
+                    ()
+                  }
+                  Regex(payload148) => {
+                    mbt_ffi_store8(iter_base + 12, 3)
+
+                    let ptr149 = mbt_ffi_str2ptr(payload148)
+                    mbt_ffi_store32(iter_base + 20, payload148.length())
+                    mbt_ffi_store32(iter_base + 16, ptr149)
+
+                    ()
+                  }
+                  FieldEquals(payload150) => {
+                    mbt_ffi_store8(iter_base + 12, 4)
+
+                    let ptr151 = mbt_ffi_str2ptr(payload150.field_name)
+                    mbt_ffi_store32(
+                      iter_base + 20,
+                      payload150.field_name.length(),
+                    )
+                    mbt_ffi_store32(iter_base + 16, ptr151)
+
+                    match payload150.literal {
                       None => {
                         mbt_ffi_store8(iter_base + 24, 0)
 
                         ()
                       }
-                      Some(payload149) => {
+                      Some(payload153) => {
                         mbt_ffi_store8(iter_base + 24, 1)
 
-                        let ptr150 = mbt_ffi_str2ptr(payload149)
-                        mbt_ffi_store32(iter_base + 32, payload149.length())
-                        mbt_ffi_store32(iter_base + 28, ptr150)
+                        let ptr154 = mbt_ffi_str2ptr(payload153)
+                        mbt_ffi_store32(iter_base + 32, payload153.length())
+                        mbt_ffi_store32(iter_base + 28, ptr154)
 
                         ()
                       }
@@ -11767,12 +12027,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  FieldAbsent(payload151) => {
+                  FieldAbsent(payload155) => {
                     mbt_ffi_store8(iter_base + 12, 5)
 
-                    let ptr152 = mbt_ffi_str2ptr(payload151)
-                    mbt_ffi_store32(iter_base + 20, payload151.length())
-                    mbt_ffi_store32(iter_base + 16, ptr152)
+                    let ptr156 = mbt_ffi_str2ptr(payload155)
+                    mbt_ffi_store32(iter_base + 20, payload155.length())
+                    mbt_ffi_store32(iter_base + 16, ptr156)
 
                     ()
                   }
@@ -11784,54 +12044,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload154) => {
+                  Some(payload158) => {
                     mbt_ffi_store8(iter_base + 36, 1)
 
-                    let ptr155 = mbt_ffi_str2ptr(payload154)
-                    mbt_ffi_store32(iter_base + 44, payload154.length())
-                    mbt_ffi_store32(iter_base + 40, ptr155)
+                    let ptr159 = mbt_ffi_str2ptr(payload158)
+                    mbt_ffi_store32(iter_base + 44, payload158.length())
+                    mbt_ffi_store32(iter_base + 40, ptr159)
 
                     ()
                   }
                 }
 
-                let address157 = mbt_ffi_malloc(
+                let address161 = mbt_ffi_malloc(
                   iter_elem.metadata.aliases.length() * 8,
                 )
-                for index158 = 0
-                    index158 < iter_elem.metadata.aliases.length()
-                    index158 = index158 + 1 {
-                  let iter_elem : String = iter_elem.metadata.aliases[index158]
-                  let iter_base = address157 + index158 * 8
+                for index162 = 0
+                    index162 < iter_elem.metadata.aliases.length()
+                    index162 = index162 + 1 {
+                  let iter_elem : String = iter_elem.metadata.aliases[index162]
+                  let iter_base = address161 + index162 * 8
 
-                  let ptr156 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr160 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr156)
+                  mbt_ffi_store32(iter_base + 0, ptr160)
                 }
                 mbt_ffi_store32(
                   iter_base + 52,
                   iter_elem.metadata.aliases.length(),
                 )
-                mbt_ffi_store32(iter_base + 48, address157)
+                mbt_ffi_store32(iter_base + 48, address161)
 
-                let address160 = mbt_ffi_malloc(
+                let address164 = mbt_ffi_malloc(
                   iter_elem.metadata.examples.length() * 8,
                 )
-                for index161 = 0
-                    index161 < iter_elem.metadata.examples.length()
-                    index161 = index161 + 1 {
-                  let iter_elem : String = iter_elem.metadata.examples[index161]
-                  let iter_base = address160 + index161 * 8
+                for index165 = 0
+                    index165 < iter_elem.metadata.examples.length()
+                    index165 = index165 + 1 {
+                  let iter_elem : String = iter_elem.metadata.examples[index165]
+                  let iter_base = address164 + index165 * 8
 
-                  let ptr159 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr163 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr159)
+                  mbt_ffi_store32(iter_base + 0, ptr163)
                 }
                 mbt_ffi_store32(
                   iter_base + 60,
                   iter_elem.metadata.examples.length(),
                 )
-                mbt_ffi_store32(iter_base + 56, address160)
+                mbt_ffi_store32(iter_base + 56, address164)
 
                 match iter_elem.metadata.deprecated {
                   None => {
@@ -11839,12 +12099,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload163) => {
+                  Some(payload167) => {
                     mbt_ffi_store8(iter_base + 64, 1)
 
-                    let ptr164 = mbt_ffi_str2ptr(payload163)
-                    mbt_ffi_store32(iter_base + 72, payload163.length())
-                    mbt_ffi_store32(iter_base + 68, ptr164)
+                    let ptr168 = mbt_ffi_str2ptr(payload167)
+                    mbt_ffi_store32(iter_base + 72, payload167.length())
+                    mbt_ffi_store32(iter_base + 68, ptr168)
 
                     ()
                   }
@@ -11856,21 +12116,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload166) => {
+                  Some(payload170) => {
                     mbt_ffi_store8(iter_base + 76, 1)
 
-                    match payload166 {
+                    match payload170 {
                       Multimodal => {
                         mbt_ffi_store8(iter_base + 80, 0)
 
                         ()
                       }
-                      Other(payload168) => {
+                      UnstructuredText => {
                         mbt_ffi_store8(iter_base + 80, 1)
 
-                        let ptr169 = mbt_ffi_str2ptr(payload168)
-                        mbt_ffi_store32(iter_base + 88, payload168.length())
-                        mbt_ffi_store32(iter_base + 84, ptr169)
+                        ()
+                      }
+                      UnstructuredBinary => {
+                        mbt_ffi_store8(iter_base + 80, 2)
+
+                        ()
+                      }
+                      Other(payload174) => {
+                        mbt_ffi_store8(iter_base + 80, 3)
+
+                        let ptr175 = mbt_ffi_str2ptr(payload174)
+                        mbt_ffi_store32(iter_base + 88, payload174.length())
+                        mbt_ffi_store32(iter_base + 84, ptr175)
 
                         ()
                       }
@@ -11880,26 +12150,26 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                   }
                 }
               }
-              mbt_ffi_store32(iter_base + 12, payload136.branches.length())
-              mbt_ffi_store32(iter_base + 8, address170)
+              mbt_ffi_store32(iter_base + 12, payload140.branches.length())
+              mbt_ffi_store32(iter_base + 8, address176)
 
               ()
             }
-            SecretType(payload172) => {
+            SecretType(payload178) => {
               mbt_ffi_store8(iter_base + 0, 32)
 
-              match payload172.category {
+              match payload178.category {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload174) => {
+                Some(payload180) => {
                   mbt_ffi_store8(iter_base + 8, 1)
 
-                  let ptr175 = mbt_ffi_str2ptr(payload174)
-                  mbt_ffi_store32(iter_base + 16, payload174.length())
-                  mbt_ffi_store32(iter_base + 12, ptr175)
+                  let ptr181 = mbt_ffi_str2ptr(payload180)
+                  mbt_ffi_store32(iter_base + 16, payload180.length())
+                  mbt_ffi_store32(iter_base + 12, ptr181)
 
                   ()
                 }
@@ -11907,21 +12177,21 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            QuotaTokenType(payload176) => {
+            QuotaTokenType(payload182) => {
               mbt_ffi_store8(iter_base + 0, 33)
 
-              match payload176.resource_name {
+              match payload182.resource_name {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload178) => {
+                Some(payload184) => {
                   mbt_ffi_store8(iter_base + 8, 1)
 
-                  let ptr179 = mbt_ffi_str2ptr(payload178)
-                  mbt_ffi_store32(iter_base + 16, payload178.length())
-                  mbt_ffi_store32(iter_base + 12, ptr179)
+                  let ptr185 = mbt_ffi_str2ptr(payload184)
+                  mbt_ffi_store32(iter_base + 16, payload184.length())
+                  mbt_ffi_store32(iter_base + 12, ptr185)
 
                   ()
                 }
@@ -11929,18 +12199,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            FutureType(payload180) => {
+            FutureType(payload186) => {
               mbt_ffi_store8(iter_base + 0, 34)
 
-              match payload180 {
+              match payload186 {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload182) => {
+                Some(payload188) => {
                   mbt_ffi_store8(iter_base + 8, 1)
-                  mbt_ffi_store32(iter_base + 12, payload182)
+                  mbt_ffi_store32(iter_base + 12, payload188)
 
                   ()
                 }
@@ -11948,18 +12218,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            StreamType(payload183) => {
+            StreamType(payload189) => {
               mbt_ffi_store8(iter_base + 0, 35)
 
-              match payload183 {
+              match payload189 {
                 None => {
                   mbt_ffi_store8(iter_base + 8, 0)
 
                   ()
                 }
-                Some(payload185) => {
+                Some(payload191) => {
                   mbt_ffi_store8(iter_base + 8, 1)
-                  mbt_ffi_store32(iter_base + 12, payload185)
+                  mbt_ffi_store32(iter_base + 12, payload191)
 
                   ()
                 }
@@ -11975,48 +12245,48 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload187) => {
+            Some(payload193) => {
               mbt_ffi_store8(iter_base + 88, 1)
 
-              let ptr188 = mbt_ffi_str2ptr(payload187)
-              mbt_ffi_store32(iter_base + 96, payload187.length())
-              mbt_ffi_store32(iter_base + 92, ptr188)
+              let ptr194 = mbt_ffi_str2ptr(payload193)
+              mbt_ffi_store32(iter_base + 96, payload193.length())
+              mbt_ffi_store32(iter_base + 92, ptr194)
 
               ()
             }
           }
 
-          let address190 = mbt_ffi_malloc(
+          let address196 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index191 = 0
-              index191 < iter_elem.metadata.aliases.length()
-              index191 = index191 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index191]
-            let iter_base = address190 + index191 * 8
+          for index197 = 0
+              index197 < iter_elem.metadata.aliases.length()
+              index197 = index197 + 1 {
+            let iter_elem : String = iter_elem.metadata.aliases[index197]
+            let iter_base = address196 + index197 * 8
 
-            let ptr189 = mbt_ffi_str2ptr(iter_elem)
+            let ptr195 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr189)
+            mbt_ffi_store32(iter_base + 0, ptr195)
           }
           mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 100, address190)
+          mbt_ffi_store32(iter_base + 100, address196)
 
-          let address193 = mbt_ffi_malloc(
+          let address199 = mbt_ffi_malloc(
             iter_elem.metadata.examples.length() * 8,
           )
-          for index194 = 0
-              index194 < iter_elem.metadata.examples.length()
-              index194 = index194 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index194]
-            let iter_base = address193 + index194 * 8
+          for index200 = 0
+              index200 < iter_elem.metadata.examples.length()
+              index200 = index200 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index200]
+            let iter_base = address199 + index200 * 8
 
-            let ptr192 = mbt_ffi_str2ptr(iter_elem)
+            let ptr198 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr192)
+            mbt_ffi_store32(iter_base + 0, ptr198)
           }
           mbt_ffi_store32(iter_base + 112, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 108, address193)
+          mbt_ffi_store32(iter_base + 108, address199)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -12024,12 +12294,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload196) => {
+            Some(payload202) => {
               mbt_ffi_store8(iter_base + 116, 1)
 
-              let ptr197 = mbt_ffi_str2ptr(payload196)
-              mbt_ffi_store32(iter_base + 124, payload196.length())
-              mbt_ffi_store32(iter_base + 120, ptr197)
+              let ptr203 = mbt_ffi_str2ptr(payload202)
+              mbt_ffi_store32(iter_base + 124, payload202.length())
+              mbt_ffi_store32(iter_base + 120, ptr203)
 
               ()
             }
@@ -12041,21 +12311,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload199) => {
+            Some(payload205) => {
               mbt_ffi_store8(iter_base + 128, 1)
 
-              match payload199 {
+              match payload205 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 132, 0)
 
                   ()
                 }
-                Other(payload201) => {
+                UnstructuredText => {
                   mbt_ffi_store8(iter_base + 132, 1)
 
-                  let ptr202 = mbt_ffi_str2ptr(payload201)
-                  mbt_ffi_store32(iter_base + 140, payload201.length())
-                  mbt_ffi_store32(iter_base + 136, ptr202)
+                  ()
+                }
+                UnstructuredBinary => {
+                  mbt_ffi_store8(iter_base + 132, 2)
+
+                  ()
+                }
+                Other(payload209) => {
+                  mbt_ffi_store8(iter_base + 132, 3)
+
+                  let ptr210 = mbt_ffi_str2ptr(payload209)
+                  mbt_ffi_store32(iter_base + 140, payload209.length())
+                  mbt_ffi_store32(iter_base + 136, ptr210)
 
                   ()
                 }
@@ -12066,18 +12346,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
           }
         }
         mbt_ffi_store32(iter_base + 28, iter_elem.schema.type_nodes.length())
-        mbt_ffi_store32(iter_base + 24, address203)
+        mbt_ffi_store32(iter_base + 24, address211)
 
-        let address209 = mbt_ffi_malloc(iter_elem.schema.defs.length() * 24)
-        for index210 = 0
-            index210 < iter_elem.schema.defs.length()
-            index210 = index210 + 1 {
-          let iter_elem : @types.SchemaTypeDef = iter_elem.schema.defs[index210]
-          let iter_base = address209 + index210 * 24
+        let address217 = mbt_ffi_malloc(iter_elem.schema.defs.length() * 24)
+        for index218 = 0
+            index218 < iter_elem.schema.defs.length()
+            index218 = index218 + 1 {
+          let iter_elem : @types.SchemaTypeDef = iter_elem.schema.defs[index218]
+          let iter_base = address217 + index218 * 24
 
-          let ptr205 = mbt_ffi_str2ptr(iter_elem.id)
+          let ptr213 = mbt_ffi_str2ptr(iter_elem.id)
           mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-          mbt_ffi_store32(iter_base + 0, ptr205)
+          mbt_ffi_store32(iter_base + 0, ptr213)
 
           match iter_elem.name {
             None => {
@@ -12085,12 +12365,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload207) => {
+            Some(payload215) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let ptr208 = mbt_ffi_str2ptr(payload207)
-              mbt_ffi_store32(iter_base + 16, payload207.length())
-              mbt_ffi_store32(iter_base + 12, ptr208)
+              let ptr216 = mbt_ffi_str2ptr(payload215)
+              mbt_ffi_store32(iter_base + 16, payload215.length())
+              mbt_ffi_store32(iter_base + 12, ptr216)
 
               ()
             }
@@ -12098,7 +12378,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
           mbt_ffi_store32(iter_base + 20, iter_elem.body)
         }
         mbt_ffi_store32(iter_base + 36, iter_elem.schema.defs.length())
-        mbt_ffi_store32(iter_base + 32, address209)
+        mbt_ffi_store32(iter_base + 32, address217)
         mbt_ffi_store32(iter_base + 40, iter_elem.schema.root)
 
         match iter_elem.constructor_.name {
@@ -12107,23 +12387,23 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
             ()
           }
-          Some(payload212) => {
+          Some(payload220) => {
             mbt_ffi_store8(iter_base + 44, 1)
 
-            let ptr213 = mbt_ffi_str2ptr(payload212)
-            mbt_ffi_store32(iter_base + 52, payload212.length())
-            mbt_ffi_store32(iter_base + 48, ptr213)
+            let ptr221 = mbt_ffi_str2ptr(payload220)
+            mbt_ffi_store32(iter_base + 52, payload220.length())
+            mbt_ffi_store32(iter_base + 48, ptr221)
 
             ()
           }
         }
 
-        let ptr214 = mbt_ffi_str2ptr(iter_elem.constructor_.description)
+        let ptr222 = mbt_ffi_str2ptr(iter_elem.constructor_.description)
         mbt_ffi_store32(
           iter_base + 60,
           iter_elem.constructor_.description.length(),
         )
-        mbt_ffi_store32(iter_base + 56, ptr214)
+        mbt_ffi_store32(iter_base + 56, ptr222)
 
         match iter_elem.constructor_.prompt_hint {
           None => {
@@ -12131,31 +12411,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
             ()
           }
-          Some(payload216) => {
+          Some(payload224) => {
             mbt_ffi_store8(iter_base + 64, 1)
 
-            let ptr217 = mbt_ffi_str2ptr(payload216)
-            mbt_ffi_store32(iter_base + 72, payload216.length())
-            mbt_ffi_store32(iter_base + 68, ptr217)
+            let ptr225 = mbt_ffi_str2ptr(payload224)
+            mbt_ffi_store32(iter_base + 72, payload224.length())
+            mbt_ffi_store32(iter_base + 68, ptr225)
 
             ()
           }
         }
 
         match iter_elem.constructor_.input_schema {
-          Parameters(payload218) => {
+          Parameters(payload226) => {
             mbt_ffi_store8(iter_base + 76, 0)
 
-            let address239 = mbt_ffi_malloc(payload218.length() * 72)
-            for index240 = 0
-                index240 < payload218.length()
-                index240 = index240 + 1 {
-              let iter_elem : @common.NamedField = payload218[index240]
-              let iter_base = address239 + index240 * 72
+            let address249 = mbt_ffi_malloc(payload226.length() * 72)
+            for index250 = 0
+                index250 < payload226.length()
+                index250 = index250 + 1 {
+              let iter_elem : @common.NamedField = payload226[index250]
+              let iter_base = address249 + index250 * 72
 
-              let ptr219 = mbt_ffi_str2ptr(iter_elem.name)
+              let ptr227 = mbt_ffi_str2ptr(iter_elem.name)
               mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-              mbt_ffi_store32(iter_base + 0, ptr219)
+              mbt_ffi_store32(iter_base + 0, ptr227)
 
               match iter_elem.source {
                 UserSupplied => {
@@ -12163,9 +12443,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                AutoInjected(payload221) => {
+                AutoInjected(payload229) => {
                   mbt_ffi_store8(iter_base + 8, 1)
-                  mbt_ffi_store8(iter_base + 9, payload221.ordinal())
+                  mbt_ffi_store8(iter_base + 9, payload229.ordinal())
 
                   ()
                 }
@@ -12178,54 +12458,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                Some(payload223) => {
+                Some(payload231) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  let ptr224 = mbt_ffi_str2ptr(payload223)
-                  mbt_ffi_store32(iter_base + 24, payload223.length())
-                  mbt_ffi_store32(iter_base + 20, ptr224)
+                  let ptr232 = mbt_ffi_str2ptr(payload231)
+                  mbt_ffi_store32(iter_base + 24, payload231.length())
+                  mbt_ffi_store32(iter_base + 20, ptr232)
 
                   ()
                 }
               }
 
-              let address226 = mbt_ffi_malloc(
+              let address234 = mbt_ffi_malloc(
                 iter_elem.metadata.aliases.length() * 8,
               )
-              for index227 = 0
-                  index227 < iter_elem.metadata.aliases.length()
-                  index227 = index227 + 1 {
-                let iter_elem : String = iter_elem.metadata.aliases[index227]
-                let iter_base = address226 + index227 * 8
+              for index235 = 0
+                  index235 < iter_elem.metadata.aliases.length()
+                  index235 = index235 + 1 {
+                let iter_elem : String = iter_elem.metadata.aliases[index235]
+                let iter_base = address234 + index235 * 8
 
-                let ptr225 = mbt_ffi_str2ptr(iter_elem)
+                let ptr233 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr225)
+                mbt_ffi_store32(iter_base + 0, ptr233)
               }
               mbt_ffi_store32(
                 iter_base + 32,
                 iter_elem.metadata.aliases.length(),
               )
-              mbt_ffi_store32(iter_base + 28, address226)
+              mbt_ffi_store32(iter_base + 28, address234)
 
-              let address229 = mbt_ffi_malloc(
+              let address237 = mbt_ffi_malloc(
                 iter_elem.metadata.examples.length() * 8,
               )
-              for index230 = 0
-                  index230 < iter_elem.metadata.examples.length()
-                  index230 = index230 + 1 {
-                let iter_elem : String = iter_elem.metadata.examples[index230]
-                let iter_base = address229 + index230 * 8
+              for index238 = 0
+                  index238 < iter_elem.metadata.examples.length()
+                  index238 = index238 + 1 {
+                let iter_elem : String = iter_elem.metadata.examples[index238]
+                let iter_base = address237 + index238 * 8
 
-                let ptr228 = mbt_ffi_str2ptr(iter_elem)
+                let ptr236 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr228)
+                mbt_ffi_store32(iter_base + 0, ptr236)
               }
               mbt_ffi_store32(
                 iter_base + 40,
                 iter_elem.metadata.examples.length(),
               )
-              mbt_ffi_store32(iter_base + 36, address229)
+              mbt_ffi_store32(iter_base + 36, address237)
 
               match iter_elem.metadata.deprecated {
                 None => {
@@ -12233,12 +12513,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                Some(payload232) => {
+                Some(payload240) => {
                   mbt_ffi_store8(iter_base + 44, 1)
 
-                  let ptr233 = mbt_ffi_str2ptr(payload232)
-                  mbt_ffi_store32(iter_base + 52, payload232.length())
-                  mbt_ffi_store32(iter_base + 48, ptr233)
+                  let ptr241 = mbt_ffi_str2ptr(payload240)
+                  mbt_ffi_store32(iter_base + 52, payload240.length())
+                  mbt_ffi_store32(iter_base + 48, ptr241)
 
                   ()
                 }
@@ -12250,21 +12530,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                Some(payload235) => {
+                Some(payload243) => {
                   mbt_ffi_store8(iter_base + 56, 1)
 
-                  match payload235 {
+                  match payload243 {
                     Multimodal => {
                       mbt_ffi_store8(iter_base + 60, 0)
 
                       ()
                     }
-                    Other(payload237) => {
+                    UnstructuredText => {
                       mbt_ffi_store8(iter_base + 60, 1)
 
-                      let ptr238 = mbt_ffi_str2ptr(payload237)
-                      mbt_ffi_store32(iter_base + 68, payload237.length())
-                      mbt_ffi_store32(iter_base + 64, ptr238)
+                      ()
+                    }
+                    UnstructuredBinary => {
+                      mbt_ffi_store8(iter_base + 60, 2)
+
+                      ()
+                    }
+                    Other(payload247) => {
+                      mbt_ffi_store8(iter_base + 60, 3)
+
+                      let ptr248 = mbt_ffi_str2ptr(payload247)
+                      mbt_ffi_store32(iter_base + 68, payload247.length())
+                      mbt_ffi_store32(iter_base + 64, ptr248)
 
                       ()
                     }
@@ -12274,34 +12564,34 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                 }
               }
             }
-            mbt_ffi_store32(iter_base + 84, payload218.length())
-            mbt_ffi_store32(iter_base + 80, address239)
+            mbt_ffi_store32(iter_base + 84, payload226.length())
+            mbt_ffi_store32(iter_base + 80, address249)
 
             ()
           }
         }
 
-        let address311 = mbt_ffi_malloc(iter_elem.methods.length() * 88)
-        for index312 = 0
-            index312 < iter_elem.methods.length()
-            index312 = index312 + 1 {
-          let iter_elem : @common.AgentMethod = iter_elem.methods[index312]
-          let iter_base = address311 + index312 * 88
+        let address323 = mbt_ffi_malloc(iter_elem.methods.length() * 88)
+        for index324 = 0
+            index324 < iter_elem.methods.length()
+            index324 = index324 + 1 {
+          let iter_elem : @common.AgentMethod = iter_elem.methods[index324]
+          let iter_base = address323 + index324 * 88
 
-          let ptr241 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr251 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr241)
+          mbt_ffi_store32(iter_base + 0, ptr251)
 
-          let ptr242 = mbt_ffi_str2ptr(iter_elem.description)
+          let ptr252 = mbt_ffi_str2ptr(iter_elem.description)
           mbt_ffi_store32(iter_base + 12, iter_elem.description.length())
-          mbt_ffi_store32(iter_base + 8, ptr242)
+          mbt_ffi_store32(iter_base + 8, ptr252)
 
-          let address276 = mbt_ffi_malloc(iter_elem.http_endpoint.length() * 48)
-          for index277 = 0
-              index277 < iter_elem.http_endpoint.length()
-              index277 = index277 + 1 {
-            let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index277]
-            let iter_base = address276 + index277 * 48
+          let address286 = mbt_ffi_malloc(iter_elem.http_endpoint.length() * 48)
+          for index287 = 0
+              index287 < iter_elem.http_endpoint.length()
+              index287 = index287 + 1 {
+            let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index287]
+            let iter_base = address286 + index287 * 48
 
             match iter_elem.http_method {
               Get => {
@@ -12349,107 +12639,107 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Custom(payload252) => {
+              Custom(payload262) => {
                 mbt_ffi_store8(iter_base + 0, 9)
 
-                let ptr253 = mbt_ffi_str2ptr(payload252)
-                mbt_ffi_store32(iter_base + 8, payload252.length())
-                mbt_ffi_store32(iter_base + 4, ptr253)
+                let ptr263 = mbt_ffi_str2ptr(payload262)
+                mbt_ffi_store32(iter_base + 8, payload262.length())
+                mbt_ffi_store32(iter_base + 4, ptr263)
 
                 ()
               }
             }
 
-            let address261 = mbt_ffi_malloc(iter_elem.path_suffix.length() * 12)
-            for index262 = 0
-                index262 < iter_elem.path_suffix.length()
-                index262 = index262 + 1 {
-              let iter_elem : @common.PathSegment = iter_elem.path_suffix[index262]
-              let iter_base = address261 + index262 * 12
+            let address271 = mbt_ffi_malloc(iter_elem.path_suffix.length() * 12)
+            for index272 = 0
+                index272 < iter_elem.path_suffix.length()
+                index272 = index272 + 1 {
+              let iter_elem : @common.PathSegment = iter_elem.path_suffix[index272]
+              let iter_base = address271 + index272 * 12
 
               match iter_elem {
-                Literal(payload254) => {
+                Literal(payload264) => {
                   mbt_ffi_store8(iter_base + 0, 0)
 
-                  let ptr255 = mbt_ffi_str2ptr(payload254)
-                  mbt_ffi_store32(iter_base + 8, payload254.length())
-                  mbt_ffi_store32(iter_base + 4, ptr255)
+                  let ptr265 = mbt_ffi_str2ptr(payload264)
+                  mbt_ffi_store32(iter_base + 8, payload264.length())
+                  mbt_ffi_store32(iter_base + 4, ptr265)
 
                   ()
                 }
-                SystemVariable(payload256) => {
+                SystemVariable(payload266) => {
                   mbt_ffi_store8(iter_base + 0, 1)
-                  mbt_ffi_store8(iter_base + 4, payload256.ordinal())
+                  mbt_ffi_store8(iter_base + 4, payload266.ordinal())
 
                   ()
                 }
-                PathVariable(payload257) => {
+                PathVariable(payload267) => {
                   mbt_ffi_store8(iter_base + 0, 2)
 
-                  let ptr258 = mbt_ffi_str2ptr(payload257.variable_name)
+                  let ptr268 = mbt_ffi_str2ptr(payload267.variable_name)
                   mbt_ffi_store32(
                     iter_base + 8,
-                    payload257.variable_name.length(),
+                    payload267.variable_name.length(),
                   )
-                  mbt_ffi_store32(iter_base + 4, ptr258)
+                  mbt_ffi_store32(iter_base + 4, ptr268)
 
                   ()
                 }
-                RemainingPathVariable(payload259) => {
+                RemainingPathVariable(payload269) => {
                   mbt_ffi_store8(iter_base + 0, 3)
 
-                  let ptr260 = mbt_ffi_str2ptr(payload259.variable_name)
+                  let ptr270 = mbt_ffi_str2ptr(payload269.variable_name)
                   mbt_ffi_store32(
                     iter_base + 8,
-                    payload259.variable_name.length(),
+                    payload269.variable_name.length(),
                   )
-                  mbt_ffi_store32(iter_base + 4, ptr260)
+                  mbt_ffi_store32(iter_base + 4, ptr270)
 
                   ()
                 }
               }
             }
             mbt_ffi_store32(iter_base + 16, iter_elem.path_suffix.length())
-            mbt_ffi_store32(iter_base + 12, address261)
+            mbt_ffi_store32(iter_base + 12, address271)
 
-            let address265 = mbt_ffi_malloc(iter_elem.header_vars.length() * 16)
-            for index266 = 0
-                index266 < iter_elem.header_vars.length()
-                index266 = index266 + 1 {
-              let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index266]
-              let iter_base = address265 + index266 * 16
+            let address275 = mbt_ffi_malloc(iter_elem.header_vars.length() * 16)
+            for index276 = 0
+                index276 < iter_elem.header_vars.length()
+                index276 = index276 + 1 {
+              let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index276]
+              let iter_base = address275 + index276 * 16
 
-              let ptr263 = mbt_ffi_str2ptr(iter_elem.header_name)
+              let ptr273 = mbt_ffi_str2ptr(iter_elem.header_name)
               mbt_ffi_store32(iter_base + 4, iter_elem.header_name.length())
-              mbt_ffi_store32(iter_base + 0, ptr263)
+              mbt_ffi_store32(iter_base + 0, ptr273)
 
-              let ptr264 = mbt_ffi_str2ptr(iter_elem.variable_name)
+              let ptr274 = mbt_ffi_str2ptr(iter_elem.variable_name)
               mbt_ffi_store32(iter_base + 12, iter_elem.variable_name.length())
-              mbt_ffi_store32(iter_base + 8, ptr264)
+              mbt_ffi_store32(iter_base + 8, ptr274)
             }
             mbt_ffi_store32(iter_base + 24, iter_elem.header_vars.length())
-            mbt_ffi_store32(iter_base + 20, address265)
+            mbt_ffi_store32(iter_base + 20, address275)
 
-            let address269 = mbt_ffi_malloc(iter_elem.query_vars.length() * 16)
-            for index270 = 0
-                index270 < iter_elem.query_vars.length()
-                index270 = index270 + 1 {
-              let iter_elem : @common.QueryVariable = iter_elem.query_vars[index270]
-              let iter_base = address269 + index270 * 16
+            let address279 = mbt_ffi_malloc(iter_elem.query_vars.length() * 16)
+            for index280 = 0
+                index280 < iter_elem.query_vars.length()
+                index280 = index280 + 1 {
+              let iter_elem : @common.QueryVariable = iter_elem.query_vars[index280]
+              let iter_base = address279 + index280 * 16
 
-              let ptr267 = mbt_ffi_str2ptr(iter_elem.query_param_name)
+              let ptr277 = mbt_ffi_str2ptr(iter_elem.query_param_name)
               mbt_ffi_store32(
                 iter_base + 4,
                 iter_elem.query_param_name.length(),
               )
-              mbt_ffi_store32(iter_base + 0, ptr267)
+              mbt_ffi_store32(iter_base + 0, ptr277)
 
-              let ptr268 = mbt_ffi_str2ptr(iter_elem.variable_name)
+              let ptr278 = mbt_ffi_str2ptr(iter_elem.variable_name)
               mbt_ffi_store32(iter_base + 12, iter_elem.variable_name.length())
-              mbt_ffi_store32(iter_base + 8, ptr268)
+              mbt_ffi_store32(iter_base + 8, ptr278)
             }
             mbt_ffi_store32(iter_base + 32, iter_elem.query_vars.length())
-            mbt_ffi_store32(iter_base + 28, address269)
+            mbt_ffi_store32(iter_base + 28, address279)
 
             match iter_elem.auth_details {
               None => {
@@ -12457,11 +12747,11 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload272) => {
+              Some(payload282) => {
                 mbt_ffi_store8(iter_base + 36, 1)
                 mbt_ffi_store8(
                   iter_base + 37,
-                  if payload272.required {
+                  if payload282.required {
                     1
                   } else {
                     0
@@ -12472,27 +12762,27 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
               }
             }
 
-            let address274 = mbt_ffi_malloc(
+            let address284 = mbt_ffi_malloc(
               iter_elem.cors_options.allowed_patterns.length() * 8,
             )
-            for index275 = 0
-                index275 < iter_elem.cors_options.allowed_patterns.length()
-                index275 = index275 + 1 {
-              let iter_elem : String = iter_elem.cors_options.allowed_patterns[index275]
-              let iter_base = address274 + index275 * 8
+            for index285 = 0
+                index285 < iter_elem.cors_options.allowed_patterns.length()
+                index285 = index285 + 1 {
+              let iter_elem : String = iter_elem.cors_options.allowed_patterns[index285]
+              let iter_base = address284 + index285 * 8
 
-              let ptr273 = mbt_ffi_str2ptr(iter_elem)
+              let ptr283 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr273)
+              mbt_ffi_store32(iter_base + 0, ptr283)
             }
             mbt_ffi_store32(
               iter_base + 44,
               iter_elem.cors_options.allowed_patterns.length(),
             )
-            mbt_ffi_store32(iter_base + 40, address274)
+            mbt_ffi_store32(iter_base + 40, address284)
           }
           mbt_ffi_store32(iter_base + 20, iter_elem.http_endpoint.length())
-          mbt_ffi_store32(iter_base + 16, address276)
+          mbt_ffi_store32(iter_base + 16, address286)
 
           match iter_elem.prompt_hint {
             None => {
@@ -12500,31 +12790,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload279) => {
+            Some(payload289) => {
               mbt_ffi_store8(iter_base + 24, 1)
 
-              let ptr280 = mbt_ffi_str2ptr(payload279)
-              mbt_ffi_store32(iter_base + 32, payload279.length())
-              mbt_ffi_store32(iter_base + 28, ptr280)
+              let ptr290 = mbt_ffi_str2ptr(payload289)
+              mbt_ffi_store32(iter_base + 32, payload289.length())
+              mbt_ffi_store32(iter_base + 28, ptr290)
 
               ()
             }
           }
 
           match iter_elem.input_schema {
-            Parameters(payload281) => {
+            Parameters(payload291) => {
               mbt_ffi_store8(iter_base + 36, 0)
 
-              let address302 = mbt_ffi_malloc(payload281.length() * 72)
-              for index303 = 0
-                  index303 < payload281.length()
-                  index303 = index303 + 1 {
-                let iter_elem : @common.NamedField = payload281[index303]
-                let iter_base = address302 + index303 * 72
+              let address314 = mbt_ffi_malloc(payload291.length() * 72)
+              for index315 = 0
+                  index315 < payload291.length()
+                  index315 = index315 + 1 {
+                let iter_elem : @common.NamedField = payload291[index315]
+                let iter_base = address314 + index315 * 72
 
-                let ptr282 = mbt_ffi_str2ptr(iter_elem.name)
+                let ptr292 = mbt_ffi_str2ptr(iter_elem.name)
                 mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                mbt_ffi_store32(iter_base + 0, ptr282)
+                mbt_ffi_store32(iter_base + 0, ptr292)
 
                 match iter_elem.source {
                   UserSupplied => {
@@ -12532,9 +12822,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  AutoInjected(payload284) => {
+                  AutoInjected(payload294) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store8(iter_base + 9, payload284.ordinal())
+                    mbt_ffi_store8(iter_base + 9, payload294.ordinal())
 
                     ()
                   }
@@ -12547,54 +12837,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload286) => {
+                  Some(payload296) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr287 = mbt_ffi_str2ptr(payload286)
-                    mbt_ffi_store32(iter_base + 24, payload286.length())
-                    mbt_ffi_store32(iter_base + 20, ptr287)
+                    let ptr297 = mbt_ffi_str2ptr(payload296)
+                    mbt_ffi_store32(iter_base + 24, payload296.length())
+                    mbt_ffi_store32(iter_base + 20, ptr297)
 
                     ()
                   }
                 }
 
-                let address289 = mbt_ffi_malloc(
+                let address299 = mbt_ffi_malloc(
                   iter_elem.metadata.aliases.length() * 8,
                 )
-                for index290 = 0
-                    index290 < iter_elem.metadata.aliases.length()
-                    index290 = index290 + 1 {
-                  let iter_elem : String = iter_elem.metadata.aliases[index290]
-                  let iter_base = address289 + index290 * 8
+                for index300 = 0
+                    index300 < iter_elem.metadata.aliases.length()
+                    index300 = index300 + 1 {
+                  let iter_elem : String = iter_elem.metadata.aliases[index300]
+                  let iter_base = address299 + index300 * 8
 
-                  let ptr288 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr298 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr288)
+                  mbt_ffi_store32(iter_base + 0, ptr298)
                 }
                 mbt_ffi_store32(
                   iter_base + 32,
                   iter_elem.metadata.aliases.length(),
                 )
-                mbt_ffi_store32(iter_base + 28, address289)
+                mbt_ffi_store32(iter_base + 28, address299)
 
-                let address292 = mbt_ffi_malloc(
+                let address302 = mbt_ffi_malloc(
                   iter_elem.metadata.examples.length() * 8,
                 )
-                for index293 = 0
-                    index293 < iter_elem.metadata.examples.length()
-                    index293 = index293 + 1 {
-                  let iter_elem : String = iter_elem.metadata.examples[index293]
-                  let iter_base = address292 + index293 * 8
+                for index303 = 0
+                    index303 < iter_elem.metadata.examples.length()
+                    index303 = index303 + 1 {
+                  let iter_elem : String = iter_elem.metadata.examples[index303]
+                  let iter_base = address302 + index303 * 8
 
-                  let ptr291 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr301 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr291)
+                  mbt_ffi_store32(iter_base + 0, ptr301)
                 }
                 mbt_ffi_store32(
                   iter_base + 40,
                   iter_elem.metadata.examples.length(),
                 )
-                mbt_ffi_store32(iter_base + 36, address292)
+                mbt_ffi_store32(iter_base + 36, address302)
 
                 match iter_elem.metadata.deprecated {
                   None => {
@@ -12602,12 +12892,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload295) => {
+                  Some(payload305) => {
                     mbt_ffi_store8(iter_base + 44, 1)
 
-                    let ptr296 = mbt_ffi_str2ptr(payload295)
-                    mbt_ffi_store32(iter_base + 52, payload295.length())
-                    mbt_ffi_store32(iter_base + 48, ptr296)
+                    let ptr306 = mbt_ffi_str2ptr(payload305)
+                    mbt_ffi_store32(iter_base + 52, payload305.length())
+                    mbt_ffi_store32(iter_base + 48, ptr306)
 
                     ()
                   }
@@ -12619,21 +12909,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload298) => {
+                  Some(payload308) => {
                     mbt_ffi_store8(iter_base + 56, 1)
 
-                    match payload298 {
+                    match payload308 {
                       Multimodal => {
                         mbt_ffi_store8(iter_base + 60, 0)
 
                         ()
                       }
-                      Other(payload300) => {
+                      UnstructuredText => {
                         mbt_ffi_store8(iter_base + 60, 1)
 
-                        let ptr301 = mbt_ffi_str2ptr(payload300)
-                        mbt_ffi_store32(iter_base + 68, payload300.length())
-                        mbt_ffi_store32(iter_base + 64, ptr301)
+                        ()
+                      }
+                      UnstructuredBinary => {
+                        mbt_ffi_store8(iter_base + 60, 2)
+
+                        ()
+                      }
+                      Other(payload312) => {
+                        mbt_ffi_store8(iter_base + 60, 3)
+
+                        let ptr313 = mbt_ffi_str2ptr(payload312)
+                        mbt_ffi_store32(iter_base + 68, payload312.length())
+                        mbt_ffi_store32(iter_base + 64, ptr313)
 
                         ()
                       }
@@ -12643,8 +12943,8 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                   }
                 }
               }
-              mbt_ffi_store32(iter_base + 44, payload281.length())
-              mbt_ffi_store32(iter_base + 40, address302)
+              mbt_ffi_store32(iter_base + 44, payload291.length())
+              mbt_ffi_store32(iter_base + 40, address314)
 
               ()
             }
@@ -12656,9 +12956,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Single(payload305) => {
+            Single(payload317) => {
               mbt_ffi_store8(iter_base + 48, 1)
-              mbt_ffi_store32(iter_base + 52, payload305)
+              mbt_ffi_store32(iter_base + 52, payload317)
 
               ()
             }
@@ -12670,10 +12970,10 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload307) => {
+            Some(payload319) => {
               mbt_ffi_store8(iter_base + 56, 1)
 
-              match payload307.cache_policy {
+              match payload319.cache_policy {
                 NoCache => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
@@ -12684,11 +12984,11 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                Ttl(payload310) => {
+                Ttl(payload322) => {
                   mbt_ffi_store8(iter_base + 64, 2)
                   mbt_ffi_store64(
                     iter_base + 72,
-                    payload310.reinterpret_as_int64(),
+                    payload322.reinterpret_as_int64(),
                   )
 
                   ()
@@ -12696,7 +12996,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
               }
               mbt_ffi_store8(
                 iter_base + 80,
-                if payload307.uses_principal {
+                if payload319.uses_principal {
                   1
                 } else {
                   0
@@ -12708,18 +13008,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
           }
         }
         mbt_ffi_store32(iter_base + 92, iter_elem.methods.length())
-        mbt_ffi_store32(iter_base + 88, address311)
+        mbt_ffi_store32(iter_base + 88, address323)
 
-        let address630 = mbt_ffi_malloc(iter_elem.dependencies.length() * 92)
-        for index631 = 0
-            index631 < iter_elem.dependencies.length()
-            index631 = index631 + 1 {
-          let iter_elem : @common.AgentDependency = iter_elem.dependencies[index631]
-          let iter_base = address630 + index631 * 92
+        let address654 = mbt_ffi_malloc(iter_elem.dependencies.length() * 92)
+        for index655 = 0
+            index655 < iter_elem.dependencies.length()
+            index655 = index655 + 1 {
+          let iter_elem : @common.AgentDependency = iter_elem.dependencies[index655]
+          let iter_base = address654 + index655 * 92
 
-          let ptr313 = mbt_ffi_str2ptr(iter_elem.type_name)
+          let ptr325 = mbt_ffi_str2ptr(iter_elem.type_name)
           mbt_ffi_store32(iter_base + 4, iter_elem.type_name.length())
-          mbt_ffi_store32(iter_base + 0, ptr313)
+          mbt_ffi_store32(iter_base + 0, ptr325)
 
           match iter_elem.description {
             None => {
@@ -12727,30 +13027,30 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload315) => {
+            Some(payload327) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let ptr316 = mbt_ffi_str2ptr(payload315)
-              mbt_ffi_store32(iter_base + 16, payload315.length())
-              mbt_ffi_store32(iter_base + 12, ptr316)
+              let ptr328 = mbt_ffi_str2ptr(payload327)
+              mbt_ffi_store32(iter_base + 16, payload327.length())
+              mbt_ffi_store32(iter_base + 12, ptr328)
 
               ()
             }
           }
 
-          let address520 = mbt_ffi_malloc(
+          let address540 = mbt_ffi_malloc(
             iter_elem.schema.type_nodes.length() * 144,
           )
-          for index521 = 0
-              index521 < iter_elem.schema.type_nodes.length()
-              index521 = index521 + 1 {
-            let iter_elem : @types.SchemaTypeNode = iter_elem.schema.type_nodes[index521]
-            let iter_base = address520 + index521 * 144
+          for index541 = 0
+              index541 < iter_elem.schema.type_nodes.length()
+              index541 = index541 + 1 {
+            let iter_elem : @types.SchemaTypeNode = iter_elem.schema.type_nodes[index541]
+            let iter_base = address540 + index541 * 144
 
             match iter_elem.body {
-              RefType(payload317) => {
+              RefType(payload329) => {
                 mbt_ffi_store8(iter_base + 0, 0)
-                mbt_ffi_store32(iter_base + 8, payload317)
+                mbt_ffi_store32(iter_base + 8, payload329)
 
                 ()
               }
@@ -12819,19 +13119,19 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              RecordType(payload331) => {
+              RecordType(payload343) => {
                 mbt_ffi_store8(iter_base + 0, 14)
 
-                let address350 = mbt_ffi_malloc(payload331.length() * 68)
-                for index351 = 0
-                    index351 < payload331.length()
-                    index351 = index351 + 1 {
-                  let iter_elem : @types.NamedFieldType = payload331[index351]
-                  let iter_base = address350 + index351 * 68
+                let address364 = mbt_ffi_malloc(payload343.length() * 68)
+                for index365 = 0
+                    index365 < payload343.length()
+                    index365 = index365 + 1 {
+                  let iter_elem : @types.NamedFieldType = payload343[index365]
+                  let iter_base = address364 + index365 * 68
 
-                  let ptr332 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr344 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr332)
+                  mbt_ffi_store32(iter_base + 0, ptr344)
                   mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                   match iter_elem.metadata.doc {
@@ -12840,54 +13140,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload334) => {
+                    Some(payload346) => {
                       mbt_ffi_store8(iter_base + 12, 1)
 
-                      let ptr335 = mbt_ffi_str2ptr(payload334)
-                      mbt_ffi_store32(iter_base + 20, payload334.length())
-                      mbt_ffi_store32(iter_base + 16, ptr335)
+                      let ptr347 = mbt_ffi_str2ptr(payload346)
+                      mbt_ffi_store32(iter_base + 20, payload346.length())
+                      mbt_ffi_store32(iter_base + 16, ptr347)
 
                       ()
                     }
                   }
 
-                  let address337 = mbt_ffi_malloc(
+                  let address349 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index338 = 0
-                      index338 < iter_elem.metadata.aliases.length()
-                      index338 = index338 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index338]
-                    let iter_base = address337 + index338 * 8
+                  for index350 = 0
+                      index350 < iter_elem.metadata.aliases.length()
+                      index350 = index350 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index350]
+                    let iter_base = address349 + index350 * 8
 
-                    let ptr336 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr348 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr336)
+                    mbt_ffi_store32(iter_base + 0, ptr348)
                   }
                   mbt_ffi_store32(
                     iter_base + 28,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 24, address337)
+                  mbt_ffi_store32(iter_base + 24, address349)
 
-                  let address340 = mbt_ffi_malloc(
+                  let address352 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index341 = 0
-                      index341 < iter_elem.metadata.examples.length()
-                      index341 = index341 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index341]
-                    let iter_base = address340 + index341 * 8
+                  for index353 = 0
+                      index353 < iter_elem.metadata.examples.length()
+                      index353 = index353 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index353]
+                    let iter_base = address352 + index353 * 8
 
-                    let ptr339 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr351 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr339)
+                    mbt_ffi_store32(iter_base + 0, ptr351)
                   }
                   mbt_ffi_store32(
                     iter_base + 36,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 32, address340)
+                  mbt_ffi_store32(iter_base + 32, address352)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -12895,12 +13195,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload343) => {
+                    Some(payload355) => {
                       mbt_ffi_store8(iter_base + 40, 1)
 
-                      let ptr344 = mbt_ffi_str2ptr(payload343)
-                      mbt_ffi_store32(iter_base + 48, payload343.length())
-                      mbt_ffi_store32(iter_base + 44, ptr344)
+                      let ptr356 = mbt_ffi_str2ptr(payload355)
+                      mbt_ffi_store32(iter_base + 48, payload355.length())
+                      mbt_ffi_store32(iter_base + 44, ptr356)
 
                       ()
                     }
@@ -12912,21 +13212,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload346) => {
+                    Some(payload358) => {
                       mbt_ffi_store8(iter_base + 52, 1)
 
-                      match payload346 {
+                      match payload358 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 56, 0)
 
                           ()
                         }
-                        Other(payload348) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 56, 1)
 
-                          let ptr349 = mbt_ffi_str2ptr(payload348)
-                          mbt_ffi_store32(iter_base + 64, payload348.length())
-                          mbt_ffi_store32(iter_base + 60, ptr349)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 56, 2)
+
+                          ()
+                        }
+                        Other(payload362) => {
+                          mbt_ffi_store8(iter_base + 56, 3)
+
+                          let ptr363 = mbt_ffi_str2ptr(payload362)
+                          mbt_ffi_store32(iter_base + 64, payload362.length())
+                          mbt_ffi_store32(iter_base + 60, ptr363)
 
                           ()
                         }
@@ -12936,24 +13246,24 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload331.length())
-                mbt_ffi_store32(iter_base + 8, address350)
+                mbt_ffi_store32(iter_base + 12, payload343.length())
+                mbt_ffi_store32(iter_base + 8, address364)
 
                 ()
               }
-              VariantType(payload352) => {
+              VariantType(payload366) => {
                 mbt_ffi_store8(iter_base + 0, 15)
 
-                let address373 = mbt_ffi_malloc(payload352.length() * 72)
-                for index374 = 0
-                    index374 < payload352.length()
-                    index374 = index374 + 1 {
-                  let iter_elem : @types.VariantCaseType = payload352[index374]
-                  let iter_base = address373 + index374 * 72
+                let address389 = mbt_ffi_malloc(payload366.length() * 72)
+                for index390 = 0
+                    index390 < payload366.length()
+                    index390 = index390 + 1 {
+                  let iter_elem : @types.VariantCaseType = payload366[index390]
+                  let iter_base = address389 + index390 * 72
 
-                  let ptr353 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr367 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr353)
+                  mbt_ffi_store32(iter_base + 0, ptr367)
 
                   match iter_elem.payload {
                     None => {
@@ -12961,9 +13271,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload355) => {
+                    Some(payload369) => {
                       mbt_ffi_store8(iter_base + 8, 1)
-                      mbt_ffi_store32(iter_base + 12, payload355)
+                      mbt_ffi_store32(iter_base + 12, payload369)
 
                       ()
                     }
@@ -12975,54 +13285,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload357) => {
+                    Some(payload371) => {
                       mbt_ffi_store8(iter_base + 16, 1)
 
-                      let ptr358 = mbt_ffi_str2ptr(payload357)
-                      mbt_ffi_store32(iter_base + 24, payload357.length())
-                      mbt_ffi_store32(iter_base + 20, ptr358)
+                      let ptr372 = mbt_ffi_str2ptr(payload371)
+                      mbt_ffi_store32(iter_base + 24, payload371.length())
+                      mbt_ffi_store32(iter_base + 20, ptr372)
 
                       ()
                     }
                   }
 
-                  let address360 = mbt_ffi_malloc(
+                  let address374 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index361 = 0
-                      index361 < iter_elem.metadata.aliases.length()
-                      index361 = index361 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index361]
-                    let iter_base = address360 + index361 * 8
+                  for index375 = 0
+                      index375 < iter_elem.metadata.aliases.length()
+                      index375 = index375 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index375]
+                    let iter_base = address374 + index375 * 8
 
-                    let ptr359 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr373 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr359)
+                    mbt_ffi_store32(iter_base + 0, ptr373)
                   }
                   mbt_ffi_store32(
                     iter_base + 32,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 28, address360)
+                  mbt_ffi_store32(iter_base + 28, address374)
 
-                  let address363 = mbt_ffi_malloc(
+                  let address377 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index364 = 0
-                      index364 < iter_elem.metadata.examples.length()
-                      index364 = index364 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index364]
-                    let iter_base = address363 + index364 * 8
+                  for index378 = 0
+                      index378 < iter_elem.metadata.examples.length()
+                      index378 = index378 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index378]
+                    let iter_base = address377 + index378 * 8
 
-                    let ptr362 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr376 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr362)
+                    mbt_ffi_store32(iter_base + 0, ptr376)
                   }
                   mbt_ffi_store32(
                     iter_base + 40,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 36, address363)
+                  mbt_ffi_store32(iter_base + 36, address377)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -13030,12 +13340,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload366) => {
+                    Some(payload380) => {
                       mbt_ffi_store8(iter_base + 44, 1)
 
-                      let ptr367 = mbt_ffi_str2ptr(payload366)
-                      mbt_ffi_store32(iter_base + 52, payload366.length())
-                      mbt_ffi_store32(iter_base + 48, ptr367)
+                      let ptr381 = mbt_ffi_str2ptr(payload380)
+                      mbt_ffi_store32(iter_base + 52, payload380.length())
+                      mbt_ffi_store32(iter_base + 48, ptr381)
 
                       ()
                     }
@@ -13047,21 +13357,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload369) => {
+                    Some(payload383) => {
                       mbt_ffi_store8(iter_base + 56, 1)
 
-                      match payload369 {
+                      match payload383 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 60, 0)
 
                           ()
                         }
-                        Other(payload371) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 60, 1)
 
-                          let ptr372 = mbt_ffi_str2ptr(payload371)
-                          mbt_ffi_store32(iter_base + 68, payload371.length())
-                          mbt_ffi_store32(iter_base + 64, ptr372)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 60, 2)
+
+                          ()
+                        }
+                        Other(payload387) => {
+                          mbt_ffi_store8(iter_base + 60, 3)
+
+                          let ptr388 = mbt_ffi_str2ptr(payload387)
+                          mbt_ffi_store32(iter_base + 68, payload387.length())
+                          mbt_ffi_store32(iter_base + 64, ptr388)
 
                           ()
                         }
@@ -13071,120 +13391,120 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload352.length())
-                mbt_ffi_store32(iter_base + 8, address373)
+                mbt_ffi_store32(iter_base + 12, payload366.length())
+                mbt_ffi_store32(iter_base + 8, address389)
 
                 ()
               }
-              EnumType(payload375) => {
+              EnumType(payload391) => {
                 mbt_ffi_store8(iter_base + 0, 16)
 
-                let address377 = mbt_ffi_malloc(payload375.length() * 8)
-                for index378 = 0
-                    index378 < payload375.length()
-                    index378 = index378 + 1 {
-                  let iter_elem : String = payload375[index378]
-                  let iter_base = address377 + index378 * 8
+                let address393 = mbt_ffi_malloc(payload391.length() * 8)
+                for index394 = 0
+                    index394 < payload391.length()
+                    index394 = index394 + 1 {
+                  let iter_elem : String = payload391[index394]
+                  let iter_base = address393 + index394 * 8
 
-                  let ptr376 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr392 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr376)
+                  mbt_ffi_store32(iter_base + 0, ptr392)
                 }
-                mbt_ffi_store32(iter_base + 12, payload375.length())
-                mbt_ffi_store32(iter_base + 8, address377)
+                mbt_ffi_store32(iter_base + 12, payload391.length())
+                mbt_ffi_store32(iter_base + 8, address393)
 
                 ()
               }
-              FlagsType(payload379) => {
+              FlagsType(payload395) => {
                 mbt_ffi_store8(iter_base + 0, 17)
 
-                let address381 = mbt_ffi_malloc(payload379.length() * 8)
-                for index382 = 0
-                    index382 < payload379.length()
-                    index382 = index382 + 1 {
-                  let iter_elem : String = payload379[index382]
-                  let iter_base = address381 + index382 * 8
+                let address397 = mbt_ffi_malloc(payload395.length() * 8)
+                for index398 = 0
+                    index398 < payload395.length()
+                    index398 = index398 + 1 {
+                  let iter_elem : String = payload395[index398]
+                  let iter_base = address397 + index398 * 8
 
-                  let ptr380 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr396 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr380)
+                  mbt_ffi_store32(iter_base + 0, ptr396)
                 }
-                mbt_ffi_store32(iter_base + 12, payload379.length())
-                mbt_ffi_store32(iter_base + 8, address381)
+                mbt_ffi_store32(iter_base + 12, payload395.length())
+                mbt_ffi_store32(iter_base + 8, address397)
 
                 ()
               }
-              TupleType(payload383) => {
+              TupleType(payload399) => {
                 mbt_ffi_store8(iter_base + 0, 18)
 
-                let address384 = mbt_ffi_malloc(payload383.length() * 4)
-                for index385 = 0
-                    index385 < payload383.length()
-                    index385 = index385 + 1 {
-                  let iter_elem : Int = payload383[index385]
-                  let iter_base = address384 + index385 * 4
+                let address400 = mbt_ffi_malloc(payload399.length() * 4)
+                for index401 = 0
+                    index401 < payload399.length()
+                    index401 = index401 + 1 {
+                  let iter_elem : Int = payload399[index401]
+                  let iter_base = address400 + index401 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload383.length())
-                mbt_ffi_store32(iter_base + 8, address384)
+                mbt_ffi_store32(iter_base + 12, payload399.length())
+                mbt_ffi_store32(iter_base + 8, address400)
 
                 ()
               }
-              ListType(payload386) => {
+              ListType(payload402) => {
                 mbt_ffi_store8(iter_base + 0, 19)
-                mbt_ffi_store32(iter_base + 8, payload386)
+                mbt_ffi_store32(iter_base + 8, payload402)
 
                 ()
               }
-              FixedListType(payload387) => {
+              FixedListType(payload403) => {
                 mbt_ffi_store8(iter_base + 0, 20)
-                mbt_ffi_store32(iter_base + 8, payload387.element)
+                mbt_ffi_store32(iter_base + 8, payload403.element)
                 mbt_ffi_store32(
                   iter_base + 12,
-                  payload387.length.reinterpret_as_int(),
+                  payload403.length.reinterpret_as_int(),
                 )
 
                 ()
               }
-              MapType(payload388) => {
+              MapType(payload404) => {
                 mbt_ffi_store8(iter_base + 0, 21)
-                mbt_ffi_store32(iter_base + 8, payload388.key)
-                mbt_ffi_store32(iter_base + 12, payload388.value)
+                mbt_ffi_store32(iter_base + 8, payload404.key)
+                mbt_ffi_store32(iter_base + 12, payload404.value)
 
                 ()
               }
-              OptionType(payload389) => {
+              OptionType(payload405) => {
                 mbt_ffi_store8(iter_base + 0, 22)
-                mbt_ffi_store32(iter_base + 8, payload389)
+                mbt_ffi_store32(iter_base + 8, payload405)
 
                 ()
               }
-              ResultType(payload390) => {
+              ResultType(payload406) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                match payload390.ok {
+                match payload406.ok {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload392) => {
+                  Some(payload408) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload392)
+                    mbt_ffi_store32(iter_base + 12, payload408)
 
                     ()
                   }
                 }
 
-                match payload390.err {
+                match payload406.err {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload394) => {
+                  Some(payload410) => {
                     mbt_ffi_store8(iter_base + 16, 1)
-                    mbt_ffi_store32(iter_base + 20, payload394)
+                    mbt_ffi_store32(iter_base + 20, payload410)
 
                     ()
                   }
@@ -13192,82 +13512,82 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              TextType(payload395) => {
+              TextType(payload411) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                match payload395.languages {
+                match payload411.languages {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload397) => {
+                  Some(payload413) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address399 = mbt_ffi_malloc(payload397.length() * 8)
-                    for index400 = 0
-                        index400 < payload397.length()
-                        index400 = index400 + 1 {
-                      let iter_elem : String = payload397[index400]
-                      let iter_base = address399 + index400 * 8
+                    let address415 = mbt_ffi_malloc(payload413.length() * 8)
+                    for index416 = 0
+                        index416 < payload413.length()
+                        index416 = index416 + 1 {
+                      let iter_elem : String = payload413[index416]
+                      let iter_base = address415 + index416 * 8
 
-                      let ptr398 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr414 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr398)
+                      mbt_ffi_store32(iter_base + 0, ptr414)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload397.length())
-                    mbt_ffi_store32(iter_base + 12, address399)
+                    mbt_ffi_store32(iter_base + 16, payload413.length())
+                    mbt_ffi_store32(iter_base + 12, address415)
 
                     ()
                   }
                 }
 
-                match payload395.min_length {
+                match payload411.min_length {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload402) => {
+                  Some(payload418) => {
                     mbt_ffi_store8(iter_base + 20, 1)
                     mbt_ffi_store32(
                       iter_base + 24,
-                      payload402.reinterpret_as_int(),
+                      payload418.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload395.max_length {
+                match payload411.max_length {
                   None => {
                     mbt_ffi_store8(iter_base + 28, 0)
 
                     ()
                   }
-                  Some(payload404) => {
+                  Some(payload420) => {
                     mbt_ffi_store8(iter_base + 28, 1)
                     mbt_ffi_store32(
                       iter_base + 32,
-                      payload404.reinterpret_as_int(),
+                      payload420.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload395.regex {
+                match payload411.regex {
                   None => {
                     mbt_ffi_store8(iter_base + 36, 0)
 
                     ()
                   }
-                  Some(payload406) => {
+                  Some(payload422) => {
                     mbt_ffi_store8(iter_base + 36, 1)
 
-                    let ptr407 = mbt_ffi_str2ptr(payload406)
-                    mbt_ffi_store32(iter_base + 44, payload406.length())
-                    mbt_ffi_store32(iter_base + 40, ptr407)
+                    let ptr423 = mbt_ffi_str2ptr(payload422)
+                    mbt_ffi_store32(iter_base + 44, payload422.length())
+                    mbt_ffi_store32(iter_base + 40, ptr423)
 
                     ()
                   }
@@ -13275,64 +13595,64 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              BinaryType(payload408) => {
+              BinaryType(payload424) => {
                 mbt_ffi_store8(iter_base + 0, 25)
 
-                match payload408.mime_types {
+                match payload424.mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload410) => {
+                  Some(payload426) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address412 = mbt_ffi_malloc(payload410.length() * 8)
-                    for index413 = 0
-                        index413 < payload410.length()
-                        index413 = index413 + 1 {
-                      let iter_elem : String = payload410[index413]
-                      let iter_base = address412 + index413 * 8
+                    let address428 = mbt_ffi_malloc(payload426.length() * 8)
+                    for index429 = 0
+                        index429 < payload426.length()
+                        index429 = index429 + 1 {
+                      let iter_elem : String = payload426[index429]
+                      let iter_base = address428 + index429 * 8
 
-                      let ptr411 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr427 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr411)
+                      mbt_ffi_store32(iter_base + 0, ptr427)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload410.length())
-                    mbt_ffi_store32(iter_base + 12, address412)
+                    mbt_ffi_store32(iter_base + 16, payload426.length())
+                    mbt_ffi_store32(iter_base + 12, address428)
 
                     ()
                   }
                 }
 
-                match payload408.min_bytes {
+                match payload424.min_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload415) => {
+                  Some(payload431) => {
                     mbt_ffi_store8(iter_base + 20, 1)
                     mbt_ffi_store32(
                       iter_base + 24,
-                      payload415.reinterpret_as_int(),
+                      payload431.reinterpret_as_int(),
                     )
 
                     ()
                   }
                 }
 
-                match payload408.max_bytes {
+                match payload424.max_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 28, 0)
 
                     ()
                   }
-                  Some(payload417) => {
+                  Some(payload433) => {
                     mbt_ffi_store8(iter_base + 28, 1)
                     mbt_ffi_store32(
                       iter_base + 32,
-                      payload417.reinterpret_as_int(),
+                      payload433.reinterpret_as_int(),
                     )
 
                     ()
@@ -13341,105 +13661,19 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              PathType(payload418) => {
+              PathType(payload434) => {
                 mbt_ffi_store8(iter_base + 0, 26)
-                mbt_ffi_store8(iter_base + 8, payload418.direction.ordinal())
-                mbt_ffi_store8(iter_base + 9, payload418.kind.ordinal())
+                mbt_ffi_store8(iter_base + 8, payload434.direction.ordinal())
+                mbt_ffi_store8(iter_base + 9, payload434.kind.ordinal())
 
-                match payload418.allowed_mime_types {
+                match payload434.allowed_mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 12, 0)
 
                     ()
                   }
-                  Some(payload420) => {
-                    mbt_ffi_store8(iter_base + 12, 1)
-
-                    let address422 = mbt_ffi_malloc(payload420.length() * 8)
-                    for index423 = 0
-                        index423 < payload420.length()
-                        index423 = index423 + 1 {
-                      let iter_elem : String = payload420[index423]
-                      let iter_base = address422 + index423 * 8
-
-                      let ptr421 = mbt_ffi_str2ptr(iter_elem)
-                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr421)
-                    }
-                    mbt_ffi_store32(iter_base + 20, payload420.length())
-                    mbt_ffi_store32(iter_base + 16, address422)
-
-                    ()
-                  }
-                }
-
-                match payload418.allowed_extensions {
-                  None => {
-                    mbt_ffi_store8(iter_base + 24, 0)
-
-                    ()
-                  }
-                  Some(payload425) => {
-                    mbt_ffi_store8(iter_base + 24, 1)
-
-                    let address427 = mbt_ffi_malloc(payload425.length() * 8)
-                    for index428 = 0
-                        index428 < payload425.length()
-                        index428 = index428 + 1 {
-                      let iter_elem : String = payload425[index428]
-                      let iter_base = address427 + index428 * 8
-
-                      let ptr426 = mbt_ffi_str2ptr(iter_elem)
-                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr426)
-                    }
-                    mbt_ffi_store32(iter_base + 32, payload425.length())
-                    mbt_ffi_store32(iter_base + 28, address427)
-
-                    ()
-                  }
-                }
-
-                ()
-              }
-              UrlType(payload429) => {
-                mbt_ffi_store8(iter_base + 0, 27)
-
-                match payload429.allowed_schemes {
-                  None => {
-                    mbt_ffi_store8(iter_base + 8, 0)
-
-                    ()
-                  }
-                  Some(payload431) => {
-                    mbt_ffi_store8(iter_base + 8, 1)
-
-                    let address433 = mbt_ffi_malloc(payload431.length() * 8)
-                    for index434 = 0
-                        index434 < payload431.length()
-                        index434 = index434 + 1 {
-                      let iter_elem : String = payload431[index434]
-                      let iter_base = address433 + index434 * 8
-
-                      let ptr432 = mbt_ffi_str2ptr(iter_elem)
-                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr432)
-                    }
-                    mbt_ffi_store32(iter_base + 16, payload431.length())
-                    mbt_ffi_store32(iter_base + 12, address433)
-
-                    ()
-                  }
-                }
-
-                match payload429.allowed_hosts {
-                  None => {
-                    mbt_ffi_store8(iter_base + 20, 0)
-
-                    ()
-                  }
                   Some(payload436) => {
-                    mbt_ffi_store8(iter_base + 20, 1)
+                    mbt_ffi_store8(iter_base + 12, 1)
 
                     let address438 = mbt_ffi_malloc(payload436.length() * 8)
                     for index439 = 0
@@ -13452,8 +13686,94 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
                       mbt_ffi_store32(iter_base + 0, ptr437)
                     }
-                    mbt_ffi_store32(iter_base + 28, payload436.length())
-                    mbt_ffi_store32(iter_base + 24, address438)
+                    mbt_ffi_store32(iter_base + 20, payload436.length())
+                    mbt_ffi_store32(iter_base + 16, address438)
+
+                    ()
+                  }
+                }
+
+                match payload434.allowed_extensions {
+                  None => {
+                    mbt_ffi_store8(iter_base + 24, 0)
+
+                    ()
+                  }
+                  Some(payload441) => {
+                    mbt_ffi_store8(iter_base + 24, 1)
+
+                    let address443 = mbt_ffi_malloc(payload441.length() * 8)
+                    for index444 = 0
+                        index444 < payload441.length()
+                        index444 = index444 + 1 {
+                      let iter_elem : String = payload441[index444]
+                      let iter_base = address443 + index444 * 8
+
+                      let ptr442 = mbt_ffi_str2ptr(iter_elem)
+                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                      mbt_ffi_store32(iter_base + 0, ptr442)
+                    }
+                    mbt_ffi_store32(iter_base + 32, payload441.length())
+                    mbt_ffi_store32(iter_base + 28, address443)
+
+                    ()
+                  }
+                }
+
+                ()
+              }
+              UrlType(payload445) => {
+                mbt_ffi_store8(iter_base + 0, 27)
+
+                match payload445.allowed_schemes {
+                  None => {
+                    mbt_ffi_store8(iter_base + 8, 0)
+
+                    ()
+                  }
+                  Some(payload447) => {
+                    mbt_ffi_store8(iter_base + 8, 1)
+
+                    let address449 = mbt_ffi_malloc(payload447.length() * 8)
+                    for index450 = 0
+                        index450 < payload447.length()
+                        index450 = index450 + 1 {
+                      let iter_elem : String = payload447[index450]
+                      let iter_base = address449 + index450 * 8
+
+                      let ptr448 = mbt_ffi_str2ptr(iter_elem)
+                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                      mbt_ffi_store32(iter_base + 0, ptr448)
+                    }
+                    mbt_ffi_store32(iter_base + 16, payload447.length())
+                    mbt_ffi_store32(iter_base + 12, address449)
+
+                    ()
+                  }
+                }
+
+                match payload445.allowed_hosts {
+                  None => {
+                    mbt_ffi_store8(iter_base + 20, 0)
+
+                    ()
+                  }
+                  Some(payload452) => {
+                    mbt_ffi_store8(iter_base + 20, 1)
+
+                    let address454 = mbt_ffi_malloc(payload452.length() * 8)
+                    for index455 = 0
+                        index455 < payload452.length()
+                        index455 = index455 + 1 {
+                      let iter_elem : String = payload452[index455]
+                      let iter_base = address454 + index455 * 8
+
+                      let ptr453 = mbt_ffi_str2ptr(iter_elem)
+                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                      mbt_ffi_store32(iter_base + 0, ptr453)
+                    }
+                    mbt_ffi_store32(iter_base + 28, payload452.length())
+                    mbt_ffi_store32(iter_base + 24, address454)
 
                     ()
                   }
@@ -13471,65 +13791,65 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              QuantityType(payload442) => {
+              QuantityType(payload458) => {
                 mbt_ffi_store8(iter_base + 0, 30)
 
-                let ptr443 = mbt_ffi_str2ptr(payload442.base_unit)
-                mbt_ffi_store32(iter_base + 12, payload442.base_unit.length())
-                mbt_ffi_store32(iter_base + 8, ptr443)
+                let ptr459 = mbt_ffi_str2ptr(payload458.base_unit)
+                mbt_ffi_store32(iter_base + 12, payload458.base_unit.length())
+                mbt_ffi_store32(iter_base + 8, ptr459)
 
-                let address445 = mbt_ffi_malloc(
-                  payload442.allowed_suffixes.length() * 8,
+                let address461 = mbt_ffi_malloc(
+                  payload458.allowed_suffixes.length() * 8,
                 )
-                for index446 = 0
-                    index446 < payload442.allowed_suffixes.length()
-                    index446 = index446 + 1 {
-                  let iter_elem : String = payload442.allowed_suffixes[index446]
-                  let iter_base = address445 + index446 * 8
+                for index462 = 0
+                    index462 < payload458.allowed_suffixes.length()
+                    index462 = index462 + 1 {
+                  let iter_elem : String = payload458.allowed_suffixes[index462]
+                  let iter_base = address461 + index462 * 8
 
-                  let ptr444 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr460 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr444)
+                  mbt_ffi_store32(iter_base + 0, ptr460)
                 }
                 mbt_ffi_store32(
                   iter_base + 20,
-                  payload442.allowed_suffixes.length(),
+                  payload458.allowed_suffixes.length(),
                 )
-                mbt_ffi_store32(iter_base + 16, address445)
+                mbt_ffi_store32(iter_base + 16, address461)
 
-                match payload442.min {
+                match payload458.min {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload448) => {
+                  Some(payload464) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(iter_base + 32, payload448.mantissa)
-                    mbt_ffi_store32(iter_base + 40, payload448.scale)
+                    mbt_ffi_store64(iter_base + 32, payload464.mantissa)
+                    mbt_ffi_store32(iter_base + 40, payload464.scale)
 
-                    let ptr449 = mbt_ffi_str2ptr(payload448.unit)
-                    mbt_ffi_store32(iter_base + 48, payload448.unit.length())
-                    mbt_ffi_store32(iter_base + 44, ptr449)
+                    let ptr465 = mbt_ffi_str2ptr(payload464.unit)
+                    mbt_ffi_store32(iter_base + 48, payload464.unit.length())
+                    mbt_ffi_store32(iter_base + 44, ptr465)
 
                     ()
                   }
                 }
 
-                match payload442.max {
+                match payload458.max {
                   None => {
                     mbt_ffi_store8(iter_base + 56, 0)
 
                     ()
                   }
-                  Some(payload451) => {
+                  Some(payload467) => {
                     mbt_ffi_store8(iter_base + 56, 1)
-                    mbt_ffi_store64(iter_base + 64, payload451.mantissa)
-                    mbt_ffi_store32(iter_base + 72, payload451.scale)
+                    mbt_ffi_store64(iter_base + 64, payload467.mantissa)
+                    mbt_ffi_store32(iter_base + 72, payload467.scale)
 
-                    let ptr452 = mbt_ffi_str2ptr(payload451.unit)
-                    mbt_ffi_store32(iter_base + 80, payload451.unit.length())
-                    mbt_ffi_store32(iter_base + 76, ptr452)
+                    let ptr468 = mbt_ffi_str2ptr(payload467.unit)
+                    mbt_ffi_store32(iter_base + 80, payload467.unit.length())
+                    mbt_ffi_store32(iter_base + 76, ptr468)
 
                     ()
                   }
@@ -13537,82 +13857,82 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              UnionType(payload453) => {
+              UnionType(payload469) => {
                 mbt_ffi_store8(iter_base + 0, 31)
 
-                let address487 = mbt_ffi_malloc(
-                  payload453.branches.length() * 92,
+                let address505 = mbt_ffi_malloc(
+                  payload469.branches.length() * 92,
                 )
-                for index488 = 0
-                    index488 < payload453.branches.length()
-                    index488 = index488 + 1 {
-                  let iter_elem : @types.UnionBranch = payload453.branches[index488]
-                  let iter_base = address487 + index488 * 92
+                for index506 = 0
+                    index506 < payload469.branches.length()
+                    index506 = index506 + 1 {
+                  let iter_elem : @types.UnionBranch = payload469.branches[index506]
+                  let iter_base = address505 + index506 * 92
 
-                  let ptr454 = mbt_ffi_str2ptr(iter_elem.tag)
+                  let ptr470 = mbt_ffi_str2ptr(iter_elem.tag)
                   mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-                  mbt_ffi_store32(iter_base + 0, ptr454)
+                  mbt_ffi_store32(iter_base + 0, ptr470)
                   mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                   match iter_elem.discriminator {
-                    Prefix(payload455) => {
+                    Prefix(payload471) => {
                       mbt_ffi_store8(iter_base + 12, 0)
 
-                      let ptr456 = mbt_ffi_str2ptr(payload455)
-                      mbt_ffi_store32(iter_base + 20, payload455.length())
-                      mbt_ffi_store32(iter_base + 16, ptr456)
+                      let ptr472 = mbt_ffi_str2ptr(payload471)
+                      mbt_ffi_store32(iter_base + 20, payload471.length())
+                      mbt_ffi_store32(iter_base + 16, ptr472)
 
                       ()
                     }
-                    Suffix(payload457) => {
+                    Suffix(payload473) => {
                       mbt_ffi_store8(iter_base + 12, 1)
 
-                      let ptr458 = mbt_ffi_str2ptr(payload457)
-                      mbt_ffi_store32(iter_base + 20, payload457.length())
-                      mbt_ffi_store32(iter_base + 16, ptr458)
+                      let ptr474 = mbt_ffi_str2ptr(payload473)
+                      mbt_ffi_store32(iter_base + 20, payload473.length())
+                      mbt_ffi_store32(iter_base + 16, ptr474)
 
                       ()
                     }
-                    Contains(payload459) => {
+                    Contains(payload475) => {
                       mbt_ffi_store8(iter_base + 12, 2)
 
-                      let ptr460 = mbt_ffi_str2ptr(payload459)
-                      mbt_ffi_store32(iter_base + 20, payload459.length())
-                      mbt_ffi_store32(iter_base + 16, ptr460)
+                      let ptr476 = mbt_ffi_str2ptr(payload475)
+                      mbt_ffi_store32(iter_base + 20, payload475.length())
+                      mbt_ffi_store32(iter_base + 16, ptr476)
 
                       ()
                     }
-                    Regex(payload461) => {
+                    Regex(payload477) => {
                       mbt_ffi_store8(iter_base + 12, 3)
 
-                      let ptr462 = mbt_ffi_str2ptr(payload461)
-                      mbt_ffi_store32(iter_base + 20, payload461.length())
-                      mbt_ffi_store32(iter_base + 16, ptr462)
+                      let ptr478 = mbt_ffi_str2ptr(payload477)
+                      mbt_ffi_store32(iter_base + 20, payload477.length())
+                      mbt_ffi_store32(iter_base + 16, ptr478)
 
                       ()
                     }
-                    FieldEquals(payload463) => {
+                    FieldEquals(payload479) => {
                       mbt_ffi_store8(iter_base + 12, 4)
 
-                      let ptr464 = mbt_ffi_str2ptr(payload463.field_name)
+                      let ptr480 = mbt_ffi_str2ptr(payload479.field_name)
                       mbt_ffi_store32(
                         iter_base + 20,
-                        payload463.field_name.length(),
+                        payload479.field_name.length(),
                       )
-                      mbt_ffi_store32(iter_base + 16, ptr464)
+                      mbt_ffi_store32(iter_base + 16, ptr480)
 
-                      match payload463.literal {
+                      match payload479.literal {
                         None => {
                           mbt_ffi_store8(iter_base + 24, 0)
 
                           ()
                         }
-                        Some(payload466) => {
+                        Some(payload482) => {
                           mbt_ffi_store8(iter_base + 24, 1)
 
-                          let ptr467 = mbt_ffi_str2ptr(payload466)
-                          mbt_ffi_store32(iter_base + 32, payload466.length())
-                          mbt_ffi_store32(iter_base + 28, ptr467)
+                          let ptr483 = mbt_ffi_str2ptr(payload482)
+                          mbt_ffi_store32(iter_base + 32, payload482.length())
+                          mbt_ffi_store32(iter_base + 28, ptr483)
 
                           ()
                         }
@@ -13620,12 +13940,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    FieldAbsent(payload468) => {
+                    FieldAbsent(payload484) => {
                       mbt_ffi_store8(iter_base + 12, 5)
 
-                      let ptr469 = mbt_ffi_str2ptr(payload468)
-                      mbt_ffi_store32(iter_base + 20, payload468.length())
-                      mbt_ffi_store32(iter_base + 16, ptr469)
+                      let ptr485 = mbt_ffi_str2ptr(payload484)
+                      mbt_ffi_store32(iter_base + 20, payload484.length())
+                      mbt_ffi_store32(iter_base + 16, ptr485)
 
                       ()
                     }
@@ -13637,54 +13957,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload471) => {
+                    Some(payload487) => {
                       mbt_ffi_store8(iter_base + 36, 1)
 
-                      let ptr472 = mbt_ffi_str2ptr(payload471)
-                      mbt_ffi_store32(iter_base + 44, payload471.length())
-                      mbt_ffi_store32(iter_base + 40, ptr472)
+                      let ptr488 = mbt_ffi_str2ptr(payload487)
+                      mbt_ffi_store32(iter_base + 44, payload487.length())
+                      mbt_ffi_store32(iter_base + 40, ptr488)
 
                       ()
                     }
                   }
 
-                  let address474 = mbt_ffi_malloc(
+                  let address490 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index475 = 0
-                      index475 < iter_elem.metadata.aliases.length()
-                      index475 = index475 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index475]
-                    let iter_base = address474 + index475 * 8
+                  for index491 = 0
+                      index491 < iter_elem.metadata.aliases.length()
+                      index491 = index491 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index491]
+                    let iter_base = address490 + index491 * 8
 
-                    let ptr473 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr489 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr473)
+                    mbt_ffi_store32(iter_base + 0, ptr489)
                   }
                   mbt_ffi_store32(
                     iter_base + 52,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 48, address474)
+                  mbt_ffi_store32(iter_base + 48, address490)
 
-                  let address477 = mbt_ffi_malloc(
+                  let address493 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index478 = 0
-                      index478 < iter_elem.metadata.examples.length()
-                      index478 = index478 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index478]
-                    let iter_base = address477 + index478 * 8
+                  for index494 = 0
+                      index494 < iter_elem.metadata.examples.length()
+                      index494 = index494 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index494]
+                    let iter_base = address493 + index494 * 8
 
-                    let ptr476 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr492 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr476)
+                    mbt_ffi_store32(iter_base + 0, ptr492)
                   }
                   mbt_ffi_store32(
                     iter_base + 60,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 56, address477)
+                  mbt_ffi_store32(iter_base + 56, address493)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -13692,12 +14012,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload480) => {
+                    Some(payload496) => {
                       mbt_ffi_store8(iter_base + 64, 1)
 
-                      let ptr481 = mbt_ffi_str2ptr(payload480)
-                      mbt_ffi_store32(iter_base + 72, payload480.length())
-                      mbt_ffi_store32(iter_base + 68, ptr481)
+                      let ptr497 = mbt_ffi_str2ptr(payload496)
+                      mbt_ffi_store32(iter_base + 72, payload496.length())
+                      mbt_ffi_store32(iter_base + 68, ptr497)
 
                       ()
                     }
@@ -13709,21 +14029,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload483) => {
+                    Some(payload499) => {
                       mbt_ffi_store8(iter_base + 76, 1)
 
-                      match payload483 {
+                      match payload499 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 80, 0)
 
                           ()
                         }
-                        Other(payload485) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 80, 1)
 
-                          let ptr486 = mbt_ffi_str2ptr(payload485)
-                          mbt_ffi_store32(iter_base + 88, payload485.length())
-                          mbt_ffi_store32(iter_base + 84, ptr486)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 80, 2)
+
+                          ()
+                        }
+                        Other(payload503) => {
+                          mbt_ffi_store8(iter_base + 80, 3)
+
+                          let ptr504 = mbt_ffi_str2ptr(payload503)
+                          mbt_ffi_store32(iter_base + 88, payload503.length())
+                          mbt_ffi_store32(iter_base + 84, ptr504)
 
                           ()
                         }
@@ -13733,26 +14063,26 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload453.branches.length())
-                mbt_ffi_store32(iter_base + 8, address487)
+                mbt_ffi_store32(iter_base + 12, payload469.branches.length())
+                mbt_ffi_store32(iter_base + 8, address505)
 
                 ()
               }
-              SecretType(payload489) => {
+              SecretType(payload507) => {
                 mbt_ffi_store8(iter_base + 0, 32)
 
-                match payload489.category {
+                match payload507.category {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload491) => {
+                  Some(payload509) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr492 = mbt_ffi_str2ptr(payload491)
-                    mbt_ffi_store32(iter_base + 16, payload491.length())
-                    mbt_ffi_store32(iter_base + 12, ptr492)
+                    let ptr510 = mbt_ffi_str2ptr(payload509)
+                    mbt_ffi_store32(iter_base + 16, payload509.length())
+                    mbt_ffi_store32(iter_base + 12, ptr510)
 
                     ()
                   }
@@ -13760,21 +14090,21 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              QuotaTokenType(payload493) => {
+              QuotaTokenType(payload511) => {
                 mbt_ffi_store8(iter_base + 0, 33)
 
-                match payload493.resource_name {
+                match payload511.resource_name {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload495) => {
+                  Some(payload513) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr496 = mbt_ffi_str2ptr(payload495)
-                    mbt_ffi_store32(iter_base + 16, payload495.length())
-                    mbt_ffi_store32(iter_base + 12, ptr496)
+                    let ptr514 = mbt_ffi_str2ptr(payload513)
+                    mbt_ffi_store32(iter_base + 16, payload513.length())
+                    mbt_ffi_store32(iter_base + 12, ptr514)
 
                     ()
                   }
@@ -13782,18 +14112,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              FutureType(payload497) => {
+              FutureType(payload515) => {
                 mbt_ffi_store8(iter_base + 0, 34)
 
-                match payload497 {
+                match payload515 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload499) => {
+                  Some(payload517) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload499)
+                    mbt_ffi_store32(iter_base + 12, payload517)
 
                     ()
                   }
@@ -13801,18 +14131,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              StreamType(payload500) => {
+              StreamType(payload518) => {
                 mbt_ffi_store8(iter_base + 0, 35)
 
-                match payload500 {
+                match payload518 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload502) => {
+                  Some(payload520) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload502)
+                    mbt_ffi_store32(iter_base + 12, payload520)
 
                     ()
                   }
@@ -13828,54 +14158,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload504) => {
+              Some(payload522) => {
                 mbt_ffi_store8(iter_base + 88, 1)
 
-                let ptr505 = mbt_ffi_str2ptr(payload504)
-                mbt_ffi_store32(iter_base + 96, payload504.length())
-                mbt_ffi_store32(iter_base + 92, ptr505)
+                let ptr523 = mbt_ffi_str2ptr(payload522)
+                mbt_ffi_store32(iter_base + 96, payload522.length())
+                mbt_ffi_store32(iter_base + 92, ptr523)
 
                 ()
               }
             }
 
-            let address507 = mbt_ffi_malloc(
+            let address525 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index508 = 0
-                index508 < iter_elem.metadata.aliases.length()
-                index508 = index508 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index508]
-              let iter_base = address507 + index508 * 8
+            for index526 = 0
+                index526 < iter_elem.metadata.aliases.length()
+                index526 = index526 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index526]
+              let iter_base = address525 + index526 * 8
 
-              let ptr506 = mbt_ffi_str2ptr(iter_elem)
+              let ptr524 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr506)
+              mbt_ffi_store32(iter_base + 0, ptr524)
             }
             mbt_ffi_store32(
               iter_base + 104,
               iter_elem.metadata.aliases.length(),
             )
-            mbt_ffi_store32(iter_base + 100, address507)
+            mbt_ffi_store32(iter_base + 100, address525)
 
-            let address510 = mbt_ffi_malloc(
+            let address528 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index511 = 0
-                index511 < iter_elem.metadata.examples.length()
-                index511 = index511 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index511]
-              let iter_base = address510 + index511 * 8
+            for index529 = 0
+                index529 < iter_elem.metadata.examples.length()
+                index529 = index529 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index529]
+              let iter_base = address528 + index529 * 8
 
-              let ptr509 = mbt_ffi_str2ptr(iter_elem)
+              let ptr527 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr509)
+              mbt_ffi_store32(iter_base + 0, ptr527)
             }
             mbt_ffi_store32(
               iter_base + 112,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 108, address510)
+            mbt_ffi_store32(iter_base + 108, address528)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -13883,12 +14213,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload513) => {
+              Some(payload531) => {
                 mbt_ffi_store8(iter_base + 116, 1)
 
-                let ptr514 = mbt_ffi_str2ptr(payload513)
-                mbt_ffi_store32(iter_base + 124, payload513.length())
-                mbt_ffi_store32(iter_base + 120, ptr514)
+                let ptr532 = mbt_ffi_str2ptr(payload531)
+                mbt_ffi_store32(iter_base + 124, payload531.length())
+                mbt_ffi_store32(iter_base + 120, ptr532)
 
                 ()
               }
@@ -13900,21 +14230,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload516) => {
+              Some(payload534) => {
                 mbt_ffi_store8(iter_base + 128, 1)
 
-                match payload516 {
+                match payload534 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 132, 0)
 
                     ()
                   }
-                  Other(payload518) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 132, 1)
 
-                    let ptr519 = mbt_ffi_str2ptr(payload518)
-                    mbt_ffi_store32(iter_base + 140, payload518.length())
-                    mbt_ffi_store32(iter_base + 136, ptr519)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 132, 2)
+
+                    ()
+                  }
+                  Other(payload538) => {
+                    mbt_ffi_store8(iter_base + 132, 3)
+
+                    let ptr539 = mbt_ffi_str2ptr(payload538)
+                    mbt_ffi_store32(iter_base + 140, payload538.length())
+                    mbt_ffi_store32(iter_base + 136, ptr539)
 
                     ()
                   }
@@ -13925,18 +14265,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
             }
           }
           mbt_ffi_store32(iter_base + 24, iter_elem.schema.type_nodes.length())
-          mbt_ffi_store32(iter_base + 20, address520)
+          mbt_ffi_store32(iter_base + 20, address540)
 
-          let address526 = mbt_ffi_malloc(iter_elem.schema.defs.length() * 24)
-          for index527 = 0
-              index527 < iter_elem.schema.defs.length()
-              index527 = index527 + 1 {
-            let iter_elem : @types.SchemaTypeDef = iter_elem.schema.defs[index527]
-            let iter_base = address526 + index527 * 24
+          let address546 = mbt_ffi_malloc(iter_elem.schema.defs.length() * 24)
+          for index547 = 0
+              index547 < iter_elem.schema.defs.length()
+              index547 = index547 + 1 {
+            let iter_elem : @types.SchemaTypeDef = iter_elem.schema.defs[index547]
+            let iter_base = address546 + index547 * 24
 
-            let ptr522 = mbt_ffi_str2ptr(iter_elem.id)
+            let ptr542 = mbt_ffi_str2ptr(iter_elem.id)
             mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-            mbt_ffi_store32(iter_base + 0, ptr522)
+            mbt_ffi_store32(iter_base + 0, ptr542)
 
             match iter_elem.name {
               None => {
@@ -13944,12 +14284,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload524) => {
+              Some(payload544) => {
                 mbt_ffi_store8(iter_base + 8, 1)
 
-                let ptr525 = mbt_ffi_str2ptr(payload524)
-                mbt_ffi_store32(iter_base + 16, payload524.length())
-                mbt_ffi_store32(iter_base + 12, ptr525)
+                let ptr545 = mbt_ffi_str2ptr(payload544)
+                mbt_ffi_store32(iter_base + 16, payload544.length())
+                mbt_ffi_store32(iter_base + 12, ptr545)
 
                 ()
               }
@@ -13957,7 +14297,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
             mbt_ffi_store32(iter_base + 20, iter_elem.body)
           }
           mbt_ffi_store32(iter_base + 32, iter_elem.schema.defs.length())
-          mbt_ffi_store32(iter_base + 28, address526)
+          mbt_ffi_store32(iter_base + 28, address546)
           mbt_ffi_store32(iter_base + 36, iter_elem.schema.root)
 
           match iter_elem.constructor_.name {
@@ -13966,23 +14306,23 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload529) => {
+            Some(payload549) => {
               mbt_ffi_store8(iter_base + 40, 1)
 
-              let ptr530 = mbt_ffi_str2ptr(payload529)
-              mbt_ffi_store32(iter_base + 48, payload529.length())
-              mbt_ffi_store32(iter_base + 44, ptr530)
+              let ptr550 = mbt_ffi_str2ptr(payload549)
+              mbt_ffi_store32(iter_base + 48, payload549.length())
+              mbt_ffi_store32(iter_base + 44, ptr550)
 
               ()
             }
           }
 
-          let ptr531 = mbt_ffi_str2ptr(iter_elem.constructor_.description)
+          let ptr551 = mbt_ffi_str2ptr(iter_elem.constructor_.description)
           mbt_ffi_store32(
             iter_base + 56,
             iter_elem.constructor_.description.length(),
           )
-          mbt_ffi_store32(iter_base + 52, ptr531)
+          mbt_ffi_store32(iter_base + 52, ptr551)
 
           match iter_elem.constructor_.prompt_hint {
             None => {
@@ -13990,31 +14330,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
               ()
             }
-            Some(payload533) => {
+            Some(payload553) => {
               mbt_ffi_store8(iter_base + 60, 1)
 
-              let ptr534 = mbt_ffi_str2ptr(payload533)
-              mbt_ffi_store32(iter_base + 68, payload533.length())
-              mbt_ffi_store32(iter_base + 64, ptr534)
+              let ptr554 = mbt_ffi_str2ptr(payload553)
+              mbt_ffi_store32(iter_base + 68, payload553.length())
+              mbt_ffi_store32(iter_base + 64, ptr554)
 
               ()
             }
           }
 
           match iter_elem.constructor_.input_schema {
-            Parameters(payload535) => {
+            Parameters(payload555) => {
               mbt_ffi_store8(iter_base + 72, 0)
 
-              let address556 = mbt_ffi_malloc(payload535.length() * 72)
-              for index557 = 0
-                  index557 < payload535.length()
-                  index557 = index557 + 1 {
-                let iter_elem : @common.NamedField = payload535[index557]
-                let iter_base = address556 + index557 * 72
+              let address578 = mbt_ffi_malloc(payload555.length() * 72)
+              for index579 = 0
+                  index579 < payload555.length()
+                  index579 = index579 + 1 {
+                let iter_elem : @common.NamedField = payload555[index579]
+                let iter_base = address578 + index579 * 72
 
-                let ptr536 = mbt_ffi_str2ptr(iter_elem.name)
+                let ptr556 = mbt_ffi_str2ptr(iter_elem.name)
                 mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                mbt_ffi_store32(iter_base + 0, ptr536)
+                mbt_ffi_store32(iter_base + 0, ptr556)
 
                 match iter_elem.source {
                   UserSupplied => {
@@ -14022,9 +14362,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  AutoInjected(payload538) => {
+                  AutoInjected(payload558) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store8(iter_base + 9, payload538.ordinal())
+                    mbt_ffi_store8(iter_base + 9, payload558.ordinal())
 
                     ()
                   }
@@ -14037,54 +14377,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload540) => {
+                  Some(payload560) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr541 = mbt_ffi_str2ptr(payload540)
-                    mbt_ffi_store32(iter_base + 24, payload540.length())
-                    mbt_ffi_store32(iter_base + 20, ptr541)
+                    let ptr561 = mbt_ffi_str2ptr(payload560)
+                    mbt_ffi_store32(iter_base + 24, payload560.length())
+                    mbt_ffi_store32(iter_base + 20, ptr561)
 
                     ()
                   }
                 }
 
-                let address543 = mbt_ffi_malloc(
+                let address563 = mbt_ffi_malloc(
                   iter_elem.metadata.aliases.length() * 8,
                 )
-                for index544 = 0
-                    index544 < iter_elem.metadata.aliases.length()
-                    index544 = index544 + 1 {
-                  let iter_elem : String = iter_elem.metadata.aliases[index544]
-                  let iter_base = address543 + index544 * 8
+                for index564 = 0
+                    index564 < iter_elem.metadata.aliases.length()
+                    index564 = index564 + 1 {
+                  let iter_elem : String = iter_elem.metadata.aliases[index564]
+                  let iter_base = address563 + index564 * 8
 
-                  let ptr542 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr562 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr542)
+                  mbt_ffi_store32(iter_base + 0, ptr562)
                 }
                 mbt_ffi_store32(
                   iter_base + 32,
                   iter_elem.metadata.aliases.length(),
                 )
-                mbt_ffi_store32(iter_base + 28, address543)
+                mbt_ffi_store32(iter_base + 28, address563)
 
-                let address546 = mbt_ffi_malloc(
+                let address566 = mbt_ffi_malloc(
                   iter_elem.metadata.examples.length() * 8,
                 )
-                for index547 = 0
-                    index547 < iter_elem.metadata.examples.length()
-                    index547 = index547 + 1 {
-                  let iter_elem : String = iter_elem.metadata.examples[index547]
-                  let iter_base = address546 + index547 * 8
+                for index567 = 0
+                    index567 < iter_elem.metadata.examples.length()
+                    index567 = index567 + 1 {
+                  let iter_elem : String = iter_elem.metadata.examples[index567]
+                  let iter_base = address566 + index567 * 8
 
-                  let ptr545 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr565 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr545)
+                  mbt_ffi_store32(iter_base + 0, ptr565)
                 }
                 mbt_ffi_store32(
                   iter_base + 40,
                   iter_elem.metadata.examples.length(),
                 )
-                mbt_ffi_store32(iter_base + 36, address546)
+                mbt_ffi_store32(iter_base + 36, address566)
 
                 match iter_elem.metadata.deprecated {
                   None => {
@@ -14092,12 +14432,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload549) => {
+                  Some(payload569) => {
                     mbt_ffi_store8(iter_base + 44, 1)
 
-                    let ptr550 = mbt_ffi_str2ptr(payload549)
-                    mbt_ffi_store32(iter_base + 52, payload549.length())
-                    mbt_ffi_store32(iter_base + 48, ptr550)
+                    let ptr570 = mbt_ffi_str2ptr(payload569)
+                    mbt_ffi_store32(iter_base + 52, payload569.length())
+                    mbt_ffi_store32(iter_base + 48, ptr570)
 
                     ()
                   }
@@ -14109,21 +14449,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Some(payload552) => {
+                  Some(payload572) => {
                     mbt_ffi_store8(iter_base + 56, 1)
 
-                    match payload552 {
+                    match payload572 {
                       Multimodal => {
                         mbt_ffi_store8(iter_base + 60, 0)
 
                         ()
                       }
-                      Other(payload554) => {
+                      UnstructuredText => {
                         mbt_ffi_store8(iter_base + 60, 1)
 
-                        let ptr555 = mbt_ffi_str2ptr(payload554)
-                        mbt_ffi_store32(iter_base + 68, payload554.length())
-                        mbt_ffi_store32(iter_base + 64, ptr555)
+                        ()
+                      }
+                      UnstructuredBinary => {
+                        mbt_ffi_store8(iter_base + 60, 2)
+
+                        ()
+                      }
+                      Other(payload576) => {
+                        mbt_ffi_store8(iter_base + 60, 3)
+
+                        let ptr577 = mbt_ffi_str2ptr(payload576)
+                        mbt_ffi_store32(iter_base + 68, payload576.length())
+                        mbt_ffi_store32(iter_base + 64, ptr577)
 
                         ()
                       }
@@ -14133,36 +14483,36 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                   }
                 }
               }
-              mbt_ffi_store32(iter_base + 80, payload535.length())
-              mbt_ffi_store32(iter_base + 76, address556)
+              mbt_ffi_store32(iter_base + 80, payload555.length())
+              mbt_ffi_store32(iter_base + 76, address578)
 
               ()
             }
           }
 
-          let address628 = mbt_ffi_malloc(iter_elem.methods.length() * 88)
-          for index629 = 0
-              index629 < iter_elem.methods.length()
-              index629 = index629 + 1 {
-            let iter_elem : @common.AgentMethod = iter_elem.methods[index629]
-            let iter_base = address628 + index629 * 88
+          let address652 = mbt_ffi_malloc(iter_elem.methods.length() * 88)
+          for index653 = 0
+              index653 < iter_elem.methods.length()
+              index653 = index653 + 1 {
+            let iter_elem : @common.AgentMethod = iter_elem.methods[index653]
+            let iter_base = address652 + index653 * 88
 
-            let ptr558 = mbt_ffi_str2ptr(iter_elem.name)
+            let ptr580 = mbt_ffi_str2ptr(iter_elem.name)
             mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-            mbt_ffi_store32(iter_base + 0, ptr558)
+            mbt_ffi_store32(iter_base + 0, ptr580)
 
-            let ptr559 = mbt_ffi_str2ptr(iter_elem.description)
+            let ptr581 = mbt_ffi_str2ptr(iter_elem.description)
             mbt_ffi_store32(iter_base + 12, iter_elem.description.length())
-            mbt_ffi_store32(iter_base + 8, ptr559)
+            mbt_ffi_store32(iter_base + 8, ptr581)
 
-            let address593 = mbt_ffi_malloc(
+            let address615 = mbt_ffi_malloc(
               iter_elem.http_endpoint.length() * 48,
             )
-            for index594 = 0
-                index594 < iter_elem.http_endpoint.length()
-                index594 = index594 + 1 {
-              let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index594]
-              let iter_base = address593 + index594 * 48
+            for index616 = 0
+                index616 < iter_elem.http_endpoint.length()
+                index616 = index616 + 1 {
+              let iter_elem : @common.HttpEndpointDetails = iter_elem.http_endpoint[index616]
+              let iter_base = address615 + index616 * 48
 
               match iter_elem.http_method {
                 Get => {
@@ -14210,119 +14560,119 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                Custom(payload569) => {
+                Custom(payload591) => {
                   mbt_ffi_store8(iter_base + 0, 9)
 
-                  let ptr570 = mbt_ffi_str2ptr(payload569)
-                  mbt_ffi_store32(iter_base + 8, payload569.length())
-                  mbt_ffi_store32(iter_base + 4, ptr570)
+                  let ptr592 = mbt_ffi_str2ptr(payload591)
+                  mbt_ffi_store32(iter_base + 8, payload591.length())
+                  mbt_ffi_store32(iter_base + 4, ptr592)
 
                   ()
                 }
               }
 
-              let address578 = mbt_ffi_malloc(
+              let address600 = mbt_ffi_malloc(
                 iter_elem.path_suffix.length() * 12,
               )
-              for index579 = 0
-                  index579 < iter_elem.path_suffix.length()
-                  index579 = index579 + 1 {
-                let iter_elem : @common.PathSegment = iter_elem.path_suffix[index579]
-                let iter_base = address578 + index579 * 12
+              for index601 = 0
+                  index601 < iter_elem.path_suffix.length()
+                  index601 = index601 + 1 {
+                let iter_elem : @common.PathSegment = iter_elem.path_suffix[index601]
+                let iter_base = address600 + index601 * 12
 
                 match iter_elem {
-                  Literal(payload571) => {
+                  Literal(payload593) => {
                     mbt_ffi_store8(iter_base + 0, 0)
 
-                    let ptr572 = mbt_ffi_str2ptr(payload571)
-                    mbt_ffi_store32(iter_base + 8, payload571.length())
-                    mbt_ffi_store32(iter_base + 4, ptr572)
+                    let ptr594 = mbt_ffi_str2ptr(payload593)
+                    mbt_ffi_store32(iter_base + 8, payload593.length())
+                    mbt_ffi_store32(iter_base + 4, ptr594)
 
                     ()
                   }
-                  SystemVariable(payload573) => {
+                  SystemVariable(payload595) => {
                     mbt_ffi_store8(iter_base + 0, 1)
-                    mbt_ffi_store8(iter_base + 4, payload573.ordinal())
+                    mbt_ffi_store8(iter_base + 4, payload595.ordinal())
 
                     ()
                   }
-                  PathVariable(payload574) => {
+                  PathVariable(payload596) => {
                     mbt_ffi_store8(iter_base + 0, 2)
 
-                    let ptr575 = mbt_ffi_str2ptr(payload574.variable_name)
+                    let ptr597 = mbt_ffi_str2ptr(payload596.variable_name)
                     mbt_ffi_store32(
                       iter_base + 8,
-                      payload574.variable_name.length(),
+                      payload596.variable_name.length(),
                     )
-                    mbt_ffi_store32(iter_base + 4, ptr575)
+                    mbt_ffi_store32(iter_base + 4, ptr597)
 
                     ()
                   }
-                  RemainingPathVariable(payload576) => {
+                  RemainingPathVariable(payload598) => {
                     mbt_ffi_store8(iter_base + 0, 3)
 
-                    let ptr577 = mbt_ffi_str2ptr(payload576.variable_name)
+                    let ptr599 = mbt_ffi_str2ptr(payload598.variable_name)
                     mbt_ffi_store32(
                       iter_base + 8,
-                      payload576.variable_name.length(),
+                      payload598.variable_name.length(),
                     )
-                    mbt_ffi_store32(iter_base + 4, ptr577)
+                    mbt_ffi_store32(iter_base + 4, ptr599)
 
                     ()
                   }
                 }
               }
               mbt_ffi_store32(iter_base + 16, iter_elem.path_suffix.length())
-              mbt_ffi_store32(iter_base + 12, address578)
+              mbt_ffi_store32(iter_base + 12, address600)
 
-              let address582 = mbt_ffi_malloc(
+              let address604 = mbt_ffi_malloc(
                 iter_elem.header_vars.length() * 16,
               )
-              for index583 = 0
-                  index583 < iter_elem.header_vars.length()
-                  index583 = index583 + 1 {
-                let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index583]
-                let iter_base = address582 + index583 * 16
+              for index605 = 0
+                  index605 < iter_elem.header_vars.length()
+                  index605 = index605 + 1 {
+                let iter_elem : @common.HeaderVariable = iter_elem.header_vars[index605]
+                let iter_base = address604 + index605 * 16
 
-                let ptr580 = mbt_ffi_str2ptr(iter_elem.header_name)
+                let ptr602 = mbt_ffi_str2ptr(iter_elem.header_name)
                 mbt_ffi_store32(iter_base + 4, iter_elem.header_name.length())
-                mbt_ffi_store32(iter_base + 0, ptr580)
+                mbt_ffi_store32(iter_base + 0, ptr602)
 
-                let ptr581 = mbt_ffi_str2ptr(iter_elem.variable_name)
+                let ptr603 = mbt_ffi_str2ptr(iter_elem.variable_name)
                 mbt_ffi_store32(
                   iter_base + 12,
                   iter_elem.variable_name.length(),
                 )
-                mbt_ffi_store32(iter_base + 8, ptr581)
+                mbt_ffi_store32(iter_base + 8, ptr603)
               }
               mbt_ffi_store32(iter_base + 24, iter_elem.header_vars.length())
-              mbt_ffi_store32(iter_base + 20, address582)
+              mbt_ffi_store32(iter_base + 20, address604)
 
-              let address586 = mbt_ffi_malloc(
+              let address608 = mbt_ffi_malloc(
                 iter_elem.query_vars.length() * 16,
               )
-              for index587 = 0
-                  index587 < iter_elem.query_vars.length()
-                  index587 = index587 + 1 {
-                let iter_elem : @common.QueryVariable = iter_elem.query_vars[index587]
-                let iter_base = address586 + index587 * 16
+              for index609 = 0
+                  index609 < iter_elem.query_vars.length()
+                  index609 = index609 + 1 {
+                let iter_elem : @common.QueryVariable = iter_elem.query_vars[index609]
+                let iter_base = address608 + index609 * 16
 
-                let ptr584 = mbt_ffi_str2ptr(iter_elem.query_param_name)
+                let ptr606 = mbt_ffi_str2ptr(iter_elem.query_param_name)
                 mbt_ffi_store32(
                   iter_base + 4,
                   iter_elem.query_param_name.length(),
                 )
-                mbt_ffi_store32(iter_base + 0, ptr584)
+                mbt_ffi_store32(iter_base + 0, ptr606)
 
-                let ptr585 = mbt_ffi_str2ptr(iter_elem.variable_name)
+                let ptr607 = mbt_ffi_str2ptr(iter_elem.variable_name)
                 mbt_ffi_store32(
                   iter_base + 12,
                   iter_elem.variable_name.length(),
                 )
-                mbt_ffi_store32(iter_base + 8, ptr585)
+                mbt_ffi_store32(iter_base + 8, ptr607)
               }
               mbt_ffi_store32(iter_base + 32, iter_elem.query_vars.length())
-              mbt_ffi_store32(iter_base + 28, address586)
+              mbt_ffi_store32(iter_base + 28, address608)
 
               match iter_elem.auth_details {
                 None => {
@@ -14330,11 +14680,11 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                   ()
                 }
-                Some(payload589) => {
+                Some(payload611) => {
                   mbt_ffi_store8(iter_base + 36, 1)
                   mbt_ffi_store8(
                     iter_base + 37,
-                    if payload589.required {
+                    if payload611.required {
                       1
                     } else {
                       0
@@ -14345,27 +14695,27 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                 }
               }
 
-              let address591 = mbt_ffi_malloc(
+              let address613 = mbt_ffi_malloc(
                 iter_elem.cors_options.allowed_patterns.length() * 8,
               )
-              for index592 = 0
-                  index592 < iter_elem.cors_options.allowed_patterns.length()
-                  index592 = index592 + 1 {
-                let iter_elem : String = iter_elem.cors_options.allowed_patterns[index592]
-                let iter_base = address591 + index592 * 8
+              for index614 = 0
+                  index614 < iter_elem.cors_options.allowed_patterns.length()
+                  index614 = index614 + 1 {
+                let iter_elem : String = iter_elem.cors_options.allowed_patterns[index614]
+                let iter_base = address613 + index614 * 8
 
-                let ptr590 = mbt_ffi_str2ptr(iter_elem)
+                let ptr612 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr590)
+                mbt_ffi_store32(iter_base + 0, ptr612)
               }
               mbt_ffi_store32(
                 iter_base + 44,
                 iter_elem.cors_options.allowed_patterns.length(),
               )
-              mbt_ffi_store32(iter_base + 40, address591)
+              mbt_ffi_store32(iter_base + 40, address613)
             }
             mbt_ffi_store32(iter_base + 20, iter_elem.http_endpoint.length())
-            mbt_ffi_store32(iter_base + 16, address593)
+            mbt_ffi_store32(iter_base + 16, address615)
 
             match iter_elem.prompt_hint {
               None => {
@@ -14373,31 +14723,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload596) => {
+              Some(payload618) => {
                 mbt_ffi_store8(iter_base + 24, 1)
 
-                let ptr597 = mbt_ffi_str2ptr(payload596)
-                mbt_ffi_store32(iter_base + 32, payload596.length())
-                mbt_ffi_store32(iter_base + 28, ptr597)
+                let ptr619 = mbt_ffi_str2ptr(payload618)
+                mbt_ffi_store32(iter_base + 32, payload618.length())
+                mbt_ffi_store32(iter_base + 28, ptr619)
 
                 ()
               }
             }
 
             match iter_elem.input_schema {
-              Parameters(payload598) => {
+              Parameters(payload620) => {
                 mbt_ffi_store8(iter_base + 36, 0)
 
-                let address619 = mbt_ffi_malloc(payload598.length() * 72)
-                for index620 = 0
-                    index620 < payload598.length()
-                    index620 = index620 + 1 {
-                  let iter_elem : @common.NamedField = payload598[index620]
-                  let iter_base = address619 + index620 * 72
+                let address643 = mbt_ffi_malloc(payload620.length() * 72)
+                for index644 = 0
+                    index644 < payload620.length()
+                    index644 = index644 + 1 {
+                  let iter_elem : @common.NamedField = payload620[index644]
+                  let iter_base = address643 + index644 * 72
 
-                  let ptr599 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr621 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr599)
+                  mbt_ffi_store32(iter_base + 0, ptr621)
 
                   match iter_elem.source {
                     UserSupplied => {
@@ -14405,9 +14755,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    AutoInjected(payload601) => {
+                    AutoInjected(payload623) => {
                       mbt_ffi_store8(iter_base + 8, 1)
-                      mbt_ffi_store8(iter_base + 9, payload601.ordinal())
+                      mbt_ffi_store8(iter_base + 9, payload623.ordinal())
 
                       ()
                     }
@@ -14420,54 +14770,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload603) => {
+                    Some(payload625) => {
                       mbt_ffi_store8(iter_base + 16, 1)
 
-                      let ptr604 = mbt_ffi_str2ptr(payload603)
-                      mbt_ffi_store32(iter_base + 24, payload603.length())
-                      mbt_ffi_store32(iter_base + 20, ptr604)
+                      let ptr626 = mbt_ffi_str2ptr(payload625)
+                      mbt_ffi_store32(iter_base + 24, payload625.length())
+                      mbt_ffi_store32(iter_base + 20, ptr626)
 
                       ()
                     }
                   }
 
-                  let address606 = mbt_ffi_malloc(
+                  let address628 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index607 = 0
-                      index607 < iter_elem.metadata.aliases.length()
-                      index607 = index607 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index607]
-                    let iter_base = address606 + index607 * 8
+                  for index629 = 0
+                      index629 < iter_elem.metadata.aliases.length()
+                      index629 = index629 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index629]
+                    let iter_base = address628 + index629 * 8
 
-                    let ptr605 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr627 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr605)
+                    mbt_ffi_store32(iter_base + 0, ptr627)
                   }
                   mbt_ffi_store32(
                     iter_base + 32,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 28, address606)
+                  mbt_ffi_store32(iter_base + 28, address628)
 
-                  let address609 = mbt_ffi_malloc(
+                  let address631 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index610 = 0
-                      index610 < iter_elem.metadata.examples.length()
-                      index610 = index610 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index610]
-                    let iter_base = address609 + index610 * 8
+                  for index632 = 0
+                      index632 < iter_elem.metadata.examples.length()
+                      index632 = index632 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index632]
+                    let iter_base = address631 + index632 * 8
 
-                    let ptr608 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr630 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr608)
+                    mbt_ffi_store32(iter_base + 0, ptr630)
                   }
                   mbt_ffi_store32(
                     iter_base + 40,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 36, address609)
+                  mbt_ffi_store32(iter_base + 36, address631)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -14475,12 +14825,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload612) => {
+                    Some(payload634) => {
                       mbt_ffi_store8(iter_base + 44, 1)
 
-                      let ptr613 = mbt_ffi_str2ptr(payload612)
-                      mbt_ffi_store32(iter_base + 52, payload612.length())
-                      mbt_ffi_store32(iter_base + 48, ptr613)
+                      let ptr635 = mbt_ffi_str2ptr(payload634)
+                      mbt_ffi_store32(iter_base + 52, payload634.length())
+                      mbt_ffi_store32(iter_base + 48, ptr635)
 
                       ()
                     }
@@ -14492,21 +14842,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload615) => {
+                    Some(payload637) => {
                       mbt_ffi_store8(iter_base + 56, 1)
 
-                      match payload615 {
+                      match payload637 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 60, 0)
 
                           ()
                         }
-                        Other(payload617) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 60, 1)
 
-                          let ptr618 = mbt_ffi_str2ptr(payload617)
-                          mbt_ffi_store32(iter_base + 68, payload617.length())
-                          mbt_ffi_store32(iter_base + 64, ptr618)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 60, 2)
+
+                          ()
+                        }
+                        Other(payload641) => {
+                          mbt_ffi_store8(iter_base + 60, 3)
+
+                          let ptr642 = mbt_ffi_str2ptr(payload641)
+                          mbt_ffi_store32(iter_base + 68, payload641.length())
+                          mbt_ffi_store32(iter_base + 64, ptr642)
 
                           ()
                         }
@@ -14516,8 +14876,8 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 44, payload598.length())
-                mbt_ffi_store32(iter_base + 40, address619)
+                mbt_ffi_store32(iter_base + 44, payload620.length())
+                mbt_ffi_store32(iter_base + 40, address643)
 
                 ()
               }
@@ -14529,9 +14889,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Single(payload622) => {
+              Single(payload646) => {
                 mbt_ffi_store8(iter_base + 48, 1)
-                mbt_ffi_store32(iter_base + 52, payload622)
+                mbt_ffi_store32(iter_base + 52, payload646)
 
                 ()
               }
@@ -14543,10 +14903,10 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload624) => {
+              Some(payload648) => {
                 mbt_ffi_store8(iter_base + 56, 1)
 
-                match payload624.cache_policy {
+                match payload648.cache_policy {
                   NoCache => {
                     mbt_ffi_store8(iter_base + 64, 0)
 
@@ -14557,11 +14917,11 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  Ttl(payload627) => {
+                  Ttl(payload651) => {
                     mbt_ffi_store8(iter_base + 64, 2)
                     mbt_ffi_store64(
                       iter_base + 72,
-                      payload627.reinterpret_as_int64(),
+                      payload651.reinterpret_as_int64(),
                     )
 
                     ()
@@ -14569,7 +14929,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                 }
                 mbt_ffi_store8(
                   iter_base + 80,
-                  if payload624.uses_principal {
+                  if payload648.uses_principal {
                     1
                   } else {
                     0
@@ -14581,10 +14941,10 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
             }
           }
           mbt_ffi_store32(iter_base + 88, iter_elem.methods.length())
-          mbt_ffi_store32(iter_base + 84, address628)
+          mbt_ffi_store32(iter_base + 84, address652)
         }
         mbt_ffi_store32(iter_base + 100, iter_elem.dependencies.length())
-        mbt_ffi_store32(iter_base + 96, address630)
+        mbt_ffi_store32(iter_base + 96, address654)
         mbt_ffi_store8(iter_base + 104, iter_elem.mode.ordinal())
 
         match iter_elem.http_mount {
@@ -14593,74 +14953,74 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
             ()
           }
-          Some(payload633) => {
+          Some(payload657) => {
             mbt_ffi_store8(iter_base + 108, 1)
 
-            let address641 = mbt_ffi_malloc(
-              payload633.path_prefix.length() * 12,
+            let address665 = mbt_ffi_malloc(
+              payload657.path_prefix.length() * 12,
             )
-            for index642 = 0
-                index642 < payload633.path_prefix.length()
-                index642 = index642 + 1 {
-              let iter_elem : @common.PathSegment = payload633.path_prefix[index642]
-              let iter_base = address641 + index642 * 12
+            for index666 = 0
+                index666 < payload657.path_prefix.length()
+                index666 = index666 + 1 {
+              let iter_elem : @common.PathSegment = payload657.path_prefix[index666]
+              let iter_base = address665 + index666 * 12
 
               match iter_elem {
-                Literal(payload634) => {
+                Literal(payload658) => {
                   mbt_ffi_store8(iter_base + 0, 0)
 
-                  let ptr635 = mbt_ffi_str2ptr(payload634)
-                  mbt_ffi_store32(iter_base + 8, payload634.length())
-                  mbt_ffi_store32(iter_base + 4, ptr635)
+                  let ptr659 = mbt_ffi_str2ptr(payload658)
+                  mbt_ffi_store32(iter_base + 8, payload658.length())
+                  mbt_ffi_store32(iter_base + 4, ptr659)
 
                   ()
                 }
-                SystemVariable(payload636) => {
+                SystemVariable(payload660) => {
                   mbt_ffi_store8(iter_base + 0, 1)
-                  mbt_ffi_store8(iter_base + 4, payload636.ordinal())
+                  mbt_ffi_store8(iter_base + 4, payload660.ordinal())
 
                   ()
                 }
-                PathVariable(payload637) => {
+                PathVariable(payload661) => {
                   mbt_ffi_store8(iter_base + 0, 2)
 
-                  let ptr638 = mbt_ffi_str2ptr(payload637.variable_name)
+                  let ptr662 = mbt_ffi_str2ptr(payload661.variable_name)
                   mbt_ffi_store32(
                     iter_base + 8,
-                    payload637.variable_name.length(),
+                    payload661.variable_name.length(),
                   )
-                  mbt_ffi_store32(iter_base + 4, ptr638)
+                  mbt_ffi_store32(iter_base + 4, ptr662)
 
                   ()
                 }
-                RemainingPathVariable(payload639) => {
+                RemainingPathVariable(payload663) => {
                   mbt_ffi_store8(iter_base + 0, 3)
 
-                  let ptr640 = mbt_ffi_str2ptr(payload639.variable_name)
+                  let ptr664 = mbt_ffi_str2ptr(payload663.variable_name)
                   mbt_ffi_store32(
                     iter_base + 8,
-                    payload639.variable_name.length(),
+                    payload663.variable_name.length(),
                   )
-                  mbt_ffi_store32(iter_base + 4, ptr640)
+                  mbt_ffi_store32(iter_base + 4, ptr664)
 
                   ()
                 }
               }
             }
-            mbt_ffi_store32(iter_base + 116, payload633.path_prefix.length())
-            mbt_ffi_store32(iter_base + 112, address641)
+            mbt_ffi_store32(iter_base + 116, payload657.path_prefix.length())
+            mbt_ffi_store32(iter_base + 112, address665)
 
-            match payload633.auth_details {
+            match payload657.auth_details {
               None => {
                 mbt_ffi_store8(iter_base + 120, 0)
 
                 ()
               }
-              Some(payload644) => {
+              Some(payload668) => {
                 mbt_ffi_store8(iter_base + 120, 1)
                 mbt_ffi_store8(
                   iter_base + 121,
-                  if payload644.required {
+                  if payload668.required {
                     1
                   } else {
                     0
@@ -14672,85 +15032,85 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
             }
             mbt_ffi_store8(
               iter_base + 122,
-              if payload633.phantom_agent {
+              if payload657.phantom_agent {
                 1
               } else {
                 0
               },
             )
 
-            let address646 = mbt_ffi_malloc(
-              payload633.cors_options.allowed_patterns.length() * 8,
+            let address670 = mbt_ffi_malloc(
+              payload657.cors_options.allowed_patterns.length() * 8,
             )
-            for index647 = 0
-                index647 < payload633.cors_options.allowed_patterns.length()
-                index647 = index647 + 1 {
-              let iter_elem : String = payload633.cors_options.allowed_patterns[index647]
-              let iter_base = address646 + index647 * 8
+            for index671 = 0
+                index671 < payload657.cors_options.allowed_patterns.length()
+                index671 = index671 + 1 {
+              let iter_elem : String = payload657.cors_options.allowed_patterns[index671]
+              let iter_base = address670 + index671 * 8
 
-              let ptr645 = mbt_ffi_str2ptr(iter_elem)
+              let ptr669 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr645)
+              mbt_ffi_store32(iter_base + 0, ptr669)
             }
             mbt_ffi_store32(
               iter_base + 128,
-              payload633.cors_options.allowed_patterns.length(),
+              payload657.cors_options.allowed_patterns.length(),
             )
-            mbt_ffi_store32(iter_base + 124, address646)
+            mbt_ffi_store32(iter_base + 124, address670)
 
-            let address655 = mbt_ffi_malloc(
-              payload633.webhook_suffix.length() * 12,
+            let address679 = mbt_ffi_malloc(
+              payload657.webhook_suffix.length() * 12,
             )
-            for index656 = 0
-                index656 < payload633.webhook_suffix.length()
-                index656 = index656 + 1 {
-              let iter_elem : @common.PathSegment = payload633.webhook_suffix[index656]
-              let iter_base = address655 + index656 * 12
+            for index680 = 0
+                index680 < payload657.webhook_suffix.length()
+                index680 = index680 + 1 {
+              let iter_elem : @common.PathSegment = payload657.webhook_suffix[index680]
+              let iter_base = address679 + index680 * 12
 
               match iter_elem {
-                Literal(payload648) => {
+                Literal(payload672) => {
                   mbt_ffi_store8(iter_base + 0, 0)
 
-                  let ptr649 = mbt_ffi_str2ptr(payload648)
-                  mbt_ffi_store32(iter_base + 8, payload648.length())
-                  mbt_ffi_store32(iter_base + 4, ptr649)
+                  let ptr673 = mbt_ffi_str2ptr(payload672)
+                  mbt_ffi_store32(iter_base + 8, payload672.length())
+                  mbt_ffi_store32(iter_base + 4, ptr673)
 
                   ()
                 }
-                SystemVariable(payload650) => {
+                SystemVariable(payload674) => {
                   mbt_ffi_store8(iter_base + 0, 1)
-                  mbt_ffi_store8(iter_base + 4, payload650.ordinal())
+                  mbt_ffi_store8(iter_base + 4, payload674.ordinal())
 
                   ()
                 }
-                PathVariable(payload651) => {
+                PathVariable(payload675) => {
                   mbt_ffi_store8(iter_base + 0, 2)
 
-                  let ptr652 = mbt_ffi_str2ptr(payload651.variable_name)
+                  let ptr676 = mbt_ffi_str2ptr(payload675.variable_name)
                   mbt_ffi_store32(
                     iter_base + 8,
-                    payload651.variable_name.length(),
+                    payload675.variable_name.length(),
                   )
-                  mbt_ffi_store32(iter_base + 4, ptr652)
+                  mbt_ffi_store32(iter_base + 4, ptr676)
 
                   ()
                 }
-                RemainingPathVariable(payload653) => {
+                RemainingPathVariable(payload677) => {
                   mbt_ffi_store8(iter_base + 0, 3)
 
-                  let ptr654 = mbt_ffi_str2ptr(payload653.variable_name)
+                  let ptr678 = mbt_ffi_str2ptr(payload677.variable_name)
                   mbt_ffi_store32(
                     iter_base + 8,
-                    payload653.variable_name.length(),
+                    payload677.variable_name.length(),
                   )
-                  mbt_ffi_store32(iter_base + 4, ptr654)
+                  mbt_ffi_store32(iter_base + 4, ptr678)
 
                   ()
                 }
               }
             }
-            mbt_ffi_store32(iter_base + 136, payload633.webhook_suffix.length())
-            mbt_ffi_store32(iter_base + 132, address655)
+            mbt_ffi_store32(iter_base + 136, payload657.webhook_suffix.length())
+            mbt_ffi_store32(iter_base + 132, address679)
 
             ()
           }
@@ -14762,29 +15122,29 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
             ()
           }
-          Enabled(payload658) => {
+          Enabled(payload682) => {
             mbt_ffi_store8(iter_base + 144, 1)
 
-            match payload658 {
+            match payload682 {
               Default => {
                 mbt_ffi_store8(iter_base + 152, 0)
 
                 ()
               }
-              Periodic(payload660) => {
+              Periodic(payload684) => {
                 mbt_ffi_store8(iter_base + 152, 1)
                 mbt_ffi_store64(
                   iter_base + 160,
-                  payload660.reinterpret_as_int64(),
+                  payload684.reinterpret_as_int64(),
                 )
 
                 ()
               }
-              EveryNInvocation(payload661) => {
+              EveryNInvocation(payload685) => {
                 mbt_ffi_store8(iter_base + 152, 2)
                 mbt_ffi_store16(
                   iter_base + 160,
-                  payload661.reinterpret_as_int(),
+                  payload685.reinterpret_as_int(),
                 )
 
                 ()
@@ -14795,93 +15155,93 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
           }
         }
 
-        let address665 = mbt_ffi_malloc(iter_elem.config.length() * 16)
-        for index666 = 0
-            index666 < iter_elem.config.length()
-            index666 = index666 + 1 {
-          let iter_elem : @common.AgentConfigDeclaration = iter_elem.config[index666]
-          let iter_base = address665 + index666 * 16
+        let address689 = mbt_ffi_malloc(iter_elem.config.length() * 16)
+        for index690 = 0
+            index690 < iter_elem.config.length()
+            index690 = index690 + 1 {
+          let iter_elem : @common.AgentConfigDeclaration = iter_elem.config[index690]
+          let iter_base = address689 + index690 * 16
           mbt_ffi_store8(iter_base + 0, iter_elem.source.ordinal())
 
-          let address663 = mbt_ffi_malloc(iter_elem.path.length() * 8)
-          for index664 = 0
-              index664 < iter_elem.path.length()
-              index664 = index664 + 1 {
-            let iter_elem : String = iter_elem.path[index664]
-            let iter_base = address663 + index664 * 8
+          let address687 = mbt_ffi_malloc(iter_elem.path.length() * 8)
+          for index688 = 0
+              index688 < iter_elem.path.length()
+              index688 = index688 + 1 {
+            let iter_elem : String = iter_elem.path[index688]
+            let iter_base = address687 + index688 * 8
 
-            let ptr662 = mbt_ffi_str2ptr(iter_elem)
+            let ptr686 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr662)
+            mbt_ffi_store32(iter_base + 0, ptr686)
           }
           mbt_ffi_store32(iter_base + 8, iter_elem.path.length())
-          mbt_ffi_store32(iter_base + 4, address663)
+          mbt_ffi_store32(iter_base + 4, address687)
           mbt_ffi_store32(iter_base + 12, iter_elem.value_type)
         }
         mbt_ffi_store32(iter_base + 172, iter_elem.config.length())
-        mbt_ffi_store32(iter_base + 168, address665)
+        mbt_ffi_store32(iter_base + 168, address689)
       }
       mbt_ffi_store32(return_area + 8, payload.length())
-      mbt_ffi_store32(return_area + 4, address667)
+      mbt_ffi_store32(return_area + 4, address691)
 
       ()
     }
-    Err(payload669) => {
+    Err(payload693) => {
       mbt_ffi_store8(return_area + 0, 1)
 
-      match payload669 {
-        InvalidInput(payload670) => {
+      match payload693 {
+        InvalidInput(payload694) => {
           mbt_ffi_store8(return_area + 4, 0)
 
-          let ptr671 = mbt_ffi_str2ptr(payload670)
-          mbt_ffi_store32(return_area + 12, payload670.length())
-          mbt_ffi_store32(return_area + 8, ptr671)
+          let ptr695 = mbt_ffi_str2ptr(payload694)
+          mbt_ffi_store32(return_area + 12, payload694.length())
+          mbt_ffi_store32(return_area + 8, ptr695)
 
           ()
         }
-        InvalidMethod(payload672) => {
+        InvalidMethod(payload696) => {
           mbt_ffi_store8(return_area + 4, 1)
 
-          let ptr673 = mbt_ffi_str2ptr(payload672)
-          mbt_ffi_store32(return_area + 12, payload672.length())
-          mbt_ffi_store32(return_area + 8, ptr673)
+          let ptr697 = mbt_ffi_str2ptr(payload696)
+          mbt_ffi_store32(return_area + 12, payload696.length())
+          mbt_ffi_store32(return_area + 8, ptr697)
 
           ()
         }
-        InvalidType(payload674) => {
+        InvalidType(payload698) => {
           mbt_ffi_store8(return_area + 4, 2)
 
-          let ptr675 = mbt_ffi_str2ptr(payload674)
-          mbt_ffi_store32(return_area + 12, payload674.length())
-          mbt_ffi_store32(return_area + 8, ptr675)
+          let ptr699 = mbt_ffi_str2ptr(payload698)
+          mbt_ffi_store32(return_area + 12, payload698.length())
+          mbt_ffi_store32(return_area + 8, ptr699)
 
           ()
         }
-        InvalidAgentId(payload676) => {
+        InvalidAgentId(payload700) => {
           mbt_ffi_store8(return_area + 4, 3)
 
-          let ptr677 = mbt_ffi_str2ptr(payload676)
-          mbt_ffi_store32(return_area + 12, payload676.length())
-          mbt_ffi_store32(return_area + 8, ptr677)
+          let ptr701 = mbt_ffi_str2ptr(payload700)
+          mbt_ffi_store32(return_area + 12, payload700.length())
+          mbt_ffi_store32(return_area + 8, ptr701)
 
           ()
         }
-        CustomError(payload678) => {
+        CustomError(payload702) => {
           mbt_ffi_store8(return_area + 4, 4)
 
-          let address882 = mbt_ffi_malloc(
-            payload678.graph.type_nodes.length() * 144,
+          let address914 = mbt_ffi_malloc(
+            payload702.graph.type_nodes.length() * 144,
           )
-          for index883 = 0
-              index883 < payload678.graph.type_nodes.length()
-              index883 = index883 + 1 {
-            let iter_elem : @types.SchemaTypeNode = payload678.graph.type_nodes[index883]
-            let iter_base = address882 + index883 * 144
+          for index915 = 0
+              index915 < payload702.graph.type_nodes.length()
+              index915 = index915 + 1 {
+            let iter_elem : @types.SchemaTypeNode = payload702.graph.type_nodes[index915]
+            let iter_base = address914 + index915 * 144
 
             match iter_elem.body {
-              RefType(payload679) => {
+              RefType(payload703) => {
                 mbt_ffi_store8(iter_base + 0, 0)
-                mbt_ffi_store32(iter_base + 8, payload679)
+                mbt_ffi_store32(iter_base + 8, payload703)
 
                 ()
               }
@@ -14950,19 +15310,19 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              RecordType(payload693) => {
+              RecordType(payload717) => {
                 mbt_ffi_store8(iter_base + 0, 14)
 
-                let address712 = mbt_ffi_malloc(payload693.length() * 68)
-                for index713 = 0
-                    index713 < payload693.length()
-                    index713 = index713 + 1 {
-                  let iter_elem : @types.NamedFieldType = payload693[index713]
-                  let iter_base = address712 + index713 * 68
+                let address738 = mbt_ffi_malloc(payload717.length() * 68)
+                for index739 = 0
+                    index739 < payload717.length()
+                    index739 = index739 + 1 {
+                  let iter_elem : @types.NamedFieldType = payload717[index739]
+                  let iter_base = address738 + index739 * 68
 
-                  let ptr694 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr718 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr694)
+                  mbt_ffi_store32(iter_base + 0, ptr718)
                   mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                   match iter_elem.metadata.doc {
@@ -14971,54 +15331,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload696) => {
+                    Some(payload720) => {
                       mbt_ffi_store8(iter_base + 12, 1)
 
-                      let ptr697 = mbt_ffi_str2ptr(payload696)
-                      mbt_ffi_store32(iter_base + 20, payload696.length())
-                      mbt_ffi_store32(iter_base + 16, ptr697)
+                      let ptr721 = mbt_ffi_str2ptr(payload720)
+                      mbt_ffi_store32(iter_base + 20, payload720.length())
+                      mbt_ffi_store32(iter_base + 16, ptr721)
 
                       ()
                     }
                   }
 
-                  let address699 = mbt_ffi_malloc(
+                  let address723 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index700 = 0
-                      index700 < iter_elem.metadata.aliases.length()
-                      index700 = index700 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index700]
-                    let iter_base = address699 + index700 * 8
+                  for index724 = 0
+                      index724 < iter_elem.metadata.aliases.length()
+                      index724 = index724 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index724]
+                    let iter_base = address723 + index724 * 8
 
-                    let ptr698 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr722 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr698)
+                    mbt_ffi_store32(iter_base + 0, ptr722)
                   }
                   mbt_ffi_store32(
                     iter_base + 28,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 24, address699)
+                  mbt_ffi_store32(iter_base + 24, address723)
 
-                  let address702 = mbt_ffi_malloc(
+                  let address726 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index703 = 0
-                      index703 < iter_elem.metadata.examples.length()
-                      index703 = index703 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index703]
-                    let iter_base = address702 + index703 * 8
+                  for index727 = 0
+                      index727 < iter_elem.metadata.examples.length()
+                      index727 = index727 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index727]
+                    let iter_base = address726 + index727 * 8
 
-                    let ptr701 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr725 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr701)
+                    mbt_ffi_store32(iter_base + 0, ptr725)
                   }
                   mbt_ffi_store32(
                     iter_base + 36,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 32, address702)
+                  mbt_ffi_store32(iter_base + 32, address726)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -15026,12 +15386,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload705) => {
+                    Some(payload729) => {
                       mbt_ffi_store8(iter_base + 40, 1)
 
-                      let ptr706 = mbt_ffi_str2ptr(payload705)
-                      mbt_ffi_store32(iter_base + 48, payload705.length())
-                      mbt_ffi_store32(iter_base + 44, ptr706)
+                      let ptr730 = mbt_ffi_str2ptr(payload729)
+                      mbt_ffi_store32(iter_base + 48, payload729.length())
+                      mbt_ffi_store32(iter_base + 44, ptr730)
 
                       ()
                     }
@@ -15043,21 +15403,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload708) => {
+                    Some(payload732) => {
                       mbt_ffi_store8(iter_base + 52, 1)
 
-                      match payload708 {
+                      match payload732 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 56, 0)
 
                           ()
                         }
-                        Other(payload710) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 56, 1)
 
-                          let ptr711 = mbt_ffi_str2ptr(payload710)
-                          mbt_ffi_store32(iter_base + 64, payload710.length())
-                          mbt_ffi_store32(iter_base + 60, ptr711)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 56, 2)
+
+                          ()
+                        }
+                        Other(payload736) => {
+                          mbt_ffi_store8(iter_base + 56, 3)
+
+                          let ptr737 = mbt_ffi_str2ptr(payload736)
+                          mbt_ffi_store32(iter_base + 64, payload736.length())
+                          mbt_ffi_store32(iter_base + 60, ptr737)
 
                           ()
                         }
@@ -15067,24 +15437,24 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload693.length())
-                mbt_ffi_store32(iter_base + 8, address712)
+                mbt_ffi_store32(iter_base + 12, payload717.length())
+                mbt_ffi_store32(iter_base + 8, address738)
 
                 ()
               }
-              VariantType(payload714) => {
+              VariantType(payload740) => {
                 mbt_ffi_store8(iter_base + 0, 15)
 
-                let address735 = mbt_ffi_malloc(payload714.length() * 72)
-                for index736 = 0
-                    index736 < payload714.length()
-                    index736 = index736 + 1 {
-                  let iter_elem : @types.VariantCaseType = payload714[index736]
-                  let iter_base = address735 + index736 * 72
+                let address763 = mbt_ffi_malloc(payload740.length() * 72)
+                for index764 = 0
+                    index764 < payload740.length()
+                    index764 = index764 + 1 {
+                  let iter_elem : @types.VariantCaseType = payload740[index764]
+                  let iter_base = address763 + index764 * 72
 
-                  let ptr715 = mbt_ffi_str2ptr(iter_elem.name)
+                  let ptr741 = mbt_ffi_str2ptr(iter_elem.name)
                   mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-                  mbt_ffi_store32(iter_base + 0, ptr715)
+                  mbt_ffi_store32(iter_base + 0, ptr741)
 
                   match iter_elem.payload {
                     None => {
@@ -15092,9 +15462,9 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload717) => {
+                    Some(payload743) => {
                       mbt_ffi_store8(iter_base + 8, 1)
-                      mbt_ffi_store32(iter_base + 12, payload717)
+                      mbt_ffi_store32(iter_base + 12, payload743)
 
                       ()
                     }
@@ -15106,54 +15476,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload719) => {
+                    Some(payload745) => {
                       mbt_ffi_store8(iter_base + 16, 1)
 
-                      let ptr720 = mbt_ffi_str2ptr(payload719)
-                      mbt_ffi_store32(iter_base + 24, payload719.length())
-                      mbt_ffi_store32(iter_base + 20, ptr720)
+                      let ptr746 = mbt_ffi_str2ptr(payload745)
+                      mbt_ffi_store32(iter_base + 24, payload745.length())
+                      mbt_ffi_store32(iter_base + 20, ptr746)
 
                       ()
                     }
                   }
 
-                  let address722 = mbt_ffi_malloc(
+                  let address748 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index723 = 0
-                      index723 < iter_elem.metadata.aliases.length()
-                      index723 = index723 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index723]
-                    let iter_base = address722 + index723 * 8
+                  for index749 = 0
+                      index749 < iter_elem.metadata.aliases.length()
+                      index749 = index749 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index749]
+                    let iter_base = address748 + index749 * 8
 
-                    let ptr721 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr747 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr721)
+                    mbt_ffi_store32(iter_base + 0, ptr747)
                   }
                   mbt_ffi_store32(
                     iter_base + 32,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 28, address722)
+                  mbt_ffi_store32(iter_base + 28, address748)
 
-                  let address725 = mbt_ffi_malloc(
+                  let address751 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index726 = 0
-                      index726 < iter_elem.metadata.examples.length()
-                      index726 = index726 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index726]
-                    let iter_base = address725 + index726 * 8
+                  for index752 = 0
+                      index752 < iter_elem.metadata.examples.length()
+                      index752 = index752 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index752]
+                    let iter_base = address751 + index752 * 8
 
-                    let ptr724 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr750 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr724)
+                    mbt_ffi_store32(iter_base + 0, ptr750)
                   }
                   mbt_ffi_store32(
                     iter_base + 40,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 36, address725)
+                  mbt_ffi_store32(iter_base + 36, address751)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -15161,12 +15531,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload728) => {
+                    Some(payload754) => {
                       mbt_ffi_store8(iter_base + 44, 1)
 
-                      let ptr729 = mbt_ffi_str2ptr(payload728)
-                      mbt_ffi_store32(iter_base + 52, payload728.length())
-                      mbt_ffi_store32(iter_base + 48, ptr729)
+                      let ptr755 = mbt_ffi_str2ptr(payload754)
+                      mbt_ffi_store32(iter_base + 52, payload754.length())
+                      mbt_ffi_store32(iter_base + 48, ptr755)
 
                       ()
                     }
@@ -15178,21 +15548,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload731) => {
+                    Some(payload757) => {
                       mbt_ffi_store8(iter_base + 56, 1)
 
-                      match payload731 {
+                      match payload757 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 60, 0)
 
                           ()
                         }
-                        Other(payload733) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 60, 1)
 
-                          let ptr734 = mbt_ffi_str2ptr(payload733)
-                          mbt_ffi_store32(iter_base + 68, payload733.length())
-                          mbt_ffi_store32(iter_base + 64, ptr734)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 60, 2)
+
+                          ()
+                        }
+                        Other(payload761) => {
+                          mbt_ffi_store8(iter_base + 60, 3)
+
+                          let ptr762 = mbt_ffi_str2ptr(payload761)
+                          mbt_ffi_store32(iter_base + 68, payload761.length())
+                          mbt_ffi_store32(iter_base + 64, ptr762)
 
                           ()
                         }
@@ -15202,120 +15582,120 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload714.length())
-                mbt_ffi_store32(iter_base + 8, address735)
+                mbt_ffi_store32(iter_base + 12, payload740.length())
+                mbt_ffi_store32(iter_base + 8, address763)
 
                 ()
               }
-              EnumType(payload737) => {
+              EnumType(payload765) => {
                 mbt_ffi_store8(iter_base + 0, 16)
 
-                let address739 = mbt_ffi_malloc(payload737.length() * 8)
-                for index740 = 0
-                    index740 < payload737.length()
-                    index740 = index740 + 1 {
-                  let iter_elem : String = payload737[index740]
-                  let iter_base = address739 + index740 * 8
+                let address767 = mbt_ffi_malloc(payload765.length() * 8)
+                for index768 = 0
+                    index768 < payload765.length()
+                    index768 = index768 + 1 {
+                  let iter_elem : String = payload765[index768]
+                  let iter_base = address767 + index768 * 8
 
-                  let ptr738 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr766 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr738)
+                  mbt_ffi_store32(iter_base + 0, ptr766)
                 }
-                mbt_ffi_store32(iter_base + 12, payload737.length())
-                mbt_ffi_store32(iter_base + 8, address739)
+                mbt_ffi_store32(iter_base + 12, payload765.length())
+                mbt_ffi_store32(iter_base + 8, address767)
 
                 ()
               }
-              FlagsType(payload741) => {
+              FlagsType(payload769) => {
                 mbt_ffi_store8(iter_base + 0, 17)
 
-                let address743 = mbt_ffi_malloc(payload741.length() * 8)
-                for index744 = 0
-                    index744 < payload741.length()
-                    index744 = index744 + 1 {
-                  let iter_elem : String = payload741[index744]
-                  let iter_base = address743 + index744 * 8
+                let address771 = mbt_ffi_malloc(payload769.length() * 8)
+                for index772 = 0
+                    index772 < payload769.length()
+                    index772 = index772 + 1 {
+                  let iter_elem : String = payload769[index772]
+                  let iter_base = address771 + index772 * 8
 
-                  let ptr742 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr770 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr742)
+                  mbt_ffi_store32(iter_base + 0, ptr770)
                 }
-                mbt_ffi_store32(iter_base + 12, payload741.length())
-                mbt_ffi_store32(iter_base + 8, address743)
+                mbt_ffi_store32(iter_base + 12, payload769.length())
+                mbt_ffi_store32(iter_base + 8, address771)
 
                 ()
               }
-              TupleType(payload745) => {
+              TupleType(payload773) => {
                 mbt_ffi_store8(iter_base + 0, 18)
 
-                let address746 = mbt_ffi_malloc(payload745.length() * 4)
-                for index747 = 0
-                    index747 < payload745.length()
-                    index747 = index747 + 1 {
-                  let iter_elem : Int = payload745[index747]
-                  let iter_base = address746 + index747 * 4
+                let address774 = mbt_ffi_malloc(payload773.length() * 4)
+                for index775 = 0
+                    index775 < payload773.length()
+                    index775 = index775 + 1 {
+                  let iter_elem : Int = payload773[index775]
+                  let iter_base = address774 + index775 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload745.length())
-                mbt_ffi_store32(iter_base + 8, address746)
+                mbt_ffi_store32(iter_base + 12, payload773.length())
+                mbt_ffi_store32(iter_base + 8, address774)
 
                 ()
               }
-              ListType(payload748) => {
+              ListType(payload776) => {
                 mbt_ffi_store8(iter_base + 0, 19)
-                mbt_ffi_store32(iter_base + 8, payload748)
+                mbt_ffi_store32(iter_base + 8, payload776)
 
                 ()
               }
-              FixedListType(payload749) => {
+              FixedListType(payload777) => {
                 mbt_ffi_store8(iter_base + 0, 20)
-                mbt_ffi_store32(iter_base + 8, payload749.element)
+                mbt_ffi_store32(iter_base + 8, payload777.element)
                 mbt_ffi_store32(
                   iter_base + 12,
-                  payload749.length.reinterpret_as_int(),
+                  payload777.length.reinterpret_as_int(),
                 )
 
                 ()
               }
-              MapType(payload750) => {
+              MapType(payload778) => {
                 mbt_ffi_store8(iter_base + 0, 21)
-                mbt_ffi_store32(iter_base + 8, payload750.key)
-                mbt_ffi_store32(iter_base + 12, payload750.value)
+                mbt_ffi_store32(iter_base + 8, payload778.key)
+                mbt_ffi_store32(iter_base + 12, payload778.value)
 
                 ()
               }
-              OptionType(payload751) => {
+              OptionType(payload779) => {
                 mbt_ffi_store8(iter_base + 0, 22)
-                mbt_ffi_store32(iter_base + 8, payload751)
+                mbt_ffi_store32(iter_base + 8, payload779)
 
                 ()
               }
-              ResultType(payload752) => {
+              ResultType(payload780) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                match payload752.ok {
+                match payload780.ok {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload754) => {
+                  Some(payload782) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload754)
+                    mbt_ffi_store32(iter_base + 12, payload782)
 
                     ()
                   }
                 }
 
-                match payload752.err {
+                match payload780.err {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload756) => {
+                  Some(payload784) => {
                     mbt_ffi_store8(iter_base + 16, 1)
-                    mbt_ffi_store32(iter_base + 20, payload756)
+                    mbt_ffi_store32(iter_base + 20, payload784)
 
                     ()
                   }
@@ -15323,195 +15703,17 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              TextType(payload757) => {
+              TextType(payload785) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                match payload757.languages {
+                match payload785.languages {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
-
-                    ()
-                  }
-                  Some(payload759) => {
-                    mbt_ffi_store8(iter_base + 8, 1)
-
-                    let address761 = mbt_ffi_malloc(payload759.length() * 8)
-                    for index762 = 0
-                        index762 < payload759.length()
-                        index762 = index762 + 1 {
-                      let iter_elem : String = payload759[index762]
-                      let iter_base = address761 + index762 * 8
-
-                      let ptr760 = mbt_ffi_str2ptr(iter_elem)
-                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr760)
-                    }
-                    mbt_ffi_store32(iter_base + 16, payload759.length())
-                    mbt_ffi_store32(iter_base + 12, address761)
-
-                    ()
-                  }
-                }
-
-                match payload757.min_length {
-                  None => {
-                    mbt_ffi_store8(iter_base + 20, 0)
-
-                    ()
-                  }
-                  Some(payload764) => {
-                    mbt_ffi_store8(iter_base + 20, 1)
-                    mbt_ffi_store32(
-                      iter_base + 24,
-                      payload764.reinterpret_as_int(),
-                    )
-
-                    ()
-                  }
-                }
-
-                match payload757.max_length {
-                  None => {
-                    mbt_ffi_store8(iter_base + 28, 0)
-
-                    ()
-                  }
-                  Some(payload766) => {
-                    mbt_ffi_store8(iter_base + 28, 1)
-                    mbt_ffi_store32(
-                      iter_base + 32,
-                      payload766.reinterpret_as_int(),
-                    )
-
-                    ()
-                  }
-                }
-
-                match payload757.regex {
-                  None => {
-                    mbt_ffi_store8(iter_base + 36, 0)
-
-                    ()
-                  }
-                  Some(payload768) => {
-                    mbt_ffi_store8(iter_base + 36, 1)
-
-                    let ptr769 = mbt_ffi_str2ptr(payload768)
-                    mbt_ffi_store32(iter_base + 44, payload768.length())
-                    mbt_ffi_store32(iter_base + 40, ptr769)
-
-                    ()
-                  }
-                }
-
-                ()
-              }
-              BinaryType(payload770) => {
-                mbt_ffi_store8(iter_base + 0, 25)
-
-                match payload770.mime_types {
-                  None => {
-                    mbt_ffi_store8(iter_base + 8, 0)
-
-                    ()
-                  }
-                  Some(payload772) => {
-                    mbt_ffi_store8(iter_base + 8, 1)
-
-                    let address774 = mbt_ffi_malloc(payload772.length() * 8)
-                    for index775 = 0
-                        index775 < payload772.length()
-                        index775 = index775 + 1 {
-                      let iter_elem : String = payload772[index775]
-                      let iter_base = address774 + index775 * 8
-
-                      let ptr773 = mbt_ffi_str2ptr(iter_elem)
-                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr773)
-                    }
-                    mbt_ffi_store32(iter_base + 16, payload772.length())
-                    mbt_ffi_store32(iter_base + 12, address774)
-
-                    ()
-                  }
-                }
-
-                match payload770.min_bytes {
-                  None => {
-                    mbt_ffi_store8(iter_base + 20, 0)
-
-                    ()
-                  }
-                  Some(payload777) => {
-                    mbt_ffi_store8(iter_base + 20, 1)
-                    mbt_ffi_store32(
-                      iter_base + 24,
-                      payload777.reinterpret_as_int(),
-                    )
-
-                    ()
-                  }
-                }
-
-                match payload770.max_bytes {
-                  None => {
-                    mbt_ffi_store8(iter_base + 28, 0)
-
-                    ()
-                  }
-                  Some(payload779) => {
-                    mbt_ffi_store8(iter_base + 28, 1)
-                    mbt_ffi_store32(
-                      iter_base + 32,
-                      payload779.reinterpret_as_int(),
-                    )
-
-                    ()
-                  }
-                }
-
-                ()
-              }
-              PathType(payload780) => {
-                mbt_ffi_store8(iter_base + 0, 26)
-                mbt_ffi_store8(iter_base + 8, payload780.direction.ordinal())
-                mbt_ffi_store8(iter_base + 9, payload780.kind.ordinal())
-
-                match payload780.allowed_mime_types {
-                  None => {
-                    mbt_ffi_store8(iter_base + 12, 0)
-
-                    ()
-                  }
-                  Some(payload782) => {
-                    mbt_ffi_store8(iter_base + 12, 1)
-
-                    let address784 = mbt_ffi_malloc(payload782.length() * 8)
-                    for index785 = 0
-                        index785 < payload782.length()
-                        index785 = index785 + 1 {
-                      let iter_elem : String = payload782[index785]
-                      let iter_base = address784 + index785 * 8
-
-                      let ptr783 = mbt_ffi_str2ptr(iter_elem)
-                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr783)
-                    }
-                    mbt_ffi_store32(iter_base + 20, payload782.length())
-                    mbt_ffi_store32(iter_base + 16, address784)
-
-                    ()
-                  }
-                }
-
-                match payload780.allowed_extensions {
-                  None => {
-                    mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
                   Some(payload787) => {
-                    mbt_ffi_store8(iter_base + 24, 1)
+                    mbt_ffi_store8(iter_base + 8, 1)
 
                     let address789 = mbt_ffi_malloc(payload787.length() * 8)
                     for index790 = 0
@@ -15524,8 +15726,59 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
                       mbt_ffi_store32(iter_base + 0, ptr788)
                     }
-                    mbt_ffi_store32(iter_base + 32, payload787.length())
-                    mbt_ffi_store32(iter_base + 28, address789)
+                    mbt_ffi_store32(iter_base + 16, payload787.length())
+                    mbt_ffi_store32(iter_base + 12, address789)
+
+                    ()
+                  }
+                }
+
+                match payload785.min_length {
+                  None => {
+                    mbt_ffi_store8(iter_base + 20, 0)
+
+                    ()
+                  }
+                  Some(payload792) => {
+                    mbt_ffi_store8(iter_base + 20, 1)
+                    mbt_ffi_store32(
+                      iter_base + 24,
+                      payload792.reinterpret_as_int(),
+                    )
+
+                    ()
+                  }
+                }
+
+                match payload785.max_length {
+                  None => {
+                    mbt_ffi_store8(iter_base + 28, 0)
+
+                    ()
+                  }
+                  Some(payload794) => {
+                    mbt_ffi_store8(iter_base + 28, 1)
+                    mbt_ffi_store32(
+                      iter_base + 32,
+                      payload794.reinterpret_as_int(),
+                    )
+
+                    ()
+                  }
+                }
+
+                match payload785.regex {
+                  None => {
+                    mbt_ffi_store8(iter_base + 36, 0)
+
+                    ()
+                  }
+                  Some(payload796) => {
+                    mbt_ffi_store8(iter_base + 36, 1)
+
+                    let ptr797 = mbt_ffi_str2ptr(payload796)
+                    mbt_ffi_store32(iter_base + 44, payload796.length())
+                    mbt_ffi_store32(iter_base + 40, ptr797)
 
                     ()
                   }
@@ -15533,58 +15786,185 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              UrlType(payload791) => {
-                mbt_ffi_store8(iter_base + 0, 27)
+              BinaryType(payload798) => {
+                mbt_ffi_store8(iter_base + 0, 25)
 
-                match payload791.allowed_schemes {
+                match payload798.mime_types {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload793) => {
+                  Some(payload800) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let address795 = mbt_ffi_malloc(payload793.length() * 8)
-                    for index796 = 0
-                        index796 < payload793.length()
-                        index796 = index796 + 1 {
-                      let iter_elem : String = payload793[index796]
-                      let iter_base = address795 + index796 * 8
+                    let address802 = mbt_ffi_malloc(payload800.length() * 8)
+                    for index803 = 0
+                        index803 < payload800.length()
+                        index803 = index803 + 1 {
+                      let iter_elem : String = payload800[index803]
+                      let iter_base = address802 + index803 * 8
 
-                      let ptr794 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr801 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr794)
+                      mbt_ffi_store32(iter_base + 0, ptr801)
                     }
-                    mbt_ffi_store32(iter_base + 16, payload793.length())
-                    mbt_ffi_store32(iter_base + 12, address795)
+                    mbt_ffi_store32(iter_base + 16, payload800.length())
+                    mbt_ffi_store32(iter_base + 12, address802)
 
                     ()
                   }
                 }
 
-                match payload791.allowed_hosts {
+                match payload798.min_bytes {
                   None => {
                     mbt_ffi_store8(iter_base + 20, 0)
 
                     ()
                   }
-                  Some(payload798) => {
+                  Some(payload805) => {
+                    mbt_ffi_store8(iter_base + 20, 1)
+                    mbt_ffi_store32(
+                      iter_base + 24,
+                      payload805.reinterpret_as_int(),
+                    )
+
+                    ()
+                  }
+                }
+
+                match payload798.max_bytes {
+                  None => {
+                    mbt_ffi_store8(iter_base + 28, 0)
+
+                    ()
+                  }
+                  Some(payload807) => {
+                    mbt_ffi_store8(iter_base + 28, 1)
+                    mbt_ffi_store32(
+                      iter_base + 32,
+                      payload807.reinterpret_as_int(),
+                    )
+
+                    ()
+                  }
+                }
+
+                ()
+              }
+              PathType(payload808) => {
+                mbt_ffi_store8(iter_base + 0, 26)
+                mbt_ffi_store8(iter_base + 8, payload808.direction.ordinal())
+                mbt_ffi_store8(iter_base + 9, payload808.kind.ordinal())
+
+                match payload808.allowed_mime_types {
+                  None => {
+                    mbt_ffi_store8(iter_base + 12, 0)
+
+                    ()
+                  }
+                  Some(payload810) => {
+                    mbt_ffi_store8(iter_base + 12, 1)
+
+                    let address812 = mbt_ffi_malloc(payload810.length() * 8)
+                    for index813 = 0
+                        index813 < payload810.length()
+                        index813 = index813 + 1 {
+                      let iter_elem : String = payload810[index813]
+                      let iter_base = address812 + index813 * 8
+
+                      let ptr811 = mbt_ffi_str2ptr(iter_elem)
+                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                      mbt_ffi_store32(iter_base + 0, ptr811)
+                    }
+                    mbt_ffi_store32(iter_base + 20, payload810.length())
+                    mbt_ffi_store32(iter_base + 16, address812)
+
+                    ()
+                  }
+                }
+
+                match payload808.allowed_extensions {
+                  None => {
+                    mbt_ffi_store8(iter_base + 24, 0)
+
+                    ()
+                  }
+                  Some(payload815) => {
+                    mbt_ffi_store8(iter_base + 24, 1)
+
+                    let address817 = mbt_ffi_malloc(payload815.length() * 8)
+                    for index818 = 0
+                        index818 < payload815.length()
+                        index818 = index818 + 1 {
+                      let iter_elem : String = payload815[index818]
+                      let iter_base = address817 + index818 * 8
+
+                      let ptr816 = mbt_ffi_str2ptr(iter_elem)
+                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                      mbt_ffi_store32(iter_base + 0, ptr816)
+                    }
+                    mbt_ffi_store32(iter_base + 32, payload815.length())
+                    mbt_ffi_store32(iter_base + 28, address817)
+
+                    ()
+                  }
+                }
+
+                ()
+              }
+              UrlType(payload819) => {
+                mbt_ffi_store8(iter_base + 0, 27)
+
+                match payload819.allowed_schemes {
+                  None => {
+                    mbt_ffi_store8(iter_base + 8, 0)
+
+                    ()
+                  }
+                  Some(payload821) => {
+                    mbt_ffi_store8(iter_base + 8, 1)
+
+                    let address823 = mbt_ffi_malloc(payload821.length() * 8)
+                    for index824 = 0
+                        index824 < payload821.length()
+                        index824 = index824 + 1 {
+                      let iter_elem : String = payload821[index824]
+                      let iter_base = address823 + index824 * 8
+
+                      let ptr822 = mbt_ffi_str2ptr(iter_elem)
+                      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+                      mbt_ffi_store32(iter_base + 0, ptr822)
+                    }
+                    mbt_ffi_store32(iter_base + 16, payload821.length())
+                    mbt_ffi_store32(iter_base + 12, address823)
+
+                    ()
+                  }
+                }
+
+                match payload819.allowed_hosts {
+                  None => {
+                    mbt_ffi_store8(iter_base + 20, 0)
+
+                    ()
+                  }
+                  Some(payload826) => {
                     mbt_ffi_store8(iter_base + 20, 1)
 
-                    let address800 = mbt_ffi_malloc(payload798.length() * 8)
-                    for index801 = 0
-                        index801 < payload798.length()
-                        index801 = index801 + 1 {
-                      let iter_elem : String = payload798[index801]
-                      let iter_base = address800 + index801 * 8
+                    let address828 = mbt_ffi_malloc(payload826.length() * 8)
+                    for index829 = 0
+                        index829 < payload826.length()
+                        index829 = index829 + 1 {
+                      let iter_elem : String = payload826[index829]
+                      let iter_base = address828 + index829 * 8
 
-                      let ptr799 = mbt_ffi_str2ptr(iter_elem)
+                      let ptr827 = mbt_ffi_str2ptr(iter_elem)
                       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                      mbt_ffi_store32(iter_base + 0, ptr799)
+                      mbt_ffi_store32(iter_base + 0, ptr827)
                     }
-                    mbt_ffi_store32(iter_base + 28, payload798.length())
-                    mbt_ffi_store32(iter_base + 24, address800)
+                    mbt_ffi_store32(iter_base + 28, payload826.length())
+                    mbt_ffi_store32(iter_base + 24, address828)
 
                     ()
                   }
@@ -15602,65 +15982,65 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              QuantityType(payload804) => {
+              QuantityType(payload832) => {
                 mbt_ffi_store8(iter_base + 0, 30)
 
-                let ptr805 = mbt_ffi_str2ptr(payload804.base_unit)
-                mbt_ffi_store32(iter_base + 12, payload804.base_unit.length())
-                mbt_ffi_store32(iter_base + 8, ptr805)
+                let ptr833 = mbt_ffi_str2ptr(payload832.base_unit)
+                mbt_ffi_store32(iter_base + 12, payload832.base_unit.length())
+                mbt_ffi_store32(iter_base + 8, ptr833)
 
-                let address807 = mbt_ffi_malloc(
-                  payload804.allowed_suffixes.length() * 8,
+                let address835 = mbt_ffi_malloc(
+                  payload832.allowed_suffixes.length() * 8,
                 )
-                for index808 = 0
-                    index808 < payload804.allowed_suffixes.length()
-                    index808 = index808 + 1 {
-                  let iter_elem : String = payload804.allowed_suffixes[index808]
-                  let iter_base = address807 + index808 * 8
+                for index836 = 0
+                    index836 < payload832.allowed_suffixes.length()
+                    index836 = index836 + 1 {
+                  let iter_elem : String = payload832.allowed_suffixes[index836]
+                  let iter_base = address835 + index836 * 8
 
-                  let ptr806 = mbt_ffi_str2ptr(iter_elem)
+                  let ptr834 = mbt_ffi_str2ptr(iter_elem)
                   mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                  mbt_ffi_store32(iter_base + 0, ptr806)
+                  mbt_ffi_store32(iter_base + 0, ptr834)
                 }
                 mbt_ffi_store32(
                   iter_base + 20,
-                  payload804.allowed_suffixes.length(),
+                  payload832.allowed_suffixes.length(),
                 )
-                mbt_ffi_store32(iter_base + 16, address807)
+                mbt_ffi_store32(iter_base + 16, address835)
 
-                match payload804.min {
+                match payload832.min {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload810) => {
+                  Some(payload838) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(iter_base + 32, payload810.mantissa)
-                    mbt_ffi_store32(iter_base + 40, payload810.scale)
+                    mbt_ffi_store64(iter_base + 32, payload838.mantissa)
+                    mbt_ffi_store32(iter_base + 40, payload838.scale)
 
-                    let ptr811 = mbt_ffi_str2ptr(payload810.unit)
-                    mbt_ffi_store32(iter_base + 48, payload810.unit.length())
-                    mbt_ffi_store32(iter_base + 44, ptr811)
+                    let ptr839 = mbt_ffi_str2ptr(payload838.unit)
+                    mbt_ffi_store32(iter_base + 48, payload838.unit.length())
+                    mbt_ffi_store32(iter_base + 44, ptr839)
 
                     ()
                   }
                 }
 
-                match payload804.max {
+                match payload832.max {
                   None => {
                     mbt_ffi_store8(iter_base + 56, 0)
 
                     ()
                   }
-                  Some(payload813) => {
+                  Some(payload841) => {
                     mbt_ffi_store8(iter_base + 56, 1)
-                    mbt_ffi_store64(iter_base + 64, payload813.mantissa)
-                    mbt_ffi_store32(iter_base + 72, payload813.scale)
+                    mbt_ffi_store64(iter_base + 64, payload841.mantissa)
+                    mbt_ffi_store32(iter_base + 72, payload841.scale)
 
-                    let ptr814 = mbt_ffi_str2ptr(payload813.unit)
-                    mbt_ffi_store32(iter_base + 80, payload813.unit.length())
-                    mbt_ffi_store32(iter_base + 76, ptr814)
+                    let ptr842 = mbt_ffi_str2ptr(payload841.unit)
+                    mbt_ffi_store32(iter_base + 80, payload841.unit.length())
+                    mbt_ffi_store32(iter_base + 76, ptr842)
 
                     ()
                   }
@@ -15668,82 +16048,82 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              UnionType(payload815) => {
+              UnionType(payload843) => {
                 mbt_ffi_store8(iter_base + 0, 31)
 
-                let address849 = mbt_ffi_malloc(
-                  payload815.branches.length() * 92,
+                let address879 = mbt_ffi_malloc(
+                  payload843.branches.length() * 92,
                 )
-                for index850 = 0
-                    index850 < payload815.branches.length()
-                    index850 = index850 + 1 {
-                  let iter_elem : @types.UnionBranch = payload815.branches[index850]
-                  let iter_base = address849 + index850 * 92
+                for index880 = 0
+                    index880 < payload843.branches.length()
+                    index880 = index880 + 1 {
+                  let iter_elem : @types.UnionBranch = payload843.branches[index880]
+                  let iter_base = address879 + index880 * 92
 
-                  let ptr816 = mbt_ffi_str2ptr(iter_elem.tag)
+                  let ptr844 = mbt_ffi_str2ptr(iter_elem.tag)
                   mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-                  mbt_ffi_store32(iter_base + 0, ptr816)
+                  mbt_ffi_store32(iter_base + 0, ptr844)
                   mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
                   match iter_elem.discriminator {
-                    Prefix(payload817) => {
+                    Prefix(payload845) => {
                       mbt_ffi_store8(iter_base + 12, 0)
 
-                      let ptr818 = mbt_ffi_str2ptr(payload817)
-                      mbt_ffi_store32(iter_base + 20, payload817.length())
-                      mbt_ffi_store32(iter_base + 16, ptr818)
+                      let ptr846 = mbt_ffi_str2ptr(payload845)
+                      mbt_ffi_store32(iter_base + 20, payload845.length())
+                      mbt_ffi_store32(iter_base + 16, ptr846)
 
                       ()
                     }
-                    Suffix(payload819) => {
+                    Suffix(payload847) => {
                       mbt_ffi_store8(iter_base + 12, 1)
 
-                      let ptr820 = mbt_ffi_str2ptr(payload819)
-                      mbt_ffi_store32(iter_base + 20, payload819.length())
-                      mbt_ffi_store32(iter_base + 16, ptr820)
+                      let ptr848 = mbt_ffi_str2ptr(payload847)
+                      mbt_ffi_store32(iter_base + 20, payload847.length())
+                      mbt_ffi_store32(iter_base + 16, ptr848)
 
                       ()
                     }
-                    Contains(payload821) => {
+                    Contains(payload849) => {
                       mbt_ffi_store8(iter_base + 12, 2)
 
-                      let ptr822 = mbt_ffi_str2ptr(payload821)
-                      mbt_ffi_store32(iter_base + 20, payload821.length())
-                      mbt_ffi_store32(iter_base + 16, ptr822)
+                      let ptr850 = mbt_ffi_str2ptr(payload849)
+                      mbt_ffi_store32(iter_base + 20, payload849.length())
+                      mbt_ffi_store32(iter_base + 16, ptr850)
 
                       ()
                     }
-                    Regex(payload823) => {
+                    Regex(payload851) => {
                       mbt_ffi_store8(iter_base + 12, 3)
 
-                      let ptr824 = mbt_ffi_str2ptr(payload823)
-                      mbt_ffi_store32(iter_base + 20, payload823.length())
-                      mbt_ffi_store32(iter_base + 16, ptr824)
+                      let ptr852 = mbt_ffi_str2ptr(payload851)
+                      mbt_ffi_store32(iter_base + 20, payload851.length())
+                      mbt_ffi_store32(iter_base + 16, ptr852)
 
                       ()
                     }
-                    FieldEquals(payload825) => {
+                    FieldEquals(payload853) => {
                       mbt_ffi_store8(iter_base + 12, 4)
 
-                      let ptr826 = mbt_ffi_str2ptr(payload825.field_name)
+                      let ptr854 = mbt_ffi_str2ptr(payload853.field_name)
                       mbt_ffi_store32(
                         iter_base + 20,
-                        payload825.field_name.length(),
+                        payload853.field_name.length(),
                       )
-                      mbt_ffi_store32(iter_base + 16, ptr826)
+                      mbt_ffi_store32(iter_base + 16, ptr854)
 
-                      match payload825.literal {
+                      match payload853.literal {
                         None => {
                           mbt_ffi_store8(iter_base + 24, 0)
 
                           ()
                         }
-                        Some(payload828) => {
+                        Some(payload856) => {
                           mbt_ffi_store8(iter_base + 24, 1)
 
-                          let ptr829 = mbt_ffi_str2ptr(payload828)
-                          mbt_ffi_store32(iter_base + 32, payload828.length())
-                          mbt_ffi_store32(iter_base + 28, ptr829)
+                          let ptr857 = mbt_ffi_str2ptr(payload856)
+                          mbt_ffi_store32(iter_base + 32, payload856.length())
+                          mbt_ffi_store32(iter_base + 28, ptr857)
 
                           ()
                         }
@@ -15751,12 +16131,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    FieldAbsent(payload830) => {
+                    FieldAbsent(payload858) => {
                       mbt_ffi_store8(iter_base + 12, 5)
 
-                      let ptr831 = mbt_ffi_str2ptr(payload830)
-                      mbt_ffi_store32(iter_base + 20, payload830.length())
-                      mbt_ffi_store32(iter_base + 16, ptr831)
+                      let ptr859 = mbt_ffi_str2ptr(payload858)
+                      mbt_ffi_store32(iter_base + 20, payload858.length())
+                      mbt_ffi_store32(iter_base + 16, ptr859)
 
                       ()
                     }
@@ -15768,54 +16148,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload833) => {
+                    Some(payload861) => {
                       mbt_ffi_store8(iter_base + 36, 1)
 
-                      let ptr834 = mbt_ffi_str2ptr(payload833)
-                      mbt_ffi_store32(iter_base + 44, payload833.length())
-                      mbt_ffi_store32(iter_base + 40, ptr834)
+                      let ptr862 = mbt_ffi_str2ptr(payload861)
+                      mbt_ffi_store32(iter_base + 44, payload861.length())
+                      mbt_ffi_store32(iter_base + 40, ptr862)
 
                       ()
                     }
                   }
 
-                  let address836 = mbt_ffi_malloc(
+                  let address864 = mbt_ffi_malloc(
                     iter_elem.metadata.aliases.length() * 8,
                   )
-                  for index837 = 0
-                      index837 < iter_elem.metadata.aliases.length()
-                      index837 = index837 + 1 {
-                    let iter_elem : String = iter_elem.metadata.aliases[index837]
-                    let iter_base = address836 + index837 * 8
+                  for index865 = 0
+                      index865 < iter_elem.metadata.aliases.length()
+                      index865 = index865 + 1 {
+                    let iter_elem : String = iter_elem.metadata.aliases[index865]
+                    let iter_base = address864 + index865 * 8
 
-                    let ptr835 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr863 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr835)
+                    mbt_ffi_store32(iter_base + 0, ptr863)
                   }
                   mbt_ffi_store32(
                     iter_base + 52,
                     iter_elem.metadata.aliases.length(),
                   )
-                  mbt_ffi_store32(iter_base + 48, address836)
+                  mbt_ffi_store32(iter_base + 48, address864)
 
-                  let address839 = mbt_ffi_malloc(
+                  let address867 = mbt_ffi_malloc(
                     iter_elem.metadata.examples.length() * 8,
                   )
-                  for index840 = 0
-                      index840 < iter_elem.metadata.examples.length()
-                      index840 = index840 + 1 {
-                    let iter_elem : String = iter_elem.metadata.examples[index840]
-                    let iter_base = address839 + index840 * 8
+                  for index868 = 0
+                      index868 < iter_elem.metadata.examples.length()
+                      index868 = index868 + 1 {
+                    let iter_elem : String = iter_elem.metadata.examples[index868]
+                    let iter_base = address867 + index868 * 8
 
-                    let ptr838 = mbt_ffi_str2ptr(iter_elem)
+                    let ptr866 = mbt_ffi_str2ptr(iter_elem)
                     mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                    mbt_ffi_store32(iter_base + 0, ptr838)
+                    mbt_ffi_store32(iter_base + 0, ptr866)
                   }
                   mbt_ffi_store32(
                     iter_base + 60,
                     iter_elem.metadata.examples.length(),
                   )
-                  mbt_ffi_store32(iter_base + 56, address839)
+                  mbt_ffi_store32(iter_base + 56, address867)
 
                   match iter_elem.metadata.deprecated {
                     None => {
@@ -15823,12 +16203,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload842) => {
+                    Some(payload870) => {
                       mbt_ffi_store8(iter_base + 64, 1)
 
-                      let ptr843 = mbt_ffi_str2ptr(payload842)
-                      mbt_ffi_store32(iter_base + 72, payload842.length())
-                      mbt_ffi_store32(iter_base + 68, ptr843)
+                      let ptr871 = mbt_ffi_str2ptr(payload870)
+                      mbt_ffi_store32(iter_base + 72, payload870.length())
+                      mbt_ffi_store32(iter_base + 68, ptr871)
 
                       ()
                     }
@@ -15840,21 +16220,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                       ()
                     }
-                    Some(payload845) => {
+                    Some(payload873) => {
                       mbt_ffi_store8(iter_base + 76, 1)
 
-                      match payload845 {
+                      match payload873 {
                         Multimodal => {
                           mbt_ffi_store8(iter_base + 80, 0)
 
                           ()
                         }
-                        Other(payload847) => {
+                        UnstructuredText => {
                           mbt_ffi_store8(iter_base + 80, 1)
 
-                          let ptr848 = mbt_ffi_str2ptr(payload847)
-                          mbt_ffi_store32(iter_base + 88, payload847.length())
-                          mbt_ffi_store32(iter_base + 84, ptr848)
+                          ()
+                        }
+                        UnstructuredBinary => {
+                          mbt_ffi_store8(iter_base + 80, 2)
+
+                          ()
+                        }
+                        Other(payload877) => {
+                          mbt_ffi_store8(iter_base + 80, 3)
+
+                          let ptr878 = mbt_ffi_str2ptr(payload877)
+                          mbt_ffi_store32(iter_base + 88, payload877.length())
+                          mbt_ffi_store32(iter_base + 84, ptr878)
 
                           ()
                         }
@@ -15864,26 +16254,26 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                     }
                   }
                 }
-                mbt_ffi_store32(iter_base + 12, payload815.branches.length())
-                mbt_ffi_store32(iter_base + 8, address849)
+                mbt_ffi_store32(iter_base + 12, payload843.branches.length())
+                mbt_ffi_store32(iter_base + 8, address879)
 
                 ()
               }
-              SecretType(payload851) => {
+              SecretType(payload881) => {
                 mbt_ffi_store8(iter_base + 0, 32)
 
-                match payload851.category {
+                match payload881.category {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload853) => {
+                  Some(payload883) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr854 = mbt_ffi_str2ptr(payload853)
-                    mbt_ffi_store32(iter_base + 16, payload853.length())
-                    mbt_ffi_store32(iter_base + 12, ptr854)
+                    let ptr884 = mbt_ffi_str2ptr(payload883)
+                    mbt_ffi_store32(iter_base + 16, payload883.length())
+                    mbt_ffi_store32(iter_base + 12, ptr884)
 
                     ()
                   }
@@ -15891,21 +16281,21 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              QuotaTokenType(payload855) => {
+              QuotaTokenType(payload885) => {
                 mbt_ffi_store8(iter_base + 0, 33)
 
-                match payload855.resource_name {
+                match payload885.resource_name {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload857) => {
+                  Some(payload887) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    let ptr858 = mbt_ffi_str2ptr(payload857)
-                    mbt_ffi_store32(iter_base + 16, payload857.length())
-                    mbt_ffi_store32(iter_base + 12, ptr858)
+                    let ptr888 = mbt_ffi_str2ptr(payload887)
+                    mbt_ffi_store32(iter_base + 16, payload887.length())
+                    mbt_ffi_store32(iter_base + 12, ptr888)
 
                     ()
                   }
@@ -15913,18 +16303,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              FutureType(payload859) => {
+              FutureType(payload889) => {
                 mbt_ffi_store8(iter_base + 0, 34)
 
-                match payload859 {
+                match payload889 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload861) => {
+                  Some(payload891) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload861)
+                    mbt_ffi_store32(iter_base + 12, payload891)
 
                     ()
                   }
@@ -15932,18 +16322,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              StreamType(payload862) => {
+              StreamType(payload892) => {
                 mbt_ffi_store8(iter_base + 0, 35)
 
-                match payload862 {
+                match payload892 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload864) => {
+                  Some(payload894) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload864)
+                    mbt_ffi_store32(iter_base + 12, payload894)
 
                     ()
                   }
@@ -15959,54 +16349,54 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload866) => {
+              Some(payload896) => {
                 mbt_ffi_store8(iter_base + 88, 1)
 
-                let ptr867 = mbt_ffi_str2ptr(payload866)
-                mbt_ffi_store32(iter_base + 96, payload866.length())
-                mbt_ffi_store32(iter_base + 92, ptr867)
+                let ptr897 = mbt_ffi_str2ptr(payload896)
+                mbt_ffi_store32(iter_base + 96, payload896.length())
+                mbt_ffi_store32(iter_base + 92, ptr897)
 
                 ()
               }
             }
 
-            let address869 = mbt_ffi_malloc(
+            let address899 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index870 = 0
-                index870 < iter_elem.metadata.aliases.length()
-                index870 = index870 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index870]
-              let iter_base = address869 + index870 * 8
+            for index900 = 0
+                index900 < iter_elem.metadata.aliases.length()
+                index900 = index900 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index900]
+              let iter_base = address899 + index900 * 8
 
-              let ptr868 = mbt_ffi_str2ptr(iter_elem)
+              let ptr898 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr868)
+              mbt_ffi_store32(iter_base + 0, ptr898)
             }
             mbt_ffi_store32(
               iter_base + 104,
               iter_elem.metadata.aliases.length(),
             )
-            mbt_ffi_store32(iter_base + 100, address869)
+            mbt_ffi_store32(iter_base + 100, address899)
 
-            let address872 = mbt_ffi_malloc(
+            let address902 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index873 = 0
-                index873 < iter_elem.metadata.examples.length()
-                index873 = index873 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index873]
-              let iter_base = address872 + index873 * 8
+            for index903 = 0
+                index903 < iter_elem.metadata.examples.length()
+                index903 = index903 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index903]
+              let iter_base = address902 + index903 * 8
 
-              let ptr871 = mbt_ffi_str2ptr(iter_elem)
+              let ptr901 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr871)
+              mbt_ffi_store32(iter_base + 0, ptr901)
             }
             mbt_ffi_store32(
               iter_base + 112,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 108, address872)
+            mbt_ffi_store32(iter_base + 108, address902)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -16014,12 +16404,12 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload875) => {
+              Some(payload905) => {
                 mbt_ffi_store8(iter_base + 116, 1)
 
-                let ptr876 = mbt_ffi_str2ptr(payload875)
-                mbt_ffi_store32(iter_base + 124, payload875.length())
-                mbt_ffi_store32(iter_base + 120, ptr876)
+                let ptr906 = mbt_ffi_str2ptr(payload905)
+                mbt_ffi_store32(iter_base + 124, payload905.length())
+                mbt_ffi_store32(iter_base + 120, ptr906)
 
                 ()
               }
@@ -16031,21 +16421,31 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload878) => {
+              Some(payload908) => {
                 mbt_ffi_store8(iter_base + 128, 1)
 
-                match payload878 {
+                match payload908 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 132, 0)
 
                     ()
                   }
-                  Other(payload880) => {
+                  UnstructuredText => {
                     mbt_ffi_store8(iter_base + 132, 1)
 
-                    let ptr881 = mbt_ffi_str2ptr(payload880)
-                    mbt_ffi_store32(iter_base + 140, payload880.length())
-                    mbt_ffi_store32(iter_base + 136, ptr881)
+                    ()
+                  }
+                  UnstructuredBinary => {
+                    mbt_ffi_store8(iter_base + 132, 2)
+
+                    ()
+                  }
+                  Other(payload912) => {
+                    mbt_ffi_store8(iter_base + 132, 3)
+
+                    let ptr913 = mbt_ffi_str2ptr(payload912)
+                    mbt_ffi_store32(iter_base + 140, payload912.length())
+                    mbt_ffi_store32(iter_base + 136, ptr913)
 
                     ()
                   }
@@ -16057,20 +16457,20 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
           }
           mbt_ffi_store32(
             return_area + 12,
-            payload678.graph.type_nodes.length(),
+            payload702.graph.type_nodes.length(),
           )
-          mbt_ffi_store32(return_area + 8, address882)
+          mbt_ffi_store32(return_area + 8, address914)
 
-          let address888 = mbt_ffi_malloc(payload678.graph.defs.length() * 24)
-          for index889 = 0
-              index889 < payload678.graph.defs.length()
-              index889 = index889 + 1 {
-            let iter_elem : @types.SchemaTypeDef = payload678.graph.defs[index889]
-            let iter_base = address888 + index889 * 24
+          let address920 = mbt_ffi_malloc(payload702.graph.defs.length() * 24)
+          for index921 = 0
+              index921 < payload702.graph.defs.length()
+              index921 = index921 + 1 {
+            let iter_elem : @types.SchemaTypeDef = payload702.graph.defs[index921]
+            let iter_base = address920 + index921 * 24
 
-            let ptr884 = mbt_ffi_str2ptr(iter_elem.id)
+            let ptr916 = mbt_ffi_str2ptr(iter_elem.id)
             mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-            mbt_ffi_store32(iter_base + 0, ptr884)
+            mbt_ffi_store32(iter_base + 0, ptr916)
 
             match iter_elem.name {
               None => {
@@ -16078,148 +16478,148 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              Some(payload886) => {
+              Some(payload918) => {
                 mbt_ffi_store8(iter_base + 8, 1)
 
-                let ptr887 = mbt_ffi_str2ptr(payload886)
-                mbt_ffi_store32(iter_base + 16, payload886.length())
-                mbt_ffi_store32(iter_base + 12, ptr887)
+                let ptr919 = mbt_ffi_str2ptr(payload918)
+                mbt_ffi_store32(iter_base + 16, payload918.length())
+                mbt_ffi_store32(iter_base + 12, ptr919)
 
                 ()
               }
             }
             mbt_ffi_store32(iter_base + 20, iter_elem.body)
           }
-          mbt_ffi_store32(return_area + 20, payload678.graph.defs.length())
-          mbt_ffi_store32(return_area + 16, address888)
-          mbt_ffi_store32(return_area + 24, payload678.graph.root)
+          mbt_ffi_store32(return_area + 20, payload702.graph.defs.length())
+          mbt_ffi_store32(return_area + 16, address920)
+          mbt_ffi_store32(return_area + 24, payload702.graph.root)
 
-          let address960 = mbt_ffi_malloc(
-            payload678.value.value_nodes.length() * 64,
+          let address992 = mbt_ffi_malloc(
+            payload702.value.value_nodes.length() * 64,
           )
-          for index961 = 0
-              index961 < payload678.value.value_nodes.length()
-              index961 = index961 + 1 {
-            let iter_elem : @types.SchemaValueNode = payload678.value.value_nodes[index961]
-            let iter_base = address960 + index961 * 64
+          for index993 = 0
+              index993 < payload702.value.value_nodes.length()
+              index993 = index993 + 1 {
+            let iter_elem : @types.SchemaValueNode = payload702.value.value_nodes[index993]
+            let iter_base = address992 + index993 * 64
 
             match iter_elem {
-              BoolValue(payload890) => {
+              BoolValue(payload922) => {
                 mbt_ffi_store8(iter_base + 0, 0)
-                mbt_ffi_store8(iter_base + 8, if payload890 { 1 } else { 0 })
+                mbt_ffi_store8(iter_base + 8, if payload922 { 1 } else { 0 })
 
                 ()
               }
-              S8Value(payload891) => {
+              S8Value(payload923) => {
                 mbt_ffi_store8(iter_base + 0, 1)
-                mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload891))
+                mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload923))
 
                 ()
               }
-              S16Value(payload892) => {
+              S16Value(payload924) => {
                 mbt_ffi_store8(iter_base + 0, 2)
-                mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload892))
+                mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload924))
 
                 ()
               }
-              S32Value(payload893) => {
+              S32Value(payload925) => {
                 mbt_ffi_store8(iter_base + 0, 3)
-                mbt_ffi_store32(iter_base + 8, payload893)
+                mbt_ffi_store32(iter_base + 8, payload925)
 
                 ()
               }
-              S64Value(payload894) => {
+              S64Value(payload926) => {
                 mbt_ffi_store8(iter_base + 0, 4)
-                mbt_ffi_store64(iter_base + 8, payload894)
+                mbt_ffi_store64(iter_base + 8, payload926)
 
                 ()
               }
-              U8Value(payload895) => {
+              U8Value(payload927) => {
                 mbt_ffi_store8(iter_base + 0, 5)
-                mbt_ffi_store8(iter_base + 8, payload895.to_int())
+                mbt_ffi_store8(iter_base + 8, payload927.to_int())
 
                 ()
               }
-              U16Value(payload896) => {
+              U16Value(payload928) => {
                 mbt_ffi_store8(iter_base + 0, 6)
-                mbt_ffi_store16(iter_base + 8, payload896.reinterpret_as_int())
+                mbt_ffi_store16(iter_base + 8, payload928.reinterpret_as_int())
 
                 ()
               }
-              U32Value(payload897) => {
+              U32Value(payload929) => {
                 mbt_ffi_store8(iter_base + 0, 7)
-                mbt_ffi_store32(iter_base + 8, payload897.reinterpret_as_int())
+                mbt_ffi_store32(iter_base + 8, payload929.reinterpret_as_int())
 
                 ()
               }
-              U64Value(payload898) => {
+              U64Value(payload930) => {
                 mbt_ffi_store8(iter_base + 0, 8)
                 mbt_ffi_store64(
                   iter_base + 8,
-                  payload898.reinterpret_as_int64(),
+                  payload930.reinterpret_as_int64(),
                 )
 
                 ()
               }
-              F32Value(payload899) => {
+              F32Value(payload931) => {
                 mbt_ffi_store8(iter_base + 0, 9)
-                mbt_ffi_storef32(iter_base + 8, payload899)
+                mbt_ffi_storef32(iter_base + 8, payload931)
 
                 ()
               }
-              F64Value(payload900) => {
+              F64Value(payload932) => {
                 mbt_ffi_store8(iter_base + 0, 10)
-                mbt_ffi_storef64(iter_base + 8, payload900)
+                mbt_ffi_storef64(iter_base + 8, payload932)
 
                 ()
               }
-              CharValue(payload901) => {
+              CharValue(payload933) => {
                 mbt_ffi_store8(iter_base + 0, 11)
-                mbt_ffi_store32(iter_base + 8, payload901.to_int())
+                mbt_ffi_store32(iter_base + 8, payload933.to_int())
 
                 ()
               }
-              StringValue(payload902) => {
+              StringValue(payload934) => {
                 mbt_ffi_store8(iter_base + 0, 12)
 
-                let ptr903 = mbt_ffi_str2ptr(payload902)
-                mbt_ffi_store32(iter_base + 12, payload902.length())
-                mbt_ffi_store32(iter_base + 8, ptr903)
+                let ptr935 = mbt_ffi_str2ptr(payload934)
+                mbt_ffi_store32(iter_base + 12, payload934.length())
+                mbt_ffi_store32(iter_base + 8, ptr935)
 
                 ()
               }
-              RecordValue(payload904) => {
+              RecordValue(payload936) => {
                 mbt_ffi_store8(iter_base + 0, 13)
 
-                let address905 = mbt_ffi_malloc(payload904.length() * 4)
-                for index906 = 0
-                    index906 < payload904.length()
-                    index906 = index906 + 1 {
-                  let iter_elem : Int = payload904[index906]
-                  let iter_base = address905 + index906 * 4
+                let address937 = mbt_ffi_malloc(payload936.length() * 4)
+                for index938 = 0
+                    index938 < payload936.length()
+                    index938 = index938 + 1 {
+                  let iter_elem : Int = payload936[index938]
+                  let iter_base = address937 + index938 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload904.length())
-                mbt_ffi_store32(iter_base + 8, address905)
+                mbt_ffi_store32(iter_base + 12, payload936.length())
+                mbt_ffi_store32(iter_base + 8, address937)
 
                 ()
               }
-              VariantValue(payload907) => {
+              VariantValue(payload939) => {
                 mbt_ffi_store8(iter_base + 0, 14)
                 mbt_ffi_store32(
                   iter_base + 8,
-                  payload907.case.reinterpret_as_int(),
+                  payload939.case.reinterpret_as_int(),
                 )
 
-                match payload907.payload {
+                match payload939.payload {
                   None => {
                     mbt_ffi_store8(iter_base + 12, 0)
 
                     ()
                   }
-                  Some(payload909) => {
+                  Some(payload941) => {
                     mbt_ffi_store8(iter_base + 12, 1)
-                    mbt_ffi_store32(iter_base + 16, payload909)
+                    mbt_ffi_store32(iter_base + 16, payload941)
 
                     ()
                   }
@@ -16227,105 +16627,105 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              EnumValue(payload910) => {
+              EnumValue(payload942) => {
                 mbt_ffi_store8(iter_base + 0, 15)
-                mbt_ffi_store32(iter_base + 8, payload910.reinterpret_as_int())
+                mbt_ffi_store32(iter_base + 8, payload942.reinterpret_as_int())
 
                 ()
               }
-              FlagsValue(payload911) => {
+              FlagsValue(payload943) => {
                 mbt_ffi_store8(iter_base + 0, 16)
 
-                let address912 = mbt_ffi_malloc(payload911.length() * 1)
-                for index913 = 0
-                    index913 < payload911.length()
-                    index913 = index913 + 1 {
-                  let iter_elem : Bool = payload911[index913]
-                  let iter_base = address912 + index913 * 1
+                let address944 = mbt_ffi_malloc(payload943.length() * 1)
+                for index945 = 0
+                    index945 < payload943.length()
+                    index945 = index945 + 1 {
+                  let iter_elem : Bool = payload943[index945]
+                  let iter_base = address944 + index945 * 1
                   mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
                 }
-                mbt_ffi_store32(iter_base + 12, payload911.length())
-                mbt_ffi_store32(iter_base + 8, address912)
+                mbt_ffi_store32(iter_base + 12, payload943.length())
+                mbt_ffi_store32(iter_base + 8, address944)
 
                 ()
               }
-              TupleValue(payload914) => {
+              TupleValue(payload946) => {
                 mbt_ffi_store8(iter_base + 0, 17)
 
-                let address915 = mbt_ffi_malloc(payload914.length() * 4)
-                for index916 = 0
-                    index916 < payload914.length()
-                    index916 = index916 + 1 {
-                  let iter_elem : Int = payload914[index916]
-                  let iter_base = address915 + index916 * 4
+                let address947 = mbt_ffi_malloc(payload946.length() * 4)
+                for index948 = 0
+                    index948 < payload946.length()
+                    index948 = index948 + 1 {
+                  let iter_elem : Int = payload946[index948]
+                  let iter_base = address947 + index948 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload914.length())
-                mbt_ffi_store32(iter_base + 8, address915)
+                mbt_ffi_store32(iter_base + 12, payload946.length())
+                mbt_ffi_store32(iter_base + 8, address947)
 
                 ()
               }
-              ListValue(payload917) => {
+              ListValue(payload949) => {
                 mbt_ffi_store8(iter_base + 0, 18)
 
-                let address918 = mbt_ffi_malloc(payload917.length() * 4)
-                for index919 = 0
-                    index919 < payload917.length()
-                    index919 = index919 + 1 {
-                  let iter_elem : Int = payload917[index919]
-                  let iter_base = address918 + index919 * 4
+                let address950 = mbt_ffi_malloc(payload949.length() * 4)
+                for index951 = 0
+                    index951 < payload949.length()
+                    index951 = index951 + 1 {
+                  let iter_elem : Int = payload949[index951]
+                  let iter_base = address950 + index951 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload917.length())
-                mbt_ffi_store32(iter_base + 8, address918)
+                mbt_ffi_store32(iter_base + 12, payload949.length())
+                mbt_ffi_store32(iter_base + 8, address950)
 
                 ()
               }
-              FixedListValue(payload920) => {
+              FixedListValue(payload952) => {
                 mbt_ffi_store8(iter_base + 0, 19)
 
-                let address921 = mbt_ffi_malloc(payload920.length() * 4)
-                for index922 = 0
-                    index922 < payload920.length()
-                    index922 = index922 + 1 {
-                  let iter_elem : Int = payload920[index922]
-                  let iter_base = address921 + index922 * 4
+                let address953 = mbt_ffi_malloc(payload952.length() * 4)
+                for index954 = 0
+                    index954 < payload952.length()
+                    index954 = index954 + 1 {
+                  let iter_elem : Int = payload952[index954]
+                  let iter_base = address953 + index954 * 4
                   mbt_ffi_store32(iter_base + 0, iter_elem)
                 }
-                mbt_ffi_store32(iter_base + 12, payload920.length())
-                mbt_ffi_store32(iter_base + 8, address921)
+                mbt_ffi_store32(iter_base + 12, payload952.length())
+                mbt_ffi_store32(iter_base + 8, address953)
 
                 ()
               }
-              MapValue(payload923) => {
+              MapValue(payload955) => {
                 mbt_ffi_store8(iter_base + 0, 20)
 
-                let address924 = mbt_ffi_malloc(payload923.length() * 8)
-                for index925 = 0
-                    index925 < payload923.length()
-                    index925 = index925 + 1 {
-                  let iter_elem : @types.MapEntry = payload923[index925]
-                  let iter_base = address924 + index925 * 8
+                let address956 = mbt_ffi_malloc(payload955.length() * 8)
+                for index957 = 0
+                    index957 < payload955.length()
+                    index957 = index957 + 1 {
+                  let iter_elem : @types.MapEntry = payload955[index957]
+                  let iter_base = address956 + index957 * 8
                   mbt_ffi_store32(iter_base + 0, iter_elem.key)
                   mbt_ffi_store32(iter_base + 4, iter_elem.value)
                 }
-                mbt_ffi_store32(iter_base + 12, payload923.length())
-                mbt_ffi_store32(iter_base + 8, address924)
+                mbt_ffi_store32(iter_base + 12, payload955.length())
+                mbt_ffi_store32(iter_base + 8, address956)
 
                 ()
               }
-              OptionValue(payload926) => {
+              OptionValue(payload958) => {
                 mbt_ffi_store8(iter_base + 0, 21)
 
-                match payload926 {
+                match payload958 {
                   None => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
                     ()
                   }
-                  Some(payload928) => {
+                  Some(payload960) => {
                     mbt_ffi_store8(iter_base + 8, 1)
-                    mbt_ffi_store32(iter_base + 12, payload928)
+                    mbt_ffi_store32(iter_base + 12, payload960)
 
                     ()
                   }
@@ -16333,22 +16733,22 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              ResultValue(payload929) => {
+              ResultValue(payload961) => {
                 mbt_ffi_store8(iter_base + 0, 22)
 
-                match payload929 {
-                  OkValue(payload930) => {
+                match payload961 {
+                  OkValue(payload962) => {
                     mbt_ffi_store8(iter_base + 8, 0)
 
-                    match payload930 {
+                    match payload962 {
                       None => {
                         mbt_ffi_store8(iter_base + 12, 0)
 
                         ()
                       }
-                      Some(payload932) => {
+                      Some(payload964) => {
                         mbt_ffi_store8(iter_base + 12, 1)
-                        mbt_ffi_store32(iter_base + 16, payload932)
+                        mbt_ffi_store32(iter_base + 16, payload964)
 
                         ()
                       }
@@ -16356,18 +16756,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                     ()
                   }
-                  ErrValue(payload933) => {
+                  ErrValue(payload965) => {
                     mbt_ffi_store8(iter_base + 8, 1)
 
-                    match payload933 {
+                    match payload965 {
                       None => {
                         mbt_ffi_store8(iter_base + 12, 0)
 
                         ()
                       }
-                      Some(payload935) => {
+                      Some(payload967) => {
                         mbt_ffi_store8(iter_base + 12, 1)
-                        mbt_ffi_store32(iter_base + 16, payload935)
+                        mbt_ffi_store32(iter_base + 16, payload967)
 
                         ()
                       }
@@ -16379,25 +16779,25 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              TextValue(payload936) => {
+              TextValue(payload968) => {
                 mbt_ffi_store8(iter_base + 0, 23)
 
-                let ptr937 = mbt_ffi_str2ptr(payload936.text)
-                mbt_ffi_store32(iter_base + 12, payload936.text.length())
-                mbt_ffi_store32(iter_base + 8, ptr937)
+                let ptr969 = mbt_ffi_str2ptr(payload968.text)
+                mbt_ffi_store32(iter_base + 12, payload968.text.length())
+                mbt_ffi_store32(iter_base + 8, ptr969)
 
-                match payload936.language {
+                match payload968.language {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload939) => {
+                  Some(payload971) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr940 = mbt_ffi_str2ptr(payload939)
-                    mbt_ffi_store32(iter_base + 24, payload939.length())
-                    mbt_ffi_store32(iter_base + 20, ptr940)
+                    let ptr972 = mbt_ffi_str2ptr(payload971)
+                    mbt_ffi_store32(iter_base + 24, payload971.length())
+                    mbt_ffi_store32(iter_base + 20, ptr972)
 
                     ()
                   }
@@ -16405,26 +16805,26 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              BinaryValue(payload941) => {
+              BinaryValue(payload973) => {
                 mbt_ffi_store8(iter_base + 0, 24)
 
-                let ptr942 = mbt_ffi_bytes2ptr(payload941.bytes)
+                let ptr974 = mbt_ffi_bytes2ptr(payload973.bytes)
 
-                mbt_ffi_store32(iter_base + 12, payload941.bytes.length())
-                mbt_ffi_store32(iter_base + 8, ptr942)
+                mbt_ffi_store32(iter_base + 12, payload973.bytes.length())
+                mbt_ffi_store32(iter_base + 8, ptr974)
 
-                match payload941.mime_type {
+                match payload973.mime_type {
                   None => {
                     mbt_ffi_store8(iter_base + 16, 0)
 
                     ()
                   }
-                  Some(payload944) => {
+                  Some(payload976) => {
                     mbt_ffi_store8(iter_base + 16, 1)
 
-                    let ptr945 = mbt_ffi_str2ptr(payload944)
-                    mbt_ffi_store32(iter_base + 24, payload944.length())
-                    mbt_ffi_store32(iter_base + 20, ptr945)
+                    let ptr977 = mbt_ffi_str2ptr(payload976)
+                    mbt_ffi_store32(iter_base + 24, payload976.length())
+                    mbt_ffi_store32(iter_base + 20, ptr977)
 
                     ()
                   }
@@ -16432,99 +16832,99 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
                 ()
               }
-              PathValue(payload946) => {
+              PathValue(payload978) => {
                 mbt_ffi_store8(iter_base + 0, 25)
 
-                let ptr947 = mbt_ffi_str2ptr(payload946)
-                mbt_ffi_store32(iter_base + 12, payload946.length())
-                mbt_ffi_store32(iter_base + 8, ptr947)
+                let ptr979 = mbt_ffi_str2ptr(payload978)
+                mbt_ffi_store32(iter_base + 12, payload978.length())
+                mbt_ffi_store32(iter_base + 8, ptr979)
 
                 ()
               }
-              UrlValue(payload948) => {
+              UrlValue(payload980) => {
                 mbt_ffi_store8(iter_base + 0, 26)
 
-                let ptr949 = mbt_ffi_str2ptr(payload948)
-                mbt_ffi_store32(iter_base + 12, payload948.length())
-                mbt_ffi_store32(iter_base + 8, ptr949)
+                let ptr981 = mbt_ffi_str2ptr(payload980)
+                mbt_ffi_store32(iter_base + 12, payload980.length())
+                mbt_ffi_store32(iter_base + 8, ptr981)
 
                 ()
               }
-              DatetimeValue(payload950) => {
+              DatetimeValue(payload982) => {
                 mbt_ffi_store8(iter_base + 0, 27)
-                mbt_ffi_store64(iter_base + 8, payload950.seconds)
+                mbt_ffi_store64(iter_base + 8, payload982.seconds)
                 mbt_ffi_store32(
                   iter_base + 16,
-                  payload950.nanoseconds.reinterpret_as_int(),
+                  payload982.nanoseconds.reinterpret_as_int(),
                 )
 
                 ()
               }
-              DurationValue(payload951) => {
+              DurationValue(payload983) => {
                 mbt_ffi_store8(iter_base + 0, 28)
-                mbt_ffi_store64(iter_base + 8, payload951.nanoseconds)
+                mbt_ffi_store64(iter_base + 8, payload983.nanoseconds)
 
                 ()
               }
-              QuantityValueNode(payload952) => {
+              QuantityValueNode(payload984) => {
                 mbt_ffi_store8(iter_base + 0, 29)
-                mbt_ffi_store64(iter_base + 8, payload952.mantissa)
-                mbt_ffi_store32(iter_base + 16, payload952.scale)
+                mbt_ffi_store64(iter_base + 8, payload984.mantissa)
+                mbt_ffi_store32(iter_base + 16, payload984.scale)
 
-                let ptr953 = mbt_ffi_str2ptr(payload952.unit)
-                mbt_ffi_store32(iter_base + 24, payload952.unit.length())
-                mbt_ffi_store32(iter_base + 20, ptr953)
+                let ptr985 = mbt_ffi_str2ptr(payload984.unit)
+                mbt_ffi_store32(iter_base + 24, payload984.unit.length())
+                mbt_ffi_store32(iter_base + 20, ptr985)
 
                 ()
               }
-              UnionValue(payload954) => {
+              UnionValue(payload986) => {
                 mbt_ffi_store8(iter_base + 0, 30)
 
-                let ptr955 = mbt_ffi_str2ptr(payload954.tag)
-                mbt_ffi_store32(iter_base + 12, payload954.tag.length())
-                mbt_ffi_store32(iter_base + 8, ptr955)
-                mbt_ffi_store32(iter_base + 16, payload954.body)
+                let ptr987 = mbt_ffi_str2ptr(payload986.tag)
+                mbt_ffi_store32(iter_base + 12, payload986.tag.length())
+                mbt_ffi_store32(iter_base + 8, ptr987)
+                mbt_ffi_store32(iter_base + 16, payload986.body)
 
                 ()
               }
-              SecretValue(payload956) => {
+              SecretValue(payload988) => {
                 mbt_ffi_store8(iter_base + 0, 31)
 
-                let ptr957 = mbt_ffi_str2ptr(payload956.secret_ref)
-                mbt_ffi_store32(iter_base + 12, payload956.secret_ref.length())
-                mbt_ffi_store32(iter_base + 8, ptr957)
+                let ptr989 = mbt_ffi_str2ptr(payload988.secret_ref)
+                mbt_ffi_store32(iter_base + 12, payload988.secret_ref.length())
+                mbt_ffi_store32(iter_base + 8, ptr989)
 
                 ()
               }
-              QuotaTokenValue(payload958) => {
+              QuotaTokenValue(payload990) => {
                 mbt_ffi_store8(iter_base + 0, 32)
                 mbt_ffi_store64(
                   iter_base + 8,
-                  payload958.environment_id.uuid.high_bits.reinterpret_as_int64(),
+                  payload990.environment_id.uuid.high_bits.reinterpret_as_int64(),
                 )
                 mbt_ffi_store64(
                   iter_base + 16,
-                  payload958.environment_id.uuid.low_bits.reinterpret_as_int64(),
+                  payload990.environment_id.uuid.low_bits.reinterpret_as_int64(),
                 )
 
-                let ptr959 = mbt_ffi_str2ptr(payload958.resource_name)
+                let ptr991 = mbt_ffi_str2ptr(payload990.resource_name)
                 mbt_ffi_store32(
                   iter_base + 28,
-                  payload958.resource_name.length(),
+                  payload990.resource_name.length(),
                 )
-                mbt_ffi_store32(iter_base + 24, ptr959)
+                mbt_ffi_store32(iter_base + 24, ptr991)
                 mbt_ffi_store64(
                   iter_base + 32,
-                  payload958.expected_use.reinterpret_as_int64(),
+                  payload990.expected_use.reinterpret_as_int64(),
                 )
-                mbt_ffi_store64(iter_base + 40, payload958.last_credit)
+                mbt_ffi_store64(iter_base + 40, payload990.last_credit)
                 mbt_ffi_store64(
                   iter_base + 48,
-                  payload958.last_credit_at.seconds,
+                  payload990.last_credit_at.seconds,
                 )
                 mbt_ffi_store32(
                   iter_base + 56,
-                  payload958.last_credit_at.nanoseconds.reinterpret_as_int(),
+                  payload990.last_credit_at.nanoseconds.reinterpret_as_int(),
                 )
 
                 ()
@@ -16533,10 +16933,10 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
           }
           mbt_ffi_store32(
             return_area + 32,
-            payload678.value.value_nodes.length(),
+            payload702.value.value_nodes.length(),
           )
-          mbt_ffi_store32(return_area + 28, address960)
-          mbt_ffi_store32(return_area + 36, payload678.value.root)
+          mbt_ffi_store32(return_area + 28, address992)
+          mbt_ffi_store32(return_area + 36, payload702.value.root)
 
           ()
         }
@@ -16620,7 +17020,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                   1 =>
                     match mbt_ffi_load8_u(iter_base + 56) {
                       0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                      1 => ()
+                      2 => ()
+                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                       _ => panic()
                     }
                   _ => panic()
@@ -16668,7 +17070,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                   1 =>
                     match mbt_ffi_load8_u(iter_base + 60) {
                       0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                      1 => ()
+                      2 => ()
+                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                       _ => panic()
                     }
                   _ => panic()
@@ -16876,7 +17280,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                   1 =>
                     match mbt_ffi_load8_u(iter_base + 80) {
                       0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                      1 => ()
+                      2 => ()
+                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                       _ => panic()
                     }
                   _ => panic()
@@ -16934,7 +17340,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
             1 =>
               match mbt_ffi_load8_u(iter_base + 132) {
                 0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                1 => ()
+                2 => ()
+                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
                 _ => panic()
               }
             _ => panic()
@@ -17010,7 +17418,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                 1 =>
                   match mbt_ffi_load8_u(iter_base + 60) {
                     0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                     _ => panic()
                   }
                 _ => panic()
@@ -17137,7 +17547,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                   1 =>
                     match mbt_ffi_load8_u(iter_base + 60) {
                       0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                      1 => ()
+                      2 => ()
+                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                       _ => panic()
                     }
                   _ => panic()
@@ -17222,7 +17634,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 56) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                         _ => panic()
                       }
                     _ => panic()
@@ -17270,7 +17684,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 60) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                         _ => panic()
                       }
                     _ => panic()
@@ -17484,7 +17900,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 80) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                         _ => panic()
                       }
                     _ => panic()
@@ -17542,7 +17960,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 132) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
                   _ => panic()
                 }
               _ => panic()
@@ -17618,7 +18038,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                   1 =>
                     match mbt_ffi_load8_u(iter_base + 60) {
                       0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                      1 => ()
+                      2 => ()
+                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                       _ => panic()
                     }
                   _ => panic()
@@ -17745,7 +18167,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 60) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                         _ => panic()
                       }
                     _ => panic()
@@ -17888,7 +18312,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 56) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
                         _ => panic()
                       }
                     _ => panic()
@@ -17936,7 +18362,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 60) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
                         _ => panic()
                       }
                     _ => panic()
@@ -18150,7 +18578,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
                     1 =>
                       match mbt_ffi_load8_u(iter_base + 80) {
                         0 => ()
-                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
                         _ => panic()
                       }
                     _ => panic()
@@ -18208,7 +18638,9 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
               1 =>
                 match mbt_ffi_load8_u(iter_base + 132) {
                   0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                  1 => ()
+                  2 => ()
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
                   _ => panic()
                 }
               _ => panic()
@@ -18297,71 +18729,6 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
 }
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
-
-///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-  #|(func (param i32) (result i64) local.get 0 i64.load)
-
-///|
-extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_s)
-
-///|
-extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load16_u)
-
-///|
-extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
-  #|(func (param i32) (result f64) local.get 0 f64.load)
-
-///|
-extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
-  #|(func (param i32) (result f32) local.get 0 f32.load)
-
-///|
-extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.extend16_s)
-
-///|
-extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-  #|(func (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-  #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1 i32.const 8 i32.add)
-
-///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
-  #|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
-
-///|
-extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
-  #|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
-
-///|
-extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
-
-///|
-extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
-  #|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
-
-///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
-
-///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #|(func (param i32) (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 8 i32.sub local.tee 2
@@ -18369,12 +18736,16 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #| local.get 2)
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
+extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.extend8_s)
 
 ///|
-extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load16_s)
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+  #|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
+  #|(func (param i32) (result f64) local.get 0 f64.load)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
@@ -18388,9 +18759,70 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
   #| local.get 2)
 
 ///|
-extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.extend8_s)
+extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
+  #|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
+
+///|
+extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
+  #|(func (param i32) (result f32) local.get 0 f32.load)
+
+///|
+extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load16_s)
+
+///|
+extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load16_u)
+
+///|
+extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
+  #|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
 
 ///|
 extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
   #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
+
+///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
+
+///|
+extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
+  #|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
+///|
+extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+
+///|
+extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
+  #|(func (param i32) (result i32) (local i32)
+  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+  #| local.tee 1 i32.const 0 call $moonbit.init_array8
+  #| local.get 1 i32.const 8 i32.add)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
+extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.extend16_s)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_s)

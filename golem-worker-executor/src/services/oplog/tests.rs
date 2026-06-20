@@ -801,16 +801,18 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .await;
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    let entry1 = oplog
-        .add_host_call(
+    let (start_idx, end_idx) = oplog
+        .add_completed_host_call(
             HostFunctionName::Custom("f1".to_string()),
             &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
             &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry_start = oplog.read(start_idx).await.rounded();
+    let entry_end = oplog.read(end_idx).await.rounded();
     let entry2 = oplog
         .add_agent_invocation_started(AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
@@ -856,18 +858,23 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await;
 
-    let r1 = oplog.read(last_oplog_idx.next()).await.rounded();
-    let r2 = oplog.read(last_oplog_idx.next().next()).await.rounded();
-    let r3 = oplog
+    let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
+    let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r2 = oplog
         .read(last_oplog_idx.next().next().next())
         .await
         .rounded();
-    let r4 = oplog
+    let r3 = oplog
         .read(last_oplog_idx.next().next().next().next())
         .await
         .rounded();
+    let r4 = oplog
+        .read(last_oplog_idx.next().next().next().next().next())
+        .await
+        .rounded();
 
-    assert_eq!(r1, entry1);
+    assert_eq!(r_start, entry_start);
+    assert_eq!(r_end, entry_end);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
@@ -877,7 +884,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &owned_agent_id,
             AgentMode::Durable,
             last_oplog_idx.next(),
-            4,
+            5,
         )
         .await;
     assert_eq!(
@@ -886,22 +893,26 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             .map(|entry| entry.rounded())
             .collect::<Vec<_>>(),
         vec![
-            entry1.clone(),
+            entry_start.clone(),
+            entry_end.clone(),
             entry2.clone(),
             entry3.clone(),
             entry4.clone(),
         ]
     );
 
-    let p1 = match entry1 {
-        OplogEntry::HostCall { response, .. } => {
+    let p1 = match entry_end {
+        OplogEntry::End {
+            response: Some(payload),
+            ..
+        } => {
             let response = oplog_service
-                .download_payload(&owned_agent_id, AgentMode::Durable, response)
+                .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
                 .unwrap();
             match response {
                 HostResponse::Custom(vnt) => String::from_value(vnt.value()).unwrap(),
-                _ => panic!("unexpected entry"),
+                _ => panic!("unexpected response"),
             }
         }
         _ => panic!("unexpected entry"),
@@ -994,16 +1005,18 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let large_payload4 = vec![3u8; 1024 * 1024];
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    let entry1 = oplog
-        .add_host_call(
+    let (start_idx, end_idx) = oplog
+        .add_completed_host_call(
             HostFunctionName::Custom("f1".to_string()),
             &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
             &HostResponse::Custom(large_payload1.clone().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
+            None,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry_start = oplog.read(start_idx).await.rounded();
+    let entry_end = oplog.read(end_idx).await.rounded();
     let entry2 = oplog
         .add_agent_invocation_started(AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
@@ -1055,18 +1068,23 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await;
 
-    let r1 = oplog.read(last_oplog_idx.next()).await.rounded();
-    let r2 = oplog.read(last_oplog_idx.next().next()).await.rounded();
-    let r3 = oplog
+    let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
+    let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r2 = oplog
         .read(last_oplog_idx.next().next().next())
         .await
         .rounded();
-    let r4 = oplog
+    let r3 = oplog
         .read(last_oplog_idx.next().next().next().next())
         .await
         .rounded();
+    let r4 = oplog
+        .read(last_oplog_idx.next().next().next().next().next())
+        .await
+        .rounded();
 
-    assert_eq!(r1, entry1);
+    assert_eq!(r_start, entry_start);
+    assert_eq!(r_end, entry_end);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
     assert_eq!(r4, entry4);
@@ -1076,7 +1094,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &owned_agent_id,
             AgentMode::Durable,
             last_oplog_idx.next(),
-            4,
+            5,
         )
         .await;
     assert_eq!(
@@ -1085,22 +1103,26 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             .map(|entry| entry.rounded())
             .collect::<Vec<_>>(),
         vec![
-            entry1.clone(),
+            entry_start.clone(),
+            entry_end.clone(),
             entry2.clone(),
             entry3.clone(),
             entry4.clone(),
         ]
     );
 
-    let p1 = match entry1 {
-        OplogEntry::HostCall { response, .. } => {
+    let p1 = match entry_end {
+        OplogEntry::End {
+            response: Some(payload),
+            ..
+        } => {
             let response = oplog_service
-                .download_payload(&owned_agent_id, AgentMode::Durable, response)
+                .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
                 .unwrap();
             match response {
                 HostResponse::Custom(vnt) => Vec::<u8>::from_value(vnt.value()).unwrap(),
-                _ => panic!("unexpected entry"),
+                _ => panic!("unexpected response"),
             }
         }
         _ => panic!("unexpected entry"),
@@ -1261,16 +1283,21 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let mut entries = Vec::new();
 
     for i in 0..n {
-        let entry = oplog
-            .add_host_call(
-                HostFunctionName::Custom("test-function".to_string()),
-                &HostRequest::Custom(i.into_typed_schema_value().unwrap()),
-                &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
-                DurableFunctionType::ReadLocal,
-            )
+        // One simple Start entry per iteration; the test only cares about
+        // per-entry layer transfer behaviour, not the Start/End pairing.
+        let request = oplog
+            .upload_payload(&HostRequest::Custom(i.into_typed_schema_value().unwrap()))
             .await
-            .unwrap()
-            .rounded();
+            .unwrap();
+        let entry = OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("test-function".to_string()),
+            request: Some(request),
+            durable_function_type: DurableFunctionType::ReadLocal,
+        }
+        .rounded();
+        oplog.add(entry.clone()).await;
         oplog.commit(CommitLevel::Always).await;
         entries.push(entry);
     }

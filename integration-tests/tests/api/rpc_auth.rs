@@ -123,14 +123,14 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
                 data: PermissionShareData {
                     lower_positive: vec![
                         format!(
-                            "environment({}/{}) @ {} : view : {}",
+                            "environment({}/{}/{}) @ {} : view :",
                             owner.account_email.as_str(),
                             owner_env.application_name.0,
-                            caller.account_email.as_str(),
                             owner_env.name.0,
+                            caller.account_email.as_str(),
                         ),
                         format!(
-                            "component({}/{}/{}) @ {} : view : *",
+                            "component({}/{}/{}/*) @ {} : view : *",
                             owner.account_email.as_str(),
                             owner_env.application_name.0,
                             owner_env.name.0,

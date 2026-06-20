@@ -119,7 +119,9 @@ fn extract_single_field_value(
     field: &NamedField,
 ) -> Result<SchemaValue, String> {
     let name = &field.name;
-    let resolved = graph.resolve_ref(&field.schema).map_err(|e| e.to_string())?;
+    let resolved = graph
+        .resolve_ref(&field.schema)
+        .map_err(|e| e.to_string())?;
     match resolved {
         SchemaType::Text { restrictions, .. } => {
             let json_value = args_map

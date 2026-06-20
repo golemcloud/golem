@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -128,7 +129,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
-        match (resolve_schema_ref(expected_graph, expected_type), config_value) {
+        match (
+            resolve_schema_ref(expected_graph, expected_type),
+            config_value,
+        ) {
             (SchemaType::Option { .. }, None) => Ok(SchemaValue::Option { inner: None }),
             // The stored local config is already a schema-native typed value.
             (_, Some(stored)) => Ok(stored.value().clone()),
@@ -168,83 +172,78 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
-        let durability =
-            Durability::<GolemAgentGetConfigValue>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
+        let handle = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::start(
+            self,
+            HostRequestGolemAgentGetConfigValue {
+                path: path.clone(),
+                expected_type: expected_graph.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-        if durability.is_live() {
-            let agent_secrets = self
-                .state
-                .environment_state_service
-                .get_agent_secrets(self.state.component_metadata.environment_id)
-                .await?;
+        let persisted = handle
+            .run(self, async |ctx| -> anyhow::Result<_> {
+                let agent_secrets = ctx
+                    .state
+                    .environment_state_service
+                    .get_agent_secrets(ctx.state.component_metadata.environment_id)
+                    .await?;
 
-            let canonical_agent_secret_path =
-                CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
-            let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
+                let canonical_agent_secret_path =
+                    CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
+                let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
-            let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
+                let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
 
-            let result_schema = match (expected_root, agent_secret) {
-                // No secret stored; `Option<_>` resolves to `None`.
-                (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
+                let result_schema = match (expected_root, agent_secret) {
+                    // No secret stored; `Option<_>` resolves to `None`.
+                    (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
 
-                // No secret stored and a non-optional expected type.
-                (_, None) => {
-                    return Err(anyhow!(
-                        "No secret for key {path_str} exists in environment"
-                    ));
-                }
-
-                // Secret exists. Compatibility is checked cross-graph so any
-                // [`SchemaType::Ref`] on either side resolves through its own
-                // graph — including a ref to `Option<T>` matched against an
-                // `Option<T>` expected type.
-                (_, Some(secret)) => {
-                    if !schema_types_compatible(
-                        &secret.secret_type,
-                        &secret.secret_type.root,
-                        &expected_graph,
-                        &expected_graph.root,
-                    ) {
+                    // No secret stored and a non-optional expected type.
+                    (_, None) => {
                         return Err(anyhow!(
-                            "declared and expected type for config key {path_str} are not compatible"
+                            "No secret for key {path_str} exists in environment"
                         ));
                     }
 
-                    match (expected_root, &secret.secret_value) {
-                        // Missing-value secrets with an `Option<_>`
-                        // expected type collapse to `None`.
-                        (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
-                        (_, None) => {
-                            return Err(anyhow!("Secret key {path_str} is missing value"));
+                    // Secret exists. Compatibility is checked cross-graph so any
+                    // [`SchemaType::Ref`] on either side resolves through its own
+                    // graph — including a ref to `Option<T>` matched against an
+                    // `Option<T>` expected type.
+                    (_, Some(secret)) => {
+                        if !schema_types_compatible(
+                            &secret.secret_type,
+                            &secret.secret_type.root,
+                            &expected_graph,
+                            &expected_graph.root,
+                        ) {
+                            return Err(anyhow!(
+                                "declared and expected type for config key {path_str} are not compatible"
+                            ));
                         }
-                        (_, Some(value)) => value.clone(),
+
+                        match (expected_root, &secret.secret_value) {
+                            // Missing-value secrets with an `Option<_>`
+                            // expected type collapse to `None`.
+                            (SchemaType::Option { .. }, None) => {
+                                SchemaValue::Option { inner: None }
+                            }
+                            (_, None) => {
+                                return Err(anyhow!("Secret key {path_str} is missing value"));
+                            }
+                            (_, Some(value)) => value.clone(),
+                        }
                     }
-                }
-            };
+                };
 
-            // The oplog payload stores the resolved value schema-natively; the
-            // guest-supplied `expected_type` graph is recorded as the request
-            // metadata.
-            let persisted = durability
-                .persist(
-                    self,
-                    HostRequestGolemAgentGetConfigValue {
-                        path,
-                        expected_type: expected_graph,
-                    },
-                    HostResponseGolemAgentGetConfigValue {
-                        result: result_schema,
-                    },
-                )
-                .await?;
+                Ok(HostResponseGolemAgentGetConfigValue {
+                    result: result_schema,
+                })
+            })
+            .await?;
 
-            Ok(persisted.result)
-        } else {
-            let replayed = durability.replay(self).await?;
-            Ok(replayed.result)
-        }
+        Ok(persisted.result)
     }
 
     /// Durable lookup of all registered agent types, returning the schema-native
@@ -253,10 +252,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_agent_types_model(
         &mut self,
     ) -> anyhow::Result<Vec<RegisteredAgentTypeSchema>> {
-        let mut durability =
-            Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<GolemAgentGetAllAgentTypes, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let response = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let result = loop {
                 let result = self
                     .agent_types_service()
@@ -267,7 +277,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .map_err(|err| err.to_string());
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
                 {
@@ -275,18 +285,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemAgentAgentTypes { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemAgentAgentTypes { result })
+                .await?
+        };
 
-        match result.result {
+        match response.result {
             Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err)),
         }
@@ -298,10 +302,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: AgentTypeName,
     ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
-        let mut durability =
-            Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
-        let result = if durability.is_live() {
+        let mut handle = CallHandle::<GolemAgentGetAgentType, NotCancellable>::start(
+            self,
+            HostRequestGolemAgentGetAgentType {
+                agent_type_name: agent_type_name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let response = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let component_revision = self.state.component_metadata.revision;
             let result = loop {
                 let result = self
@@ -314,7 +331,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .map_err(|err| err.to_string());
-                match durability
+                match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
                 {
@@ -322,18 +339,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            durability
-                .persist(
-                    self,
-                    HostRequestGolemAgentGetAgentType { agent_type_name },
-                    HostResponseGolemAgentAgentType { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+            handle
+                .complete(self, HostResponseGolemAgentAgentType { result })
+                .await?
+        };
 
-        match result.result {
+        match response.result {
             Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err)),
         }
@@ -443,71 +454,83 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn create_webhook(&mut self, promise_id: core_wire::PromiseId) -> anyhow::Result<String> {
-        let durability =
-            Durability::<GolemAgentCreateWebhook>::new(self, DurableFunctionType::ReadRemote)
-                .await?;
+        let promise_id: PromiseId = promise_id.clone().into();
+        let mut handle = CallHandle::<GolemAgentCreateWebhook, NotCancellable>::start(
+            self,
+            HostRequestGolemApiPromiseId {
+                promise_id: promise_id.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-        if durability.is_live() {
-            let promise_id: PromiseId = promise_id.clone().into();
-            if promise_id.agent_id.component_id != self.state.component_metadata.id {
-                let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
-                let persisted = durability
-                    .persist(
-                        self,
-                        HostRequestGolemApiPromiseId { promise_id },
-                        HostResponseGolemAgentWebhookUrl { result: Err(error) },
-                    )
-                    .await?;
-                return persisted.result.map_err(|e| anyhow!(e));
+        let response = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
             }
 
-            let Some(agent_id) = self.state.agent_id.as_ref() else {
-                let error =
-                    "Creating webhook urls is only supported for agentic components".to_string();
-                let persisted = durability
-                    .persist(
+            if promise_id.agent_id.component_id != self.state.component_metadata.id {
+                let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
+                break 'result handle
+                    .complete(
                         self,
-                        HostRequestGolemApiPromiseId { promise_id },
                         HostResponseGolemAgentWebhookUrl { result: Err(error) },
                     )
                     .await?;
-                return persisted.result.map_err(|e| anyhow!(e));
+            }
+
+            let agent_type = match self.state.agent_id.as_ref() {
+                Some(agent_id) => agent_id.agent_type.clone(),
+                None => {
+                    let error = "Creating webhook urls is only supported for agentic components"
+                        .to_string();
+                    break 'result handle
+                        .complete(
+                            self,
+                            HostResponseGolemAgentWebhookUrl { result: Err(error) },
+                        )
+                        .await?;
+                }
             };
 
-            let webhook_url = self
+            let webhook_url = match self
                 .state
                 .agent_webhooks_service
                 .get_agent_webhook_url_for_promise(
                     self.state.component_metadata.environment_id,
-                    &agent_id.agent_type,
+                    &agent_type,
                     &promise_id,
                 )
-                .await?;
+                .await
+            {
+                Ok(webhook_url) => webhook_url,
+                Err(err) => {
+                    handle.abandon_for_trap();
+                    return Err(err.into());
+                }
+            };
 
             let Some(webhook_url) = webhook_url else {
+                handle.abandon_for_trap();
                 return Err(anyhow!(
                     "Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"
                 ));
             };
 
-            let persisted = durability
-                .persist(
+            handle
+                .complete(
                     self,
-                    HostRequestGolemApiPromiseId { promise_id },
                     HostResponseGolemAgentWebhookUrl {
                         result: Ok(webhook_url),
                     },
                 )
-                .await?;
-
-            Ok(persisted.result.map_err(|e| anyhow!(e))?)
-        } else {
-            Ok(durability
-                .replay(self)
                 .await?
-                .result
-                .map_err(|e| anyhow!(e))?)
-        }
+        };
+
+        response.result.map_err(|e| anyhow!(e))
     }
 
     async fn get_config_value(

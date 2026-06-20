@@ -103,22 +103,70 @@ oplog_entry! {
             instance_id: Uuid
         }
     },
-    /// The agent invoked a host function
-    HostCall {
+    /// Marks the start of a durable host call (or scope such as a batched-write).
+    ///
+    /// A `Start` is identified by its own `OplogIndex`. It is paired either with a
+    /// matching `End` (successful completion) or a matching `Cancelled` (the call was
+    /// dropped before completion); both reference this `Start` via `start_index`.
+    ///
+    /// `parent_start_index` is the `OplogIndex` of the enclosing scope's `Start`, if any.
+    /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
+    /// host-level request payload (batched-write, future transaction scopes).
+    Start {
         hint: false
-        wit_raw_type: "raw-host-call-parameters"
-        wit_public_type: "host-call-parameters"
+        wit_raw_type: "raw-start-parameters"
+        wit_public_type: "start-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             function_name: payload::host_functions::HostFunctionName,
-            request: payload::OplogPayload<payload::HostRequest>,
-            response: payload::OplogPayload<payload::HostResponse>,
+            request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
         }
         public {
+            parent_start_index: Option<OplogIndex>,
             function_name: String,
-            request: TypedSchemaValue,
-            response: TypedSchemaValue,
+            request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
+        }
+    },
+    /// Marks the successful completion of a durable host call (or scope) started by the
+    /// `Start` at `start_index`.
+    ///
+    /// `response` is `Some(...)` for real host calls and `None` for scopes (batched-write,
+    /// future transaction scopes). `forced_commit` requests the oplog to commit immediately
+    /// after this entry is appended (currently only used for scope ends that today drive
+    /// `CommitLevel::Always`).
+    End {
+        hint: false
+        wit_raw_type: "raw-end-parameters"
+        wit_public_type: "end-parameters"
+        raw {
+            start_index: OplogIndex,
+            response: Option<payload::OplogPayload<payload::HostResponse>>,
+            forced_commit: bool,
+        }
+        public {
+            start_index: OplogIndex,
+            response: Option<TypedSchemaValue>,
+            forced_commit: bool,
+        }
+    },
+    /// Marks that a durable host call started by the `Start` at `start_index` was
+    /// cancelled (e.g. dropped from a `select!`) before producing a final response.
+    ///
+    /// `partial` optionally carries any partial response captured before cancellation
+    /// (e.g. partially read bytes from a stream).
+    Cancelled {
+        hint: false
+        wit_raw_type: "raw-cancelled-parameters"
+        wit_public_type: "cancelled-parameters"
+        raw {
+            start_index: OplogIndex,
+            partial: Option<payload::OplogPayload<payload::HostResponse>>,
+        }
+        public {
+            start_index: OplogIndex,
+            partial: Option<TypedSchemaValue>,
         }
     },
     /// The agent has been invoked
@@ -246,28 +294,6 @@ oplog_entry! {
         hint: false
         wit_raw_type: "end-atomic-region-parameters"
         wit_public_type: "end-atomic-region-parameters"
-        raw {
-            begin_index: OplogIndex,
-        }
-        public {
-            begin_index: OplogIndex,
-        }
-    },
-    /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-    /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-    /// unfinished remote writes cannot be recovered.
-    BeginRemoteWrite {
-        hint: false
-        wit_raw_type: "timestamp"
-        wit_public_type: "timestamp"
-        raw {}
-        public {}
-    },
-    /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-    EndRemoteWrite {
-        hint: false
-        wit_raw_type: "end-remote-write-parameters"
-        wit_public_type: "end-remote-write-parameters"
         raw {
             begin_index: OplogIndex,
         }

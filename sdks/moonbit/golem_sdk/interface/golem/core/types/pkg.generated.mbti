@@ -154,6 +154,8 @@ pub(all) enum ResultValuePayload {
 
 pub(all) enum Role {
   Multimodal
+  UnstructuredText
+  UnstructuredBinary
   Other(String)
 } derive(Eq, Show)
 

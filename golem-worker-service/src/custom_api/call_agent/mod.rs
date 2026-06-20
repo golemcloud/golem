@@ -115,10 +115,7 @@ impl CallAgentHandler {
                 None,
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
-                AuthCtx::agent(
-                    resolved_route.route.account_id,
-                    resolved_route.route.account_email.clone(),
-                ),
+                AuthCtx::System,
                 proto_principal,
                 Some(resolved_route.route.environment_id),
             )
@@ -198,9 +195,8 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
-        let Some((current_fingerprint, current_oplog)) = self
-            .fetch_current_validator(resolved_route, agent_id)
-            .await?
+        let Some((current_fingerprint, current_oplog)) =
+            self.fetch_current_validator(agent_id).await?
         else {
             return Ok(None);
         };
@@ -233,18 +229,11 @@ impl CallAgentHandler {
     /// the oplog index describe the same agent instance.
     async fn fetch_current_validator(
         &self,
-        resolved_route: &ResolvedRouteEntry,
         agent_id: &AgentId,
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(
-                agent_id,
-                AuthCtx::agent(
-                    resolved_route.route.account_id,
-                    resolved_route.route.account_email.clone(),
-                ),
-            )
+            .get_metadata(agent_id, AuthCtx::System)
             .await
         {
             Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),

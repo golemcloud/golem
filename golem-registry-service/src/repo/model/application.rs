@@ -44,6 +44,15 @@ pub struct ApplicationRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ApplicationScopedRecord {
+    pub application_id: Uuid,
+    pub name: String,
+    pub account_id: Uuid,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ApplicationRevisionRecord {
     pub application_id: Uuid,
     pub revision_id: i64,
@@ -72,6 +81,31 @@ pub struct ApplicationExtRevisionRecord {
 
     #[sqlx(flatten)]
     pub revision: ApplicationRevisionRecord,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ApplicationScopedExtRevisionRecord {
+    pub account_id: Uuid,
+
+    pub entity_created_at: SqlDateTime,
+
+    #[sqlx(flatten)]
+    pub revision: ApplicationRevisionRecord,
+}
+
+impl ApplicationScopedExtRevisionRecord {
+    pub fn try_into_model(
+        self,
+        account_email: AccountEmail,
+    ) -> Result<Application, ApplicationRepoError> {
+        Ok(Application {
+            id: ApplicationId(self.revision.application_id),
+            revision: self.revision.revision_id.try_into()?,
+            account_id: AccountId(self.account_id),
+            account_email,
+            name: ApplicationName(self.revision.name),
+        })
+    }
 }
 
 impl TryFrom<ApplicationExtRevisionRecord> for Application {

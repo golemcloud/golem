@@ -23,7 +23,9 @@ use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
-use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
+use golem_registry_service::repo::environment::{
+    EnvironmentRevisionRecord, EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
+};
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
@@ -59,7 +61,7 @@ use golem_registry_service::services::registry_change_notifier::{
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use heck::ToKebabCase;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
@@ -191,7 +193,9 @@ pub async fn test_application_create(deps: &Deps) {
         .unwrap();
     let_assert!(Some(app_2) = app_2);
 
-    check!(app == app_2);
+    check!(app.account_id == app_2.account_id);
+    check!(app.entity_created_at == app_2.entity_created_at);
+    check!(app.revision == app_2.revision);
 }
 
 pub async fn test_application_create_concurrent(deps: &Deps) {
@@ -294,11 +298,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     assert!(
         deps.environment_repo
-            .get_by_name(
-                app.revision.application_id,
-                env_name,
-                user.revision.account_id,
-            )
+            .get_by_name(app.revision.application_id, env_name)
             .await
             .unwrap()
             .is_none()
@@ -328,23 +328,131 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env_by_name = deps
         .environment_repo
-        .get_by_name(
-            app.revision.application_id,
-            env_name,
-            user.revision.account_id,
-        )
+        .get_by_name(app.revision.application_id, env_name)
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
-    check!(env == env_by_name);
+    check!(env.application_id == env_by_name.application_id);
+    check!(env.revision == env_by_name.revision);
 
     let env_by_id = deps
         .environment_repo
-        .get_by_id(env.revision.environment_id, user.revision.account_id, false)
+        .get_by_id(env.revision.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
-    check!(env == env_by_id);
+    check!(env.application_id == env_by_id.application_id);
+    check!(env.revision == env_by_id.revision);
+}
+
+pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
+    let owner_1 = deps
+        .create_account_with_email("visibility-owner-1@golem")
+        .await;
+    let owner_2 = deps
+        .create_account_with_email("visibility-owner-2@golem")
+        .await;
+
+    let app_1 = deps.create_application(owner_1.revision.account_id).await;
+    let app_2 = deps.create_application(owner_1.revision.account_id).await;
+    let app_3 = deps.create_application(owner_2.revision.account_id).await;
+
+    let env_1 = deps.create_env(app_1.revision.application_id).await;
+    let env_2 = deps.create_env(app_2.revision.application_id).await;
+    let env_3 = deps.create_env(app_3.revision.application_id).await;
+
+    let account_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
+            owner_1.revision.email.clone(),
+        )]);
+    let account_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &account_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(
+        account_filtered
+            == BTreeSet::from([env_1.revision.environment_id, env_2.revision.environment_id])
+    );
+
+    let account_filter_with_request_filters = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(
+                new_repo_uuid(),
+                &account_filter,
+                Some(&owner_1.revision.email),
+                Some(&app_2.revision.name),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    check!(account_filter_with_request_filters == BTreeSet::from([env_2.revision.environment_id]));
+
+    let application_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::application(
+            owner_1.revision.email.clone(),
+            app_1.revision.name.clone(),
+            None,
+        )]);
+    let application_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &application_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(application_filtered == BTreeSet::from([env_1.revision.environment_id]));
+
+    let environment_filter =
+        EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::application(
+            owner_2.revision.email.clone(),
+            app_3.revision.name.clone(),
+            Some(env_3.revision.name.clone()),
+        )]);
+    let environment_filtered = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(new_repo_uuid(), &environment_filter, None, None, None)
+            .await
+            .unwrap(),
+    );
+    check!(environment_filtered == BTreeSet::from([env_3.revision.environment_id]));
+
+    let none_filtered = deps
+        .environment_repo
+        .list_visible_to_account(
+            new_repo_uuid(),
+            &EnvironmentVisibilityFilter::None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    check!(none_filtered.is_empty());
+
+    let all_with_request_account_filter = environment_ids(
+        deps.environment_repo
+            .list_visible_to_account(
+                new_repo_uuid(),
+                &EnvironmentVisibilityFilter::All,
+                Some(&owner_2.revision.email),
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    check!(all_with_request_account_filter == BTreeSet::from([env_3.revision.environment_id]));
+}
+
+fn environment_ids(
+    records: Vec<golem_registry_service::repo::model::environment::EnvironmentWithDetailsRecord>,
+) -> BTreeSet<Uuid> {
+    records
+        .into_iter()
+        .map(|record| record.environment_id)
+        .collect()
 }
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
@@ -424,11 +532,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_name = deps
         .environment_repo
-        .get_by_name(
-            env_rev_0.application_id,
-            &env_rev_0.revision.name,
-            user.revision.account_id,
-        )
+        .get_by_name(env_rev_0.application_id, &env_rev_0.revision.name)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_name) = rev_1_by_name);
@@ -438,7 +542,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(env_rev_1.environment_id, user.revision.account_id, false)
+        .get_by_id(env_rev_1.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -477,11 +581,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_name = deps
         .environment_repo
-        .get_by_name(
-            env_rev_0.application_id,
-            &env_rev_0.revision.name,
-            user.revision.account_id,
-        )
+        .get_by_name(env_rev_0.application_id, &env_rev_0.revision.name)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_name) = rev_2_by_name);
@@ -491,7 +591,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(env_rev_2.environment_id, user.revision.account_id, false)
+        .get_by_id(env_rev_2.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
@@ -646,9 +746,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.name == component_name);
+    assert!(revision_0 == get_revision_0.component.revision);
+    assert!(get_revision_0.component.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.component.name == component_name);
 
     let get_revision_0 = deps
         .component_repo
@@ -821,9 +921,9 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.domain == domain);
+    assert!(revision_0 == get_revision_0.deployment.revision);
+    assert!(get_revision_0.deployment.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.deployment.domain == domain);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
@@ -1441,8 +1541,8 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(fetched_deployment) = fetched_deployment);
-    assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
-    assert!(fetched_deployment.domain == domain);
+    assert!(fetched_deployment.deployment.revision.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.deployment.domain == domain);
 
     let fetched_by_domain = deps
         .mcp_deployment_repo

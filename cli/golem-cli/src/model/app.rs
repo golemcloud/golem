@@ -1179,10 +1179,7 @@ impl ComponentLayerApplyContext {
             component_dir: self.component_dir.clone().unwrap_or_default(),
             component_dir_rel: self.component_dir_rel.clone().unwrap_or_default(),
             cargo_manifest_dir: self.cargo_manifest_dir.clone(),
-            moonbit_build_package_path: self
-                .moonbit_build_package_path
-                .clone()
-                .unwrap_or_default(),
+            moonbit_build_package_path: self.moonbit_build_package_path.clone().unwrap_or_default(),
         })
     }
 }

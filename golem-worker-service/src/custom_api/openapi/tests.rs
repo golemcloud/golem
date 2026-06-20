@@ -22,12 +22,12 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::schema::unstructured::{
-    unstructured_binary_schema_type, unstructured_text_schema_type,
-};
 use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, NamedFieldType, ResultSpec, TextRestrictions,
+};
+use golem_common::schema::unstructured::{
+    unstructured_binary_schema_type, unstructured_text_schema_type,
 };
 use golem_common::schema::{
     InputSchema, OutputSchema, Role, SchemaGraph, SchemaType, SchemaTypeDef,

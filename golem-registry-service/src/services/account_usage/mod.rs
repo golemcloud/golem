@@ -243,7 +243,7 @@ impl AccountUsageService {
             .ok_or_else(|| AccountUsageError::AccountNotfound(account_id))?;
 
         let account = account_service
-            .get(account_id, &AuthCtx::System)
+            .get(account_id, auth)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {

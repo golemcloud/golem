@@ -51,7 +51,9 @@ pub fn extract_constructor_input_values(
     for field in user_fields {
         ensure_supplyable_via_mcp(graph, field)?;
 
-        let resolved = graph.resolve_ref(&field.schema).map_err(|e| e.to_string())?;
+        let resolved = graph
+            .resolve_ref(&field.schema)
+            .map_err(|e| e.to_string())?;
         let json_value = match args_map.get(&field.name) {
             Some(value) => value.clone(),
             None => {
@@ -92,7 +94,10 @@ fn reject_multimodal(graph: &SchemaGraph, fields: &[&NamedField]) -> Result<(), 
 /// Reject unstructured (text/binary) constructor parameters, which cannot be
 /// supplied through the MCP agent-id encoding.
 fn ensure_supplyable_via_mcp(graph: &SchemaGraph, field: &NamedField) -> Result<(), String> {
-    match graph.resolve_ref(&field.schema).map_err(|e| e.to_string())? {
+    match graph
+        .resolve_ref(&field.schema)
+        .map_err(|e| e.to_string())?
+    {
         SchemaType::Text { .. } => Err(format!(
             "MCP cannot support unstructured-text constructor parameters like '{}'",
             field.name

@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::model::security_scheme::{
-    SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError, SecuritySchemeRevisionRecord,
+    SecuritySchemeAuthExtRevisionRecord, SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError,
+    SecuritySchemeRevisionRecord,
 };
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
@@ -59,7 +60,7 @@ pub trait SecuritySchemeRepo: Send + Sync {
     async fn get_by_id(
         &self,
         security_scheme_id: Uuid,
-    ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
+    ) -> Result<Option<SecuritySchemeAuthExtRevisionRecord>, SecuritySchemeRepoError>;
 
     async fn get_for_environment(
         &self,
@@ -138,7 +139,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
     async fn get_by_id(
         &self,
         security_scheme_id: Uuid,
-    ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<Option<SecuritySchemeAuthExtRevisionRecord>, SecuritySchemeRepoError> {
         self.repo
             .get_by_id(security_scheme_id)
             .instrument(Self::span_security_scheme_id(security_scheme_id))
@@ -389,14 +390,27 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         security_scheme_id: Uuid,
-    ) -> Result<Option<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
-        let result: Option<SecuritySchemeExtRevisionRecord> = self.with_ro("get_by_id")
+    ) -> Result<Option<SecuritySchemeAuthExtRevisionRecord>, SecuritySchemeRepoError> {
+        let result: Option<SecuritySchemeAuthExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.custom_provider_name, ssr.custom_issuer_url, ssr.created_at, ssr.created_by, ssr.deleted
+                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.custom_provider_name, ssr.custom_issuer_url, ssr.created_at, ssr.created_by, ssr.deleted,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM security_schemes ss
+                    JOIN environments e ON e.environment_id = ss.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                        AND er.revision_id = e.current_revision_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
                     JOIN security_scheme_revisions ssr ON ssr.security_scheme_id = ss.security_scheme_id AND ssr.revision_id = ss.current_revision_id
-                    WHERE ss.security_scheme_id = $1 AND ss.deleted_at IS NULL
+                    WHERE ss.security_scheme_id = $1
+                        AND ss.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "#})
                     .bind(security_scheme_id),
             )

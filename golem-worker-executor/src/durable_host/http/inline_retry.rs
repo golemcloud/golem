@@ -284,53 +284,71 @@ async fn reconstruct_outgoing_body_chunks_after(
     let write_zeroes_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesOutgoingBodyStreamWriteZeroes::HOST_FUNCTION_NAME;
 
+    // The legacy adapter persists a completed durable host call as a matched
+    // `Start` + `End` pair. We index pending `Start` entries by their
+    // `OplogIndex` and, when we see a matching `End` (via `start_index`), decode
+    // the response.
+    use std::collections::HashMap;
+    let mut pending_starts: HashMap<
+        OplogIndex,
+        golem_common::model::oplog::host_functions::HostFunctionName,
+    > = HashMap::new();
+
     for (idx, entry) in &entries {
         if after_index.is_some_and(|after| *idx <= after) {
             continue;
         }
 
-        if let OplogEntry::HostCall {
-            function_name,
-            response,
-            durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(batch_begin)),
-            ..
-        } = entry
-        {
-            if batch_begin != &begin_index {
-                continue;
+        match entry {
+            OplogEntry::Start {
+                function_name,
+                durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(batch_begin)),
+                ..
+            } if *batch_begin == begin_index => {
+                pending_starts.insert(*idx, function_name.clone());
             }
+            OplogEntry::End {
+                start_index,
+                response: Some(response),
+                ..
+            } => {
+                if let Some(function_name) = pending_starts.remove(start_index) {
+                    if function_name == write_fn_name {
+                        let response_value = oplog
+                            .download_payload(response.clone())
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!(
+                                    "failed to download outgoing body chunk payload: {err}"
+                                )
+                            })?;
 
-            if *function_name == write_fn_name {
-                let response_value =
-                    oplog
-                        .download_payload(response.clone())
-                        .await
-                        .map_err(|err| {
-                            anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
-                        })?;
+                        if let HostResponse::StreamWriteWithBytes(payload) = response_value
+                            && let Ok(data) = &payload.result
+                            && !data.is_empty()
+                        {
+                            chunks.push(BodyChunk::Data(Bytes::from(data.clone())));
+                        }
+                    } else if function_name == write_zeroes_fn_name {
+                        let response_value = oplog
+                            .download_payload(response.clone())
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!(
+                                    "failed to download outgoing body chunk payload: {err}"
+                                )
+                            })?;
 
-                if let HostResponse::StreamWriteWithBytes(payload) = response_value
-                    && let Ok(data) = &payload.result
-                    && !data.is_empty()
-                {
-                    chunks.push(BodyChunk::Data(Bytes::from(data.clone())));
-                }
-            } else if *function_name == write_zeroes_fn_name {
-                let response_value =
-                    oplog
-                        .download_payload(response.clone())
-                        .await
-                        .map_err(|err| {
-                            anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
-                        })?;
-
-                if let HostResponse::StreamWriteZeroes(payload) = response_value
-                    && let Ok(len) = &payload.result
-                    && *len > 0
-                {
-                    chunks.push(BodyChunk::Zeroes(*len));
+                        if let HostResponse::StreamWriteZeroes(payload) = response_value
+                            && let Ok(len) = &payload.result
+                            && *len > 0
+                        {
+                            chunks.push(BodyChunk::Zeroes(*len));
+                        }
+                    }
                 }
             }
+            _ => {}
         }
     }
 
@@ -362,19 +380,33 @@ pub async fn count_incoming_body_bytes(
     let blocking_read_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesIncomingBodyStreamBlockingRead::HOST_FUNCTION_NAME;
 
-    for entry in entries.values() {
-        if let OplogEntry::HostCall {
-            function_name,
-            response,
-            durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(batch_begin)),
-            ..
-        } = entry
-        {
-            if batch_begin != &begin_index {
-                continue;
-            }
+    // The legacy adapter persists a completed durable host call as a matched
+    // `Start` + `End` pair. Index pending `Start` entries by their
+    // `OplogIndex` and, when we see a matching `End` (via `start_index`), decode
+    // the response.
+    use std::collections::HashMap;
+    let mut pending_starts: HashMap<
+        OplogIndex,
+        golem_common::model::oplog::host_functions::HostFunctionName,
+    > = HashMap::new();
 
-            if *function_name == read_fn_name || *function_name == blocking_read_fn_name {
+    for (idx, entry) in &entries {
+        match entry {
+            OplogEntry::Start {
+                function_name,
+                durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(batch_begin)),
+                ..
+            } if *batch_begin == begin_index
+                && (*function_name == read_fn_name || *function_name == blocking_read_fn_name) =>
+            {
+                pending_starts.insert(*idx, function_name.clone());
+            }
+            OplogEntry::End {
+                start_index,
+                response: Some(response),
+                ..
+            } if pending_starts.contains_key(start_index) => {
+                pending_starts.remove(start_index);
                 let response_value =
                     oplog
                         .download_payload(response.clone())
@@ -389,6 +421,7 @@ pub async fn count_incoming_body_bytes(
                     total += data.len() as u64;
                 }
             }
+            _ => {}
         }
     }
 

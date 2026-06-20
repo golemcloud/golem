@@ -48,11 +48,13 @@ pub enum AccountVerb {
     Update,
     Delete,
     SetPlan,
+    ViewPlan,
 }
 impl VerbPattern for AccountVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
         match verb {
             "view" => Some(Self::View),
+            "view-plan" => Some(Self::ViewPlan),
             "update" => Some(Self::Update),
             "delete" => Some(Self::Delete),
             "set-plan" => Some(Self::SetPlan),

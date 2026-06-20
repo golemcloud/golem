@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::InFunctionRetryHost;
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendForSleep};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::ephemeral::{dec_promise_waiting, inc_promise_waiting};
 use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
@@ -35,26 +36,24 @@ use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
-        let durability =
-            Durability::<IoPollReady>::new(self, DurableFunctionType::ReadLocal).await?;
+        let handle = CallHandle::<IoPollReady, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
 
-        let result = if durability.is_live() {
-            let result = {
-                let mut view = self.as_wasi_view();
-                HostPollable::ready(&mut view.io_data(), self_)
-                    .await
-                    .map_err(|err| err.to_string())
-            };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponsePollReady { result },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?;
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let result = {
+                    let mut view = ctx.as_wasi_view();
+                    HostPollable::ready(&mut view.io_data(), self_)
+                        .await
+                        .map_err(|err| err.to_string())
+                };
+                Ok(HostResponsePollReady { result })
+            })
+            .await?;
 
         result.result.map_err(wasmtime::Error::msg)
     }
@@ -139,17 +138,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let durability =
-            Durability::<IoPollPoll>::new(self, DurableFunctionType::ReadLocal).await?;
+        let count = in_.len();
+        let mut handle = CallHandle::<IoPollPoll, NotCancellable>::start(
+            self,
+            HostRequestPollCount { count },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
 
-        let result: Result<HostResponsePollResult, Duration> = if durability.is_live() {
+        let result: Result<HostResponsePollResult, Duration> = 'poll: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'poll Ok(response),
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
             let interrupt_signal = self
                 .execution_status
                 .read()
                 .unwrap()
                 .create_await_interrupt_signal();
 
-            let count = in_.len();
             let record_ephemeral_promise_wait = if self.agent_mode() == AgentMode::Ephemeral {
                 let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
                 let mut all_blocked = true;
@@ -194,9 +204,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             result
                         }
                         interrupt_kind = interrupt_signal => {
+                            // Trap leaves the eager host-call `Start` incomplete (re-executed on
+                            // replay); never written as a `Cancelled`.
+                            handle.abandon_for_trap();
                             return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
                         }
                         _ = &mut timeout => {
+                            handle.abandon_for_trap();
                             let max_nanos = std_duration_to_nanos(timeout_duration);
                             return Err(ephemeral_sleep_too_long_error(max_nanos, max_nanos));
                         }
@@ -207,6 +221,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             result
                         }
                         interrupt_kind = interrupt_signal => {
+                            handle.abandon_for_trap();
                             return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
                         }
                     }
@@ -214,19 +229,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             };
 
             match is_suspend_for_sleep(&result) {
-                Some(duration) => Err(duration),
-                None => Ok(durability
-                    .persist(
+                Some(duration) => {
+                    // The worker suspends and re-executes this poll on resume; the eager `Start`
+                    // is left incomplete (resolved by incomplete-replay re-execution), not persisted.
+                    handle.abandon_for_trap();
+                    Err(duration)
+                }
+                None => Ok(handle
+                    .complete(
                         self,
-                        HostRequestPollCount { count },
                         HostResponsePollResult {
                             result: result.map_err(|err| err.to_string()),
                         },
                     )
                     .await?),
             }
-        } else {
-            Ok(durability.replay(self).await?)
         };
 
         match result {

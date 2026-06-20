@@ -280,7 +280,7 @@ async fn get_oplog_with_api_changing_updates(
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 13);
+    assert_eq!(oplog.len(), 15);
 
     Ok(())
 }
@@ -327,7 +327,7 @@ async fn get_oplog_starting_with_updated_component(
         .collect::<Vec<_>>();
 
     assert_eq!(result.into_typed::<u64>()?, 11);
-    assert_eq!(oplog.len(), 9);
+    assert_eq!(oplog.len(), 11);
 
     Ok(())
 }

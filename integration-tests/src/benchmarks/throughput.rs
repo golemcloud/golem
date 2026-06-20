@@ -367,6 +367,7 @@ impl AgentIdPair {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AgentInvocationTarget {
     Single {
         component: ComponentDto,

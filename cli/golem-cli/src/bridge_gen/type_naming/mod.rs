@@ -15,14 +15,14 @@
 use crate::bridge_gen::type_naming::builder::{Builder, RootOwner};
 use crate::bridge_gen::type_naming::schema_type_ext::SchemaTypeExt;
 use anyhow::bail;
-use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::unstructured::is_unstructured_variant;
 use golem_common::schema::agent::{
     AgentTypeSchema, FieldSource, InputSchema, NamedField, OutputSchema,
 };
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::metadata::TypeId;
+use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::unstructured::is_unstructured_variant;
 use indexmap::IndexMap;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};

@@ -95,10 +95,7 @@ pub async fn invoke_resource(
         agent_id: parsed_agent_id.to_string(),
     };
 
-    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent(
-        mcp_resource.account_id,
-        mcp_resource.account_email.clone(),
-    );
+    let auth_ctx = golem_service_base::model::auth::AuthCtx::System;
 
     let agent_output = worker_service
         .invoke_agent(
@@ -273,15 +270,15 @@ mod tests {
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{AgentMode, AgentTypeName};
     use golem_common::model::AgentInvocationOutput;
-    use golem_common::schema::unstructured::{
-        unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
-        unstructured_url_value,
-    };
     use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
     use golem_common::schema::graph::SchemaGraph;
     use golem_common::schema::metadata::Role;
     use golem_common::schema::schema_type::{
         BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
+    };
+    use golem_common::schema::unstructured::{
+        unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
+        unstructured_url_value,
     };
     use golem_common::schema::{BinaryValuePayload, InputSchema, TextValuePayload};
     use rmcp::model::{Annotated, RawResource};

@@ -1200,3 +1200,54 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     drop(executor);
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+async fn monotonic_clock_now_replay_parity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("MonotonicClockState", "monotonic-replay-parity-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Live: record a single `monotonic_clock::now()` reading. This goes through the
+    // concurrent-replay path (eager `Start` + resolver-matched `End`) and stores the value in
+    // the agent's state.
+    let recorded_live = executor
+        .invoke_and_await_agent(&component, &agent_id, "record_now", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart the executor so the worker is recovered by replaying its oplog. During replay
+    // `monotonic_clock::now()` must yield the recorded value, so the rebuilt agent state must equal
+    // the live reading.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let recorded_after_replay = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_recorded", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(
+        recorded_live, recorded_after_replay,
+        "monotonic_clock::now() must replay to the same value recorded live"
+    );
+    Ok(())
+}

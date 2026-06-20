@@ -15,6 +15,7 @@
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
+use crate::model::card::PolymorphicPermissionPattern;
 use crate::schema::AgentTypeSchema;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
@@ -131,6 +132,10 @@ impl Debug for ComponentMetadata {
                 "agent_type_provision_configs",
                 &self.data.agent_type_provision_configs,
             )
+            .field(
+                "agent_type_initial_permissions",
+                &self.data.agent_type_initial_permissions,
+            )
             .finish()
     }
 }
@@ -188,6 +193,25 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(skip))]
+    pub agent_type_initial_permissions: BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInitialPermissionTemplate {
+    #[serde(default)]
+    pub lower_positive: Vec<PolymorphicPermissionPattern>,
+    #[serde(default)]
+    pub lower_negative: Vec<PolymorphicPermissionPattern>,
+    #[serde(default)]
+    pub upper_positive: Vec<PolymorphicPermissionPattern>,
+    #[serde(default)]
+    pub upper_negative: Vec<PolymorphicPermissionPattern>,
 }
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations

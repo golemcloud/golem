@@ -40,6 +40,16 @@ pub struct DomainRegistrationRecord {
     pub audit: ImmutableAuditFields,
 }
 
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct DomainRegistrationAuthRecord {
+    #[sqlx(flatten)]
+    pub domain_registration: DomainRegistrationRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl DomainRegistrationRecord {
     pub fn from_model(model: DomainRegistration, audit: ImmutableAuditFields) -> Self {
         Self {

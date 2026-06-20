@@ -18,8 +18,8 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_cli::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTypeName};
+use golem_cli::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::{AgentTypeSchema, SchemaType};
@@ -73,7 +73,10 @@ fn ts_counter_agent() -> GeneratedPackage {
 
 #[test_dep(scope = PerWorker, tagged_as = "ts_code_first_snippets_foo_agent")]
 fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
-    GeneratedPackage::new(code_first_snippets_agent_type(GuestLanguage::TypeScript, "FooAgent"))
+    GeneratedPackage::new(code_first_snippets_agent_type(
+        GuestLanguage::TypeScript,
+        "FooAgent",
+    ))
 }
 
 #[test]
@@ -129,19 +132,23 @@ fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
     generator.generate().unwrap();
 
     let package_dir = target_dir.join(package_name);
-    assert!(std::process::Command::new("npm")
-        .arg("install")
-        .current_dir(&package_dir)
-        .status()
-        .unwrap()
-        .success());
-    assert!(std::process::Command::new("npm")
-        .arg("run")
-        .arg("build")
-        .current_dir(&package_dir)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        std::process::Command::new("npm")
+            .arg("install")
+            .current_dir(&package_dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("npm")
+            .arg("run")
+            .arg("build")
+            .current_dir(&package_dir)
+            .status()
+            .unwrap()
+            .success()
+    );
 }
 
 fn generated_package_dir(target_dir: &Utf8Path, package_name: &str) -> Utf8PathBuf {

@@ -31,16 +31,16 @@ use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
-use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::unstructured::{
-    unstructured_binary_restrictions, unstructured_text_restrictions,
-};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
+};
+use golem_common::schema::unstructured::{
+    unstructured_binary_restrictions, unstructured_text_restrictions,
 };
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
@@ -58,6 +58,7 @@ enum TsInput {
 }
 
 /// Output shape for a method, derived from an [`OutputSchema`].
+#[allow(clippy::large_enum_variant)]
 enum TsOutput {
     /// No return value.
     Unit,

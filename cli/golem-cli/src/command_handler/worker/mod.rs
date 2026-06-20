@@ -62,6 +62,7 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest,
 };
+use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -73,10 +74,9 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
-use golem_common::model::agent::typed_constructor_parameters;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -616,8 +616,9 @@ impl WorkerCommandHandler {
             bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        let value: SchemaValue = serde_json::from_value(parameters)
-            .map_err(|err| anyhow!("Failed to match agent type parameters to the current metadata: {err}"))?;
+        let value: SchemaValue = serde_json::from_value(parameters).map_err(|err| {
+            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
+        })?;
         let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
@@ -2513,61 +2514,59 @@ impl WorkerCommandHandler {
         }
 
         match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
-            Ok((agent_id, agent_type)) => {
-                match function_name {
-                    Some(function_name) => {
-                        let parsed = match ParsedFunctionName::parse(function_name) {
-                            Ok(p) => p,
-                            Err(_) => {
-                                logln("");
-                                log_error(format!(
-                                    "Incompatible agent type ({}) and method ({})",
-                                    agent_id.agent_type.as_str().log_color_error_highlight(),
-                                    function_name.log_color_error_highlight()
-                                ));
-                                logln("");
-                                log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                                    component,
-                                    &agent_id,
-                                    &agent_type,
-                                ));
-                                bail!(NonSuccessfulExit);
-                            }
-                        };
-
-                        if let ParsedFunctionSite::PackagedInterface {
-                            namespace,
-                            package,
-                            interface,
-                            ..
-                        } = parsed.site()
-                        {
-                            let component_name = format!("{namespace}:{package}");
-                            if *interface == agent_id.agent_type.0
-                                && component.component_name.0 == component_name
-                            {
-                                return Ok(Some((agent_id, agent_type.clone())));
-                            }
+            Ok((agent_id, agent_type)) => match function_name {
+                Some(function_name) => {
+                    let parsed = match ParsedFunctionName::parse(function_name) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            logln("");
+                            log_error(format!(
+                                "Incompatible agent type ({}) and method ({})",
+                                agent_id.agent_type.as_str().log_color_error_highlight(),
+                                function_name.log_color_error_highlight()
+                            ));
+                            logln("");
+                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                component,
+                                &agent_id,
+                                &agent_type,
+                            ));
+                            bail!(NonSuccessfulExit);
                         }
+                    };
 
-                        logln("");
-                        log_error(format!(
-                            "Incompatible agent type ({}) and method ({})",
-                            agent_id.agent_type.as_str().log_color_error_highlight(),
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                            component,
-                            &agent_id,
-                            &agent_type,
-                        ));
-                        bail!(NonSuccessfulExit);
+                    if let ParsedFunctionSite::PackagedInterface {
+                        namespace,
+                        package,
+                        interface,
+                        ..
+                    } = parsed.site()
+                    {
+                        let component_name = format!("{namespace}:{package}");
+                        if *interface == agent_id.agent_type.0
+                            && component.component_name.0 == component_name
+                        {
+                            return Ok(Some((agent_id, agent_type.clone())));
+                        }
                     }
 
-                    None => Ok(Some((agent_id, agent_type.clone()))),
+                    logln("");
+                    log_error(format!(
+                        "Incompatible agent type ({}) and method ({})",
+                        agent_id.agent_type.as_str().log_color_error_highlight(),
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                        component,
+                        &agent_id,
+                        &agent_type,
+                    ));
+                    bail!(NonSuccessfulExit);
                 }
-            }
+
+                None => Ok(Some((agent_id, agent_type.clone()))),
+            },
             Err(err) => {
                 let parsed_agent_type_name =
                     ParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
@@ -2748,7 +2747,12 @@ fn parse_method_parameters_with_error_table(
     let mut has_error = false;
 
     for (idx, (schema, value)) in element_schemas.iter().zip(arguments.iter()).enumerate() {
-        match parse_method_argument_schema_value(value, &agent_type.schema, &schema.schema, source_language) {
+        match parse_method_argument_schema_value(
+            value,
+            &agent_type.schema,
+            &schema.schema,
+            source_language,
+        ) {
             Ok(parsed) => {
                 values.push(parsed);
                 rows.push(ArgumentError {
@@ -2790,23 +2794,18 @@ fn parse_method_argument_schema_value(
     schema: &SchemaType,
     source_language: &SourceLanguage,
 ) -> Result<SchemaValue, crate::agent_id_display::ParseError> {
-    let parsed = crate::agent_id_display::parse_value_for_language(
-        value,
-        graph,
-        schema,
-        source_language,
-    );
+    let parsed =
+        crate::agent_id_display::parse_value_for_language(value, graph, schema, source_language);
     if parsed.is_ok() {
         return parsed;
     }
 
     if matches!(schema, SchemaType::String { .. }) {
-        let quoted = serde_json::to_string(value).map_err(|err| {
-            crate::agent_id_display::ParseError {
+        let quoted =
+            serde_json::to_string(value).map_err(|err| crate::agent_id_display::ParseError {
                 position: 0,
                 message: format!("failed to quote string value: {err}"),
-            }
-        })?;
+            })?;
 
         return crate::agent_id_display::parse_value_for_language(
             &quoted,
@@ -2953,9 +2952,11 @@ mod tests {
     use crate::agent_id_display::SourceLanguage;
     use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
-    use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema};
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    };
     use golem_common::schema::graph::TypedSchemaValue;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;

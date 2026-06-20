@@ -2713,14 +2713,6 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: include_deleted
-        schema:
-          type: boolean
-          default: false
-        in: query
-        required: false
-        deprecated: false
-        explode: true
       responses:
         '200':
           description: ''

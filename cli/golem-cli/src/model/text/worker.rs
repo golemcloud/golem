@@ -454,24 +454,56 @@ impl TextView for PublicOplogEntry {
                     log_plugin_description(&inner_pad, plugin);
                 }
             }
-            PublicOplogEntry::HostCall(params) => {
+            PublicOplogEntry::Start(params) => {
                 logln(format!(
                     "{} {}",
-                    format_message_highlight("CALL"),
+                    format_message_highlight("START"),
                     format_id(&params.function_name),
                 ));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                if let Some(parent) = params.parent_start_index {
+                    logln(format!("{pad}parent start index: {}", parent));
+                }
+                if let Some(request) = &params.request {
+                    logln(format!(
+                        "{pad}input:             {}",
+                        typed_schema_value_to_string(request)
+                    ));
+                }
+            }
+            PublicOplogEntry::End(params) => {
+                logln(format_message_highlight("END"));
                 logln(format!(
-                    "{pad}input:             {}",
-                    typed_schema_value_to_string(&params.request)
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+                if let Some(response) = &params.response {
+                    logln(format!(
+                        "{pad}result:            {}",
+                        typed_schema_value_to_string(response)
+                    ));
+                }
+                if params.forced_commit {
+                    logln(format!("{pad}forced commit:     true"));
+                }
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                logln(format_message_highlight("CANCELLED"));
                 logln(format!(
-                    "{pad}result:            {}",
-                    typed_schema_value_to_string(&params.response)
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+                if let Some(partial) = &params.partial {
+                    logln(format!(
+                        "{pad}partial result:    {}",
+                        typed_schema_value_to_string(partial)
+                    ));
+                }
             }
             PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
                 PublicAgentInvocation::AgentMethodInvocation(inner) => {
@@ -616,24 +648,7 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.begin_index)
                 ));
             }
-            PublicOplogEntry::BeginRemoteWrite(params) => {
-                logln(format_message_highlight("BEGIN REMOTE WRITE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-            }
-            PublicOplogEntry::EndRemoteWrite(params) => {
-                logln(format_message_highlight("END REMOTE WRITE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}begin index:       {}",
-                    format_id(&params.begin_index)
-                ));
-            }
+
             PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
                 PublicAgentInvocation::AgentInitialization(inner_params) => {
                     logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));

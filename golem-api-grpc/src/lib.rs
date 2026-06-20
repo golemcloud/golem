@@ -71,5 +71,4 @@ pub mod proto {
             }
         }
     }
-
 }

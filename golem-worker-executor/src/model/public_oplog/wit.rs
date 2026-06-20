@@ -16,19 +16,18 @@ use crate::preview2::golem_api_1_x::oplog;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
-    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartSpanParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
+    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams,
+    ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -105,18 +104,38 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 original_phantom_id: original_phantom_id.map(|id| id.into()),
                 instance_id: instance_id.into(),
             }),
-            PublicOplogEntry::HostCall(HostCallParams {
+            PublicOplogEntry::Start(StartParams {
                 timestamp,
+                parent_start_index,
                 function_name,
                 request,
-                response,
                 durable_function_type: wrapped_function_type,
-            }) => Self::HostCall(oplog::HostCallParameters {
+            }) => Self::Start(oplog::StartParameters {
                 timestamp: timestamp.into(),
+                parent_start_index: parent_start_index.map(|c| c.into()),
                 function_name,
-                request: encode_public_typed_schema_value(request),
-                response: encode_public_typed_schema_value(response),
+                request: request.map(encode_public_typed_schema_value),
                 durable_function_type: wrapped_function_type.into(),
+            }),
+            PublicOplogEntry::End(EndParams {
+                timestamp,
+                start_index,
+                response,
+                forced_commit,
+            }) => Self::End(oplog::EndParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
+                response: response.map(encode_public_typed_schema_value),
+                forced_commit,
+            }),
+            PublicOplogEntry::Cancelled(CancelledParams {
+                timestamp,
+                start_index,
+                partial,
+            }) => Self::Cancelled(oplog::CancelledParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
+                partial: partial.map(encode_public_typed_schema_value),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp,
@@ -178,16 +197,6 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 begin_index,
             }) => Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
-                timestamp: timestamp.into(),
-                begin_index: begin_index.into(),
-            }),
-            PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams { timestamp }) => {
-                Self::BeginRemoteWrite(timestamp.into())
-            }
-            PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
-                timestamp,
-                begin_index,
-            }) => Self::EndRemoteWrite(oplog::EndRemoteWriteParameters {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             }),
@@ -866,15 +875,28 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     params.instance_id.low_bits,
                 ),
             }),
-            oplog::OplogEntry::HostCall(params) => Ok(Self::HostCall {
+            oplog::OplogEntry::Start(params) => Ok(Self::Start {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                parent_start_index: params
+                    .parent_start_index
+                    .map(golem_common::base_model::OplogIndex::from_u64),
                 function_name:
                     golem_common::model::oplog::payload::host_functions::HostFunctionName::from(
                         params.function_name.as_str(),
                     ),
-                request: oplog_payload_from_wit(params.request),
-                response: oplog_payload_from_wit(params.response),
+                request: params.request.map(oplog_payload_from_wit),
                 durable_function_type: params.durable_function_type.into(),
+            }),
+            oplog::OplogEntry::End(params) => Ok(Self::End {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
+                response: params.response.map(oplog_payload_from_wit),
+                forced_commit: params.forced_commit,
+            }),
+            oplog::OplogEntry::Cancelled(params) => Ok(Self::Cancelled {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
+                partial: params.partial.map(oplog_payload_from_wit),
             }),
             oplog::OplogEntry::AgentInvocationStarted(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
@@ -941,13 +963,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(ts.timestamp),
             }),
             oplog::OplogEntry::EndAtomicRegion(params) => Ok(Self::EndAtomicRegion {
-                timestamp: timestamp_from_datetime(params.timestamp),
-                begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
-            }),
-            oplog::OplogEntry::BeginRemoteWrite(ts) => Ok(Self::BeginRemoteWrite {
-                timestamp: timestamp_from_datetime(ts.timestamp),
-            }),
-            oplog::OplogEntry::EndRemoteWrite(params) => Ok(Self::EndRemoteWrite {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
             }),
@@ -1536,18 +1551,38 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 original_phantom_id: original_phantom_id.map(|id| id.into()),
                 instance_id: instance_id.into(),
             })),
-            M::HostCall {
+            M::Start {
                 timestamp,
+                parent_start_index,
                 function_name,
                 request,
-                response,
                 durable_function_type,
-            } => Ok(Self::HostCall(oplog::RawHostCallParameters {
+            } => Ok(Self::Start(oplog::RawStartParameters {
                 timestamp: timestamp.into(),
+                parent_start_index: parent_start_index.map(|i| i.into()),
                 function_name: function_name.to_string(),
-                request: oplog_payload_to_wit(request)?,
-                response: oplog_payload_to_wit(response)?,
+                request: request.map(oplog_payload_to_wit).transpose()?,
                 durable_function_type: durable_function_type.into(),
+            })),
+            M::End {
+                timestamp,
+                start_index,
+                response,
+                forced_commit,
+            } => Ok(Self::End(oplog::RawEndParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
+                response: response.map(oplog_payload_to_wit).transpose()?,
+                forced_commit,
+            })),
+            M::Cancelled {
+                timestamp,
+                start_index,
+                partial,
+            } => Ok(Self::Cancelled(oplog::RawCancelledParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
+                partial: partial.map(oplog_payload_to_wit).transpose()?,
             })),
             M::AgentInvocationStarted {
                 timestamp,
@@ -1610,14 +1645,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 begin_index,
             } => Ok(Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
-                timestamp: timestamp.into(),
-                begin_index: begin_index.into(),
-            })),
-            M::BeginRemoteWrite { timestamp } => Ok(Self::BeginRemoteWrite(timestamp.into())),
-            M::EndRemoteWrite {
-                timestamp,
-                begin_index,
-            } => Ok(Self::EndRemoteWrite(oplog::EndRemoteWriteParameters {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             })),

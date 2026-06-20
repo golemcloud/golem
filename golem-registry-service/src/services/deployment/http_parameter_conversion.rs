@@ -29,10 +29,10 @@
 use golem_common::model::agent::{
     HeaderVariable, HttpEndpointDetails, HttpMountDetails, PathSegment, QueryVariable,
 };
+use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use golem_common::schema::{
     FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
 };
-use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use golem_service_base::custom_api::{
     CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
     RequestBodySchema,
@@ -354,7 +354,9 @@ fn schema_type_to_path_segment_type<E>(
     schema: &SchemaType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<PathSegmentType, E> {
-    let resolved = graph.resolve_ref(schema).map_err(|e| make_error(e.to_string()))?;
+    let resolved = graph
+        .resolve_ref(schema)
+        .map_err(|e| make_error(e.to_string()))?;
     match resolved {
         SchemaType::String { .. } => Ok(PathSegmentType::Str),
         SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
@@ -384,7 +386,9 @@ fn schema_type_to_query_or_header_type<E>(
     schema: &SchemaType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<QueryOrHeaderType, E> {
-    let resolved = graph.resolve_ref(schema).map_err(|e| make_error(e.to_string()))?;
+    let resolved = graph
+        .resolve_ref(schema)
+        .map_err(|e| make_error(e.to_string()))?;
     match resolved {
         SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
             name: None,

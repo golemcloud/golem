@@ -18,8 +18,8 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
-use golem_cli::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
+use golem_cli::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::{AgentTypeSchema, SchemaType};
@@ -58,7 +58,10 @@ fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
 
 #[test_dep(scope = PerWorker, tagged_as = "rust_code_first_snippets_foo_agent")]
 fn rust_code_first_snippets_foo_agent() -> GeneratedPackage {
-    GeneratedPackage::new(code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"))
+    GeneratedPackage::new(code_first_snippets_agent_type(
+        GuestLanguage::Rust,
+        "FooAgent",
+    ))
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "counter_agent")]
@@ -116,7 +119,9 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
     generator.generate().unwrap();
 
-    let lib_rs = std::fs::read_to_string(target_dir.join("ephemeral-config-agent-client/src/lib.rs")).unwrap();
+    let lib_rs =
+        std::fs::read_to_string(target_dir.join("ephemeral-config-agent-client/src/lib.rs"))
+            .unwrap();
     assert!(lib_rs.contains("pub struct EphemeralConfigAgentClient"));
     assert!(!lib_rs.contains("pub async fn new("));
 }
@@ -136,10 +141,12 @@ fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
     let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
     generator.generate().unwrap();
 
-    assert!(std::process::Command::new("cargo")
-        .arg("check")
-        .current_dir(package_dir)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        std::process::Command::new("cargo")
+            .arg("check")
+            .current_dir(package_dir)
+            .status()
+            .unwrap()
+            .success()
+    );
 }

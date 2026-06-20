@@ -83,6 +83,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_workers::memory_probe::FixedProbe;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -1840,6 +1841,36 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
+        // The in-process test harness shares its process (and RSS) with the test
+        // framework and other services, so a process-RSS probe cannot isolate
+        // this executor's footprint. When a test pins a memory limit via
+        // system_memory_override, give the gate a fixed probe reporting that
+        // limit with zero current usage, so admission is decided solely on the
+        // granted accounting (exact and process-isolated) against the pinned
+        // limit. The usable_ratio (worker_memory_ratio) still applies, matching
+        // the pre-gate semaphore pool size of system_memory_override * ratio.
+        match golem_config.memory.system_memory_override {
+            Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
+                Box::new(FixedProbe::new(limit, 0)),
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )),
+            None => Arc::new(ActiveWorkers::new(
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )),
+        }
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -2468,8 +2499,9 @@ impl TestOplog {
             OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
             OplogEntry::CommittedRemoteTransaction { .. } => "CommittedRemoteTransaction",
             OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
-            OplogEntry::BeginRemoteWrite { .. } => "BeginRemoteWrite",
-            OplogEntry::EndRemoteWrite { .. } => "EndRemoteWrite",
+            OplogEntry::Start { .. } => "Start",
+            OplogEntry::End { .. } => "End",
+            OplogEntry::Cancelled { .. } => "Cancelled",
             _ => "Other",
         };
 
@@ -2526,6 +2558,16 @@ impl Oplog for TestOplog {
         self.oplog.fallible_add(entry).await
     }
 
+    async fn fallible_add_pair(
+        &self,
+        first: OplogEntry,
+        second: OplogEntry,
+    ) -> Result<(OplogIndex, OplogIndex), String> {
+        self.check_oplog_add(&first).await?;
+        self.check_oplog_add(&second).await?;
+        self.oplog.fallible_add_pair(first, second).await
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.oplog.drop_prefix(last_dropped_id).await
     }
@@ -2572,6 +2614,14 @@ impl Oplog for TestOplog {
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.oplog.switch_persistence_level(mode).await;
+    }
+
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        self.oplog.add_pair(start, make_second).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -3200,21 +3250,21 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
                 owned_agent_id,
                 self_created_by,
-                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
                 config,
+                auth_ctx,
             )
             .await
     }
@@ -3226,10 +3276,10 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
@@ -3247,10 +3297,10 @@ impl Rpc for FailingRpc {
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
+                    auth_ctx,
                 )
                 .await
         }
@@ -3263,10 +3313,10 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
@@ -3275,10 +3325,10 @@ impl Rpc for FailingRpc {
                 method_name,
                 method_parameters,
                 self_created_by,
-                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
+                auth_ctx,
             )
             .await
     }

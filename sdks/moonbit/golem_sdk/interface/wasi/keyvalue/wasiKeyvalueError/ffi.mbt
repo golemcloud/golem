@@ -7,6 +7,10 @@ fn wasmImportResourceDropError_(resource : Int) = "wasi:keyvalue/wasi-keyvalue-e
 fn wasmImportMethodErrorTrace(p0 : Int, p1 : Int) = "wasi:keyvalue/wasi-keyvalue-error@0.1.0" "[method]error.trace"
 
 ///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #|(func (param i32) (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 8 i32.sub local.tee 2
@@ -19,10 +23,6 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
   #| local.tee 1 i32.const 0 call $moonbit.init_array8
   #| local.get 1 i32.const 8 i32.add)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =

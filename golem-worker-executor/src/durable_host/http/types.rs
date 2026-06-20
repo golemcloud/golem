@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::HttpOutgoingBodyState;
+use crate::durable_host::concurrent::{CallHandle, NotCancellable, Resolution};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::inline_retry::{
     StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
-use crate::get_oplog_entry;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
@@ -30,7 +30,7 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
-    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
+    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, PersistenceLevel,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderName, HeaderValue};
@@ -500,29 +500,49 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         if let Some(request_state) = self.state.open_http_requests.get(&self_.rep()) {
             let request = request_state.request.clone();
 
-            let durability = Durability::<HttpTypesFutureTrailersGet>::new(
+            // `WriteRemoteBatched`: not re-executable on an incomplete `Start`, so replay never
+            // yields `Incomplete` (it hard-errors instead) and the lone batched `Start` is recovered
+            // by the surrounding durable scope.
+            let mut call = CallHandle::<HttpTypesFutureTrailersGet, NotCancellable>::start(
                 self,
+                request,
                 DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
             )
             .await
             .map_err(wasmtime::Error::from)?;
 
             let handle = self_.rep();
-            if durability.is_live() {
+            if call.is_live() {
                 let result = HostFutureTrailers::get(&mut self.as_wasi_http_view(), self_).await;
-                let (to_serialize, for_retry) = match &result {
-                    Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
+
+                // The only fallible step while the `Start` is open is reading the trailers from the
+                // resource table; on failure abandon the started call (leaving its `Start`
+                // incomplete, never a `Cancelled`) and propagate.
+                let trailers_serialized = match &result {
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
                         let mut serialized_trailers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
-
-                        for (key, value) in self.table().get(trailers)?.iter() {
-                            serialized_trailers
-                                .entry(key.as_str().to_string())
-                                .or_default()
-                                .push(value.as_bytes().to_vec());
+                        match self.table().get(trailers) {
+                            Ok(trailers) => {
+                                for (key, value) in trailers.iter() {
+                                    serialized_trailers
+                                        .entry(key.as_str().to_string())
+                                        .or_default()
+                                        .push(value.as_bytes().to_vec());
+                                }
+                                Some(serialized_trailers)
+                            }
+                            Err(err) => {
+                                call.abandon_for_trap();
+                                return Err(err.into());
+                            }
                         }
-                        (Ok(Some(Ok(Ok(Some(serialized_trailers))))), Ok(()))
                     }
+                    _ => None,
+                };
+
+                let (to_serialize, for_retry) = match &result {
+                    Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
+                    Ok(Some(Ok(Ok(Some(_))))) => (Ok(Some(Ok(Ok(trailers_serialized)))), Ok(())),
                     Ok(Some(Ok(Err(error_code)))) => (
                         Ok(Some(Ok(Err(error_code.into())))),
                         Err(HttpFailure::ErrorCode(error_code.clone())),
@@ -537,17 +557,15 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                         Err(HttpFailure::Other(err.to_string())),
                     ),
                 };
-                durability
-                    .try_trigger_retry(self, &for_retry, |err| match err {
-                        HttpFailure::ErrorCode(code) => classify_http_error_code(code),
-                        HttpFailure::Other(_) => HostFailureKind::Transient,
-                    })
-                    .await
-                    .map_err(wasmtime::Error::from_anyhow)?;
-                let _ = durability
-                    .persist(
+                call.try_trigger_retry(self, &for_retry, |err| match err {
+                    HttpFailure::ErrorCode(code) => classify_http_error_code(code),
+                    HttpFailure::Other(_) => HostFailureKind::Transient,
+                })
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
+                let _ = call
+                    .complete(
                         self,
-                        request,
                         HostResponseHttpFutureTrailersGet {
                             result: to_serialize,
                         },
@@ -563,11 +581,10 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
 
                 result
             } else {
-                let serialized: HostResponseHttpFutureTrailersGet =
-                    durability
-                        .replay(self)
-                        .await
-                        .map_err(wasmtime::Error::from)?;
+                let serialized: HostResponseHttpFutureTrailersGet = call
+                    .replay_expecting_completion(self)
+                    .await
+                    .map_err(wasmtime::Error::from)?;
                 let result = match serialized.result {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
@@ -606,11 +623,13 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::future_trailers", "drop");
 
         let handle = rep.rep();
-        // Remove tracking if still present (guest dropped without calling get()).
-        // Note: we cannot call async end_http_request here because the trait
-        // requires a sync drop. The durable function boundary and span will be
-        // cleaned up when the worker is suspended/interrupted. Log so the leak
-        // is observable.
+        // The durable boundary of an HTTP request is closed by `end_http_request`, called from the
+        // normal `get()` completion paths and from the *async* drops of the response, body and
+        // future-incoming-response resources. This `drop` is synchronous (trailers `drop` is not an
+        // async host call), so it cannot await that oplog write — it can only release the in-memory
+        // request tracking. If the trailers future is the request's close-owner and is dropped
+        // without `get()`, the request's durable scope is therefore left open; the warning makes
+        // that observable.
         if let Some(state) = self.state.open_http_requests.remove(&handle)
             && state.close_owner == HttpRequestCloseOwner::FutureTrailersDrop
         {
@@ -1194,14 +1213,49 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             // Propagate WorkerExecutorError via `?` (From) so the downcast
             // survives the wasmtime::Error chain — TrapType::from_error
             // classifies UnexpectedOplogEntry as non-retriable.
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
+            //
+            // Each poll persists a completed HTTP durable call as a `Start` + `End` pair (see
+            // `persist_http_response`). Replay it through the concurrent resolver: claim the call's
+            // `Start` — validating the function identity the `End` does not carry — and await the
+            // matching `End` instead of reading the pair positionally.
+            let begin_index = self
+                .state
+                .open_http_requests
+                .get(&handle)
+                .map(|state| state.begin_index)
+                .ok_or_else(|| {
+                    wasmtime::Error::from(WorkerExecutorError::runtime(format!(
+                        "no open HTTP request for handle {handle} while replaying future_incoming_response::get"
+                    )))
+                })?;
+            let claim = self
+                .state
+                .replay_state
+                .claim_concurrent_start(
+                    &HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
+                    &DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+                )
+                .await
+                .map_err(wasmtime::Error::from)?;
+            let resolution = self
+                .state
+                .replay_state
+                .await_resolution(claim)
+                .await
+                .map_err(wasmtime::Error::from)?;
 
-            let serialized_response = match oplog_entry {
-                OplogEntry::HostCall { response, .. } => {
+            let serialized_response = match resolution {
+                Resolution::Completed { response, .. } => {
+                    let response_payload = response.ok_or_else(|| {
+                        wasmtime::Error::from(WorkerExecutorError::unexpected_oplog_entry(
+                            "End { response: Some(..) }",
+                            "End { response: None }".to_string(),
+                        ))
+                    })?;
                     let response = self
                         .state
                         .oplog
-                        .download_payload(response)
+                        .download_payload(response_payload)
                         .await
                         .map_err(|err| {
                             WorkerExecutorError::runtime(format!(
@@ -1220,14 +1274,11 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                // The macro above already guarantees `OplogEntry::HostCall`, so
-                // this arm is structurally unreachable. We still return an
-                // error rather than panicking to keep the function panic-free.
-                other => {
+                Resolution::Cancelled { cancelled_idx, .. } => {
                     return Err(wasmtime::Error::from(
                         WorkerExecutorError::unexpected_oplog_entry(
-                            "OplogEntry::HostCall",
-                            format!("{other:?}"),
+                            "End",
+                            format!("Cancelled at {cancelled_idx}"),
                         ),
                     ));
                 }
@@ -1466,18 +1517,19 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     begin_index: golem_common::model::oplog::OplogIndex,
 ) {
     if ctx.state.snapshotting_mode.is_none() {
-        ctx.state
-            .oplog
-            .add_host_call(
-                HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
-                &HostRequest::HttpRequest(request),
-                &HostResponse::HttpResponse(HostResponseHttpResponse {
-                    response: serializable_response.clone(),
-                }),
-                DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
-            )
-            .await
-            .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+        ctx.append_completed_child_call(
+            HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
+            &HostRequest::HttpRequest(request),
+            &HostResponse::HttpResponse(HostResponseHttpResponse {
+                response: serializable_response.clone(),
+            }),
+            DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+            // The HTTP request always opens a `WriteRemoteBatched(None)` scope at `begin_index`
+            // (see `outgoing_handler::handle`), so this poll nests directly inside it.
+            Some(begin_index),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
         ctx.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)

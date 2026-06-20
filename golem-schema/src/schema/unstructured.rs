@@ -141,9 +141,7 @@ pub fn unstructured_text_restrictions<'a>(
         ));
     }
     let inline_payload = inline.payload.as_ref().ok_or_else(|| {
-        UnstructuredError(
-            "Role::UnstructuredText `inline` case must carry a text payload".into(),
-        )
+        UnstructuredError("Role::UnstructuredText `inline` case must carry a text payload".into())
     })?;
     let SchemaType::Text { restrictions, .. } = graph.resolve_ref(inline_payload)? else {
         return Err(UnstructuredError(
@@ -203,9 +201,10 @@ fn check_url_case(
     url: &VariantCaseType,
     role: &str,
 ) -> Result<(), UnstructuredError> {
-    let url_payload = url.payload.as_ref().ok_or_else(|| {
-        UnstructuredError(format!("{role} `url` case must carry a url payload"))
-    })?;
+    let url_payload = url
+        .payload
+        .as_ref()
+        .ok_or_else(|| UnstructuredError(format!("{role} `url` case must carry a url payload")))?;
     if !matches!(graph.resolve_ref(url_payload)?, SchemaType::Url { .. }) {
         return Err(UnstructuredError(format!(
             "{role} `url` case payload must be a url type"
@@ -454,17 +453,13 @@ pub fn decode_unstructured_value(
     match *case {
         INLINE_CASE => {
             let payload = payload.as_deref().ok_or_else(|| {
-                UnstructuredError(
-                    "unstructured `inline` value must carry a payload".into(),
-                )
+                UnstructuredError("unstructured `inline` value must carry a payload".into())
             })?;
             Ok(UnstructuredValueCase::Inline(payload))
         }
         URL_CASE => {
             let payload = payload.as_deref().ok_or_else(|| {
-                UnstructuredError(
-                    "unstructured `url` value must carry a payload".into(),
-                )
+                UnstructuredError("unstructured `url` value must carry a payload".into())
             })?;
             let SchemaValue::Url { url } = payload else {
                 return Err(UnstructuredError(

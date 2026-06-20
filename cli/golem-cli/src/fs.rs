@@ -988,8 +988,11 @@ mod test {
         // A fully literal absolute path outside the base directory (e.g. a redirected cargo
         // target directory) walks from its parent directory.
         assert_eq!(
-            fs::split_absolute_glob(&base_dir, "/var/cargo-target/wasm32-wasip2/release/foo.wasm")
-                .unwrap(),
+            fs::split_absolute_glob(
+                &base_dir,
+                "/var/cargo-target/wasm32-wasip2/release/foo.wasm"
+            )
+            .unwrap(),
             (
                 PathBuf::from("/var/cargo-target/wasm32-wasip2/release"),
                 "foo.wasm".to_string()

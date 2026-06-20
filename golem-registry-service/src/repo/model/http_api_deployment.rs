@@ -193,6 +193,16 @@ pub struct HttpApiDeploymentExtRevisionRecord {
     pub revision: HttpApiDeploymentRevisionRecord,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct HttpApiDeploymentAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub deployment: HttpApiDeploymentExtRevisionRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
     type Error = HttpApiDeploymentRepoError;
     fn try_from(value: HttpApiDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {

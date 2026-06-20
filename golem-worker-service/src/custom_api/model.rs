@@ -74,6 +74,7 @@ pub struct RichCompiledRoute {
     pub cors: CorsOptions,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum RichRouteBehaviour {
     CallAgent(CallAgentBehaviour),
@@ -118,6 +119,7 @@ pub struct RouteExecutionResult {
     pub body: ResponseBody,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody {

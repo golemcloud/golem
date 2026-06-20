@@ -17,7 +17,7 @@ use super::{
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
 use crate::base_model::card::parsing::CardParseError;
-use crate::model::card::owner::ApplicationOwnerPattern;
+use crate::model::card::owner::EnvironmentOwnerPattern;
 use combine::parser::char::string;
 use combine::{EasyParser, Parser, eof, many1, optional, satisfy};
 use serde::{Deserialize, Serialize};
@@ -26,21 +26,12 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentResourcePattern {
     Any,
-    Environment(EnvironmentName),
-    Revision {
-        environment: EnvironmentName,
-        revision: u64,
-    },
+    Revision { revision: u64 },
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct EnvironmentName(pub String);
 
 impl ResourcePattern for EnvironmentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource == "*" {
+        if resource.is_empty() || resource == "*" {
             Ok(EnvironmentResourcePattern::Any)
         } else {
             parse_environment_resource(resource).map_err(|_| CardParseError::InvalidResource {
@@ -53,20 +44,8 @@ impl ResourcePattern for EnvironmentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Environment(a), Self::Environment(b)) => a == b,
-            (Self::Environment(a), Self::Revision { environment: b, .. }) => a == b,
-            (
-                Self::Revision {
-                    environment: a,
-                    revision: ar,
-                },
-                Self::Revision {
-                    environment: b,
-                    revision: br,
-                },
-            ) => a == b && ar == br,
-            (Self::Environment(_) | Self::Revision { .. }, Self::Any) => false,
-            (Self::Revision { .. }, Self::Environment(_)) => false,
+            (Self::Revision { revision: a }, Self::Revision { revision: b }) => a == b,
+            (Self::Revision { .. }, Self::Any) => false,
         }
     }
 }
@@ -108,7 +87,7 @@ pub struct EnvironmentClass;
 
 impl PermissionClass for EnvironmentClass {
     type Verb = EnvironmentVerb;
-    type Owner = ApplicationOwnerPattern;
+    type Owner = EnvironmentOwnerPattern;
     type Resource = EnvironmentResourcePattern;
     const NAME: &'static str = "environment";
 
@@ -124,31 +103,15 @@ impl PermissionClass for EnvironmentClass {
 }
 
 fn parse_environment_resource(resource: &str) -> Result<EnvironmentResourcePattern, String> {
-    let mut parser = (
-        environment_name(),
-        optional(string("@rev=").with(many1(satisfy(|c: char| c.is_ascii_digit())))),
-    )
-        .skip(eof());
+    let parser = optional(string("@"))
+        .with(string("rev=").with(many1(satisfy(|c: char| c.is_ascii_digit()))));
+    let mut parser = parser.skip(eof());
 
-    let ((environment, revision), _): ((EnvironmentName, Option<String>), &str) = parser
+    let (revision, _): (String, &str) = parser
         .easy_parse(resource)
         .map_err(|_| resource.to_string())?;
 
-    match revision {
-        Some(revision) => Ok(EnvironmentResourcePattern::Revision {
-            environment,
-            revision: revision.parse::<u64>().map_err(|_| resource.to_string())?,
-        }),
-        None => Ok(EnvironmentResourcePattern::Environment(environment)),
-    }
-}
-
-fn environment_name<Input>() -> impl Parser<Input, Output = EnvironmentName>
-where
-    Input: combine::Stream<Token = char>,
-{
-    many1(satisfy(|c: char| {
-        c != '@' && c != ':' && c != '/' && !c.is_whitespace()
-    }))
-    .map(EnvironmentName)
+    Ok(EnvironmentResourcePattern::Revision {
+        revision: revision.parse::<u64>().map_err(|_| resource.to_string())?,
+    })
 }

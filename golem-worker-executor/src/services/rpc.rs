@@ -37,7 +37,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, AgentPrincipal, Principal};
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -47,8 +47,8 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
-
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -62,11 +62,11 @@ pub trait Rpc: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
@@ -76,10 +76,10 @@ pub trait Rpc: Send + Sync {
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<SchemaValue, RpcError>;
 
     async fn invoke(
@@ -89,10 +89,10 @@ pub trait Rpc: Send + Sync {
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError>;
 }
 
@@ -292,12 +292,12 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
-        self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
+        _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
@@ -310,10 +310,9 @@ impl Rpc for RemoteInvocationRpc {
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
-                self_created_by,
-                self_created_by_email,
                 config,
                 principal,
+                auth_ctx,
             )
             .await?;
 
@@ -329,11 +328,11 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: SchemaValue,
-        self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
+        _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<SchemaValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
 
@@ -349,10 +348,9 @@ impl Rpc for RemoteInvocationRpc {
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
-                self_created_by,
-                self_created_by_email,
                 principal,
                 owned_agent_id.environment_id,
+                auth_ctx,
             )
             .await?;
 
@@ -372,11 +370,11 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: SchemaValue,
-        self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
+        _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
         let principal = caller_agent_principal(self_agent_id);
 
@@ -391,10 +389,9 @@ impl Rpc for RemoteInvocationRpc {
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
-                self_created_by,
-                self_created_by_email,
                 principal,
                 owned_agent_id.environment_id,
+                auth_ctx,
             )
             .await?;
 
@@ -795,11 +792,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -813,10 +810,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.direct_invocation_auth
                 .check(
                     self_created_by,
-                    self_created_by_email,
                     owned_agent_id,
                     AgentVerb::Invoke,
                     AgentResourcePattern::Any,
+                    auth_ctx,
                 )
                 .await?;
 
@@ -844,11 +841,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .create_demand(
                     owned_agent_id,
                     self_created_by,
-                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
                     config,
+                    auth_ctx,
                 )
                 .await
         }
@@ -861,10 +858,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<SchemaValue, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -878,10 +875,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.direct_invocation_auth
                 .check(
                     self_created_by,
-                    self_created_by_email,
                     owned_agent_id,
                     AgentVerb::Invoke,
                     AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
+                    auth_ctx,
                 )
                 .await?;
 
@@ -924,10 +921,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
+                    auth_ctx,
                 )
                 .await
         }
@@ -940,10 +937,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -957,10 +954,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.direct_invocation_auth
                 .check(
                     self_created_by,
-                    self_created_by_email,
                     owned_agent_id,
                     AgentVerb::Invoke,
                     AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
+                    auth_ctx,
                 )
                 .await?;
 
@@ -997,10 +994,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
+                    auth_ctx,
                 )
                 .await
         }

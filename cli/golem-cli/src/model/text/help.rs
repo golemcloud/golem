@@ -23,9 +23,9 @@ use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
-use golem_common::schema::{SchemaGraph, SchemaType};
-use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::{SchemaGraph, SchemaType};
 use indoc::indoc;
 use std::path::PathBuf;
 

@@ -15,12 +15,12 @@
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::{BinarySource, BinaryType, TextSource, TextType};
+use golem_common::schema::multimodal::is_multimodal_schema_type;
+use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
 use golem_common::schema::{
     BinaryValuePayload, ResultValuePayload, SchemaGraph, SchemaType, SchemaValue, TextValuePayload,
     TypedSchemaValue,
 };
-use golem_common::schema::multimodal::is_multimodal_schema_type;
-use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
 use golem_service_base::custom_api::CompiledOutputSchema;
 use http::StatusCode;
 use http::header::LOCATION;
@@ -244,12 +244,12 @@ fn json_response_body(graph: &SchemaGraph, typ: SchemaType, value: SchemaValue) 
 mod tests {
     use super::*;
     use assert2::let_assert;
+    use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
     use golem_common::schema::unstructured::{
         unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
         unstructured_url_value,
     };
-    use golem_common::schema::graph::SchemaGraph;
-    use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
     use golem_common::schema::{BinaryValuePayload, OutputSchema, SchemaType, TextValuePayload};
     use test_r::test;
 

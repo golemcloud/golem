@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ComponentError;
+use super::{ComponentError, environment_from_component_record};
 use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
@@ -27,14 +27,15 @@ use crate::services::environment_plugin_grant::{
 };
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
+};
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
-    ComponentVerb, PermissionTarget,
+    ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -46,7 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -217,6 +218,12 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
+        let component_metadata =
+            component_metadata.with_agent_initial_permissions(default_initial_permissions(
+                component_metadata.agent_types(),
+                &environment.name,
+                &component_creation.component_name,
+            ));
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
@@ -281,18 +288,9 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(component_record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&component_record)?;
 
-        let component_name = ComponentName(component_record.name.clone());
+        let component_name = ComponentName(component_record.component.name.clone());
 
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
             .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
@@ -302,13 +300,7 @@ impl ComponentWriteService {
             return Err(ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let mut component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email.clone(),
-            environment.application_name.clone(),
-            environment.name.clone(),
-        )?;
+        let mut component = component_record.try_into_model()?;
 
         if component_update.current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -420,12 +412,18 @@ impl ComponentWriteService {
 
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 new_wasm.clone(),
                 final_provision_configs,
             )
             .await?;
+            component.metadata =
+                metadata.with_agent_initial_permissions(default_initial_permissions(
+                    metadata.agent_types(),
+                    &environment.name,
+                    &component.component_name,
+                ));
         } else if agent_types_changed {
             // TODO: skip the download here
             let old_data = self
@@ -433,12 +431,18 @@ impl ComponentWriteService {
                 .get(environment_id, &component.object_store_key)
                 .await?;
 
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 Arc::from(old_data),
                 final_provision_configs,
             )
             .await?;
+            component.metadata =
+                metadata.with_agent_initial_permissions(default_initial_permissions(
+                    metadata.agent_types(),
+                    &environment.name,
+                    &component_name,
+                ));
         } else if provision_configs_changed {
             component.metadata = component
                 .metadata
@@ -487,29 +491,14 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(component_record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&component_record)?;
 
-        let component_name = ComponentName(component_record.name.clone());
+        let component_name = ComponentName(component_record.component.name.clone());
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
             .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::Delete)?;
 
-        let component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email,
-            environment.application_name,
-            environment.name,
-        )?;
+        let component = component_record.try_into_model()?;
 
         if current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -1004,6 +993,22 @@ fn provision_configs_for_agent_types(
         .collect()
 }
 
+fn default_initial_permissions(
+    agent_types: &[AgentTypeSchema],
+    environment_name: &EnvironmentName,
+    component_name: &ComponentName,
+) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
+    agent_types
+        .iter()
+        .map(|agent_type| {
+            (
+                agent_type.type_name.clone(),
+                AgentInitialPermissionTemplate::default_for(environment_name, component_name),
+            )
+        })
+        .collect()
+}
+
 fn validate_component_metadata_invariants(
     metadata: &ComponentMetadata,
 ) -> Result<(), ComponentError> {
@@ -1036,12 +1041,13 @@ fn authorize_component_permission(
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
-        owner: EnvironmentOwnerPattern::Environment {
+        owner: ComponentOwnerPattern::Component {
             account: environment.owner_account_email.clone(),
             application: environment.application_name.clone(),
             environment: environment.name.clone(),
+            component: component_name.clone(),
         },
-        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+        resource: ComponentResourcePattern::Any,
     }))
 }
 

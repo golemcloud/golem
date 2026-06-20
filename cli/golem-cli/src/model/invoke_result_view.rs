@@ -17,8 +17,8 @@ use crate::log::log_error;
 use anyhow::anyhow;
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
-use golem_common::schema::agent::{AgentTypeSchema, OutputSchema};
 use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::agent::{AgentTypeSchema, OutputSchema};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

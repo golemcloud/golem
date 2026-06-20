@@ -1063,16 +1063,7 @@ impl Display for GolemSpecificWasmTrap {
 impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialOrd,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
+    Debug, Copy, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec,
 )]
 pub enum InterruptKind {
     Interrupt(Timestamp),

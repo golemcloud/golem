@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b49eb145c9dca28d347382d8e482bb2cb6c5d256ccaba7532b370fbadc2bb3fb # shrinks to (limit, residents) = (500, []), schedule = [Admit(220), Admit(92), Admit(189)]
+cc 9727f7e7aab54f8f48e6b856f9d70428fd8503767677fa7c232e27263273e071 # shrinks to limit = 815, schedule = [Grant(485), Grant(1), Grant(7), Exit(1), Grant(1), FaultIn(2, 1), Grant(40), Exit(2), Grant(284)]
+cc 41321d47abd75b283d651e63e40c0f5191b680b908c05879c02d5f36b70de66c # shrinks to (limit, residents) = (1369, [Resident { size: 144, priority: Idle }, Resident { size: 228, priority: Warm }, Resident { size: 152, priority: Warm }, Resident { size: 101, priority: Idle }, Resident { size: 68, priority: Warm }, Resident { size: 45, priority: Idle }, Resident { size: 30, priority: Idle }, Resident { size: 20, priority: Idle }, Resident { size: 13, priority: Warm }, Resident { size: 9, priority: Idle }, Resident { size: 6, priority: Idle }]), schedule = [Admit(270), Admit(785), Admit(250), Admit(146), Admit(456)]

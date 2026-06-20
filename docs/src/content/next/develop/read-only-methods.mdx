@@ -1,0 +1,348 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Read-only agent methods
+
+Golem lets agent authors mark individual agent methods as **read-only**. A read-only method is one you promise
+performs only a pure read of the agent's state, and Golem caches its result, so read-heavy methods can be served
+without waiting behind slow writes — and without even loading the agent when a cached value is available.
+
+This page explains what the runtime actually enforces (and, just as importantly, what it does **not**), how the
+cache policies work, and how to use the marker from each SDK.
+
+## What "read-only" means
+
+A read-only method must be a **pure function of the agent's already-loaded state and the method inputs**: it must
+not change anything, and its result must depend only on its inputs and the current state. That is the contract you
+are promising.
+
+Golem enforces the most important part of that contract — but **not all of it**. It is essential to understand
+exactly what is and isn't checked.
+
+### Enforced: writes, HTTP, and RPC trap
+
+The following all go through Golem's durability layer, and a read-only method **traps immediately** on any of
+them — *before* the call runs and *before* any change is persisted — with a typed `ReadOnlyViolation` error that
+carries the offending host function. User code can catch it and distinguish it from other failures.
+
+- writing or changing persistent state (key-value & blob storage, databases, promises, worker management, …),
+- making outgoing HTTP requests,
+- calling other agents over RPC.
+
+### Not enforced: your responsibility
+
+Golem does **not** detect the following. They will **not** trap, but they silently break the read-only contract —
+either by mutating state that should be immutable here, or by making the result non-deterministic — which corrupts
+the cache. You must avoid them yourself:
+
+- **Mutating the agent's in-memory state** (assigning to a field). This is a plain in-memory write, not a host
+  call, so there is nothing for the runtime to intercept. It does **not** trap — but it must never be done in a
+  read-only method.
+- Reading the clock / current time.
+- Using randomness.
+- Reading environment variables.
+- Remote / blob reads.
+
+<Callout type="warning">
+  The read-only guarantee enforced at runtime is precisely **"no writes, no outgoing HTTP, no RPC"**. It does
+  **not** cover in-memory state mutation or non-deterministic reads (time, randomness, environment, remote reads).
+  Those are not checked and will not trap — keeping a read-only method pure is the author's responsibility.
+</Callout>
+
+In exchange for honoring this contract, Golem provides:
+
+| Guarantee | What it means |
+|---|---|
+| No writes / external calls | Writes, outgoing HTTP, and RPC trap with a typed `ReadOnlyViolation` error, *before* anything is written. |
+| Cached result | The result is cached per `(method, normalized input, optional principal)` on the worker. |
+| Queue & loading bypass | A cache hit returns immediately — it never acquires the agent's invocation queue and never loads an evicted agent. |
+
+<Callout type="info">
+  A cache **hit** writes nothing to the oplog and does not load the agent. A cache **miss** (or a `no-cache`
+  method) still runs through the queue and writes the usual `AgentInvocationStarted` / `AgentInvocationFinished`
+  markers — needed for oplog visibility, fuel accounting, and idempotency-key result lookup. No durable *write*
+  entries are produced, because writes trap before they can append to the oplog.
+</Callout>
+
+## Cache policies
+
+The cache policy is part of the read-only marker — non-read-only methods cannot carry one.
+
+| Policy | Behavior |
+|---|---|
+| `until-write` (default) | The cached result is valid until the next non-read-only invocation on the same agent invalidates it. |
+| `ttl(d)` | The cached result expires after duration `d`, even if no write happened in the meantime. |
+| `no-cache` | The method runs every time. It is still side-effect-free, but its result is never cached. |
+
+Invalidation for `until-write` happens automatically: any non-read-only invocation, update, restart, or replay on
+the agent invalidates all `until-write` entries. `ttl(d)` entries additionally expire by time. `no-cache` never
+inserts into the cache.
+
+## Per-principal caching (automatic)
+
+By default a read-only result is **shared across all callers** — the cache key is `(method, input)` and HTTP
+responses are marked `Cache-Control: public` (CDN-friendly).
+
+When the result depends on *who* is calling (for example, an authorization-scoped view), add a `Principal`
+parameter to the method. The SDK detects it and **automatically** marks the read-only configuration as
+principal-dependent (`uses_principal = true`) — there is no manual flag to set. The calling principal then becomes
+part of the cache key, so each principal gets its own cached entry, and HTTP responses switch to
+`Cache-Control: private` with `Vary: Authorization`.
+
+The `Principal` parameter is auto-injected by the runtime: it is not part of the method's input schema and callers
+do not pass it (the same `Principal` mechanism used by authenticated HTTP endpoints).
+
+## Read-only and ephemeral are mutually exclusive
+
+Read-only methods read the agent's **shared, already-loaded state**. [Ephemeral agents](/next/develop/durability)
+get a fresh instance per invocation and have no shared state to read from, so a read-only method on an ephemeral
+agent has no meaning. The SDKs reject this combination at **compile time**, and the host rejects it again when the
+agent registers its types.
+
+## What works in a read-only method
+
+The "not allowed" operations fall into two groups: those the runtime **traps** on, and those it does **not** check
+but which still break the contract and must be avoided by you.
+
+| Allowed | Not allowed — **traps** with `ReadOnlyViolation` | Not allowed — **not checked**, your responsibility |
+|---|---|---|
+| Reading the agent's state fields | Writing persistent state (storage, databases, …) | Mutating in-memory state (assigning to a field) |
+| Computation over the method inputs | Outgoing HTTP requests | Reading the clock / current time |
+| Returning derived/aggregated values | RPC calls to other agents | Randomness |
+| | | Reading environment variables |
+| | | Remote / blob reads |
+
+Everything in the middle column traps *before* it runs. Everything in the right column runs silently — it will
+**not** trap, but it corrupts the cache, so you must avoid it yourself. If you need any of these operations, use a
+regular (non-read-only) method instead.
+
+## Marking a method read-only
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        Use the `@readonly()` decorator on the method:
+
+        ```typescript
+        import { BaseAgent, agent, readonly } from "@golemcloud/golem-ts-sdk"
+
+        @agent()
+        class CounterAgent extends BaseAgent {
+          private count: number = 0
+
+          constructor(private name: string) {
+            super()
+          }
+
+          // Non-read-only: writes shared state
+          async increment(): Promise<number> {
+            this.count += 1
+            return this.count
+          }
+
+          // Read-only: pure read over already-loaded state
+          @readonly()
+          async getCount(): Promise<number> {
+            return this.count
+          }
+        }
+        ```
+
+        Choose a cache policy via the decorator options; per-principal caching is automatic when a parameter has
+        type `Principal`:
+
+        ```typescript
+        import { Principal } from "@golemcloud/golem-ts-sdk"
+
+        @readonly({ cache: { ttl: "30s" } })
+        async recentSummary(): Promise<Summary> { /* ... */ }
+
+        @readonly({ cache: "no-cache" })
+        async pureCompute(x: number, y: number): Promise<number> {
+          return x + y
+        }
+
+        // Principal-aware: cached per principal (usesPrincipal auto-derived)
+        @readonly()
+        async myVisibleItems(principal: Principal): Promise<Item[]> { /* ... */ }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use the `#[read_only]` attribute on the method:
+
+        ```rust
+        use golem_rust::{agent_definition, agent_implementation, read_only};
+
+        #[agent_definition]
+        pub trait CounterAgent {
+            fn new(name: String) -> Self;
+
+            // Non-read-only: writes shared state
+            fn increment(&mut self) -> u64;
+
+            // Read-only: pure read over already-loaded state
+            #[read_only]
+            fn get_count(&self) -> u64;
+        }
+        ```
+
+        Choose a cache policy via attribute arguments; per-principal caching is automatic when the method takes a
+        `Principal` parameter:
+
+        ```rust
+        use golem_rust::agentic::Principal;
+
+        #[read_only(cache = "ttl", ttl = "30s")]
+        fn recent_summary(&self) -> Summary;
+
+        #[read_only(cache = "no_cache")]
+        fn pure_compute(&self, x: u32, y: u32) -> u32;
+
+        // Principal-aware: cached per principal (uses_principal auto-derived)
+        #[read_only]
+        fn my_visible_items(&self, principal: Principal) -> Vec<Item>;
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use the `@readOnly` annotation on the method:
+
+        ```scala
+        import golem.runtime.annotations.{agentDefinition, readOnly}
+        import golem.BaseAgent
+
+        import scala.concurrent.Future
+
+        @agentDefinition()
+        trait CounterAgent extends BaseAgent {
+          class Id(val name: String)
+
+          // Non-read-only: writes shared state
+          def increment(): Future[Long]
+
+          // Read-only: pure read over already-loaded state
+          @readOnly
+          def getCount(): Future[Long]
+        }
+        ```
+
+        Choose a cache policy via the `cache` string argument; per-principal caching is automatic when the method
+        receives a `Principal`:
+
+        ```scala
+        import golem.runtime.annotations.readOnly
+        import golem.Principal
+
+        @readOnly(cache = "ttl(30 seconds)")
+        def recentSummary(): Future[Summary]
+
+        @readOnly(cache = "no-cache")
+        def pureCompute(x: Int, y: Int): Future[Int]
+
+        // Principal-aware: cached per principal (usesPrincipal auto-derived)
+        @readOnly
+        def myVisibleItems(principal: Principal): Future[List[Item]]
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use the `#derive.read_only` attribute, placed before the method (the same place as `#derive.prompt_hint`):
+
+        ```moonbit
+        #derive.agent
+        struct CounterAgent {
+          name: String
+          mut count: UInt64
+        }
+
+        fn CounterAgent::new(name: String) -> CounterAgent {
+          { name, count: 0 }
+        }
+
+        /// Increments the counter and returns the new value.
+        pub fn CounterAgent::increment(self: Self) -> UInt64 {
+          self.count += 1
+          self.count
+        }
+
+        /// Returns the current counter value.
+        #derive.read_only
+        pub fn CounterAgent::get_count(self: Self) -> UInt64 {
+          self.count
+        }
+        ```
+
+        Choose a cache policy via attribute arguments (TTL is given in nanoseconds); per-principal caching is
+        automatic when the method takes a `Principal` parameter:
+
+        ```moonbit
+        #derive.read_only(cache="ttl", ttl="30000000000") // 30s in nanoseconds
+        pub fn CounterAgent::recent_summary(self: Self) -> Summary { /* ... */ }
+
+        #derive.read_only(cache="no_cache")
+        pub fn CounterAgent::pure_compute(self: Self, x: UInt, y: UInt) -> UInt {
+          x + y
+        }
+
+        // Principal-aware: cached per principal (uses_principal auto-derived)
+        #derive.read_only
+        pub fn CounterAgent::my_visible_items(self: Self, principal: Principal) -> Array[Item] { /* ... */ }
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+## Performance contract
+
+- **Queue bypass.** On a cache hit the result is returned without acquiring the agent's invocation queue, so a
+  read-only call is *not* blocked behind a slow write that is currently being processed.
+- **Agent-loading bypass.** The cache lives on the worker independently of whether the WebAssembly instance is
+  loaded. A cache hit is served even when the agent is currently evicted — no instance loading happens.
+- **Automatic RPC fast path.** The cache lookup sits at the single invocation entry point shared by the public API
+  and agent-to-agent RPC, so an RPC into a read-only method on the same node hits the cache too. (A read-only
+  method itself cannot make an RPC call — that would trap.)
+- **Concurrent coalescing.** Many identical first-time reads coalesce into a single execution; the rest wait for
+  and share that one result.
+
+## HTTP cache headers
+
+When a read-only method is mapped to an HTTP `GET` or `HEAD` endpoint (see
+[Exposing agents over HTTP](/next/develop/http)), Golem emits cache-friendly response headers derived from the
+cache policy and whether the method is principal-dependent:
+
+| Cache policy | Response headers |
+|---|---|
+| `no-cache` | `Cache-Control: no-store` |
+| `until-write` | `Cache-Control: <visibility>, no-cache` + `ETag: "<agent-id>:<oplog-index>"` |
+| `ttl(d)` | `Cache-Control: <visibility>, max-age=<d>` + `ETag: "<agent-id>:<oplog-index>"` |
+
+Where `<visibility>` is `private` (plus `Vary: Authorization`) when the method is principal-dependent (it takes a
+`Principal` parameter), and `public` otherwise.
+
+A request that arrives with `If-None-Match: "<agent-id>:<index>"` is revalidated cheaply: if the index still
+matches the agent's current state (no non-read-only invocation happened since), Golem returns `304 Not Modified`
+**without invoking the executor** — giving a full agent-loading bypass even for cold agents whose state has not
+changed.
+
+A response a CDN or browser sees for a `public`, `until-write` method therefore looks like:
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: public, no-cache
+ETag: "counter-1:42"
+Content-Type: application/json
+
+{"count":7}
+```
+
+and a later conditional request short-circuits to:
+
+```http
+GET /counter-1/count HTTP/1.1
+If-None-Match: "counter-1:42"
+
+HTTP/1.1 304 Not Modified
+Cache-Control: public, no-cache
+ETag: "counter-1:42"
+```
+
+<Callout type="warning">
+  Read-only methods bound to non-`GET`/`HEAD` verbs are allowed, but they do not get cache headers — caching a
+  `POST`/`PUT`/`DELETE` response is not meaningful. The worker-service logs a one-time warning on first
+  registration in that case.
+</Callout>

@@ -297,6 +297,7 @@ pub struct CompiledRoute {
     pub cors: CorsOptions,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RouteBehaviour {

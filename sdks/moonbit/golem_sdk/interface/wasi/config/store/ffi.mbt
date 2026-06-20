@@ -7,21 +7,17 @@ fn wasmImportGet(p0 : Int, p1 : Int, p2 : Int) = "wasi:config/store@0.2.0-draft"
 fn wasmImportGetAll(p0 : Int) = "wasi:config/store@0.2.0-draft" "get-all"
 
 ///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
 
 ///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load8_u)
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
@@ -36,3 +32,7 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #| local.get 0 i32.const 8 i32.sub local.tee 2
   #| local.get 1 call $moonbit.init_array16
   #| local.get 2)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
