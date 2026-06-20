@@ -1355,6 +1355,7 @@ args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"
 [tasks.build-plugins]
 dependencies = ["build"]
 description = "Builds built-in plugins (requires golem CLI to be built first)"
+script_runner = "@duckscript"
 script = '''
 # Resolve the cargo target directory robustly so this works even when the target
 # dir is redirected (e.g. via CARGO_TARGET_DIR, cargo config, or a cargo wrapper).
