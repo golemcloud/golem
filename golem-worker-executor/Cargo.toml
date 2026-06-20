@@ -27,10 +27,12 @@ path = "tests/lib.rs"
 harness = false
 
 [features]
+default = ["mimalloc"]
 # Switches the worker-executor binary from mimalloc to jemalloc with heap
 # profiling support and installs a SIGUSR2 handler that writes a heap profile.
 # Off by default; intended only for explicitly tagged profiling Docker images.
 jemalloc-prof = ["dep:tikv-jemalloc-ctl", "dep:tikv-jemallocator"]
+mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 golem-api-grpc = { workspace = true }
@@ -82,7 +84,7 @@ md5 = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 metrohash = { workspace = true }
-mimalloc = { workspace = true }
+mimalloc = { workspace = true, optional = true }
 nonempty-collections = { workspace = true }
 nonzero_ext = { workspace = true }
 pgvector = { workspace = true }

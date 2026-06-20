@@ -59,7 +59,7 @@ jobs:
         env:
           PLATFORM_OVERRIDE: linux/arm64
         run: |
-          cross build -p golem-worker-executor --features jemalloc-prof --release --target "${RUST_TARGET}"
+          cross build -p golem-worker-executor --no-default-features --features jemalloc-prof --release --target "${RUST_TARGET}"
 
       - name: Package target binary
         run: |

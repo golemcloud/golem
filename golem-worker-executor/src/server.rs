@@ -21,11 +21,14 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::info;
 
+#[cfg(all(feature = "jemalloc-prof", feature = "mimalloc"))]
+compile_error!("features `jemalloc-prof` and `mimalloc` must not be enabled together");
+
 #[cfg(feature = "jemalloc-prof")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[cfg(not(feature = "jemalloc-prof"))]
+#[cfg(all(feature = "mimalloc", not(feature = "jemalloc-prof")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
