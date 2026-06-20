@@ -65,8 +65,6 @@ pub mod retries;
 pub mod serialization;
 #[cfg(feature = "full")]
 pub mod tracing;
-#[cfg(feature = "full")]
-pub mod virtual_exports;
 
 mod macros;
 

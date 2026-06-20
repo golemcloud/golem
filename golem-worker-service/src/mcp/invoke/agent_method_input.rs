@@ -14,9 +14,9 @@
 
 use crate::mcp::invoke::multimodal_params_extraction::extract_multimodal_element_value;
 use crate::mcp::invoke::{schema_binary_value_from_json, schema_text_value_from_json};
-use golem_common::schema::adapters::{multimodal_variant_cases, resolve_ref};
 use golem_common::schema::agent::{FieldSource, InputSchema, NamedField};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::render::json_value::from_json_value;
 use golem_common::schema::schema_type::{SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{SchemaValue, VariantValuePayload};
@@ -119,7 +119,7 @@ fn extract_single_field_value(
     field: &NamedField,
 ) -> Result<SchemaValue, String> {
     let name = &field.name;
-    let resolved = resolve_ref(graph, &field.schema).map_err(|e| e.to_string())?;
+    let resolved = graph.resolve_ref(&field.schema).map_err(|e| e.to_string())?;
     match resolved {
         SchemaType::Text { restrictions, .. } => {
             let json_value = args_map
@@ -155,11 +155,12 @@ fn extract_single_field_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::schema::adapters::{
-        MULTIMODAL_PARTS_FIELD_NAME, unstructured_binary_schema_type, unstructured_text_schema_type,
-    };
+    use golem_common::schema::MULTIMODAL_PARTS_FIELD_NAME;
     use golem_common::schema::metadata::Role;
     use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType, TextRestrictions};
+    use golem_common::schema::unstructured::{
+        unstructured_binary_schema_type, unstructured_text_schema_type,
+    };
     use serde_json::json;
     use test_r::test;
 

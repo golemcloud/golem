@@ -25,7 +25,7 @@ use super::schema_mapping::{
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::HttpMethod;
-use golem_common::schema::adapters::{UnstructuredKind, unstructured_kind};
+use golem_common::schema::unstructured::{UnstructuredKind, unstructured_kind};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType, TextRestrictions};
 use golem_service_base::custom_api::OpenApiSpecFormat;

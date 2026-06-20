@@ -32,7 +32,7 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
     DeserializationContext, SerializationContext,
 };
-use golem_wasm::NodeIndex;
+use golem_schema::schema::wit::wire::ValueNodeIndex as NodeIndex;
 use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
@@ -91,8 +91,8 @@ pub struct SerializableDateTime {
     pub nanoseconds: u32,
 }
 
-impl From<golem_wasm::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: golem_wasm::wasi::clocks::wall_clock::Datetime) -> Self {
+impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
+    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
         Self {
             seconds: value.seconds,
             nanoseconds: value.nanoseconds,

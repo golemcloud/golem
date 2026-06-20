@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::schema::adapters::{multimodal_variant_cases, resolve_ref};
 use golem_common::schema::agent::{FieldSource, InputSchema, NamedField};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::render::json_value::from_json_value;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
@@ -51,7 +51,7 @@ pub fn extract_constructor_input_values(
     for field in user_fields {
         ensure_supplyable_via_mcp(graph, field)?;
 
-        let resolved = resolve_ref(graph, &field.schema).map_err(|e| e.to_string())?;
+        let resolved = graph.resolve_ref(&field.schema).map_err(|e| e.to_string())?;
         let json_value = match args_map.get(&field.name) {
             Some(value) => value.clone(),
             None => {
@@ -92,7 +92,7 @@ fn reject_multimodal(graph: &SchemaGraph, fields: &[&NamedField]) -> Result<(), 
 /// Reject unstructured (text/binary) constructor parameters, which cannot be
 /// supplied through the MCP agent-id encoding.
 fn ensure_supplyable_via_mcp(graph: &SchemaGraph, field: &NamedField) -> Result<(), String> {
-    match resolve_ref(graph, &field.schema).map_err(|e| e.to_string())? {
+    match graph.resolve_ref(&field.schema).map_err(|e| e.to_string())? {
         SchemaType::Text { .. } => Err(format!(
             "MCP cannot support unstructured-text constructor parameters like '{}'",
             field.name

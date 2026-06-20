@@ -20,16 +20,15 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::schema::adapters::{
-    UnstructuredOutput, decode_unstructured_output, multimodal_variant_cases,
-};
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::render::json_value::to_json_value;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
+use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;
@@ -274,7 +273,7 @@ mod tests {
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{AgentMode, AgentTypeName};
     use golem_common::model::AgentInvocationOutput;
-    use golem_common::schema::adapters::unstructured::{
+    use golem_common::schema::unstructured::{
         unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
         unstructured_url_value,
     };

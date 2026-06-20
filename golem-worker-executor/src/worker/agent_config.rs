@@ -15,18 +15,36 @@
 use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_common::schema::adapters::analysed_type::{
-    schema_graph_to_analysed_type, schema_type_to_analysed_type,
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_common::schema::{
+    AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
-use golem_common::schema::adapters::typed_schema_value_to_value_and_type;
-use golem_common::schema::validation::validate_value;
-use golem_common::schema::{AgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
 use std::collections::HashMap;
+
+/// Resolve a chain of [`SchemaType::Ref`]s into a non-`Ref` type, with a bounded
+/// loop guarding against reference cycles.
+fn resolve_type<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a SchemaType {
+    let mut current = ty;
+    for _ in 0..256 {
+        match current {
+            SchemaType::Ref { id, .. } => match graph.lookup(id) {
+                Some(def) => current = &def.body,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Whether `ty` (resolving refs in `graph`) is an `option<_>` type, i.e. a value
+/// is not required to be present.
+fn is_optional_type(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    matches!(resolve_type(graph, ty), SchemaType::Option { .. })
+}
 
 pub fn ensure_required_agent_secrets_are_configured(
     agent_secrets: &HashMap<CanonicalAgentSecretPath, AgentSecret>,
@@ -50,36 +68,27 @@ pub fn ensure_required_agent_secrets_are_configured(
         let canonical_agent_secret_path =
             CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_entry.path);
 
-        let expected_secret_type = schema_type_to_analysed_type(
-            &agent_type.schema,
-            &config_entry.value_type,
-        )
-        .map_err(|e| {
-            WorkerExecutorError::runtime(format!(
-                "Declared secret config type for {} is not representable as AnalysedType: {e}",
-                config_entry.path.join(".")
-            ))
-        })?;
+        let declared_graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: config_entry.value_type.clone(),
+        };
 
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
-                let secret_type_legacy = schema_graph_to_analysed_type(&agent_secret.secret_type)
-                    .map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Required agent secret {} has a type that is not representable as AnalysedType: {e}",
-                        config_entry.path.join(".")
-                    ))
-                })?;
-                if secret_type_legacy != expected_secret_type {
+                let secret_graph = &agent_secret.secret_type;
+                if !is_equivalent_cross_graph(
+                    secret_graph,
+                    &secret_graph.root,
+                    &declared_graph,
+                    &declared_graph.root,
+                ) {
                     return Err(WorkerExecutorError::invalid_request(format!(
-                        "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
-                        config_entry.path.join("."),
-                        secret_type_legacy,
-                        expected_secret_type
+                        "Required agent secret {} has invalid type",
+                        config_entry.path.join(".")
                     )));
                 }
                 if agent_secret.secret_value.is_none()
-                    && !matches!(secret_type_legacy, AnalysedType::Option(_))
+                    && !is_optional_type(secret_graph, &secret_graph.root)
                 {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has no configured value",
@@ -87,7 +96,7 @@ pub fn ensure_required_agent_secrets_are_configured(
                     )));
                 }
             }
-            None if matches!(expected_secret_type, AnalysedType::Option(_)) => {}
+            None if is_optional_type(&declared_graph, &declared_graph.root) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
@@ -180,16 +189,14 @@ pub fn parse_worker_creation_agent_config(
 /// Merges the component-level typed config (stored in `AgentTypeProvisionConfig`) with
 /// the worker-creation config entries, with worker entries taking precedence.
 ///
-/// This is the single downgrade boundary from the schema-native
-/// [`TypedSchemaValue`] carried by [`TypedAgentConfigEntry`] to the legacy
-/// `golem_wasm::ValueAndType` still consumed by the executor's guest-facing
-/// config plumbing (`wasi:config/store`, named retry-policy parsing). The
-/// downgrade is partial and fails for shapes without a legacy counterpart;
-/// it stays here until those consumers migrate to schema-native values.
+/// The result is the schema-native [`TypedSchemaValue`] carried by
+/// [`TypedAgentConfigEntry`] keyed by config path; it is what the executor's
+/// guest-facing config plumbing (`wasi:config/store`, named retry-policy
+/// parsing) consumes.
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
-) -> Result<HashMap<Vec<String>, ValueAndType>, WorkerExecutorError> {
+) -> Result<HashMap<Vec<String>, TypedSchemaValue>, WorkerExecutorError> {
     let mut result: HashMap<Vec<String>, TypedSchemaValue> = HashMap::new();
 
     for entry in default_agent_config {
@@ -200,22 +207,11 @@ pub fn effective_agent_config(
         result.insert(entry.path, entry.value);
     }
 
-    result
-        .into_iter()
-        .map(|(path, typed)| {
-            let value = typed_schema_value_to_value_and_type(&typed).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "config value for path {} cannot be converted to a value: {err}",
-                    path.join(".")
-                ))
-            })?;
-            Ok((path, value))
-        })
-        .collect()
+    Ok(result)
 }
 
 pub fn validate_agent_config(
-    config: &HashMap<Vec<String>, ValueAndType>,
+    config: &HashMap<Vec<String>, TypedSchemaValue>,
     agent_type: &AgentTypeSchema,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
@@ -223,27 +219,27 @@ pub fn validate_agent_config(
             continue;
         };
 
-        let entry_value_type = schema_type_to_analysed_type(&agent_type.schema, &entry.value_type)
-            .map_err(|e| {
-                WorkerExecutorError::runtime(format!(
-                    "Declared config type for {} is not representable as AnalysedType: {e}",
-                    entry.path.join(".")
-                ))
-            })?;
+        let declared_graph = SchemaGraph {
+            defs: agent_type.schema.defs.clone(),
+            root: entry.value_type.clone(),
+        };
 
         match config.get(&entry.path) {
             Some(config_value) => {
-                if config_value.typ != entry_value_type {
-                    // TODO: better rendering of analysed type.
-                    return Err(WorkerExecutorError::invalid_request(format!(
-                        "Type mismatch for config {}. expected: {:?}; found: {:?}",
-                        entry.path.join("."),
-                        entry_value_type,
-                        config_value.typ
-                    )));
-                }
+                validate_value(&declared_graph, &declared_graph.root, config_value.value())
+                    .map_err(|errors| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Type mismatch for config {}: [{}]",
+                            entry.path.join("."),
+                            errors
+                                .iter()
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                    })?;
             }
-            None if matches!(entry_value_type, AnalysedType::Option(_)) => {}
+            None if is_optional_type(&declared_graph, &declared_graph.root) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Config {} was not provided a value",

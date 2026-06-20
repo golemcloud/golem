@@ -17,8 +17,7 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
-// A `url::Url` is modelled as its string form, mirroring the legacy
-// `golem_wasm::IntoValue for Url` representation.
+// A `url::Url` is modelled as its string form.
 impl IntoSchema for ::url::Url {
     fn type_id() -> TypeId {
         TypeId::new("url.Url")

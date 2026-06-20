@@ -16,17 +16,20 @@ use super::DurableWorkerCtx;
 use crate::preview2::wasi::config::store::{Error, Host};
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::render_config_path;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::render::json_value::to_json_value;
 
-/// Render an agent-config value (held in executor state as a legacy
-/// `ValueAndType`) into the flat string form expected by `wasi:config/store`.
-/// Scalars render as their bare JSON string; structured values render as JSON.
-fn render_agent_config_value(value: &ValueAndType) -> Option<String> {
-    value.to_json_value().ok().map(|json| match json {
-        serde_json::Value::String(value) => value,
-        other => other.to_string(),
-    })
+/// Render an agent-config value (held in executor state as a schema-native
+/// [`TypedSchemaValue`]) into the flat string form expected by
+/// `wasi:config/store`. Scalars render as their bare JSON string; structured
+/// values render as JSON.
+fn render_agent_config_value(value: &TypedSchemaValue) -> Option<String> {
+    to_json_value(value.graph(), value.root_type(), value.value())
+        .ok()
+        .map(|json| match json {
+            serde_json::Value::String(value) => value,
+            other => other.to_string(),
+        })
 }
 
 /// `wasi:config/store` implementation

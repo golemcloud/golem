@@ -77,23 +77,11 @@ description = "Fetches the WIT dependencies based on wit/deps.toml"
 run_task = [
     { name = [
         "remove-wit-deps",
-        "wit-golem-wasm",
         "wit-golem-common",
         "wit-golem-cli",
         "wit-sdks",
     ] },
 ]
-
-[tasks.wit-golem-wasm]
-private = true
-script_runner = "@duckscript"
-script = """
-rm -r golem-wasm/wit/deps
-mkdir golem-wasm/wit/deps
-cp wit/deps/io golem-wasm/wit/deps
-cp wit/deps/clocks golem-wasm/wit/deps
-cp wit/deps/golem-core golem-wasm/wit/deps
-"""
 
 [tasks.wit-golem-common]
 private = true
@@ -104,7 +92,6 @@ mkdir golem-common/wit/deps
 cp wit/deps/io golem-common/wit/deps
 cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
-cp wit/deps/golem-core golem-common/wit/deps
 cp wit/deps/golem-core-v2 golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
 """
@@ -127,9 +114,6 @@ glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/scala/wit/deps
 glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
-rm -r sdks/ts/wit/deps/golem-core
-rm -r sdks/moonbit/golem_sdk/wit/deps/golem-core
-rm -r sdks/scala/wit/deps/golem-core
 """
 
 [tasks.wit-golem-cli]
@@ -141,7 +125,6 @@ mkdir cli/golem-cli/wit/deps
 cp wit/deps/clocks cli/golem-cli/wit/deps
 cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
-cp wit/deps/golem-core cli/golem-cli/wit/deps
 cp wit/deps/golem-core-v2 cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
@@ -151,14 +134,13 @@ cp wit/deps/logging cli/golem-cli/wit/deps
 private = true
 script_runner = "@duckscript"
 script = """
-rm -rf golem-wasm/wit/deps
 rm -rf golem-common/wit/deps
 rm -rf cli/golem-cli/wit/deps
 """
 
 [tasks.diff-wit]
 private = true
-script = "git diff --exit-code wit golem-wasm/wit"
+script = "git diff --exit-code wit golem-common/wit"
 
 [tasks.check-wit]
 run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
@@ -486,7 +468,7 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo-test-r run --workspace --lib --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --workspace --lib -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]
@@ -915,8 +897,6 @@ script = '''
 description = "Publishes packages to crates.io"
 dependencies = [
     "set-version",
-    "publish-golem-wasm-derive",
-    "publish-golem-wasm",
 ]
 
 [tasks.set-version]
@@ -945,30 +925,6 @@ foreach ($file in $cargoFiles)
     Set-Content $file.PSPath
 }
 '''
-
-[tasks.publish-golem-wasm-derive]
-description = "Publishes golem-wasm-derive package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-wasm-derive",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-wasm]
-description = "Publishes golem-wasm package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-wasm",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
 
 ## ** PACKAGE RELEASE **
 

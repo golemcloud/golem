@@ -21,10 +21,9 @@ pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::component_introspection::wit_parser::WitAnalysisContext;
-use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
-use crate::model::agent::{AgentType, AgentTypeName};
+use crate::component_introspection::{AnalysisFailure, AnalysisResult, TopLevelExport};
+use crate::model::agent::AgentTypeName;
 use crate::model::component::InstalledPlugin;
-use crate::schema::adapters::schema_agent_type_to_legacy;
 use crate::schema::agent::AgentTypeSchema;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -106,16 +105,6 @@ impl ComponentMetadata {
 
     pub fn agent_types(&self) -> &[AgentTypeSchema] {
         &self.data.agent_types
-    }
-
-    pub fn legacy_agent_types(&self) -> Result<Vec<AgentType>, String> {
-        self.data
-            .agent_types
-            .iter()
-            .map(|agent_type| {
-                schema_agent_type_to_legacy(agent_type).map_err(|err| err.to_string())
-            })
-            .collect()
     }
 
     pub fn agent_type_provision_configs(
@@ -222,17 +211,6 @@ impl ComponentMetadata {
             .iter()
             .find(|t| &t.type_name == agent_type)
             .cloned()
-    }
-
-    pub fn find_legacy_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        self.find_agent_type_by_name(agent_type)
-            .map(|agent_type| {
-                schema_agent_type_to_legacy(&agent_type).map_err(|err| err.to_string())
-            })
-            .transpose()
     }
 }
 
@@ -361,14 +339,14 @@ fn record_known_export(
     }
 }
 
-/// Extract a `KnownExports` index from the full analysed export tree.
+/// Extract a `KnownExports` index from the top-level exports.
 /// Only instance exports are considered; each supported interface prefix
 /// is matched at most once (the exact versioned name is stored).
-pub fn extract_known_exports(exports: &[AnalysedExport]) -> AnalysisResult<KnownExports> {
+pub fn extract_known_exports(exports: &[TopLevelExport]) -> AnalysisResult<KnownExports> {
     let mut known = KnownExports::default();
 
     for export in exports {
-        if let AnalysedExport::Instance(instance) = export {
+        if let TopLevelExport::Instance(instance) = export {
             let name = &instance.name;
             if name == AGENT_GUEST_PREFIX || name.starts_with(&format!("{AGENT_GUEST_PREFIX}@")) {
                 record_known_export(&mut known.agent_guest_interface, "agent guest", name)?;
@@ -818,11 +796,11 @@ mod protobuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component_introspection::{AnalysedExport, AnalysedInstance};
+    use crate::component_introspection::{ExportedInstance, TopLevelExport};
     use test_r::test;
 
-    fn instance_export(name: &str) -> AnalysedExport {
-        AnalysedExport::Instance(AnalysedInstance {
+    fn instance_export(name: &str) -> TopLevelExport {
+        TopLevelExport::Instance(ExportedInstance {
             name: name.to_string(),
             functions: vec![],
         })

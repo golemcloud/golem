@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm::analysis::{AnalysedType, analysed_type};
-use golem_wasm::{FromValue, IntoValue, Value};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
@@ -43,23 +41,6 @@ impl TraceId {
 impl Display for TraceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:032x}", self.0)
-    }
-}
-
-impl IntoValue for TraceId {
-    fn into_value(self) -> Value {
-        Value::String(self.to_string())
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::str()
-    }
-}
-
-impl FromValue for TraceId {
-    fn from_value(value: Value) -> Result<Self, String> {
-        let str = String::from_value(value)?;
-        Self::from_string(str)
     }
 }
 
@@ -109,23 +90,6 @@ impl SpanId {
 impl Display for SpanId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:016x}", self.0)
-    }
-}
-
-impl IntoValue for SpanId {
-    fn into_value(self) -> Value {
-        Value::String(self.to_string())
-    }
-
-    fn get_type() -> AnalysedType {
-        analysed_type::str()
-    }
-}
-
-impl FromValue for SpanId {
-    fn from_value(value: Value) -> Result<Self, String> {
-        let str = String::from_value(value)?;
-        Self::from_string(str)
     }
 }
 

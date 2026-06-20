@@ -16,7 +16,6 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::get;
-use golem_common::component_introspection::wit_parser::SharedAnalysedTypeResolve;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
@@ -55,10 +54,6 @@ use tracing::{Instrument, Span, debug, info};
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
-inherit_test_dep!(
-    #[tagged_as("golem_host")]
-    SharedAnalysedTypeResolve
-);
 inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent

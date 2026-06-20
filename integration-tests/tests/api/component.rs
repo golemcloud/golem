@@ -18,9 +18,8 @@ use golem_client::api::{
 };
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
-    ComponentModelElementSchema, DataSchema, DeployedRegisteredAgentType, ElementSchema,
-    NamedElementSchema, NamedElementSchemas, RegisteredAgentTypeImplementer, Snapshotting,
+    AgentMode, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
+    Snapshotting,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
@@ -34,11 +33,12 @@ use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::agent::agent_type_to_schema;
+use golem_common::schema::{
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema,
+    MetadataEnvelope, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -755,36 +755,28 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let agent_type = AgentType {
-        type_name: golem_common::model::agent::AgentTypeName("CounterAgent".to_string()),
+    let agent_type_schema = AgentTypeSchema {
+        type_name: AgentTypeName("CounterAgent".to_string()),
         description: "".to_string(),
         source_language: String::new(),
-        constructor: AgentConstructor {
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
             name: None,
             description: "".to_string(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "name".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: AnalysedType::Str(TypeStr),
-                    }),
-                }],
-            }),
+            input_schema: InputSchema::Parameters(vec![NamedField {
+                name: "name".to_string(),
+                source: FieldSource::default(),
+                schema: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            }]),
         },
-        methods: vec![AgentMethod {
+        methods: vec![AgentMethodSchema {
             name: "increment".to_string(),
             description: "".to_string(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "return-value".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: AnalysedType::U32(TypeU32),
-                    }),
-                }],
-            }),
+            input_schema: InputSchema::Parameters(vec![]),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::u32())),
             http_endpoint: Vec::new(),
             read_only: None,
         }],
@@ -794,8 +786,6 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         snapshotting: Snapshotting::Disabled(Empty {}),
         config: Vec::new(),
     };
-
-    let agent_type_schema = agent_type_to_schema(&agent_type)?;
 
     let component = client
         .create_component(

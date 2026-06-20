@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::schema::adapters::unstructured::is_unstructured_variant;
+use golem_common::schema::unstructured::is_unstructured_variant;
 use golem_common::schema::schema_type::SchemaType;
 
 fn is_path_leaf_type(typ: &SchemaType) -> bool {

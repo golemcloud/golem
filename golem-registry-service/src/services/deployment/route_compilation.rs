@@ -33,7 +33,7 @@ use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
 };
-use golem_common::schema::adapters::is_multimodal_schema_type;
+use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::{
     AgentMethodSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, NamedFieldType,
     OutputSchema, SchemaGraph, SchemaType,

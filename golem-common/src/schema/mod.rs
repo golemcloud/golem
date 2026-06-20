@@ -19,8 +19,6 @@
 //! bindings through crate features. `golem-common` keeps only the platform
 //! extension modules layered on top of that core.
 
-#[cfg(feature = "full")]
-pub mod adapters;
 pub mod agent;
 mod common_impls;
 #[cfg(feature = "full")]
@@ -33,7 +31,8 @@ pub use golem_schema::schema::proptest_strategies;
 #[cfg(feature = "full")]
 pub use golem_schema::schema::wit;
 pub use golem_schema::schema::{
-    canonical, conversion, derive, graph, metadata, schema_type, schema_value,
+    canonical, conversion, derive, graph, metadata, multimodal, schema_type, schema_value,
+    unstructured,
 };
 
 #[cfg(test)]
@@ -41,8 +40,9 @@ mod tests;
 
 pub use agent::{
     AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-    AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema, ParsedAgentId,
-    RegisteredAgentTypeSchema, build_input_record,
+    AutoInjectedKind, FALLBACK_OUTPUT_FIELD_NAME, FieldSource, InputSchema,
+    MULTIMODAL_PARTS_FIELD_NAME, NamedField, OutputSchema, ParsedAgentId,
+    RegisteredAgentTypeSchema, build_input_record, json_input_schema_value_to_typed_schema_value,
 };
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,

@@ -13,17 +13,12 @@
 // limitations under the License.
 
 use golem_common::base_model::oplog::PublicSnapshotData;
-use golem_common::model::agent::{
-    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
     PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::schema::TypedSchemaValue;
 use golem_common::schema::render::value_to_cli_text;
-use golem_wasm::{ValueAndType, print_value_and_type};
 use std::fmt::Write;
 
 // backported from golem-cli to help debugging worker executor issues
@@ -471,60 +466,7 @@ fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstalla
     }
 }
 
-fn value_to_string(value: &ValueAndType) -> String {
-    print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
-}
-
 fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
     value_to_cli_text(value.graph(), value.root_type(), value.value())
         .unwrap_or_else(|_| format!("{value:?}"))
-}
-
-#[allow(dead_code)]
-fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
-    match value {
-        DataValue::Tuple(values) => {
-            let _ = writeln!(output, "{pad}  tuple:");
-            for value in &values.elements {
-                log_element_value(output, &format!("{pad}    "), value);
-            }
-        }
-        DataValue::Multimodal(values) => {
-            let _ = writeln!(output, "{pad}  multi-modal:");
-            for value in &values.elements {
-                log_element_value(output, &format!("{pad}    "), &value.value);
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
-    match value {
-        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-            let _ = writeln!(output, "{pad}- {}", value_to_string(value));
-        }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Url(url) => {
-                let _ = writeln!(output, "{pad}- URL: {}", url.value);
-            }
-            TextReference::Inline(inline) => {
-                let _ = writeln!(output, "{pad}- Inline: {}", inline.data);
-                if let Some(text_type) = &inline.text_type {
-                    let _ = writeln!(output, "{pad}  Language code: {}", text_type.language_code);
-                }
-            }
-        },
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Url(url) => {
-                    let _ = writeln!(output, "{pad}- URL: {}", url.value);
-                }
-                BinaryReference::Inline(inline) => {
-                    let _ = writeln!(output, "{pad}- Inline: {} bytes", inline.data.len());
-                    let _ = writeln!(output, "{pad}  MIME type: {}", inline.binary_type.mime_type);
-                }
-            }
-        }
-    }
 }

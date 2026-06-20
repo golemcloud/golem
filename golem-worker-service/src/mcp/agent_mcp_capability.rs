@@ -20,13 +20,12 @@ use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::schema::adapters::{
-    UnstructuredPayloadKind, is_multimodal_schema_type, unstructured_or_raw_kind,
-};
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, FieldSource, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::multimodal::is_multimodal_schema_type;
+use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Tool};
 use std::borrow::Cow;
 use std::sync::Arc;

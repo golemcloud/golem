@@ -27,7 +27,6 @@ use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
-use golem_wasm::analysis::TypeEnum;
 use http::HeaderName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
@@ -719,11 +718,7 @@ impl TryFrom<proto::golem::customapi::PathSegmentType> for PathSegmentType {
             Kind::EnumType(e) => {
                 let inner = e.inner.ok_or("PathSegmentType::Enum.inner missing")?;
 
-                Ok(PathSegmentType::Enum(TypeEnum {
-                    owner: inner.owner,
-                    name: inner.name,
-                    cases: inner.names,
-                }))
+                Ok(PathSegmentType::Enum(inner.names))
             }
         }
     }
@@ -750,10 +745,10 @@ impl From<PathSegmentType> for proto::golem::customapi::PathSegmentType {
 
             PathSegmentType::Enum(inner) => {
                 Kind::EnumType(proto::golem::customapi::path_segment_type::Enum {
-                    inner: Some(golem_wasm::protobuf::TypeEnum {
-                        owner: inner.owner,
-                        name: inner.name,
-                        names: inner.cases,
+                    inner: Some(proto::golem::customapi::PathSegmentEnum {
+                        owner: None,
+                        name: None,
+                        names: inner,
                     }),
                 })
             }

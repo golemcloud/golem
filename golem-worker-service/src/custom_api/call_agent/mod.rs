@@ -32,7 +32,7 @@ use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig};
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
-use golem_common::schema::adapters::wrap_unstructured_inline_for_schema;
+use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,

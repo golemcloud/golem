@@ -109,10 +109,8 @@ pub fn try_into_schema_graph<T: IntoSchema + ?Sized>() -> Result<SchemaGraph, Sc
 /// the encoded [`SchemaValue`] tree — from a value whose type implements
 /// [`IntoSchema`].
 ///
-/// This is the schema-native counterpart of the legacy
-/// `golem_wasm::IntoValueAndType::into_value_and_type`: where that produced a
-/// `ValueAndType` (an `AnalysedType` + `Value`), this produces a
-/// `TypedSchemaValue` (a `SchemaGraph` + `SchemaValue`). It is the bridge used
+/// This produces a `TypedSchemaValue` (a `SchemaGraph` + `SchemaValue`) for a
+/// Rust value carrying its own type. It is the bridge used
 /// at boundaries that still need a value carrying its own type (e.g. the public
 /// oplog / oplog-processor surface).
 pub fn try_into_typed_schema_value<T: IntoSchema + ?Sized>(
@@ -1056,8 +1054,7 @@ impl FromSchema for std::time::Duration {
 }
 
 // A `uuid::Uuid` is modelled as a nominal record of two `u64`s (the high and
-// low 64-bit halves), mirroring the legacy `golem_wasm::IntoValue for Uuid`
-// representation so existing consumers see the same shape.
+// low 64-bit halves).
 impl IntoSchema for uuid::Uuid {
     fn type_id() -> TypeId {
         TypeId::new("uuid.Uuid")
@@ -1158,9 +1155,8 @@ impl FromSchema for usize {
     }
 }
 
-// `std::ops::Bound<T>` mirrors the legacy `golem_wasm::IntoValue for Bound<T>`
-// shape: a 3-case variant `included(T) | excluded(T) | unbounded` with the same
-// case order/indices, so existing consumers see the same structure.
+// `std::ops::Bound<T>` is modelled as a 3-case variant
+// `included(T) | excluded(T) | unbounded`.
 impl<T: IntoSchema> IntoSchema for std::ops::Bound<T> {
     fn type_id() -> TypeId {
         type_id_with_args("core.ops.range.Bound", &[T::type_id()])

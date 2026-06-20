@@ -136,8 +136,7 @@ impl AgentResult {
 
     /// Consume the result, returning the raw output [`SchemaValue`] if present.
     ///
-    /// Schema-native replacement for the legacy `DataValue::into_return_value`
-    /// (which returned a `golem_wasm::Value`).
+    /// Schema-native replacement for the legacy `DataValue::into_return_value`.
     pub fn into_return_value(self) -> Option<SchemaValue> {
         self.value
     }

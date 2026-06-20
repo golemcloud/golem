@@ -51,6 +51,7 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
 };
+use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_common::schema::SchemaValue;
 use golem_service_base::clients::registry::RegistryService;
@@ -71,7 +72,6 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
-use golem_wasm::Uri;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -1770,7 +1770,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
@@ -2062,7 +2062,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;

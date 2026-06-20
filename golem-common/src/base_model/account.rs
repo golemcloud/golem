@@ -21,11 +21,10 @@ use crate::schema::schema_type::{NamedFieldType, SchemaType};
 use crate::schema::schema_value::SchemaValue;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use derive_more::Display;
-use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use uuid::uuid;
 
-newtype_uuid!(AccountId, wit_name: "account-id", wit_owner: "golem:core@1.5.0/types", golem_api_grpc::proto::golem::common::AccountId);
+newtype_uuid!(AccountId, wit_name: "account-id", wit_owner: "golem:core@2.0.0/types", golem_api_grpc::proto::golem::common::AccountId);
 
 impl AccountId {
     pub const SYSTEM: Self = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
@@ -81,9 +80,7 @@ impl crate::schema::conversion::FromSchema for AccountId {
 
 declare_revision!(AccountRevision);
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Display, IntoValue, FromValue,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Display)]
 #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]

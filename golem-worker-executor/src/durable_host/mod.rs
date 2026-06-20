@@ -112,6 +112,7 @@ use golem_common::model::{
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
+use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -120,7 +121,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use golem_wasm::Uri;
 use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -4191,7 +4191,7 @@ struct PrivateDurableWorkerState {
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
-    agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 
     /// Cached named retry policies derived from `agent_config` only. Lazily populated and
     /// invalidated whenever `agent_config` is reassigned.
@@ -4300,7 +4300,7 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
-        agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+        agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,

@@ -42,11 +42,10 @@ impl TryFrom<PublicTypedAgentConfigEntry> for crate::base_model::worker::Untyped
     type Error = String;
 
     fn try_from(value: PublicTypedAgentConfigEntry) -> Result<Self, Self::Error> {
-        let vat = crate::schema::adapters::typed_schema_value_to_value_and_type(&value.value)
-            .map_err(|e| e.to_string())?;
+        let (_graph, schema_value) = value.value.into_parts();
         Ok(Self {
             path: value.path,
-            value: vat.value,
+            value: schema_value,
         })
     }
 }

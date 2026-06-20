@@ -22,8 +22,6 @@ pub mod proto {
         BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
         SerializationContext,
     };
-    use golem_wasm::analysis::{AnalysedType, analysed_type};
-    use golem_wasm::{FromValue, IntoValue, Value};
 
     use uuid::Uuid;
 
@@ -74,26 +72,4 @@ pub mod proto {
         }
     }
 
-    impl IntoValue for UpdateMode {
-        fn into_value(self) -> Value {
-            match self {
-                UpdateMode::Automatic => Value::Enum(0),
-                UpdateMode::Manual => Value::Enum(1),
-            }
-        }
-
-        fn get_type() -> AnalysedType {
-            analysed_type::r#enum(&["automatic", "snapshot-based"])
-        }
-    }
-
-    impl FromValue for UpdateMode {
-        fn from_value(value: Value) -> Result<Self, String> {
-            match value {
-                Value::Enum(0) => Ok(UpdateMode::Automatic),
-                Value::Enum(1) => Ok(UpdateMode::Manual),
-                _ => Err(format!("Unexpected value for UpdateMode: {value:?}")),
-            }
-        }
-    }
 }

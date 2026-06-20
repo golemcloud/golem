@@ -377,14 +377,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::AgentResourceDescription",
             ),
             ("AgentStatus", "golem_common::model::AgentStatus"),
-            // golem_wasm
-            ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
-            ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
-            (
-                "ValueAndOptionalType",
-                "golem_wasm::json::OptionallyValueAndTypeJson",
-            ),
-            ("ValueAndType", "golem_wasm::ValueAndType"),
             // schema model (the OpenAPI spec exposes these for 3rd-party
             // consumers; golem-client must alias them to the real Rust types
             // rather than regenerate structs from the typed schemas)

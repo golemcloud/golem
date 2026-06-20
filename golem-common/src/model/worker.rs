@@ -17,7 +17,6 @@ use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
-use crate::schema::adapters::schema_type_to_analysed_type;
 use crate::schema::{SchemaGraph, TypedSchemaValue};
 use std::collections::BTreeMap;
 
@@ -78,29 +77,17 @@ impl UntypedAgentConfigEntry {
                 )
             })?;
 
-        // This is the legacy-oplog upgrade boundary: the incoming value is a
-        // legacy `golem_wasm::Value` recovered from the persisted raw oplog
-        // entry. We keep the agent's native config schema graph (so named/ref
-        // composites are preserved) and only lower the declared `value_type` to
-        // a legacy `AnalysedType` to drive decoding of the legacy value into a
-        // `SchemaValue`. Refs in `value_type` are resolved against the agent's
-        // full `SchemaGraph`. This honestly fails on config types that have no
-        // legacy representation (which a legacy `Value` could never have
-        // carried anyway).
+        // Reattach the agent's native config schema graph (so named/ref
+        // composites are preserved) to the stored schema value. Refs in
+        // `value_type` are resolved against the agent's full `SchemaGraph`.
         let graph = SchemaGraph {
             defs: agent_type.schema.defs.clone(),
             root: declaration.value_type.clone(),
         };
 
-        let analysed = schema_type_to_analysed_type(&agent_type.schema, &declaration.value_type)
-            .map_err(|err| format!("failed to convert config type: {err}"))?;
-
-        let schema_value = crate::schema::adapters::value_to_schema_value(&self.value, &analysed)
-            .map_err(|err| format!("failed to convert config value: {err}"))?;
-
         Ok(TypedAgentConfigEntry {
             path: self.path,
-            value: TypedSchemaValue::new(graph, schema_value),
+            value: TypedSchemaValue::new(graph, self.value),
         })
     }
 }

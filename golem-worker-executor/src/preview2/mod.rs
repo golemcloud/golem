@@ -43,9 +43,9 @@ wasmtime::component::bindgen!({
         "golem:api/oplog.search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability.lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
         "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-        "golem:agent/host.wasm-rpc": golem_wasm::WasmRpcEntry,
-        "golem:agent/host.future-invoke-result": golem_wasm::FutureInvokeResultEntry,
-        "golem:agent/host.cancellation-token": golem_wasm::CancellationTokenEntry,
+        "golem:agent/host.wasm-rpc": super::durable_host::wasm_rpc::WasmRpcEntry,
+        "golem:agent/host.future-invoke-result": super::durable_host::wasm_rpc::FutureInvokeResultEntry,
+        "golem:agent/host.cancellation-token": super::durable_host::wasm_rpc::CancellationTokenEntry,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
         "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,

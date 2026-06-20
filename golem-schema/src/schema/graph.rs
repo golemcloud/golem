@@ -90,7 +90,57 @@ impl SchemaGraph {
     pub fn lookup(&self, id: &TypeId) -> Option<&SchemaTypeDef> {
         self.defs.iter().find(|d| &d.id == id)
     }
+
+    /// Walk through any number of [`SchemaType::Ref`] indirections and return
+    /// the first non-ref body in this graph. Detects recursive cycles
+    /// ([`RefResolutionError::RecursiveRef`]) and dangling references
+    /// ([`RefResolutionError::DanglingRef`]).
+    pub fn resolve_ref<'a>(
+        &'a self,
+        ty: &'a SchemaType,
+    ) -> Result<&'a SchemaType, RefResolutionError> {
+        let mut visiting: Vec<TypeId> = Vec::new();
+        let mut current = ty;
+        loop {
+            match current {
+                SchemaType::Ref { id, .. } => {
+                    if visiting.iter().any(|x| x == id) {
+                        return Err(RefResolutionError::RecursiveRef(id.clone()));
+                    }
+                    let def = self
+                        .lookup(id)
+                        .ok_or_else(|| RefResolutionError::DanglingRef(id.clone()))?;
+                    visiting.push(id.clone());
+                    current = &def.body;
+                }
+                other => return Ok(other),
+            }
+        }
+    }
 }
+
+/// Error from resolving a chain of [`SchemaType::Ref`] indirections in a
+/// [`SchemaGraph`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefResolutionError {
+    /// The schema graph has a recursive cycle.
+    RecursiveRef(TypeId),
+    /// A [`SchemaType::Ref`] pointed at a [`TypeId`] not present in the graph.
+    DanglingRef(TypeId),
+}
+
+impl std::fmt::Display for RefResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RecursiveRef(id) => {
+                write!(f, "schema graph contains a recursive reference: {id}")
+            }
+            Self::DanglingRef(id) => write!(f, "schema graph contains dangling reference: {id}"),
+        }
+    }
+}
+
+impl std::error::Error for RefResolutionError {}
 
 /// A named type definition inside a [`SchemaGraph`].
 ///

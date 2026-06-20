@@ -15,9 +15,8 @@
 use crate::bridge_gen::type_naming::builder::{Builder, RootOwner};
 use crate::bridge_gen::type_naming::schema_type_ext::SchemaTypeExt;
 use anyhow::bail;
-use golem_common::schema::adapters::analysed_type::strip_disambiguation_suffix;
-use golem_common::schema::adapters::data_schema::multimodal_variant_cases;
-use golem_common::schema::adapters::unstructured::is_unstructured_variant;
+use golem_common::schema::multimodal::multimodal_variant_cases;
+use golem_common::schema::unstructured::is_unstructured_variant;
 use golem_common::schema::agent::{
     AgentTypeSchema, FieldSource, InputSchema, NamedField, OutputSchema,
 };
@@ -33,6 +32,15 @@ use type_location::{TypeLocation, TypeLocationPath};
 mod builder;
 pub(crate) mod schema_type_ext;
 mod type_location;
+
+const DISAMBIGUATION_MARKER: &str = "__g_";
+
+fn strip_disambiguation_suffix(id: &str) -> &str {
+    match id.rfind(DISAMBIGUATION_MARKER) {
+        Some(pos) => &id[..pos],
+        None => id,
+    }
+}
 
 type TypeLocationsBySchema = Vec<(SchemaType, Vec<TypeLocation>)>;
 
@@ -612,7 +620,7 @@ impl<TN: TypeName> TypeNaming<TN> {
 /// are filled in by the host at invocation time, never by the generated
 /// client, so the bridge generators omit them from the generated parameter
 /// surface and from the encoded request record — matching the legacy
-/// `DataSchema`, which had no notion of auto-injected fields.
+/// the old input model, which had no notion of auto-injected fields.
 pub(crate) fn user_supplied_fields(input: &InputSchema) -> Vec<&NamedField> {
     input
         .fields()
@@ -627,16 +635,15 @@ pub(crate) fn user_supplied_fields(input: &InputSchema) -> Vec<&NamedField> {
 /// pair from the raw id by splitting at the last dot.
 ///
 /// Disambiguation suffixes produced by the schema adapter (see
-/// [`SchemaGraphBuilder`](golem_common::schema::adapters::analysed_type::SchemaGraphBuilder))
+/// schema graph builder.
 /// are stripped before splitting so an owner-qualified duplicate generic
 /// (e.g. `std.ops.Bound__g_<hex>` with display name `Bound`) still
 /// recovers `(Some("std.ops"), Some("Bound"))` instead of losing the
 /// owner.
 ///
-/// This mirrors the legacy [`AnalysedType::name`](golem_wasm::analysis::AnalysedType::name)
-/// / [`AnalysedType::owner`](golem_wasm::analysis::AnalysedType::owner)
+/// This mirrors the legacy analysed-type name / owner metadata semantics
 /// reattachment performed inside
-/// [`golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type`].
+/// schema graph conversion.
 fn split_type_id(raw: &str, display_name: Option<&str>) -> (Option<String>, Option<String>) {
     let raw = strip_disambiguation_suffix(raw);
     if let Some(name) = display_name {

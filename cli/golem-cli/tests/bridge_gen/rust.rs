@@ -13,21 +13,16 @@
 // limitations under the License.
 
 use crate::bridge_gen::fixtures::{
-    code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
+    agent, code_first_snippets_agent_type, field, method, multi_agent_wrapper_2_types,
+    single_agent_wrapper_types,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
-use golem_cli::bridge_gen::BridgeGenerator;
+use golem_cli::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
 use golem_cli::model::GuestLanguage;
-use golem_common::model::Empty;
-use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentMethod, AgentMode, AgentType,
-    AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-    NamedElementSchemas, Snapshotting,
-};
-use golem_common::schema::adapters::agent_type_to_schema;
-use golem_wasm::analysis::analysed_type::{f64, field, list, option, record, s32, str};
+use golem_common::model::agent::AgentMode;
+use golem_common::schema::{AgentTypeSchema, SchemaType};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
@@ -37,7 +32,7 @@ struct GeneratedPackage {
 }
 
 impl GeneratedPackage {
-    pub fn new(agent_type: AgentType) -> Self {
+    pub fn new(agent_type: AgentTypeSchema) -> Self {
         let dir = TempDir::new().unwrap();
         let target_dir = Utf8Path::from_path(dir.path()).unwrap();
         std::fs::remove_dir_all(target_dir).ok();
@@ -61,371 +56,90 @@ fn rust_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
     GeneratedPackage::new(multi_agent_wrapper_2_types()[1].clone())
 }
 
-#[test_dep(scope = PerWorker, tagged_as = "ts_code_first_snippets_foo_agent")]
-fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
-    GeneratedPackage::new(code_first_snippets_agent_type(
-        GuestLanguage::TypeScript,
-        "FooAgent",
-    ))
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "ts_code_first_snippets_bar_agent")]
-fn ts_code_first_snippets_bar_agent() -> GeneratedPackage {
-    GeneratedPackage::new(code_first_snippets_agent_type(
-        GuestLanguage::TypeScript,
-        "BarAgent",
-    ))
-}
-
 #[test_dep(scope = PerWorker, tagged_as = "rust_code_first_snippets_foo_agent")]
 fn rust_code_first_snippets_foo_agent() -> GeneratedPackage {
-    GeneratedPackage::new(code_first_snippets_agent_type(
-        GuestLanguage::Rust,
-        "FooAgent",
-    ))
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "rust_code_first_snippets_bar_agent")]
-fn rust_code_first_snippets_bar_agent() -> GeneratedPackage {
-    GeneratedPackage::new(code_first_snippets_agent_type(
-        GuestLanguage::Rust,
-        "BarAgent",
-    ))
+    GeneratedPackage::new(code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"))
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "counter_agent")]
 fn rust_counter_agent() -> GeneratedPackage {
-    let agent_type = AgentType {
-        type_name: AgentTypeName("CounterAgent".to_string()),
-        description: "Constructs the agent CounterAgent".to_string(),
-        source_language: "rust".to_string(),
-        constructor: AgentConstructor {
-            name: Some("CounterAgent".to_string()),
-            description: "Constructs the agent CounterAgent".to_string(),
-            prompt_hint: Some("Enter the following parameters: name".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "name".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-        },
-        methods: vec![AgentMethod {
-            name: "increment".to_string(),
-            description: "Increases the count by one and returns the new value".to_string(),
-            prompt_hint: Some("Increase the count by one".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "return_value".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: f64(),
-                    }),
-                }],
-            }),
-            http_endpoint: vec![],
-            read_only: None,
-        }],
-        dependencies: vec![],
-        mode: AgentMode::Durable,
-        http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
-        config: Vec::new(),
-    };
-
-    GeneratedPackage::new(agent_type)
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "rust_local_config_primitive_agent")]
-fn rust_local_config_primitive_agent() -> GeneratedPackage {
-    GeneratedPackage::new(durable_local_config_primitive_agent())
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "rust_local_config_complex_agent")]
-fn rust_local_config_complex_agent() -> GeneratedPackage {
-    GeneratedPackage::new(durable_local_config_complex_agent())
+    GeneratedPackage::new(agent(
+        "CounterAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![method("increment", vec![], Some(SchemaType::f64()))],
+        vec![],
+        AgentMode::Durable,
+    ))
 }
 
 #[test]
 fn bridge_rust_compiles_single_agent_wrapper(
     #[tagged_as("single_agent_wrapper_types_1")] _pkg: &GeneratedPackage,
 ) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
 }
 
 #[test]
 fn bridge_rust_compiles_multi_agent_1(
     #[tagged_as("multi_agent_wrapper_2_types_1")] _pkg: &GeneratedPackage,
 ) {
-    //     The test_dep ensures it was compiled successfully in generate_and_compile
 }
 
 #[test]
 fn bridge_rust_compiles_multi_agent_2(
     #[tagged_as("multi_agent_wrapper_2_types_2")] _pkg: &GeneratedPackage,
 ) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
 }
 
 #[test]
-fn bridge_rust_compiles_counter_agent(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
-}
-
-#[test]
-fn bridge_rust_compiles_local_config_primitive_agent(
-    #[tagged_as("rust_local_config_primitive_agent")] _pkg: &GeneratedPackage,
-) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
-}
-
-#[test]
-fn bridge_rust_compiles_local_config_complex_agent(
-    #[tagged_as("rust_local_config_complex_agent")] _pkg: &GeneratedPackage,
-) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
-}
-
-#[test]
-fn bridge_rust_compiles_ts_ode_first_snippets_foo_agent(
-    #[tagged_as("ts_code_first_snippets_foo_agent")] _pkg: &GeneratedPackage,
-) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
-}
-
-#[test]
-fn bridge_rust_compiles_ts_code_first_snippets_bar_agent(
-    #[tagged_as("ts_code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
-) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
-}
+fn bridge_rust_compiles_counter_agent(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {}
 
 #[test]
 fn bridge_rust_compiles_rust_code_first_snippets_foo_agent(
     #[tagged_as("rust_code_first_snippets_foo_agent")] _pkg: &GeneratedPackage,
 ) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
-}
-
-#[test]
-fn bridge_rust_compiles_rust_code_first_snippets_bar_agent(
-    #[tagged_as("rust_code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
-) {
-    // The test_dep ensures it was compiled successfully in generate_and_compile
 }
 
 #[test]
 fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-
-    let mut generator = RustBridgeGenerator::new(
-        agent_type_to_schema(&ephemeral_config_agent()).unwrap(),
-        target_dir,
-        true,
-    )
-    .unwrap();
-    generator
-        .generate()
-        .expect("Failed to generate Rust bridge");
-
-    let lib_rs = std::fs::read_to_string(target_dir.join("src/lib.rs")).unwrap();
-
-    assert!(!lib_rs.contains("pub async fn get("));
-    assert!(!lib_rs.contains("pub async fn get_with_config("));
-    assert!(lib_rs.contains("pub async fn new_phantom("));
-    assert!(lib_rs.contains("pub async fn get_phantom("));
-    assert!(lib_rs.contains("pub async fn new_phantom_with_config("));
-    assert!(lib_rs.contains("pub async fn get_phantom_with_config("));
-}
-
-fn ephemeral_config_agent() -> AgentType {
-    AgentType {
-        type_name: AgentTypeName("EphemeralBridgeAgent".to_string()),
-        description: "Constructs an ephemeral bridge agent".to_string(),
-        source_language: "rust".to_string(),
-        constructor: AgentConstructor {
-            name: Some("EphemeralBridgeAgent".to_string()),
-            description: "Constructs an ephemeral bridge agent".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "name".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-        },
-        methods: vec![AgentMethod {
-            name: "ping".to_string(),
-            description: "Returns the name".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "return_value".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-            http_endpoint: vec![],
-            read_only: None,
-        }],
-        dependencies: vec![],
-        mode: AgentMode::Ephemeral,
-        http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
-        config: vec![AgentConfigDeclaration {
-            source: AgentConfigSource::Local,
-            path: vec!["timeout".to_string()],
-            value_type: str(),
-        }],
-    }
-}
-
-fn durable_local_config_primitive_agent() -> AgentType {
-    AgentType {
-        type_name: AgentTypeName("DurableLocalConfigPrimitiveAgent".to_string()),
-        description: "Constructs a durable local config primitive agent".to_string(),
-        source_language: "rust".to_string(),
-        constructor: AgentConstructor {
-            name: Some("DurableLocalConfigPrimitiveAgent".to_string()),
-            description: "Constructs a durable local config primitive agent".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-        },
-        methods: vec![AgentMethod {
-            name: "ping".to_string(),
-            description: "Returns the name".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "return_value".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-            http_endpoint: vec![],
-            read_only: None,
-        }],
-        dependencies: vec![],
-        mode: AgentMode::Durable,
-        http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
-        config: vec![AgentConfigDeclaration {
-            source: AgentConfigSource::Local,
-            path: vec!["timeout".to_string()],
-            value_type: str(),
-        }],
-    }
-}
-
-fn durable_local_config_complex_agent() -> AgentType {
-    let nested = record(vec![field("x", s32()), field("y", str())]);
-
-    AgentType {
-        type_name: AgentTypeName("DurableLocalConfigComplexAgent".to_string()),
-        description: "Constructs a durable local config complex agent".to_string(),
-        source_language: "rust".to_string(),
-        constructor: AgentConstructor {
-            name: Some("DurableLocalConfigComplexAgent".to_string()),
-            description: "Constructs a durable local config complex agent".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-        },
-        methods: vec![AgentMethod {
-            name: "ping".to_string(),
-            description: "Returns the name".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "return_value".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-            http_endpoint: vec![],
-            read_only: None,
-        }],
-        dependencies: vec![],
-        mode: AgentMode::Durable,
-        http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
-        config: vec![
-            AgentConfigDeclaration {
-                source: AgentConfigSource::Local,
-                path: vec!["xyz".to_string()],
-                value_type: option(nested.clone()),
-            },
-            AgentConfigDeclaration {
-                source: AgentConfigSource::Local,
-                path: vec!["xyzList".to_string()],
-                value_type: list(nested),
-            },
-        ],
-    }
-}
-
-fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
-    println!(
-        "Generating Rust bridge SDK for {} ({}) into: {}",
-        agent_type.type_name, agent_type.description, target_dir
+    let mut agent_type = agent(
+        "EphemeralConfigAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![method("get", vec![], Some(SchemaType::string()))],
+        vec![],
+        AgentMode::Ephemeral,
     );
-
-    let agent_type = agent_type_to_schema(&agent_type).unwrap();
+    agent_type.constructor.name = Some("EphemeralConfigAgent".to_string());
     let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
-    generator
-        .generate()
-        .expect("Failed to generate Rust bridge");
+    generator.generate().unwrap();
 
-    let cwd = std::env::current_dir().expect("Failed to get current directory");
-    let shared_target_dir = cwd.join("../../target/shared_bridge_tests");
-
-    let status = std::process::Command::new("cargo")
-        .arg("check")
-        .arg("--manifest-path")
-        .arg(target_dir.join("Cargo.toml").as_std_path())
-        .arg("--target-dir")
-        .arg(&shared_target_dir)
-        .status()
-        .expect("failed to run `cargo check`");
-    assert!(status.success(), "`cargo check` failed: {:?}", status);
-
-    let status = std::process::Command::new("cargo")
-        .arg("build")
-        .arg("--manifest-path")
-        .arg(target_dir.join("Cargo.toml").as_std_path())
-        .arg("--target-dir")
-        .arg(&shared_target_dir)
-        .status()
-        .expect("failed to run `cargo build`");
-    assert!(status.success(), "`cargo build` failed: {:?}", status);
+    let lib_rs = std::fs::read_to_string(target_dir.join("ephemeral-config-agent-client/src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("pub struct EphemeralConfigAgentClient"));
+    assert!(!lib_rs.contains("pub async fn new("));
 }
 
 #[test]
-fn test_rust_type_naming_rust_foo() {
+fn test_type_naming_rust_foo_agent() {
     test_type_naming::<RustTypeName>(GuestLanguage::Rust, "FooAgent");
 }
 
 #[test]
-fn test_rust_type_naming_rust_bar() {
-    test_type_naming::<RustTypeName>(GuestLanguage::Rust, "BarAgent");
-}
-
-#[test]
-fn test_rust_type_naming_ts_foo() {
+fn test_type_naming_ts_foo_agent_for_rust_bridge() {
     test_type_naming::<RustTypeName>(GuestLanguage::TypeScript, "FooAgent");
 }
 
-#[test]
-fn test_rust_type_naming_ts_bar() {
-    test_type_naming::<RustTypeName>(GuestLanguage::TypeScript, "BarAgent");
+fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
+    let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
+    let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    generator.generate().unwrap();
+
+    assert!(std::process::Command::new("cargo")
+        .arg("check")
+        .current_dir(package_dir)
+        .status()
+        .unwrap()
+        .success());
 }

@@ -123,21 +123,36 @@ mod codec_tests {
     //! Regression tests for the MCP value codec: parsing and rendering of
     //! component-model values must agree with the schema-layer JSON Schema the
     //! MCP tools advertise. These cover the three shapes where the old
-    //! `ValueAndTypeJsonExtensions` codec disagreed with the advertised schema:
+    //! legacy typed-value JSON codec disagreed with the advertised schema:
     //! `char`, payload-less variants, and `option<T>` record fields. They now
     //! drive the shared schema-layer JSON codec (`from_json_value` /
-    //! `to_json_value`) directly, projecting the `AnalysedType` into a graph via
-    //! [`analysed_type_to_schema_graph`].
+    //! `to_json_value`) directly.
 
-    use golem_common::schema::adapters::analysed_type_to_schema_graph;
+    use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::metadata::MetadataEnvelope;
     use golem_common::schema::render::json_value::{from_json_value, to_json_value};
-    use golem_wasm::analysis::NameOptionTypePair;
-    use golem_wasm::analysis::analysed_type::{chr, field, option, record, str, variant};
+    use golem_common::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
     use serde_json::json;
     use test_r::test;
 
-    fn round_trip(ty: &golem_wasm::analysis::AnalysedType, json: serde_json::Value) {
-        let graph = analysed_type_to_schema_graph(ty).expect("graph");
+    fn field(name: &str, body: SchemaType) -> NamedFieldType {
+        NamedFieldType {
+            name: name.to_string(),
+            body,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    fn variant_case(name: &str, payload: Option<SchemaType>) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    fn round_trip(ty: SchemaType, json: serde_json::Value) {
+        let graph = SchemaGraph::anonymous(ty);
         let value = from_json_value(&graph, &graph.root, &json)
             .unwrap_or_else(|e| panic!("parse failed for {json}: {e}"));
         let back = to_json_value(&graph, &graph.root, &value)
@@ -145,54 +160,51 @@ mod codec_tests {
         assert_eq!(back, json, "round-trip changed the JSON shape");
     }
 
-    fn parse_fails(ty: &golem_wasm::analysis::AnalysedType, json: serde_json::Value) -> bool {
-        let graph = analysed_type_to_schema_graph(ty).expect("graph");
+    fn parse_fails(ty: SchemaType, json: serde_json::Value) -> bool {
+        let graph = SchemaGraph::anonymous(ty);
         from_json_value(&graph, &graph.root, &json).is_err()
     }
 
     #[test]
     fn char_is_a_one_character_string() {
         // Advertised as a one-character JSON string; accepted and round-trips.
-        round_trip(&chr(), json!("A"));
+        round_trip(SchemaType::char(), json!("A"));
         // The legacy code-point number form is now rejected.
         assert!(
-            parse_fails(&chr(), json!(65)),
+            parse_fails(SchemaType::char(), json!(65)),
             "numeric char code point must be rejected"
         );
     }
 
     #[test]
     fn payloadless_variant_is_a_bare_case_name() {
-        let ty = variant(vec![
-            NameOptionTypePair {
-                name: "none".to_string(),
-                typ: None,
-            },
-            NameOptionTypePair {
-                name: "some".to_string(),
-                typ: Some(str()),
-            },
+        let ty = SchemaType::variant(vec![
+            variant_case("none", None),
+            variant_case("some", Some(SchemaType::string())),
         ]);
         // Payload-less case is a bare string constant; payload case is tagged.
-        round_trip(&ty, json!("none"));
-        round_trip(&ty, json!({"some": "x"}));
+        round_trip(ty.clone(), json!("none"));
+        round_trip(ty.clone(), json!({"some": "x"}));
         // The legacy `{ "none": null }` form is now rejected.
         assert!(
-            parse_fails(&ty, json!({"none": null})),
+            parse_fails(ty, json!({"none": null})),
             "tagged-null form for a payload-less case must be rejected"
         );
     }
 
     #[test]
     fn option_record_field_is_required() {
-        let ty = record(vec![field("inner", option(str()))]);
+        let ty = SchemaType::record(vec![field(
+            "inner",
+            SchemaType::option(SchemaType::string()),
+        )]);
         // The advertised schema marks the field required; an explicit null is
         // accepted and round-trips.
-        round_trip(&ty, json!({"inner": null}));
-        round_trip(&ty, json!({"inner": "x"}));
+        round_trip(ty.clone(), json!({"inner": null}));
+        round_trip(ty.clone(), json!({"inner": "x"}));
         // Omitting the field is rejected (schema and runtime now agree).
         assert!(
-            parse_fails(&ty, json!({})),
+            parse_fails(ty, json!({})),
             "omitted option<T> record field must be rejected"
         );
     }

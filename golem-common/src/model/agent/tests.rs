@@ -14,42 +14,22 @@
 
 use crate::base_model::Empty;
 use crate::base_model::agent::{
-    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
+    AgentMode, AgentTypeName, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    SnapshottingPeriodic,
 };
-use crate::model::agent::AgentTypeSchemaResolver;
-use crate::model::agent::{
-    AgentConstructor, AgentMode, AgentType, AgentTypeName, AgentTypeResolver, BinaryDescriptor,
-    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
-    ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
-    TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue, UntypedJsonDataValue,
-    UntypedJsonElementValue, UntypedJsonElementValues, Url,
-    parsed_agent_id_parameters_to_legacy_data_value, typed_constructor_parameters,
-};
-use crate::schema::AgentTypeSchema;
-use crate::schema::adapters::agent::{
-    agent_type_to_schema, legacy_data_value_to_typed_schema_value,
-};
-use crate::schema::adapters::{
-    input_schema_to_data_schema, input_value_to_typed_schema_value,
-    untyped_data_value_to_input_value,
+use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
+use crate::schema::{
+    AgentConstructorSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, MetadataEnvelope,
+    NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TextRestrictions,
+    TypedSchemaValue,
 };
 use crate::{agent_id, data_value, phantom_agent_id};
-use async_trait::async_trait;
-use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
-use proptest::prelude::Strategy;
-use proptest::strategy::Just;
-use proptest::string::string_regex;
-use proptest::{prop_assert_eq, prop_oneof, proptest};
+use proptest::{prop_assert_eq, proptest};
 use std::collections::HashMap;
 use test_r::test;
 use uuid::Uuid;
-
 #[test]
 fn agent_id_structural_normalization() {
     {
@@ -71,624 +51,11 @@ fn agent_id_structural_normalization() {
 }
 
 #[test]
-fn roundtrip_test_1() {
-    roundtrip_test(
-        "agent-1",
-        DataValue::Tuple(ElementValues { elements: vec![] }),
-    )
-}
-
-#[test]
-fn roundtrip_test_2() {
-    roundtrip_test(
-        "agent-2",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 12u32.into_value_and_type(),
-            })],
-        }),
-    )
-}
-
-#[test]
-fn roundtrip_test_3() {
-    roundtrip_test(
-        "agent-3",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 12u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::U32(1),
-                            Value::U32(2),
-                            Value::Flags(vec![true, false, true]),
-                        ]),
-                        record(vec![
-                            field("x", u32()),
-                            field("y", u32()),
-                            field("properties", flags(&["a", "b", "c"])),
-                        ]),
-                    ),
-                }),
-            ],
-        }),
-    )
-}
-
-#[test]
-fn roundtrip_test_4_1() {
-    roundtrip_test(
-        "agent-4",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "https://url1.com/".to_string(),
-                        text_type: None,
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "https://url2.com/".to_string(),
-                        text_type: None,
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-            ],
-        }),
-    )
-}
-
-#[test]
-fn roundtrip_test_4_2() {
-    roundtrip_test(
-        "agent-4",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "hello, world!".to_string(),
-                        text_type: None,
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "\\\"hello,\\\" world!".to_string(),
-                        text_type: Some(TextType {
-                            language_code: "en".to_string(),
-                        }),
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-            ],
-        }),
-    )
-}
-
-fn text_type_strat() -> impl Strategy<Value = Option<TextType>> {
-    prop_oneof! {
-        Just(None),
-        Just(Some(TextType { language_code: "en".to_string() })),
-        Just(Some(TextType { language_code: "de".to_string() })),
-        Just(Some(TextType { language_code: "hu".to_string() })),
-    }
-}
-
-fn text_reference_strat() -> impl Strategy<Value = TextReference> {
-    (string_regex(".*\\p{Cc}.*").unwrap(), text_type_strat())
-        .prop_map(|(data, text_type)| TextReference::Inline(TextSource { data, text_type }))
-}
-
-proptest! {
-    #[test]
-    fn roundtrip_test_arbitrary_unstructured_text(txt in text_reference_strat()) {
-        let parameters = DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt, descriptor: TextDescriptor::default() }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Inline(TextSource { data: "fixed".to_string(), text_type: None }), descriptor: TextDescriptor::default() }),
-            ]
-        });
-        let id = parsed_agent_id_from_test_schema("agent-4", parameters, None).unwrap();
-        let s = id.to_string();
-        println!("{s}");
-        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
-        prop_assert_eq!(id, id2);
-    }
-
-    #[test]
-    fn roundtrip_test_multiple_arbitrary_unstructured_text(txt1 in text_reference_strat(), txt2 in text_reference_strat()) {
-        let parameters = DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt1, descriptor: TextDescriptor::default() }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt2, descriptor: TextDescriptor::default() }),
-            ]
-        });
-        let id = parsed_agent_id_from_test_schema("agent-4", parameters, None).unwrap();
-        let s = id.to_string();
-        println!("{s}");
-        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
-        prop_assert_eq!(id, id2);
-    }
-}
-
-#[test]
-fn roundtrip_test_5_1() {
-    roundtrip_test(
-        "agent-5",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: "https://url1.com/".as_bytes().to_vec(),
-                        binary_type: BinaryType {
-                            mime_type: "text/plain".to_string(),
-                        },
-                    }),
-                    descriptor: BinaryDescriptor::default(),
-                }),
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: "https://url2.com/".as_bytes().to_vec(),
-                        binary_type: BinaryType {
-                            mime_type: "text/plain".to_string(),
-                        },
-                    }),
-                    descriptor: BinaryDescriptor::default(),
-                }),
-            ],
-        }),
-    )
-}
-
-#[test]
-fn roundtrip_test_5_2() {
-    roundtrip_test(
-        "agent-5",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: "Hello world!".as_bytes().to_vec(),
-                        binary_type: BinaryType {
-                            mime_type: "application/json".to_string(),
-                        },
-                    }),
-                    descriptor: BinaryDescriptor::default(),
-                }),
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: "Hello world!".as_bytes().to_vec(),
-                        binary_type: BinaryType {
-                            mime_type: "image/png".to_string(),
-                        },
-                    }),
-                    descriptor: BinaryDescriptor::default(),
-                }),
-            ],
-        }),
-    )
-}
-
-#[test]
-fn roundtrip_test_6() {
-    roundtrip_test(
-        "agent-7",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    Value::List(vec![Value::U32(1), Value::U32(2)]),
-                    list(u32()),
-                ),
-            })],
-        }),
-    )
-}
-
-// =====================================================================
-// Agent-id equivalence: schema-native REST path vs legacy path
-//
-// The invocation REST API now derives the agent id from a bare schema-native
-// `SchemaValue` (via `input_value_to_typed_schema_value`) instead of the legacy
-// `DataValue` (via `from_legacy_parameters`). These tests pin the invariant that
-// already-running agents stay addressable: both paths must render byte-identical
-// agent-id strings for the same logical constructor parameters.
-// =====================================================================
-
-/// Build a `ParsedAgentId` the way the invocation REST API now does: derive a
-/// bare input `SchemaValue` from the looked-up `DataSchema`, wrap it with
-/// `input_value_to_typed_schema_value`, then construct the id.
-fn schema_native_agent_id(
-    agent_type: &str,
-    parameters: DataValue,
-    phantom_id: Option<Uuid>,
-) -> Result<ParsedAgentId, String> {
-    let agent_type_name = AgentTypeName(agent_type.to_string());
-    let agent_type_schema =
-        TestAgentTypes::new().resolve_agent_type_schema_by_name(&agent_type_name)?;
-    let data_schema = input_schema_to_data_schema(
-        &agent_type_schema.schema,
-        &agent_type_schema.constructor.input_schema,
-    )
-    .map_err(|e| e.to_string())?;
-    let value = untyped_data_value_to_input_value(parameters.into(), &data_schema)
-        .map_err(|e| e.to_string())?;
-    let typed =
-        input_value_to_typed_schema_value(&data_schema, value).map_err(|e| e.to_string())?;
-    ParsedAgentId::try_new(agent_type_name, typed, phantom_id)
-}
-
-/// Assert the schema-native REST path renders the exact same agent-id string as
-/// the legacy `DataValue` path, and that the result still parses back cleanly.
-fn assert_schema_native_matches_legacy(
-    agent_type: &str,
-    parameters: DataValue,
-    phantom_id: Option<Uuid>,
-) {
-    let legacy = ParsedAgentId::from_legacy_parameters(
-        AgentTypeName(agent_type.to_string()),
-        parameters.clone(),
-        phantom_id,
-    )
-    .unwrap();
-    let schema_native = schema_native_agent_id(agent_type, parameters, phantom_id).unwrap();
-
-    assert_eq!(
-        schema_native.to_string(),
-        legacy.to_string(),
-        "schema-native agent id must match legacy rendering"
-    );
-    assert_eq!(schema_native.phantom_id, phantom_id);
-
-    let reparsed = ParsedAgentId::parse(schema_native.to_string(), TestAgentTypes::new()).unwrap();
-    assert_eq!(reparsed.to_string(), schema_native.to_string());
-}
-
-#[test]
-fn agent_id_equivalence_empty_params() {
-    assert_schema_native_matches_legacy(
-        "agent-1",
-        DataValue::Tuple(ElementValues { elements: vec![] }),
-        None,
-    );
-}
-
-#[test]
-fn agent_id_equivalence_single_u32() {
-    assert_schema_native_matches_legacy(
-        "agent-2",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 12u32.into_value_and_type(),
-            })],
-        }),
-        None,
-    );
-}
-
-#[test]
-fn agent_id_equivalence_nested_record_and_flags() {
-    assert_schema_native_matches_legacy(
-        "agent-3",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 12u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::U32(1),
-                            Value::U32(2),
-                            Value::Flags(vec![true, false, true]),
-                        ]),
-                        record(vec![
-                            field("x", u32()),
-                            field("y", u32()),
-                            field("properties", flags(&["a", "b", "c"])),
-                        ]),
-                    ),
-                }),
-            ],
-        }),
-        None,
-    );
-}
-
-#[test]
-fn agent_id_equivalence_unstructured_text() {
-    assert_schema_native_matches_legacy(
-        "agent-4",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "hello, world!".to_string(),
-                        text_type: None,
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "\\\"hello,\\\" world!".to_string(),
-                        text_type: Some(TextType {
-                            language_code: "en".to_string(),
-                        }),
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-            ],
-        }),
-        None,
-    );
-}
-
-#[test]
-fn agent_id_equivalence_unstructured_binary() {
-    assert_schema_native_matches_legacy(
-        "agent-5",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: "Hello world!".as_bytes().to_vec(),
-                        binary_type: BinaryType {
-                            mime_type: "application/json".to_string(),
-                        },
-                    }),
-                    descriptor: BinaryDescriptor::default(),
-                }),
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: "Hello world!".as_bytes().to_vec(),
-                        binary_type: BinaryType {
-                            mime_type: "image/png".to_string(),
-                        },
-                    }),
-                    descriptor: BinaryDescriptor::default(),
-                }),
-            ],
-        }),
-        None,
-    );
-}
-
-#[test]
-fn agent_id_equivalence_list() {
-    assert_schema_native_matches_legacy(
-        "agent-7",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    Value::List(vec![Value::U32(1), Value::U32(2)]),
-                    list(u32()),
-                ),
-            })],
-        }),
-        None,
-    );
-}
-
-#[test]
-fn agent_id_equivalence_with_phantom_id() {
-    let phantom_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    assert_schema_native_matches_legacy(
-        "agent-3",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 32u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::U32(12),
-                            Value::U32(32),
-                            Value::Flags(vec![true, true, false]),
-                        ]),
-                        record(vec![
-                            field("x", u32()),
-                            field("y", u32()),
-                            field("properties", flags(&["a", "b", "c"])),
-                        ]),
-                    ),
-                }),
-            ],
-        }),
-        Some(phantom_id),
-    );
-}
-
-#[test]
-fn invalid_agent_type() {
-    failure_test(
-        "unknown-agent",
-        DataValue::Tuple(ElementValues { elements: vec![] }),
-        "Unknown agent type: unknown-agent",
-    )
-}
-
-#[test]
-fn invalid_agent_param_count() {
-    failure_test(
-        "agent-1",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 12u32.into_value_and_type(),
-            })],
-        }),
-        "Parse error at position 0: Unexpected trailing input: \"12\"",
-    )
-}
-
-#[test]
-fn invalid_agent_param_type() {
-    failure_test(
-        "agent-2",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: "hello".into_value_and_type(),
-            })],
-        }),
-        "Parse error at position 0: Expected unsigned integer",
-    )
-}
-
-#[test]
-fn text_content_that_looks_like_url_roundtrips_without_validation() {
-    // Structural format does not validate URL-like text; validation happens elsewhere
-    roundtrip_test(
-        "agent-4",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "https://url1.com/".to_string(),
-                        text_type: None,
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: "not?a/valid!url".to_string(),
-                        text_type: None,
-                    }),
-                    descriptor: TextDescriptor::default(),
-                }),
-            ],
-        }),
-    )
-}
-
-#[test]
-fn roundtrip_test_with_phantom_id() {
-    let phantom_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-    roundtrip_test_with_id(
-        "agent-1",
-        DataValue::Tuple(ElementValues { elements: vec![] }),
-        Some(phantom_id),
-    )
-}
-
-#[test]
-fn roundtrip_test_phantom_id_complex() {
-    let phantom_id = Uuid::parse_str("f47ac10b-58cc-4372-a567-0e02b2c3d479").unwrap();
-    roundtrip_test_with_id(
-        "agent-3",
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 12u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::U32(1),
-                            Value::U32(2),
-                            Value::Flags(vec![true, false, true]),
-                        ]),
-                        record(vec![
-                            field("x", u32()),
-                            field("y", u32()),
-                            field("properties", flags(&["a", "b", "c"])),
-                        ]),
-                    ),
-                }),
-            ],
-        }),
-        Some(phantom_id),
-    )
-}
-
-#[test]
 fn invalid_phantom_id() {
     failure_test_with_string(
         "agent-1()[not-a-uuid]",
         "Invalid UUID in phantom ID: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1",
     )
-}
-
-#[test]
-fn roundtrip_without_phantom_id_maintains_none() {
-    roundtrip_test_with_id(
-        "agent-1",
-        DataValue::Tuple(ElementValues { elements: vec![] }),
-        None,
-    )
-}
-
-#[test]
-fn roundtrip_with_non_kebab_metadata() {
-    roundtrip_test(
-        "non-kebab-agent",
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    // promiseId
-                    Value::Record(vec![
-                        // agentId
-                        Value::Record(vec![
-                            // componentId
-                            Value::Record(vec![
-                                // uuid
-                                Value::Record(vec![
-                                    Value::U64(115746831381919841),   // highBits
-                                    Value::U64(13556493125794766855), // lowBits
-                                ]),
-                            ]),
-                            // agentId
-                            Value::String("some-agent-id(\"hello\")".to_string()),
-                        ]),
-                        Value::U64(1234), // oplogIdx
-                    ]),
-                    record(vec![
-                        field(
-                            "agentId",
-                            record(vec![
-                                field(
-                                    "componentId",
-                                    record(vec![field(
-                                        "uuid",
-                                        record(vec![
-                                            field("highBits", u64()),
-                                            field("lowBits", u64()),
-                                        ]),
-                                    )]),
-                                ),
-                                field("agentId", str()),
-                            ]),
-                        ),
-                        field("oplogIdx", u64()),
-                    ]),
-                ),
-            })],
-        }),
-    );
-}
-
-#[test]
-fn untyped_data_value_serde_poem_roundtrip() {
-    let original = UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
-        elements: vec![
-            UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                value: 42u32.into_value_and_type().to_json_value().unwrap(),
-            }),
-            UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Url(Url {
-                    value: "https://example.com/".to_string(),
-                }),
-            }),
-        ],
-    });
-
-    let poem_serialized = original.to_json_string();
-    println!("{}", poem_serialized);
-    let serde_deserialized: UntypedJsonDataValue = serde_json::from_str(&poem_serialized).unwrap();
-    assert_eq!(original, serde_deserialized);
 }
 
 fn snapshotting_serde_poem_roundtrip(original: Snapshotting) {
@@ -929,13 +296,9 @@ fn normalize_rejects_empty_agent_type() {
 proptest! {
     #[test]
     fn normalize_text_idempotent_for_simple_agent(x in 0u32..10000) {
-        let agent_id = ParsedAgentId::from_legacy_parameters(
+        let agent_id = ParsedAgentId::try_new(
             AgentTypeName("agent-2".to_string()),
-            DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: x.into_value_and_type() }),
-                ],
-            }),
+            data_value!(x),
             None,
         ).unwrap();
         let canonical = agent_id.to_string();
@@ -949,16 +312,20 @@ proptest! {
         b in 0u32..100,
         c in 0u32..100,
     ) {
-        let agent_id = ParsedAgentId::from_legacy_parameters(
+        let agent_id = ParsedAgentId::try_new(
             AgentTypeName("agent-7".to_string()),
-            DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(
-                        Value::List(vec![Value::U32(a), Value::U32(b), Value::U32(c)]),
-                        list(u32()),
-                    ) }),
-                ],
-            }),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+                    name: "args".into(),
+                    body: SchemaType::list(SchemaType::u32()),
+                    metadata: Default::default(),
+                }])),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::U32(a), SchemaValue::U32(b), SchemaValue::U32(c)],
+                    }],
+                },
+            ),
             None,
         ).unwrap();
         let canonical = agent_id.to_string();
@@ -985,37 +352,6 @@ proptest! {
     }
 }
 
-fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = parsed_agent_id_from_test_schema(agent_type, parameters, None).unwrap();
-    let s = id.to_string();
-    println!("{s}");
-    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
-    assert_eq!(id, id2);
-}
-
-fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
-    let id = parsed_agent_id_from_test_schema(agent_type, parameters, phantom_id).unwrap();
-    let s = id.to_string();
-    println!("{s}");
-    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
-    assert_eq!(id, id2);
-    assert_eq!(id.phantom_id, phantom_id);
-}
-
-fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = ParsedAgentId::from_legacy_parameters(
-        AgentTypeName(agent_type.to_string()),
-        parameters,
-        None,
-    )
-    .unwrap();
-    let s = id.to_string();
-    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new())
-        .err()
-        .unwrap();
-    assert_eq!(id2, expected_failure.to_string());
-}
-
 fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
     let id2 = ParsedAgentId::parse(agent_id_str, TestAgentTypes::new())
         .err()
@@ -1023,27 +359,8 @@ fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
     assert_eq!(id2, expected_failure.to_string());
 }
 
-fn parsed_agent_id_from_test_schema(
-    agent_type: &str,
-    parameters: DataValue,
-    phantom_id: Option<Uuid>,
-) -> Result<ParsedAgentId, String> {
-    let agent_type_name = AgentTypeName(agent_type.to_string());
-    let agent_type = TestAgentTypes::new().resolve_agent_type_schema_by_name(&agent_type_name)?;
-    let data_schema =
-        input_schema_to_data_schema(&agent_type.schema, &agent_type.constructor.input_schema)
-            .map_err(|e| e.to_string())?;
-    let value = untyped_data_value_to_input_value(parameters.into(), &data_schema)
-        .map_err(|e| e.to_string())?;
-    ParsedAgentId::try_new(
-        agent_type_name,
-        typed_constructor_parameters(&agent_type, value),
-        phantom_id,
-    )
-}
-
 struct TestAgentTypes {
-    types: HashMap<AgentTypeName, AgentType>,
+    types: HashMap<AgentTypeName, AgentTypeSchema>,
 }
 
 impl TestAgentTypes {
@@ -1054,16 +371,6 @@ impl TestAgentTypes {
     }
 }
 
-#[async_trait]
-impl AgentTypeResolver for TestAgentTypes {
-    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
-        self.types
-            .get(agent_type)
-            .cloned()
-            .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
-    }
-}
-
 impl AgentTypeSchemaResolver for TestAgentTypes {
     fn resolve_agent_type_schema_by_name(
         &self,
@@ -1071,282 +378,100 @@ impl AgentTypeSchemaResolver for TestAgentTypes {
     ) -> Result<AgentTypeSchema, String> {
         self.types
             .get(agent_type)
+            .cloned()
             .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
-            .and_then(|agent_type| agent_type_to_schema(agent_type).map_err(|e| e.to_string()))
     }
 }
 
-fn parsed_agent_id_lenient(
-    agent_type: AgentTypeName,
-    parameters: DataValue,
-    phantom_id: Option<Uuid>,
-) -> ParsedAgentId {
-    let parameters =
-        legacy_data_value_to_typed_schema_value(&parameters).expect("promote parameters");
-    ParsedAgentId::new(agent_type, parameters, phantom_id)
+fn field(name: &str, body: SchemaType) -> NamedField {
+    NamedField {
+        name: name.to_string(),
+        source: Default::default(),
+        schema: body,
+        metadata: MetadataEnvelope::default(),
+    }
 }
 
-fn assert_legacy_parameters_eq(parameters: &crate::schema::TypedSchemaValue, expected: DataValue) {
-    assert_eq!(
-        parsed_agent_id_parameters_to_legacy_data_value(parameters).unwrap(),
-        expected
-    );
+fn record_field(name: &str, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.to_string(),
+        body,
+        metadata: Default::default(),
+    }
 }
 
-fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
-    let agent_types = &[
-        AgentType {
-            type_name: AgentTypeName("agent-1".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
+fn make_agent_type(name: &str, fields: Vec<(&str, SchemaType)>) -> AgentTypeSchema {
+    AgentTypeSchema {
+        type_name: AgentTypeName(name.to_string()),
+        description: String::new(),
+        source_language: String::new(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(
+                fields.into_iter().map(|(n, t)| field(n, t)).collect(),
+            ),
         },
-        AgentType {
-            type_name: AgentTypeName("agent-2".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "x".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: u32(),
-                        }),
-                    }],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: AgentTypeName("agent-3".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "x".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "r".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: record(vec![
-                                    field("x", u32()),
-                                    field("y", u32()),
-                                    field("properties", flags(&["a", "b", "c"])),
-                                ]),
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: AgentTypeName("agent-4".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "a".to_string(),
-                            schema: ElementSchema::UnstructuredText(TextDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "b".to_string(),
-                            schema: ElementSchema::UnstructuredText(TextDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: AgentTypeName("agent-5".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "a".to_string(),
-                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "b".to_string(),
-                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: AgentTypeName("agent-6".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Multimodal(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "x".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "y".to_string(),
-                            schema: ElementSchema::UnstructuredText(TextDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "z".to_string(),
-                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: AgentTypeName("agent-7".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "args".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: list(u32()),
-                        }),
-                    }],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: AgentTypeName("non-kebab-agent".to_string()),
-            description: "".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "args".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: record(vec![
-                                field(
-                                    "agentId",
-                                    record(vec![
-                                        field(
-                                            "componentId",
-                                            record(vec![field(
-                                                "uuid",
-                                                record(vec![
-                                                    field("highBits", u64()),
-                                                    field("lowBits", u64()),
-                                                ]),
-                                            )]),
-                                        ),
-                                        field("agentId", str()),
-                                    ]),
-                                ),
-                                field("oplogIdx", u64()),
+        methods: Vec::new(),
+        dependencies: Vec::new(),
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
+    }
+}
+
+fn test_agent_types() -> HashMap<AgentTypeName, AgentTypeSchema> {
+    let agent_types = [
+        make_agent_type("agent-1", vec![]),
+        make_agent_type("agent-2", vec![("x", SchemaType::u32())]),
+        make_agent_type(
+            "agent-3",
+            vec![
+                ("x", SchemaType::u32()),
+                (
+                    "r",
+                    SchemaType::record(vec![
+                        record_field("x", SchemaType::u32()),
+                        record_field("y", SchemaType::u32()),
+                        record_field(
+                            "properties",
+                            SchemaType::flags(vec![
+                                "a".to_string(),
+                                "b".to_string(),
+                                "c".to_string(),
                             ]),
-                        }),
-                    }],
-                }),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
+                        ),
+                    ]),
+                ),
+            ],
+        ),
+        make_agent_type(
+            "agent-4",
+            vec![
+                ("a", SchemaType::text(TextRestrictions::default())),
+                ("b", SchemaType::text(TextRestrictions::default())),
+            ],
+        ),
+        make_agent_type(
+            "agent-5",
+            vec![
+                ("a", SchemaType::binary(BinaryRestrictions::default())),
+                ("b", SchemaType::binary(BinaryRestrictions::default())),
+            ],
+        ),
+        make_agent_type(
+            "agent-7",
+            vec![("args", SchemaType::list(SchemaType::u32()))],
+        ),
     ];
 
-    let mut result = HashMap::new();
-    for agent_type in agent_types {
-        result.insert(agent_type.type_name.clone(), agent_type.clone());
-    }
-    result
+    agent_types
+        .into_iter()
+        .map(|agent_type| (agent_type.type_name.clone(), agent_type))
+        .collect()
 }
 
 #[test]
@@ -1416,9 +541,9 @@ fn data_value_macro_trailing_comma() {
 fn agent_id_macro_no_parameters() {
     let id = agent_id!("agent-1");
     assert_eq!(id.agent_type, AgentTypeName("agent-1".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues { elements: vec![] }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record { fields: vec![] }
     );
     assert_eq!(id.phantom_id, None);
 }
@@ -1427,13 +552,11 @@ fn agent_id_macro_no_parameters() {
 fn agent_id_macro_single_parameter() {
     let id = agent_id!("agent-2", 42u32);
     assert_eq!(id.agent_type, AgentTypeName("agent-2".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 42u32.into_value_and_type(),
-            })],
-        }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42)]
+        }
     );
     assert_eq!(id.phantom_id, None);
 }
@@ -1442,20 +565,16 @@ fn agent_id_macro_single_parameter() {
 fn agent_id_macro_multiple_parameters() {
     let id = agent_id!("agent-3", 42u32, 100u64, 3u8);
     assert_eq!(id.agent_type, AgentTypeName("agent-3".to_string()));
-    let expected_params = DataValue::Tuple(ElementValues {
-        elements: vec![
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 42u32.into_value_and_type(),
-            }),
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 100u64.into_value_and_type(),
-            }),
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 3u8.into_value_and_type(),
-            }),
-        ],
-    });
-    assert_legacy_parameters_eq(&id.parameters, expected_params);
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(42),
+                SchemaValue::U64(100),
+                SchemaValue::U8(3)
+            ]
+        }
+    );
     assert_eq!(id.phantom_id, None);
 }
 
@@ -1463,18 +582,11 @@ fn agent_id_macro_multiple_parameters() {
 fn agent_id_macro_with_trailing_comma() {
     let id = agent_id!("agent-4", 42u32, 100u64,);
     assert_eq!(id.agent_type, AgentTypeName("agent-4".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type(),
-                }),
-            ],
-        }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42), SchemaValue::U64(100)]
+        }
     );
     assert_eq!(id.phantom_id, None);
 }
@@ -1484,9 +596,9 @@ fn phantom_agent_id_macro_no_parameters() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-1", phantom_uuid);
     assert_eq!(id.agent_type, AgentTypeName("phantom-1".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues { elements: vec![] }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record { fields: vec![] }
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1496,13 +608,11 @@ fn phantom_agent_id_macro_single_parameter() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-2", phantom_uuid, 42u32);
     assert_eq!(id.agent_type, AgentTypeName("phantom-2".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: 42u32.into_value_and_type(),
-            })],
-        }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42)]
+        }
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1512,18 +622,11 @@ fn phantom_agent_id_macro_multiple_parameters() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-3", phantom_uuid, 42u32, 100u64);
     assert_eq!(id.agent_type, AgentTypeName("phantom-3".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type(),
-                }),
-            ],
-        }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42), SchemaValue::U64(100)]
+        }
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1533,18 +636,11 @@ fn phantom_agent_id_macro_with_trailing_comma() {
     let phantom_uuid = Uuid::now_v7();
     let id = phantom_agent_id!("phantom-4", phantom_uuid, 42u32, 100u64,);
     assert_eq!(id.agent_type, AgentTypeName("phantom-4".to_string()));
-    assert_legacy_parameters_eq(
-        &id.parameters,
-        DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 42u32.into_value_and_type(),
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: 100u64.into_value_and_type(),
-                }),
-            ],
-        }),
+    assert_eq!(
+        id.parameters.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::U32(42), SchemaValue::U64(100)]
+        }
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
 }
@@ -1570,28 +666,16 @@ fn agent_id_too_long_rejected() {
     use crate::base_model::component::ComponentId;
 
     let component_id = ComponentId(Uuid::nil());
-    let long_string = "a".repeat(600);
-    let parameters = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(
-                Value::String(long_string),
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-        })],
-    });
+    let parameters = data_value!("a".repeat(600));
 
-    let err = ParsedAgentId::from_legacy_parameters(
-        AgentTypeName("t".to_string()),
-        parameters.clone(),
-        None,
-    )
-    .expect_err("ParsedAgentId::new should reject too-long ids");
+    let err = ParsedAgentId::try_new(AgentTypeName("t".to_string()), parameters.clone(), None)
+        .expect_err("ParsedAgentId::new should reject too-long ids");
     assert!(
         err.contains("too long"),
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed = parsed_agent_id_lenient(AgentTypeName("t".to_string()), parameters, None);
+    let parsed = ParsedAgentId::new(AgentTypeName("t".to_string()), parameters, None);
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
     let err = result.unwrap_err();
@@ -1608,16 +692,9 @@ fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
 
     let component_id = ComponentId(Uuid::nil());
     let agent_type = AgentTypeName("t".to_string());
-    let params = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(
-                Value::String("a".repeat(600)),
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-        })],
-    });
+    let params = data_value!("a".repeat(600));
 
-    let err = ParsedAgentId::from_legacy_parameters_auto_phantom(
+    let err = ParsedAgentId::new_auto_phantom(
         agent_type.clone(),
         params.clone(),
         None,
@@ -1629,7 +706,7 @@ fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed = parsed_agent_id_lenient(agent_type, params, None);
+    let parsed = ParsedAgentId::new(agent_type, params, None);
 
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
@@ -1647,17 +724,9 @@ fn agent_id_at_max_length_accepted() {
 
     let component_id = ComponentId(Uuid::nil());
     // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512
-    let content = "a".repeat(507);
-    let parsed = ParsedAgentId::from_legacy_parameters(
+    let parsed = ParsedAgentId::try_new(
         AgentTypeName("t".to_string()),
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    Value::String(content),
-                    golem_wasm::analysis::analysed_type::str(),
-                ),
-            })],
-        }),
+        data_value!("a".repeat(507)),
         None,
     )
     .expect("ParsedAgentId::new should succeed");
@@ -1675,47 +744,10 @@ fn agent_id_at_max_length_accepted() {
 }
 
 #[test]
-fn source_language_protobuf_roundtrip() {
-    use golem_api_grpc::proto::golem::component::AgentType as ProtoAgentType;
-
-    for lang in &["rust", "typescript", ""] {
-        let agent_type = AgentType {
-            type_name: AgentTypeName("test-agent".to_string()),
-            description: "test".to_string(),
-            source_language: lang.to_string(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-            },
-            methods: vec![],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        };
-        let proto: ProtoAgentType = agent_type.clone().into();
-        let roundtripped: AgentType = proto.try_into().expect("protobuf roundtrip failed");
-        assert_eq!(
-            roundtripped.source_language, agent_type.source_language,
-            "source_language should survive protobuf roundtrip for '{lang}'"
-        );
-    }
-}
-
-#[test]
 fn new_auto_phantom_durable_none() {
     let agent_type = AgentTypeName("test-agent".to_string());
-    let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
-        agent_type,
-        params,
-        None,
-        AgentMode::Durable,
-    )
-    .unwrap();
+    let id = ParsedAgentId::new_auto_phantom(agent_type, data_value!(), None, AgentMode::Durable)
+        .unwrap();
     assert_eq!(
         id.phantom_id, None,
         "Durable agent with no phantom_id should remain None"
@@ -1726,10 +758,9 @@ fn new_auto_phantom_durable_none() {
 fn new_auto_phantom_durable_some() {
     let supplied = Uuid::new_v4();
     let agent_type = AgentTypeName("test-agent".to_string());
-    let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+    let id = ParsedAgentId::new_auto_phantom(
         agent_type,
-        params,
+        data_value!(),
         Some(supplied),
         AgentMode::Durable,
     )
@@ -1744,14 +775,8 @@ fn new_auto_phantom_durable_some() {
 #[test]
 fn new_auto_phantom_ephemeral_none() {
     let agent_type = AgentTypeName("test-agent".to_string());
-    let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
-        agent_type,
-        params,
-        None,
-        AgentMode::Ephemeral,
-    )
-    .unwrap();
+    let id = ParsedAgentId::new_auto_phantom(agent_type, data_value!(), None, AgentMode::Ephemeral)
+        .unwrap();
     assert!(
         id.phantom_id.is_some(),
         "Ephemeral agent with no phantom_id should auto-generate one"
@@ -1768,10 +793,9 @@ fn new_auto_phantom_ephemeral_none() {
 fn new_auto_phantom_ephemeral_some() {
     let supplied = Uuid::new_v4();
     let agent_type = AgentTypeName("test-agent".to_string());
-    let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = ParsedAgentId::from_legacy_parameters_auto_phantom(
+    let id = ParsedAgentId::new_auto_phantom(
         agent_type,
-        params,
+        data_value!(),
         Some(supplied),
         AgentMode::Ephemeral,
     )
@@ -1837,115 +861,47 @@ mod read_only_config_roundtrip {
 
 mod agent_error_tests {
     use crate::model::agent::AgentError;
-    use crate::schema::adapters::value::{
-        typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
-    };
     use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
     use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, TextRestrictions};
     use crate::schema::schema_value::{SchemaValue, SecretValuePayload, TextValuePayload};
-    use golem_wasm::analysis::AnalysedType;
-    use golem_wasm::analysis::analysed_type::{case, str, variant};
-    use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value, ValueAndType};
     use pretty_assertions::assert_eq;
     use test_r::test;
 
-    fn agent_error_legacy_get_type() -> AnalysedType {
-        variant(vec![
-            case("InvalidInput", str()),
-            case("InvalidMethod", str()),
-            case("InvalidType", str()),
-            case("InvalidAgentId", str()),
-            case("CustomError", ValueAndType::get_type()),
-        ])
-    }
-
-    #[test]
-    fn get_type_matches_legacy_variant_shape() {
-        assert_eq!(AgentError::get_type(), agent_error_legacy_get_type());
-    }
-
-    #[test]
-    fn round_trip_invalid_input() {
-        let err = AgentError::InvalidInput("bad thing".to_string());
-        let v = err.clone().into_value();
-        let back = AgentError::from_value(v).expect("decode");
-        match (err, back) {
-            (AgentError::InvalidInput(a), AgentError::InvalidInput(b)) => assert_eq!(a, b),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn round_trip_custom_error_preserves_payload() {
-        // Build a custom error from a legacy `ValueAndType` so we can compare
-        // pre- and post-roundtrip in the legacy shape.
-        let original_vat = "boom".to_string().into_value_and_type();
-        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
-
-        let err = AgentError::CustomError(typed);
-        let encoded = err.into_value();
-        let decoded = AgentError::from_value(encoded).expect("decode");
-
-        match decoded {
-            AgentError::CustomError(t) => {
-                let round_trip_vat = typed_schema_value_to_value_and_type(&t).expect("lower");
-                assert_eq!(round_trip_vat.value, original_vat.value);
-                assert_eq!(round_trip_vat.typ, original_vat.typ);
-            }
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn encoded_custom_error_wire_shape_matches_value_and_type() {
-        // The wire shape for `CustomError(TypedSchemaValue)` must remain the
-        // same legacy `value-and-type` record as before the variant flip so
-        // that producers and consumers on the WIT boundary keep working.
-        let original_vat = 42u64.into_value_and_type();
-        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
-        let err = AgentError::CustomError(typed);
-
-        let encoded = err.into_value();
-        match encoded {
-            Value::Variant {
-                case_idx,
-                case_value: Some(inner),
-            } => {
-                assert_eq!(case_idx, 4);
-                let decoded_vat = ValueAndType::from_value(*inner).expect("decode VAT");
-                assert_eq!(decoded_vat.value, original_vat.value);
-                assert_eq!(decoded_vat.typ, original_vat.typ);
-            }
-            other => panic!("expected Variant with payload, got {other:?}"),
-        }
-    }
-
     #[test]
     fn display_renders_primitive_payload_exact() {
-        let original_vat = 7u32.into_value_and_type();
-        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let typed = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::u32()),
+            SchemaValue::U32(7),
+        );
         let err = AgentError::CustomError(typed);
         assert_eq!(err.to_string(), "7");
     }
 
     #[test]
     fn display_renders_record_payload_exact() {
-        let original_vat = ValueAndType {
-            value: Value::Record(vec![Value::U32(7), Value::String("Ada".to_string())]),
-            typ: golem_wasm::analysis::analysed_type::record(vec![
-                golem_wasm::analysis::analysed_type::field(
-                    "id",
-                    golem_wasm::analysis::analysed_type::u32(),
-                ),
-                golem_wasm::analysis::analysed_type::field(
-                    "name",
-                    golem_wasm::analysis::analysed_type::str(),
-                ),
-            ]),
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "id".to_string(),
+                body: SchemaType::u32(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "name".to_string(),
+                body: SchemaType::text(TextRestrictions::default()),
+                metadata: Default::default(),
+            },
+        ]));
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::Text(TextValuePayload {
+                    text: "Ada".to_string(),
+                    language: None,
+                }),
+            ],
         };
-        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
-        let err = AgentError::CustomError(typed);
-        assert_eq!(err.to_string(), "{ id: 7, name: \"Ada\" }");
+        let err = AgentError::CustomError(TypedSchemaValue::new(graph, value));
+        assert_eq!(err.to_string(), "{ id: 7, name: Ada }");
     }
 
     #[test]
@@ -1987,31 +943,5 @@ mod agent_error_tests {
             !rendered.contains("shhh"),
             "secret ref must not leak into Display, got: {rendered:?}"
         );
-    }
-
-    #[test]
-    fn into_value_falls_back_for_non_legacy_payload() {
-        // `TypedSchemaValue` can carry capability nodes (e.g. `Secret`) that
-        // have no legacy `ValueAndType` counterpart. `IntoValue` is used as
-        // a boundary encoder by oplog and gRPC paths, so it must collapse
-        // such payloads into an `InvalidType` variant rather than panic.
-        let graph = SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default()));
-        let value = SchemaValue::Secret(SecretValuePayload {
-            secret_ref: "shhh".to_string(),
-        });
-        let typed = TypedSchemaValue::new(graph, value);
-        let err = AgentError::CustomError(typed);
-
-        let encoded = err.into_value();
-        let decoded = AgentError::from_value(encoded).expect("decode");
-        match decoded {
-            AgentError::InvalidType(msg) => {
-                assert!(
-                    msg.starts_with("Invalid custom error payload:"),
-                    "expected diagnostic prefix, got: {msg:?}"
-                );
-            }
-            other => panic!("expected InvalidType fallback, got: {other:?}"),
-        }
     }
 }

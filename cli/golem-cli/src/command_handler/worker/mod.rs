@@ -62,10 +62,7 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest,
 };
-use golem_common::model::agent::{
-    AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
-    ElementSchema, ElementValues, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
-};
+use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -76,14 +73,10 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
-use golem_common::schema::SchemaValue;
-use golem_common::schema::adapters::{
-    data_schema_to_input_schema, input_schema_to_data_schema, json_data_value_to_legacy_data_value,
-    legacy_data_value_to_typed_schema_value, schema_agent_type_to_legacy,
-};
-use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::model::agent::typed_constructor_parameters;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -623,20 +616,9 @@ impl WorkerCommandHandler {
             bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        // The Bridge SDK REPL still sends constructor parameters in the legacy
-        // `UntypedDataValue` JSON shape, so lift them through the legacy carrier
-        // before pairing them with the schema-native constructor input schema.
-        let data_schema = input_schema_to_data_schema(
-            &agent_type.agent_type.schema,
-            &agent_type.agent_type.constructor.input_schema,
-        )
-        .map_err(|err| anyhow!("Failed to interpret agent constructor schema: {err}"))?;
-        let data_value =
-            json_data_value_to_legacy_data_value(parameters, &data_schema).map_err(|err| {
-                anyhow!("Failed to match agent type parameters to the current metadata: {err}")
-            })?;
-        let typed_parameters = legacy_data_value_to_typed_schema_value(&data_value)
-            .map_err(|err| anyhow!("Failed to adapt agent ID parameters: {err}"))?;
+        let value: SchemaValue = serde_json::from_value(parameters)
+            .map_err(|err| anyhow!("Failed to match agent type parameters to the current metadata: {err}"))?;
+        let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
 
@@ -2261,24 +2243,18 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
     // Derive source language from agent type metadata
     let source_language = SourceLanguage::from(agent_type.source_language.as_str());
 
-    // Try language-aware parse via the schema-typed API and convert the
-    // resulting SchemaValue back to a legacy DataValue at the boundary
-    // (the ParsedAgentId logic below still consumes DataValue).
-    let Ok(constructor_input_schema) = golem_common::schema::adapters::input_schema_to_data_schema(
+    let Ok(value) = crate::agent_id_display::parse_agent_id_params(
+        params_str,
         &agent_type.schema,
         &agent_type.constructor.input_schema,
+        &source_language,
     ) else {
         return (agent_name.clone(), None);
     };
-    let Ok(data_value) =
-        parse_agent_id_params_legacy_shim(params_str, &constructor_input_schema, &source_language)
-    else {
-        return (agent_name.clone(), None);
-    };
+    let typed = typed_constructor_parameters(agent_type, value);
 
-    // Re-canonicalize using structural format
     let Ok(canonical) =
-        golem_common::model::agent::structural_format::format_structural(&data_value)
+        golem_common::model::agent::structural_format::format_structural_typed(&typed)
     else {
         return (agent_name.clone(), None);
     };
@@ -2293,12 +2269,7 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed = ParsedAgentId::from_legacy_parameters(
-        agent_type.type_name.clone(),
-        data_value,
-        phantom_uuid,
-    )
-    .ok();
+    let parsed = ParsedAgentId::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2536,15 +2507,13 @@ impl WorkerCommandHandler {
         component: &ComponentDto,
         agent_name: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(ParsedAgentId, AgentType)>> {
+    ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
         match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
-            Ok((agent_id, agent_type_schema)) => {
-                let agent_type = schema_agent_type_to_legacy(&agent_type_schema)
-                    .map_err(|e| anyhow!("Failed to adapt agent type metadata: {e}"))?;
+            Ok((agent_id, agent_type)) => {
                 match function_name {
                     Some(function_name) => {
                         let parsed = match ParsedFunctionName::parse(function_name) {
@@ -2686,7 +2655,7 @@ impl Drop for AlternateScreenGuard {
 /// returning the matched method name on success.
 fn resolve_agent_method_name(
     provided_method_name: &str,
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
 ) -> crate::fuzzy::Result {
     let mut alias_to_original: HashMap<String, String> = HashMap::new();
     let mut aliases: Vec<String> = Vec::new();
@@ -2711,7 +2680,7 @@ fn resolve_agent_method_name(
 }
 
 fn parse_method_parameters_with_error_table(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     method_name: &str,
     arguments: Vec<AgentFunctionArgument>,
     source_language: &SourceLanguage,
@@ -2722,14 +2691,7 @@ fn parse_method_parameters_with_error_table(
         .find(|m| m.name == method_name)
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
-    let element_schemas = match &method.input_schema {
-        DataSchema::Tuple(schemas) => &schemas.elements,
-        DataSchema::Multimodal(_) => {
-            let joined_args = arguments.join(",");
-            return parse_input_schema_params(&joined_args, &method.input_schema, source_language)
-                .map_err(|e| anyhow!("Failed to parse method parameters: {e}"));
-        }
-    };
+    let InputSchema::Parameters(element_schemas) = &method.input_schema;
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -2747,10 +2709,11 @@ fn parse_method_parameters_with_error_table(
             .map(|(idx, pair)| match pair {
                 EitherOrBoth::Both(schema, value) => ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: Some(value.clone()),
                     error: parse_method_argument_schema_value(
                         value,
+                        &agent_type.schema,
                         &schema.schema,
                         source_language,
                     )
@@ -2760,7 +2723,7 @@ fn parse_method_parameters_with_error_table(
                 },
                 EitherOrBoth::Left(schema) => ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: None,
                     error: Some("missing argument".to_string()),
                     source_language: source_language.clone(),
@@ -2785,12 +2748,12 @@ fn parse_method_parameters_with_error_table(
     let mut has_error = false;
 
     for (idx, (schema, value)) in element_schemas.iter().zip(arguments.iter()).enumerate() {
-        match parse_method_argument_schema_value(value, &schema.schema, source_language) {
+        match parse_method_argument_schema_value(value, &agent_type.schema, &schema.schema, source_language) {
             Ok(parsed) => {
                 values.push(parsed);
                 rows.push(ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: Some(value.clone()),
                     error: None,
                     source_language: source_language.clone(),
@@ -2800,7 +2763,7 @@ fn parse_method_parameters_with_error_table(
                 has_error = true;
                 rows.push(ArgumentError {
                     argument_index: idx + 1,
-                    parameter_type: Some(schema.schema.clone()),
+                    parameter_type: Some((agent_type.schema.clone(), schema.schema.clone())),
                     value: Some(value.clone()),
                     error: Some(err.message),
                     source_language: source_language.clone(),
@@ -2821,203 +2784,39 @@ fn parse_method_parameters_with_error_table(
     Ok(SchemaValue::Record { fields: values })
 }
 
-fn parse_input_schema_params(
-    input: &str,
-    schema: &DataSchema,
-    source_language: &SourceLanguage,
-) -> Result<SchemaValue, crate::agent_id_display::ParseError> {
-    let input_schema =
-        data_schema_to_input_schema(schema).map_err(|err| crate::agent_id_display::ParseError {
-            position: 0,
-            message: format!("schema adapter error: {err}"),
-        })?;
-    crate::agent_id_display::parse_agent_id_params(
-        input,
-        &golem_common::schema::SchemaGraph::empty(),
-        &input_schema,
-        source_language,
-    )
-}
-
 fn parse_method_argument_schema_value(
     value: &str,
-    element_schema: &ElementSchema,
+    graph: &SchemaGraph,
+    schema: &SchemaType,
     source_language: &SourceLanguage,
 ) -> Result<SchemaValue, crate::agent_id_display::ParseError> {
-    match element_schema {
-        ElementSchema::ComponentModel(cm) => {
-            let graph =
-                golem_common::schema::adapters::analysed_type_to_schema_graph(&cm.element_type)
-                    .map_err(|err| crate::agent_id_display::ParseError {
-                        position: 0,
-                        message: format!("schema adapter error: {err}"),
-                    })?;
-
-            let parsed = crate::agent_id_display::parse_value_for_language(
-                value,
-                &graph,
-                &graph.root,
-                source_language,
-            );
-            if parsed.is_ok() {
-                return parsed;
-            }
-
-            if matches!(cm.element_type, AnalysedType::Str(_)) {
-                let quoted = serde_json::to_string(value).map_err(|err| {
-                    crate::agent_id_display::ParseError {
-                        position: 0,
-                        message: format!("failed to quote string value: {err}"),
-                    }
-                })?;
-
-                return crate::agent_id_display::parse_value_for_language(
-                    &quoted,
-                    &graph,
-                    &graph.root,
-                    source_language,
-                );
-            }
-
-            parsed
-        }
-        ElementSchema::UnstructuredText(_) | ElementSchema::UnstructuredBinary(_) => {
-            let schema = DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "value".to_string(),
-                    schema: element_schema.clone(),
-                }],
-            });
-
-            match parse_input_schema_params(value, &schema, source_language)? {
-                SchemaValue::Record { mut fields } => {
-                    fields
-                        .pop()
-                        .ok_or_else(|| crate::agent_id_display::ParseError {
-                            position: 0,
-                            message: "expected a single parsed value".to_string(),
-                        })
-                }
-                _ => Err(crate::agent_id_display::ParseError {
-                    position: 0,
-                    message: "expected record parsed value".to_string(),
-                }),
-            }
-        }
-    }
-}
-
-/// Boundary shim: adapt the legacy `DataSchema` / `DataValue` shape to the
-/// schema-typed `parse_agent_id_params` API. Converts the legacy
-/// `DataSchema` into a [`SchemaGraph`] + [`InputSchema`], invokes the
-/// schema-typed parser, then walks the resulting `SchemaValue::Record`
-/// back into a legacy `DataValue::Tuple` with the same per-element type
-/// information (used by `ParsedAgentId::new(...)` downstream).
-fn parse_agent_id_params_legacy_shim(
-    input: &str,
-    schema: &DataSchema,
-    source_language: &SourceLanguage,
-) -> Result<DataValue, crate::agent_id_display::ParseError> {
-    use golem_common::base_model::agent::{
-        BinaryReference, BinarySource, BinaryType, ElementValue, TextReference, TextSource,
-        TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-    };
-    use golem_common::schema::adapters::data_schema_to_input_schema;
-    use golem_common::schema::adapters::value::schema_value_to_value;
-    use golem_common::schema::agent::InputSchema;
-    use golem_common::schema::graph::SchemaGraph;
-    use golem_common::schema::schema_value::{BinaryValuePayload, SchemaValue, TextValuePayload};
-
-    // Agent-id constructor parameters are always a tuple; multimodal inputs
-    // are not valid here, so this shim rejects them up front (mirroring the
-    // legacy parser path) even though the generic adapter now supports them.
-    let DataSchema::Tuple(schema_elements) = schema else {
-        return Err(crate::agent_id_display::ParseError {
-            position: 0,
-            message: "multimodal DataSchema is not supported by the legacy shim".to_string(),
-        });
-    };
-    let input_schema =
-        data_schema_to_input_schema(schema).map_err(|err| crate::agent_id_display::ParseError {
-            position: 0,
-            message: format!("schema adapter error: {err}"),
-        })?;
-    let graph = SchemaGraph::empty();
-    let parsed = crate::agent_id_display::parse_agent_id_params(
-        input,
-        &graph,
-        &input_schema,
+    let parsed = crate::agent_id_display::parse_value_for_language(
+        value,
+        graph,
+        schema,
         source_language,
-    )?;
-    let SchemaValue::Record {
-        fields: parsed_fields,
-    } = parsed
-    else {
-        return Err(crate::agent_id_display::ParseError {
-            position: 0,
-            message: "expected schema-typed parser to return a Record".to_string(),
-        });
-    };
-    let InputSchema::Parameters(named_fields) = input_schema;
-    let mut elements = Vec::with_capacity(parsed_fields.len());
-    for (i, ((schema_element, named_field), parsed_value)) in schema_elements
-        .elements
-        .iter()
-        .zip(named_fields.iter())
-        .zip(parsed_fields)
-        .enumerate()
-    {
-        let element = match &schema_element.schema {
-            ElementSchema::ComponentModel(cm) => {
-                let value = schema_value_to_value(&graph, &named_field.schema, &parsed_value)
-                    .map_err(|err| crate::agent_id_display::ParseError {
-                        position: 0,
-                        message: format!(
-                            "element {i}: schema → legacy value conversion failed: {err}"
-                        ),
-                    })?;
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: golem_wasm::ValueAndType::new(value, cm.element_type.clone()),
-                })
-            }
-            ElementSchema::UnstructuredText(desc) => {
-                let SchemaValue::Text(TextValuePayload { text, language }) = parsed_value else {
-                    return Err(crate::agent_id_display::ParseError {
-                        position: 0,
-                        message: format!("element {i}: expected Text schema-value"),
-                    });
-                };
-                let text_type = language.map(|language_code| TextType { language_code });
-                ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                    value: TextReference::Inline(TextSource {
-                        data: text,
-                        text_type,
-                    }),
-                    descriptor: desc.clone(),
-                })
-            }
-            ElementSchema::UnstructuredBinary(desc) => {
-                let SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }) = parsed_value
-                else {
-                    return Err(crate::agent_id_display::ParseError {
-                        position: 0,
-                        message: format!("element {i}: expected Binary schema-value"),
-                    });
-                };
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data: bytes,
-                        binary_type: BinaryType {
-                            mime_type: mime_type.unwrap_or_default(),
-                        },
-                    }),
-                    descriptor: desc.clone(),
-                })
-            }
-        };
-        elements.push(element);
+    );
+    if parsed.is_ok() {
+        return parsed;
     }
-    Ok(DataValue::Tuple(ElementValues { elements }))
+
+    if matches!(schema, SchemaType::String { .. }) {
+        let quoted = serde_json::to_string(value).map_err(|err| {
+            crate::agent_id_display::ParseError {
+                position: 0,
+                message: format!("failed to quote string value: {err}"),
+            }
+        })?;
+
+        return crate::agent_id_display::parse_value_for_language(
+            &quoted,
+            graph,
+            schema,
+            source_language,
+        );
+    }
+
+    parsed
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
@@ -3134,7 +2933,7 @@ fn build_repl_agent_id(
 
 fn normalize_public_agent_id(
     agent_id: &ParsedAgentId,
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
 ) -> anyhow::Result<ParsedAgentId> {
     ParsedAgentId::new_auto_phantom(
         agent_type.type_name.clone(),
@@ -3153,12 +2952,10 @@ mod tests {
     };
     use crate::agent_id_display::SourceLanguage;
     use golem_common::model::Empty;
-    use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
-        DataSchema, ElementSchema, ElementValues, NamedElementSchemas, ParsedAgentId, Snapshotting,
-        TextDescriptor,
-    };
-    use golem_common::schema::SchemaValue;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema};
+    use golem_common::schema::graph::TypedSchemaValue;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
@@ -3209,23 +3006,24 @@ mod tests {
         assert_eq!(result, input);
     }
 
-    fn test_agent_type(mode: AgentMode) -> AgentType {
-        AgentType {
+    fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName("repl-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            methods: vec![AgentMethod {
+            methods: vec![AgentMethodSchema {
                 name: "run".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![],
                 read_only: None,
             }],
@@ -3237,17 +3035,11 @@ mod tests {
         }
     }
 
-    fn empty_tuple() -> golem_common::model::agent::DataValue {
-        golem_common::model::agent::DataValue::Tuple(ElementValues { elements: vec![] })
-    }
-
-    fn test_agent_type_schema(mode: AgentMode) -> golem_common::schema::agent::AgentTypeSchema {
-        golem_common::schema::adapters::agent_type_to_schema(&test_agent_type(mode)).unwrap()
-    }
-
-    fn empty_typed_parameters() -> golem_common::schema::graph::TypedSchemaValue {
-        golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(&empty_tuple())
-            .unwrap()
+    fn empty_typed_parameters() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![])),
+            SchemaValue::Record { fields: vec![] },
+        )
     }
 
     #[test]
@@ -3304,26 +3096,26 @@ mod tests {
 
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id = ParsedAgentId::from_legacy_parameters(
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
             AgentTypeName("repl-agent".to_string()),
-            empty_tuple(),
+            empty_typed_parameters(),
             None,
         )
         .unwrap();
-        let normalized =
-            normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
+        let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
 
         assert!(normalized.phantom_id.is_some());
     }
 
     #[test]
     fn parse_method_argument_schema_value_parses_unstructured_text_inline() {
-        // Per-language-rendered rich scalars use constructor syntax. The
-        // schema layer's `SchemaType::Text` is inline-only (no URL
-        // reference variant), and `Text("body")` is the native form.
+        let ty = SchemaType::text(Default::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
         let parsed = parse_method_argument_schema_value(
-            r#"Text("hello")"#,
-            &ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            r#"Text(\"hello\")"#,
+            &graph,
+            &ty,
             &SourceLanguage::Rust,
         )
         .unwrap();
@@ -3333,13 +3125,12 @@ mod tests {
 
     #[test]
     fn parse_method_argument_schema_value_parses_unstructured_binary_data_url() {
-        // Per-language-rendered rich scalars use constructor syntax. The
-        // schema layer's `SchemaType::Binary` is inline-only and uses
-        // the canonical RFC 2397-style `data:<mime>;base64,<body>` text
-        // form (URL-safe-no-pad base64) inside `Binary(...)`.
+        let ty = SchemaType::binary(Default::default());
+        let graph = SchemaGraph::anonymous(ty.clone());
         let parsed = parse_method_argument_schema_value(
-            r#"Binary("data:application/octet-stream;base64,SGVsbG8")"#,
-            &ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            r#"Binary(\"data:application/octet-stream;base64,SGVsbG8\")"#,
+            &graph,
+            &ty,
             &SourceLanguage::Rust,
         )
         .unwrap();

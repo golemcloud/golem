@@ -30,9 +30,7 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{
-    AgentMode, ParsedAgentId, parsed_agent_id_parameters_to_legacy_data_value,
-};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -47,7 +45,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 
-use golem_common::model::agent::structural_format::format_structural;
+use golem_common::model::agent::structural_format::format_structural_typed;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -1295,10 +1293,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),
                 AttributeValue::String(
-                    parsed_agent_id_parameters_to_legacy_data_value(&parsed_agent_id.parameters)
-                        .and_then(|parameters| {
-                            format_structural(&parameters).map_err(|err| err.to_string())
-                        })
+                    format_structural_typed(&parsed_agent_id.parameters)
                         .unwrap_or_else(|err| format!("Cannot render: {}", err)),
                 ),
             )

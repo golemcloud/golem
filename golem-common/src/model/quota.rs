@@ -15,7 +15,6 @@
 use crate::model::diff;
 use crate::model::environment::EnvironmentId;
 use desert_rust::BinaryCodec;
-use golem_wasm_derive::{FromValue, IntoValue};
 
 pub use crate::base_model::quota::*;
 use std::fmt::Display;
@@ -44,8 +43,6 @@ impl ResourceDefinition {
     Hash,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
-    FromValue,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
@@ -77,8 +74,6 @@ impl Display for LeaseEpoch {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
-    FromValue,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
@@ -102,8 +97,6 @@ pub enum Reservation {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
-    FromValue,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,

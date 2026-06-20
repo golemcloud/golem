@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::component_introspection::wit_parser::{
-    AnalysedTypeResolve, SharedAnalysedTypeResolve,
-};
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
 };
 use std::fmt::Debug;
-use std::path::Path;
 use test_r::{sequential_suite, tag_suite, test_dep, timeout_suite};
 
 pub mod agent;
@@ -150,13 +146,6 @@ pub async fn test_dependencies() -> WorkerExecutorTestDependencies {
 #[test_dep(scope = HostedRpc, stub = LastUniqueId)]
 pub fn last_unique_id_owner() -> LastUniqueIdOwner {
     LastUniqueIdOwner::new()
-}
-
-#[test_dep(scope = PerWorker, tagged_as = "golem_host")]
-pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
-    SharedAnalysedTypeResolve::new(
-        AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
-    )
 }
 
 // Pre-compiled test components - these warm the analysis cache during

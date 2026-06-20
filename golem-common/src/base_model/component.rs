@@ -30,14 +30,13 @@ use crate::{
     newtype_uuid,
 };
 use derive_more::Display;
-use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
 newtype_uuid!(
     ComponentId,
     wit_name: "component-id",
-    wit_owner: "golem:core@1.5.0/types",
+    wit_owner: "golem:core@2.0.0/types",
     golem_api_grpc::proto::golem::component::ComponentId
 );
 
@@ -51,7 +50,7 @@ declare_transparent_newtypes! {
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
-    #[derive(Copy, PartialOrd, Eq, Hash, Ord, Display, IntoValue, FromValue)]
+    #[derive(Copy, PartialOrd, Eq, Hash, Ord, Display)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(transparent))]
     pub struct PluginPriority(pub i32);

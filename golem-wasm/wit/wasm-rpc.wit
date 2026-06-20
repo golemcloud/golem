@@ -1,7 +1,0 @@
-package golem:rpc;
-
-world wasm-rpc {
-  import golem:core/types@1.5.0;
-  import wasi:clocks/wall-clock@0.2.3;
-  import wasi:io/poll@0.2.3;
-}

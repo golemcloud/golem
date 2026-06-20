@@ -114,14 +114,12 @@ pub fn parse_path_segment_value(
         }),
 
         PathSegmentType::Enum(inner) => {
-            let case_index = inner
-                .cases
-                .iter()
-                .position(|c| *c == value)
-                .ok_or_else(|| RequestHandlerError::ValueParsingFailed {
+            let case_index = inner.iter().position(|c| *c == value).ok_or_else(|| {
+                RequestHandlerError::ValueParsingFailed {
                     value,
                     expected: "enum variant",
-                })?;
+                }
+            })?;
 
             Ok(SchemaValue::Enum {
                 case: case_index
@@ -191,7 +189,6 @@ mod path_segment_tests {
     use super::*;
     use assert2::assert;
     use golem_service_base::custom_api::PathSegmentType;
-    use golem_wasm::analysis::TypeEnum;
     use test_r::test;
 
     #[test]
@@ -256,11 +253,7 @@ mod path_segment_tests {
 
     #[test]
     fn parse_enum_success() {
-        let enum_type = PathSegmentType::Enum(TypeEnum {
-            owner: None,
-            name: None,
-            cases: vec!["red".into(), "green".into(), "blue".into()],
-        });
+        let enum_type = PathSegmentType::Enum(vec!["red".into(), "green".into(), "blue".into()]);
 
         let value = parse_path_segment_value("green".to_string(), &enum_type).unwrap();
 
@@ -269,11 +262,7 @@ mod path_segment_tests {
 
     #[test]
     fn parse_enum_failure() {
-        let enum_type = PathSegmentType::Enum(TypeEnum {
-            owner: None,
-            name: None,
-            cases: vec!["a".into(), "b".into()],
-        });
+        let enum_type = PathSegmentType::Enum(vec!["a".into(), "b".into()]);
 
         let err = parse_path_segment_value("c".to_string(), &enum_type).unwrap_err();
 

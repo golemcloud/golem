@@ -2697,8 +2697,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
                 // both options are equivalent here, this is just cheaper.
 
-                // Downgrade the schema-native config entries to the legacy raw
-                // form persisted in the Create oplog entry.
+                // Strip the schema graph from the typed config entries to get
+                // the raw (untyped) form persisted in the Create oplog entry.
                 let local_agent_config: Vec<golem_common::model::worker::UntypedAgentConfigEntry> =
                     initial_worker_metadata
                         .config

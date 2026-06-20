@@ -15,14 +15,13 @@
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::{BinarySource, BinaryType, TextSource, TextType};
-use golem_common::schema::adapters::{
-    UnstructuredOutput, decode_unstructured_output, is_multimodal_schema_type,
-    schema_type_to_analysed_type, schema_value_to_value,
+use golem_common::schema::{
+    BinaryValuePayload, ResultValuePayload, SchemaGraph, SchemaType, SchemaValue, TextValuePayload,
+    TypedSchemaValue,
 };
-use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload};
+use golem_common::schema::multimodal::is_multimodal_schema_type;
+use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
 use golem_service_base::custom_api::CompiledOutputSchema;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
 use http::StatusCode;
 use http::header::LOCATION;
 use std::collections::HashMap;
@@ -82,10 +81,7 @@ fn map_successful_agent_response(
         });
     }
 
-    let value =
-        schema_value_to_value(graph, output_type, &agent_response).map_err(map_schema_error)?;
-    let typ = schema_type_to_analysed_type(graph, output_type).map_err(map_schema_error)?;
-    map_component_model_agent_response(ValueAndType { value, typ })
+    map_component_model_agent_response(graph, output_type, agent_response)
 }
 
 /// Render a raw `Text` / `Binary` value as an unstructured HTTP body, whether
@@ -137,118 +133,110 @@ fn redirect(url: &str) -> RouteExecutionResult {
     }
 }
 
-fn map_schema_error(
-    error: golem_common::schema::adapters::SchemaAdapterError,
-) -> RequestHandlerError {
+fn map_schema_error(error: impl std::fmt::Display) -> RequestHandlerError {
     RequestHandlerError::AgentResponseTypeMismatch {
         error: error.to_string(),
     }
 }
 
 fn map_component_model_agent_response(
-    value_and_type: ValueAndType,
+    graph: &SchemaGraph,
+    typ: &SchemaType,
+    value: SchemaValue,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    use golem_wasm::Value;
-
-    match value_and_type.value {
-        Value::Option(None) => Ok(RouteExecutionResult {
+    match value {
+        SchemaValue::Option { inner: None } => Ok(RouteExecutionResult {
             status: StatusCode::NOT_FOUND,
             headers: HashMap::new(),
             body: ResponseBody::NoBody,
         }),
 
-        Value::Option(Some(inner)) => {
-            let inner_type = unwrap_option_type(value_and_type.typ)?;
+        SchemaValue::Option { inner: Some(inner) } => {
+            let inner_type = unwrap_option_type(typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::OK,
                 headers: HashMap::new(),
-                body: json_response_body(*inner, inner_type),
+                body: json_response_body(graph, inner_type.clone(), *inner),
             })
         }
 
-        Value::Result(Ok(None)) => Ok(RouteExecutionResult {
+        SchemaValue::Result(ResultValuePayload::Ok { value: None }) => Ok(RouteExecutionResult {
             status: StatusCode::NO_CONTENT,
             headers: HashMap::new(),
             body: ResponseBody::NoBody,
         }),
 
-        Value::Result(Ok(Some(inner))) => {
-            let inner_type = unwrap_result_ok_type(value_and_type.typ)?;
+        SchemaValue::Result(ResultValuePayload::Ok { value: Some(inner) }) => {
+            let inner_type = unwrap_result_ok_type(typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::OK,
                 headers: HashMap::new(),
-                body: json_response_body(*inner, inner_type),
+                body: json_response_body(graph, inner_type.clone(), *inner),
             })
         }
 
-        Value::Result(Err(None)) => Ok(RouteExecutionResult {
+        SchemaValue::Result(ResultValuePayload::Err { value: None }) => Ok(RouteExecutionResult {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             headers: HashMap::new(),
             body: ResponseBody::NoBody,
         }),
 
-        Value::Result(Err(Some(inner))) => {
-            let inner_type = unwrap_result_err_type(value_and_type.typ)?;
+        SchemaValue::Result(ResultValuePayload::Err { value: Some(inner) }) => {
+            let inner_type = unwrap_result_err_type(typ)?;
             Ok(RouteExecutionResult {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
                 headers: HashMap::new(),
-                body: json_response_body(*inner, inner_type),
+                body: json_response_body(graph, inner_type.clone(), *inner),
             })
         }
 
         other => Ok(RouteExecutionResult {
             status: StatusCode::OK,
             headers: HashMap::new(),
-            body: json_response_body(other, value_and_type.typ),
+            body: json_response_body(graph, typ.clone(), other),
         }),
     }
 }
 
-fn unwrap_option_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
-    use golem_wasm::analysis;
-
-    if let AnalysedType::Option(analysis::TypeOption { inner, .. }) = typ {
-        Ok(*inner)
+fn unwrap_option_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerError> {
+    if let SchemaType::Option { inner, .. } = typ {
+        Ok(inner)
     } else {
         Err(RequestHandlerError::invariant_violated(
-            "analysed type did not match value",
+            "schema type did not match value",
         ))
     }
 }
 
-fn unwrap_result_ok_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
-    use golem_wasm::analysis;
-
-    if let AnalysedType::Result(analysis::TypeResult {
-        ok: Some(inner), ..
-    }) = typ
+fn unwrap_result_ok_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerError> {
+    if let SchemaType::Result { spec, .. } = typ
+        && let Some(inner) = &spec.ok
     {
-        Ok(*inner)
+        Ok(inner)
     } else {
         Err(RequestHandlerError::invariant_violated(
-            "analysed type did not match value",
+            "schema type did not match value",
         ))
     }
 }
 
-fn unwrap_result_err_type(typ: AnalysedType) -> Result<AnalysedType, RequestHandlerError> {
-    use golem_wasm::analysis;
-
-    if let AnalysedType::Result(analysis::TypeResult {
-        err: Some(inner), ..
-    }) = typ
+fn unwrap_result_err_type(typ: &SchemaType) -> Result<&SchemaType, RequestHandlerError> {
+    if let SchemaType::Result { spec, .. } = typ
+        && let Some(inner) = &spec.err
     {
-        Ok(*inner)
+        Ok(inner)
     } else {
         Err(RequestHandlerError::invariant_violated(
-            "analysed type did not match value",
+            "schema type did not match value",
         ))
     }
 }
 
-fn json_response_body(value: golem_wasm::Value, typ: AnalysedType) -> ResponseBody {
+fn json_response_body(graph: &SchemaGraph, typ: SchemaType, value: SchemaValue) -> ResponseBody {
+    let mut graph = graph.clone();
+    graph.root = typ;
     ResponseBody::ComponentModelJsonBody {
-        body: ValueAndType::new(value, typ),
+        body: TypedSchemaValue::new(graph, value),
     }
 }
 
@@ -256,7 +244,7 @@ fn json_response_body(value: golem_wasm::Value, typ: AnalysedType) -> ResponseBo
 mod tests {
     use super::*;
     use assert2::let_assert;
-    use golem_common::schema::adapters::unstructured::{
+    use golem_common::schema::unstructured::{
         unstructured_binary_schema_type, unstructured_inline_value, unstructured_text_schema_type,
         unstructured_url_value,
     };

@@ -14,7 +14,6 @@
 
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::diff;
-use uuid::Uuid;
 
 pub use crate::base_model::component::*;
 pub use crate::base_model::path::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
@@ -99,28 +98,6 @@ impl ComponentDto {
 impl InitialAgentFile {
     pub fn is_read_only(&self) -> bool {
         self.permissions == AgentFilePermissions::ReadOnly
-    }
-}
-
-impl From<golem_wasm::ComponentId> for ComponentId {
-    fn from(host: golem_wasm::ComponentId) -> Self {
-        let high_bits = host.uuid.high_bits;
-        let low_bits = host.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}
-
-impl From<ComponentId> for golem_wasm::ComponentId {
-    fn from(component_id: ComponentId) -> Self {
-        let (high_bits, low_bits) = component_id.0.as_u64_pair();
-
-        golem_wasm::ComponentId {
-            uuid: golem_wasm::Uuid {
-                high_bits,
-                low_bits,
-            },
-        }
     }
 }
 

@@ -26,7 +26,6 @@ pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod error;
-pub mod exports;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod login;
@@ -74,7 +73,6 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
@@ -643,56 +641,6 @@ pub struct RetryConfig {
     pub max_delay: Duration,
     pub multiplier: f64,
     pub max_jitter_factor: Option<f64>,
-}
-
-impl golem_wasm::IntoValue for RetryConfig {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![
-            self.max_attempts.into_value(),
-            (self.min_delay.as_nanos() as u64).into_value(),
-            (self.max_delay.as_nanos() as u64).into_value(),
-            self.multiplier.into_value(),
-            self.max_jitter_factor.into_value(),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::*;
-        record(vec![
-            field("max-attempts", u32()),
-            field("min-delay", u64()),
-            field("max-delay", u64()),
-            field("multiplier", f64()),
-            field("max-jitter-factor", option(f64())),
-        ])
-        .named("retry-policy")
-        .owned("golem:api@1.5.0/host")
-    }
-}
-
-impl golem_wasm::FromValue for RetryConfig {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Record(fields) if fields.len() == 5 => {
-                let mut iter = fields.into_iter();
-                let max_attempts = u32::from_value(iter.next().unwrap())?;
-                let min_delay_ns = u64::from_value(iter.next().unwrap())?;
-                let max_delay_ns = u64::from_value(iter.next().unwrap())?;
-                let multiplier = f64::from_value(iter.next().unwrap())?;
-                let max_jitter_factor = Option::<f64>::from_value(iter.next().unwrap())?;
-                Ok(RetryConfig {
-                    max_attempts,
-                    min_delay: Duration::from_nanos(min_delay_ns),
-                    max_delay: Duration::from_nanos(max_delay_ns),
-                    multiplier,
-                    max_jitter_factor,
-                })
-            }
-            other => Err(format!(
-                "Expected Record with 5 fields for RetryConfig, got {other:?}"
-            )),
-        }
-    }
 }
 
 impl SafeDisplay for RetryConfig {
@@ -1416,42 +1364,6 @@ impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
     }
 }
 
-impl From<AgentId> for golem_wasm::AgentId {
-    fn from(agent_id: AgentId) -> Self {
-        golem_wasm::AgentId {
-            component_id: agent_id.component_id.into(),
-            agent_id: agent_id.agent_id,
-        }
-    }
-}
-
-impl From<golem_wasm::AgentId> for AgentId {
-    fn from(host: golem_wasm::AgentId) -> Self {
-        Self {
-            component_id: host.component_id.into(),
-            agent_id: host.agent_id,
-        }
-    }
-}
-
-impl From<PromiseId> for golem_wasm::PromiseId {
-    fn from(promise_id: PromiseId) -> Self {
-        golem_wasm::PromiseId {
-            agent_id: promise_id.agent_id.into(),
-            oplog_idx: promise_id.oplog_idx.into(),
-        }
-    }
-}
-
-impl From<golem_wasm::PromiseId> for PromiseId {
-    fn from(host: golem_wasm::PromiseId) -> Self {
-        Self {
-            agent_id: host.agent_id.into(),
-            oplog_idx: OplogIndex::from_u64(host.oplog_idx),
-        }
-    }
-}
-
 #[derive(
     Clone,
     Copy,
@@ -1460,8 +1372,6 @@ impl From<golem_wasm::PromiseId> for PromiseId {
     Ord,
     PartialEq,
     PartialOrd,
-    IntoValue,
-    FromValue,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
@@ -1480,8 +1390,6 @@ pub enum ForkResult {
     Eq,
     Hash,
     BinaryCodec,
-    IntoValue,
-    FromValue,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]

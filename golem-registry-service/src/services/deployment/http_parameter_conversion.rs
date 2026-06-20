@@ -29,18 +29,15 @@
 use golem_common::model::agent::{
     HeaderVariable, HttpEndpointDetails, HttpMountDetails, PathSegment, QueryVariable,
 };
-use golem_common::schema::adapters::{
-    UnstructuredPayloadKind, resolve_ref, unstructured_or_raw_kind,
-};
 use golem_common::schema::{
     FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
 };
+use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use golem_service_base::custom_api::{
     CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
     RequestBodySchema,
 };
 use golem_service_base::model::SafeIndex;
-use golem_wasm::analysis::TypeEnum;
 use std::collections::HashMap;
 
 pub fn build_http_agent_constructor_parameters<E>(
@@ -357,7 +354,7 @@ fn schema_type_to_path_segment_type<E>(
     schema: &SchemaType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<PathSegmentType, E> {
-    let resolved = resolve_ref(graph, schema).map_err(|e| make_error(e.to_string()))?;
+    let resolved = graph.resolve_ref(schema).map_err(|e| make_error(e.to_string()))?;
     match resolved {
         SchemaType::String { .. } => Ok(PathSegmentType::Str),
         SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
@@ -372,11 +369,7 @@ fn schema_type_to_path_segment_type<E>(
         SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
         SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
         SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
-        SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(TypeEnum {
-            owner: None,
-            name: None,
-            cases: cases.clone(),
-        })),
+        SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases.clone())),
         _ => Err(make_error(
             "Only primitive or enum types can be bound to path segments".into(),
         )),
@@ -391,7 +384,7 @@ fn schema_type_to_query_or_header_type<E>(
     schema: &SchemaType,
     make_error: &impl Fn(String) -> E,
 ) -> Result<QueryOrHeaderType, E> {
-    let resolved = resolve_ref(graph, schema).map_err(|e| make_error(e.to_string()))?;
+    let resolved = graph.resolve_ref(schema).map_err(|e| make_error(e.to_string()))?;
     match resolved {
         SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
             name: None,

@@ -12,7 +12,6 @@ import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
 import "golem/registry/security_scheme.proto";
 import "google/protobuf/timestamp.proto";
-import "wasm/rpc/type.proto";
 
 message PathSegment {
   oneof kind {
@@ -58,8 +57,17 @@ message PathSegmentType {
   }
 
   message Enum {
-    wasm.rpc.TypeEnum inner = 1;
+    PathSegmentEnum inner = 1;
   }
+}
+
+// Local mirror of the enum case-set used by path-segment types. Field numbers
+// match the legacy wasm.rpc.TypeEnum (names = 1, name = 2, owner = 3) so
+// previously persisted bytes remain decodable.
+message PathSegmentEnum {
+  repeated string names = 1;
+  optional string name = 2;
+  optional string owner = 3;
 }
 
 message QueryOrHeaderType {

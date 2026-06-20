@@ -24,17 +24,17 @@
 //! `parts` array of canonical variant objects `{ <caseName>: <payload> }`.
 
 use crate::mcp::schema::field_disambiguation::field_name_mapping;
-use golem_common::schema::adapters::{
-    FALLBACK_OUTPUT_FIELD_NAME, is_multimodal_schema_type, resolve_ref, unstructured_or_raw_kind,
-};
+use golem_common::schema::FALLBACK_OUTPUT_FIELD_NAME;
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, InputSchema, NamedField, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::render::{
     JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
 };
 use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::unstructured::unstructured_or_raw_kind;
 use rmcp::model::JsonObject;
 use serde_json::{Value, json};
 
@@ -152,7 +152,7 @@ fn is_unstructured_output(graph: &SchemaGraph, ty: &SchemaType) -> bool {
 }
 
 fn resolves_to_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
-    matches!(resolve_ref(graph, ty), Ok(SchemaType::Option { .. }))
+    matches!(graph.resolve_ref(ty), Ok(SchemaType::Option { .. }))
 }
 
 #[cfg(test)]

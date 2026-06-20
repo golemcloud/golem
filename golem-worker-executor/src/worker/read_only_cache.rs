@@ -200,14 +200,15 @@ mod tests {
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentPrincipal, AgentType, AgentTypeName,
-        CachePolicy, DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting,
+        AgentMode, AgentPrincipal, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::schema::UnionValuePayload;
-    use golem_common::schema::adapters::agent::agent_type_to_schema;
-    use golem_wasm::Value;
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    };
+    use golem_common::schema::graph::SchemaGraph;
     use std::collections::BTreeMap;
     use test_r::test;
     use uuid::Uuid;
@@ -216,17 +217,13 @@ mod tests {
         ComponentRevision::new(n).unwrap()
     }
 
-    fn empty_schema() -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas { elements: vec![] })
-    }
-
-    fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethod {
-        AgentMethod {
+    fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethodSchema {
+        AgentMethodSchema {
             name: name.to_string(),
             description: String::new(),
             prompt_hint: None,
-            input_schema: empty_schema(),
-            output_schema: empty_schema(),
+            input_schema: InputSchema::Parameters(vec![]),
+            output_schema: OutputSchema::Unit,
             http_endpoint: vec![],
             read_only: ro,
         }
@@ -234,17 +231,18 @@ mod tests {
 
     fn metadata_with_one_agent_type(
         agent_type: AgentTypeName,
-        methods: Vec<AgentMethod>,
+        methods: Vec<AgentMethodSchema>,
     ) -> ComponentMetadata {
-        let at = AgentType {
+        let at = AgentTypeSchema {
             type_name: agent_type,
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: empty_schema(),
+                input_schema: InputSchema::Parameters(vec![]),
             },
             methods,
             dependencies: vec![],
@@ -258,7 +256,7 @@ mod tests {
             vec![],
             None,
             None,
-            vec![agent_type_to_schema(&at).unwrap()],
+            vec![at],
             BTreeMap::new(),
         )
     }
@@ -271,39 +269,18 @@ mod tests {
         Principal::Agent(AgentPrincipal { agent_id })
     }
 
-    fn value_to_schema(value: Value) -> SchemaValue {
-        match value {
-            Value::Bool(v) => SchemaValue::Bool(v),
-            Value::U8(v) => SchemaValue::U8(v),
-            Value::U16(v) => SchemaValue::U16(v),
-            Value::U32(v) => SchemaValue::U32(v),
-            Value::U64(v) => SchemaValue::U64(v),
-            Value::S8(v) => SchemaValue::S8(v),
-            Value::S16(v) => SchemaValue::S16(v),
-            Value::S32(v) => SchemaValue::S32(v),
-            Value::S64(v) => SchemaValue::S64(v),
-            Value::F32(v) => SchemaValue::F32(v),
-            Value::F64(v) => SchemaValue::F64(v),
-            Value::Char(v) => SchemaValue::Char(v),
-            Value::String(v) => SchemaValue::String(v),
-            other => panic!("unsupported test value: {other:?}"),
-        }
+    fn tuple(values: Vec<SchemaValue>) -> SchemaValue {
+        SchemaValue::Record { fields: values }
     }
 
-    fn tuple(values: Vec<Value>) -> SchemaValue {
-        SchemaValue::Record {
-            fields: values.into_iter().map(value_to_schema).collect(),
-        }
-    }
-
-    fn multimodal(values: Vec<(&str, Value)>) -> SchemaValue {
+    fn multimodal(values: Vec<(&str, SchemaValue)>) -> SchemaValue {
         SchemaValue::List {
             elements: values
                 .into_iter()
                 .map(|(name, value)| {
                     SchemaValue::Union(UnionValuePayload {
                         tag: name.to_string(),
-                        body: Box::new(value_to_schema(value)),
+                        body: Box::new(value),
                     })
                 })
                 .collect(),
@@ -312,8 +289,8 @@ mod tests {
 
     #[test]
     fn equal_inputs_produce_equal_keys() {
-        let a = tuple(vec![Value::U32(1), Value::U32(2)]);
-        let b = tuple(vec![Value::U32(1), Value::U32(2)]);
+        let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
+        let b = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_eq!(ka, kb);
@@ -321,8 +298,8 @@ mod tests {
 
     #[test]
     fn different_inputs_produce_different_keys() {
-        let a = tuple(vec![Value::U32(1)]);
-        let b = tuple(vec![Value::U32(2)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
+        let b = tuple(vec![SchemaValue::U32(2)]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_ne!(ka, kb);
@@ -330,8 +307,8 @@ mod tests {
 
     #[test]
     fn swapped_tuple_positions_produce_different_keys() {
-        let a = tuple(vec![Value::U32(1), Value::U32(2)]);
-        let b = tuple(vec![Value::U32(2), Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
+        let b = tuple(vec![SchemaValue::U32(2), SchemaValue::U32(1)]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_ne!(ka, kb);
@@ -339,8 +316,8 @@ mod tests {
 
     #[test]
     fn multimodal_field_renames_produce_different_keys() {
-        let a = multimodal(vec![("x", Value::U32(1))]);
-        let b = multimodal(vec![("y", Value::U32(1))]);
+        let a = multimodal(vec![("x", SchemaValue::U32(1))]);
+        let b = multimodal(vec![("y", SchemaValue::U32(1))]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_ne!(ka, kb);
@@ -348,7 +325,7 @@ mod tests {
 
     #[test]
     fn epoch_in_key_changes_key_when_epoch_bumps() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
         let k2 = build_read_only_cache_key("m", &a, None, rev(1), 2);
         assert_ne!(k1, k2);
@@ -356,7 +333,7 @@ mod tests {
 
     #[test]
     fn component_revision_in_key_changes_key_after_update() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
         let k2 = build_read_only_cache_key("m", &a, None, rev(2), 1);
         assert_ne!(k1, k2);
@@ -364,14 +341,14 @@ mod tests {
 
     #[test]
     fn principal_off_means_principal_digest_is_none() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let key = build_read_only_cache_key("m", &a, None, rev(1), 1);
         assert!(key.principal_digest.is_none());
     }
 
     #[test]
     fn principal_on_distinguishes_principals() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let p1 = principal(1);
         let p2 = principal(2);
         let k1 = build_read_only_cache_key("m", &a, Some(&p1), rev(1), 1);
@@ -382,7 +359,7 @@ mod tests {
 
     #[test]
     fn method_name_changes_the_key() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let k1 = build_read_only_cache_key("foo", &a, None, rev(1), 1);
         let k2 = build_read_only_cache_key("bar", &a, None, rev(1), 1);
         assert_ne!(k1, k2);

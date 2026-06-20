@@ -1183,31 +1183,11 @@ mod test {
     use golem_common::schema::SchemaValue;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::component::Component;
-    use golem_wasm::Value;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
     use uuid::Uuid;
-
-    fn value_to_schema(value: Value) -> SchemaValue {
-        match value {
-            Value::Bool(v) => SchemaValue::Bool(v),
-            Value::U8(v) => SchemaValue::U8(v),
-            Value::U16(v) => SchemaValue::U16(v),
-            Value::U32(v) => SchemaValue::U32(v),
-            Value::U64(v) => SchemaValue::U64(v),
-            Value::S8(v) => SchemaValue::S8(v),
-            Value::S16(v) => SchemaValue::S16(v),
-            Value::S32(v) => SchemaValue::S32(v),
-            Value::S64(v) => SchemaValue::S64(v),
-            Value::F32(v) => SchemaValue::F32(v),
-            Value::F64(v) => SchemaValue::F64(v),
-            Value::Char(v) => SchemaValue::Char(v),
-            Value::String(v) => SchemaValue::String(v),
-            other => panic!("unsupported test value: {other:?}"),
-        }
-    }
 
     #[test]
     async fn empty() {
@@ -2057,14 +2037,12 @@ mod test {
         pub fn agent_invocation_started(
             self,
             function_name: &str,
-            request: Vec<Value>,
+            request: Vec<SchemaValue>,
             idempotency_key: IdempotencyKey,
         ) -> Self {
             let payload = AgentInvocationPayload::AgentMethod {
                 method_name: function_name.to_string(),
-                input: SchemaValue::Record {
-                    fields: request.into_iter().map(value_to_schema).collect(),
-                },
+                input: SchemaValue::Record { fields: request },
                 principal: Principal::anonymous(),
             };
             self.add(

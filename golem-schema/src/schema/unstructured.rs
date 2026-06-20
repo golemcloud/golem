@@ -12,40 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Canonical schema-native representation of the ergonomic "unstructured
-//! text / binary" wrappers.
+//! Canonical "unstructured" text/binary carriers.
 //!
-//! An unstructured-text value is either inline text or a URL that references
-//! the text; an unstructured-binary value is either inline bytes or a URL.
-//! Both are modelled as a **role-marked two-case `variant`**:
-//!
-//! ```text
-//! variant {              // metadata.role = Role::UnstructuredText
-//!   inline: text<…>,     // case 0
-//!   url: url,            // case 1
-//! }
-//! ```
-//!
-//! (and the binary analogue with `inline: binary<…>` and
-//! `Role::UnstructuredBinary`).
-//!
-//! This is the *single* canonical form: the guest SDKs publish it directly
-//! (see `golem_rust::agentic::schema` and the TS SDK's `schema/rich.ts`), the
-//! legacy `ElementSchema` adapter lowers to it, and both per-language bridge
-//! generators detect it (via [`unstructured_text_restrictions`] /
-//! [`unstructured_binary_restrictions`]) to emit the ergonomic wrapper types.
-//! The role marker — not the bare `SchemaType::Text` / `SchemaType::Binary`
-//! rich scalars — is what identifies the wrapper.
+//! Unstructured text/binary fields are represented as a role-marked
+//! `variant { inline, url }` wrapper (or, accepted on input, a bare `Text` /
+//! `Binary` rich scalar). This module is the single home for building,
+//! detecting, and decoding that canonical shape.
 
-use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
-use crate::schema::graph::SchemaGraph;
+use crate::schema::graph::{RefResolutionError, SchemaGraph};
 use crate::schema::metadata::Role;
 use crate::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{SchemaValue, VariantValuePayload};
 
-/// The case index of the `inline` alternative in the canonical variant.
+/// Error produced while building, detecting, or decoding a canonical
+/// unstructured text/binary carrier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnstructuredError(pub String);
+
+impl std::fmt::Display for UnstructuredError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for UnstructuredError {}
+
+impl From<RefResolutionError> for UnstructuredError {
+    fn from(err: RefResolutionError) -> Self {
+        UnstructuredError(err.to_string())
+    }
+}
+
 pub const INLINE_CASE: u32 = 0;
 /// The case index of the `url` alternative in the canonical variant.
 pub const URL_CASE: u32 = 1;
@@ -117,8 +116,8 @@ pub fn is_unstructured_variant(ty: &SchemaType) -> bool {
 pub fn unstructured_text_restrictions<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> Result<Option<&'a TextRestrictions>, SchemaAdapterError> {
-    let resolved = resolve_ref(graph, ty)?;
+) -> Result<Option<&'a TextRestrictions>, UnstructuredError> {
+    let resolved = graph.resolve_ref(ty)?;
     if resolved.metadata().role != Some(Role::UnstructuredText) {
         return Ok(None);
     }
@@ -126,28 +125,28 @@ pub fn unstructured_text_restrictions<'a>(
     // that is not the canonical `variant { inline, url }` shape is a hard error,
     // not "merely not unstructured".
     let SchemaType::Variant { cases, .. } = resolved else {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "Role::UnstructuredText must mark a variant type".into(),
         ));
     };
     let [inline, url] = cases.as_slice() else {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "Role::UnstructuredText variant must have exactly an `inline` and a `url` case".into(),
         ));
     };
     if inline.name != INLINE_CASE_NAME || url.name != URL_CASE_NAME {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "Role::UnstructuredText variant cases must be exactly `inline`, `url` in that order"
                 .into(),
         ));
     }
     let inline_payload = inline.payload.as_ref().ok_or_else(|| {
-        SchemaAdapterError::LossySchemaType(
+        UnstructuredError(
             "Role::UnstructuredText `inline` case must carry a text payload".into(),
         )
     })?;
-    let SchemaType::Text { restrictions, .. } = resolve_ref(graph, inline_payload)? else {
-        return Err(SchemaAdapterError::LossySchemaType(
+    let SchemaType::Text { restrictions, .. } = graph.resolve_ref(inline_payload)? else {
+        return Err(UnstructuredError(
             "Role::UnstructuredText `inline` case payload must be a text type".into(),
         ));
     };
@@ -160,8 +159,8 @@ pub fn unstructured_text_restrictions<'a>(
 pub fn unstructured_binary_restrictions<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> Result<Option<&'a BinaryRestrictions>, SchemaAdapterError> {
-    let resolved = resolve_ref(graph, ty)?;
+) -> Result<Option<&'a BinaryRestrictions>, UnstructuredError> {
+    let resolved = graph.resolve_ref(ty)?;
     if resolved.metadata().role != Some(Role::UnstructuredBinary) {
         return Ok(None);
     }
@@ -169,29 +168,29 @@ pub fn unstructured_binary_restrictions<'a>(
     // that is not the canonical `variant { inline, url }` shape is a hard error,
     // not "merely not unstructured".
     let SchemaType::Variant { cases, .. } = resolved else {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "Role::UnstructuredBinary must mark a variant type".into(),
         ));
     };
     let [inline, url] = cases.as_slice() else {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "Role::UnstructuredBinary variant must have exactly an `inline` and a `url` case"
                 .into(),
         ));
     };
     if inline.name != INLINE_CASE_NAME || url.name != URL_CASE_NAME {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "Role::UnstructuredBinary variant cases must be exactly `inline`, `url` in that order"
                 .into(),
         ));
     }
     let inline_payload = inline.payload.as_ref().ok_or_else(|| {
-        SchemaAdapterError::LossySchemaType(
+        UnstructuredError(
             "Role::UnstructuredBinary `inline` case must carry a binary payload".into(),
         )
     })?;
-    let SchemaType::Binary { restrictions, .. } = resolve_ref(graph, inline_payload)? else {
-        return Err(SchemaAdapterError::LossySchemaType(
+    let SchemaType::Binary { restrictions, .. } = graph.resolve_ref(inline_payload)? else {
+        return Err(UnstructuredError(
             "Role::UnstructuredBinary `inline` case payload must be a binary type".into(),
         ));
     };
@@ -203,12 +202,12 @@ fn check_url_case(
     graph: &SchemaGraph,
     url: &VariantCaseType,
     role: &str,
-) -> Result<(), SchemaAdapterError> {
+) -> Result<(), UnstructuredError> {
     let url_payload = url.payload.as_ref().ok_or_else(|| {
-        SchemaAdapterError::LossySchemaType(format!("{role} `url` case must carry a url payload"))
+        UnstructuredError(format!("{role} `url` case must carry a url payload"))
     })?;
-    if !matches!(resolve_ref(graph, url_payload)?, SchemaType::Url { .. }) {
-        return Err(SchemaAdapterError::LossySchemaType(format!(
+    if !matches!(graph.resolve_ref(url_payload)?, SchemaType::Url { .. }) {
+        return Err(UnstructuredError(format!(
             "{role} `url` case payload must be a url type"
         )));
     }
@@ -232,7 +231,7 @@ pub enum UnstructuredKind<'a> {
 pub fn unstructured_kind<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> Result<Option<UnstructuredKind<'a>>, SchemaAdapterError> {
+) -> Result<Option<UnstructuredKind<'a>>, UnstructuredError> {
     if let Some(restrictions) = unstructured_text_restrictions(graph, ty)? {
         Ok(Some(UnstructuredKind::Text(restrictions)))
     } else if let Some(restrictions) = unstructured_binary_restrictions(graph, ty)? {
@@ -254,13 +253,13 @@ pub fn unstructured_kind<'a>(
 pub fn binary_body_restrictions<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> Result<&'a BinaryRestrictions, SchemaAdapterError> {
+) -> Result<&'a BinaryRestrictions, UnstructuredError> {
     if let Some(restrictions) = unstructured_binary_restrictions(graph, ty)? {
         return Ok(restrictions);
     }
-    match resolve_ref(graph, ty)? {
+    match graph.resolve_ref(ty)? {
         SchemaType::Binary { restrictions, .. } => Ok(restrictions),
-        _ => Err(SchemaAdapterError::LossySchemaType(
+        _ => Err(UnstructuredError(
             "binary body schema root is neither an unstructured-binary wrapper nor a bare binary type"
                 .into(),
         )),
@@ -276,13 +275,13 @@ pub fn binary_body_restrictions<'a>(
 pub fn text_body_restrictions<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> Result<&'a TextRestrictions, SchemaAdapterError> {
+) -> Result<&'a TextRestrictions, UnstructuredError> {
     if let Some(restrictions) = unstructured_text_restrictions(graph, ty)? {
         return Ok(restrictions);
     }
-    match resolve_ref(graph, ty)? {
+    match graph.resolve_ref(ty)? {
         SchemaType::Text { restrictions, .. } => Ok(restrictions),
-        _ => Err(SchemaAdapterError::LossySchemaType(
+        _ => Err(UnstructuredError(
             "text body schema root is neither an unstructured-text wrapper nor a bare text type"
                 .into(),
         )),
@@ -309,13 +308,13 @@ pub enum UnstructuredPayloadKind {
 pub fn unstructured_or_raw_kind(
     graph: &SchemaGraph,
     ty: &SchemaType,
-) -> Result<Option<UnstructuredPayloadKind>, SchemaAdapterError> {
+) -> Result<Option<UnstructuredPayloadKind>, UnstructuredError> {
     match unstructured_kind(graph, ty)? {
         Some(UnstructuredKind::Text(_)) => return Ok(Some(UnstructuredPayloadKind::Text)),
         Some(UnstructuredKind::Binary(_)) => return Ok(Some(UnstructuredPayloadKind::Binary)),
         None => {}
     }
-    Ok(match resolve_ref(graph, ty)? {
+    Ok(match graph.resolve_ref(ty)? {
         SchemaType::Text { .. } => Some(UnstructuredPayloadKind::Text),
         SchemaType::Binary { .. } => Some(UnstructuredPayloadKind::Binary),
         _ => None,
@@ -335,7 +334,7 @@ pub fn wrap_unstructured_inline_for_schema(
     graph: &SchemaGraph,
     ty: &SchemaType,
     raw: SchemaValue,
-) -> Result<SchemaValue, SchemaAdapterError> {
+) -> Result<SchemaValue, UnstructuredError> {
     if unstructured_kind(graph, ty)?.is_some() {
         Ok(unstructured_inline_value(raw))
     } else {
@@ -373,7 +372,7 @@ pub fn decode_unstructured_output<'a>(
     graph: &SchemaGraph,
     ty: &SchemaType,
     value: &'a SchemaValue,
-) -> Result<Option<UnstructuredOutput<'a>>, SchemaAdapterError> {
+) -> Result<Option<UnstructuredOutput<'a>>, UnstructuredError> {
     // Canonical wrapper schema: accept *either* a wrapper runtime value
     // (`variant { inline, url }`) or a raw `Text` / `Binary` rich scalar (DE:
     // both runtime representations are valid under a wrapper schema). The `url`
@@ -400,7 +399,7 @@ pub fn decode_unstructured_output<'a>(
     }
 
     // Bare `Text` / `Binary` rich scalar: the value must match the schema kind.
-    let expected = match resolve_ref(graph, ty)? {
+    let expected = match graph.resolve_ref(ty)? {
         SchemaType::Text { .. } => UnstructuredPayloadKind::Text,
         SchemaType::Binary { .. } => UnstructuredPayloadKind::Binary,
         _ => return Ok(None),
@@ -412,7 +411,7 @@ pub fn decode_unstructured_output<'a>(
 fn check_unstructured_value_kind(
     value: &SchemaValue,
     expected: UnstructuredPayloadKind,
-) -> Result<(), SchemaAdapterError> {
+) -> Result<(), UnstructuredError> {
     let matches = match expected {
         UnstructuredPayloadKind::Text => matches!(value, SchemaValue::Text(_)),
         UnstructuredPayloadKind::Binary => matches!(value, SchemaValue::Binary(_)),
@@ -424,7 +423,7 @@ fn check_unstructured_value_kind(
             UnstructuredPayloadKind::Text => "text",
             UnstructuredPayloadKind::Binary => "binary",
         };
-        Err(SchemaAdapterError::LossySchemaType(format!(
+        Err(UnstructuredError(format!(
             "expected a {kind} value for an unstructured {kind} output"
         )))
     }
@@ -446,16 +445,16 @@ pub enum UnstructuredValueCase<'a> {
 /// inline-vs-url dispatch lives in exactly one place.
 pub fn decode_unstructured_value(
     value: &SchemaValue,
-) -> Result<UnstructuredValueCase<'_>, SchemaAdapterError> {
+) -> Result<UnstructuredValueCase<'_>, UnstructuredError> {
     let SchemaValue::Variant(VariantValuePayload { case, payload }) = value else {
-        return Err(SchemaAdapterError::LossySchemaType(
+        return Err(UnstructuredError(
             "expected a variant value for an unstructured text/binary type".into(),
         ));
     };
     match *case {
         INLINE_CASE => {
             let payload = payload.as_deref().ok_or_else(|| {
-                SchemaAdapterError::LossySchemaType(
+                UnstructuredError(
                     "unstructured `inline` value must carry a payload".into(),
                 )
             })?;
@@ -463,18 +462,18 @@ pub fn decode_unstructured_value(
         }
         URL_CASE => {
             let payload = payload.as_deref().ok_or_else(|| {
-                SchemaAdapterError::LossySchemaType(
+                UnstructuredError(
                     "unstructured `url` value must carry a payload".into(),
                 )
             })?;
             let SchemaValue::Url { url } = payload else {
-                return Err(SchemaAdapterError::LossySchemaType(
+                return Err(UnstructuredError(
                     "unstructured `url` value payload must be a url".into(),
                 ));
             };
             Ok(UnstructuredValueCase::Url(url))
         }
-        other => Err(SchemaAdapterError::LossySchemaType(format!(
+        other => Err(UnstructuredError(format!(
             "unknown unstructured variant case {other}"
         ))),
     }

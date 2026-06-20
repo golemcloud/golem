@@ -40,7 +40,6 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm::FromValue;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -237,17 +236,20 @@ pub trait InFunctionRetryHost {
 }
 
 pub(crate) fn collect_named_retry_policies(
-    config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    config: &HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 ) -> Vec<NamedRetryPolicy> {
+    use golem_common::schema::FromSchema;
+
     let mut policies = Vec::new();
 
-    for value_and_type in config.values() {
-        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value_and_type.value.clone()) {
+    for typed in config.values() {
+        let value = typed.value();
+        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value) {
             policies.append(&mut parsed);
             continue;
         }
 
-        if let Ok(parsed) = NamedRetryPolicy::from_value(value_and_type.value.clone()) {
+        if let Ok(parsed) = NamedRetryPolicy::from_value(value) {
             policies.push(parsed);
         }
     }

@@ -121,7 +121,7 @@ pub struct RouteExecutionResult {
 pub enum ResponseBody {
     NoBody,
     ComponentModelJsonBody {
-        body: golem_wasm::ValueAndType,
+        body: golem_common::schema::TypedSchemaValue,
     },
     UnstructuredBinaryBody {
         body: BinarySource,

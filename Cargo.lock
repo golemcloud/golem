@@ -188,9 +188,6 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
-dependencies = [
- "derive_arbitrary",
-]
 
 [[package]]
 name = "arc-swap"
@@ -1373,9 +1370,6 @@ name = "camino"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629a66d692cb9ff1a1c664e41771b3dcaf961985a9774c0eb0bd1b51cf60a48"
-dependencies = [
- "serde_core",
-]
 
 [[package]]
 name = "cap-fs-ext"
@@ -1443,46 +1437,6 @@ dependencies = [
  "once_cell",
  "rustix 1.1.4",
  "winx",
-]
-
-[[package]]
-name = "cargo-platform"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84982c6c0ae343635a3a4ee6dedef965513735c8b183caa7289fa6e27399ebd4"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "cargo-util-schemas"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dc1a6f7b5651af85774ae5a34b4e8be397d9cf4bc063b7e6dbd99a841837830"
-dependencies = [
- "semver",
- "serde",
- "serde-untagged",
- "serde-value",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "unicode-xid",
- "url",
-]
-
-[[package]]
-name = "cargo_metadata"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cfca2aaa699835ba88faf58a06342a314a950d2b9686165e038286c30316868"
-dependencies = [
- "camino",
- "cargo-platform",
- "cargo-util-schemas",
- "semver",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2551,17 +2505,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive_arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2963,17 +2906,6 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "erased-serde"
-version = "0.4.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2add8a07dd6a8d93ff627029c51de145e12686fbc36ecb298ac22e74cf02dec"
-dependencies = [
- "serde",
- "serde_core",
- "typeid",
-]
 
 [[package]]
 name = "errno"
@@ -3690,9 +3622,7 @@ dependencies = [
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
- "cargo_metadata",
  "desert_rust",
- "golem-wasm",
  "miette",
  "prost 0.14.3",
  "prost-types",
@@ -3735,7 +3665,6 @@ dependencies = [
  "goldenfile",
  "golem-client",
  "golem-common",
- "golem-wasm",
  "heck",
  "http 1.4.0",
  "humansize",
@@ -3819,7 +3748,6 @@ dependencies = [
  "chrono",
  "golem-common",
  "golem-openapi-client-generator",
- "golem-wasm",
  "http 1.4.0",
  "reqwest 0.13.2",
  "reqwest-middleware",
@@ -3859,8 +3787,6 @@ dependencies = [
  "golem-api-grpc",
  "golem-schema",
  "golem-schema-derive",
- "golem-wasm",
- "golem-wasm-derive",
  "heck",
  "http 1.4.0",
  "humantime",
@@ -3964,7 +3890,6 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
- "golem-wasm",
  "golem-worker-executor",
  "golem-worker-executor-test-utils",
  "humansize",
@@ -4032,7 +3957,6 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
- "golem-wasm",
  "heck",
  "http 1.4.0",
  "humantime-serde",
@@ -4165,8 +4089,6 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm",
- "golem-wasm-derive",
  "headers",
  "hex",
  "hmac",
@@ -4273,7 +4195,6 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-service-base",
- "golem-wasm",
  "heck",
  "humantime-serde",
  "itertools 0.14.0",
@@ -4306,51 +4227,6 @@ dependencies = [
  "url",
  "uuid",
  "wasm-metadata 0.248.0",
-]
-
-[[package]]
-name = "golem-wasm"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "async-recursion",
- "async-trait",
- "bigdecimal",
- "bit-vec 0.6.3",
- "chrono",
- "desert_rust",
- "golem-wasm-derive",
- "itertools 0.14.0",
- "lazy_static",
- "miette",
- "poem-openapi",
- "pretty_assertions",
- "proptest",
- "proptest-arbitrary-interop",
- "prost 0.14.3",
- "prost-build",
- "protox",
- "serde",
- "serde_json",
- "test-r",
- "url",
- "uuid",
- "wasip2",
- "wasm-wave",
- "wasmtime",
- "wasmtime-wasi",
- "wit-bindgen 0.57.1",
-]
-
-[[package]]
-name = "golem-wasm-derive"
-version = "0.0.0"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "test-r",
 ]
 
 [[package]]
@@ -4388,8 +4264,6 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
- "golem-wasm",
- "golem-wasm-derive",
  "golem-worker-executor-test-utils",
  "governor",
  "half",
@@ -4464,7 +4338,6 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
- "golem-wasm",
  "golem-worker-executor",
  "prometheus",
  "regex",
@@ -4510,8 +4383,6 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-test-framework",
- "golem-wasm",
- "golem-wasm-derive",
  "headers",
  "http 1.4.0",
  "http-body-util",
@@ -5361,8 +5232,6 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-test-framework",
- "golem-wasm",
- "golem-wasm-derive",
  "headers",
  "indoc",
  "opentelemetry 0.30.0",
@@ -7610,16 +7479,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proptest-arbitrary-interop"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1981e49bd2432249da8b0e11e5557099a8e74690d6b94e721f7dc0bb7f3555f"
-dependencies = [
- "arbitrary",
- "proptest",
-]
-
-[[package]]
 name = "prost"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8972,18 +8831,6 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
-]
-
-[[package]]
-name = "serde-untagged"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9faf48a4a2d2693be24c6289dbe26552776eb7737074e6722891fadbe6c5058"
-dependencies = [
- "erased-serde",
- "serde",
- "serde_core",
- "typeid",
 ]
 
 [[package]]
@@ -10900,12 +10747,6 @@ name = "typed-path"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41713888c5ccfd99979fcd1afd47b71652e331b3d4a0e19d30769e80fec76cce"
-
-[[package]]
-name = "typeid"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
 
 [[package]]
 name = "typenum"

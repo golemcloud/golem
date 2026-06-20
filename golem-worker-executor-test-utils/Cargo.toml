@@ -18,7 +18,6 @@ golem-common = { workspace = true, default-features = true }
 golem-schema = { workspace = true, features = ["host"] }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 golem-test-framework = { workspace = true }
-golem-wasm = { workspace = true, default-features = true }
 golem-worker-executor = { workspace = true }
 
 anyhow = { workspace = true }

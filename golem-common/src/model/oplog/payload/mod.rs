@@ -38,7 +38,7 @@ use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
 };
 use crate::oplog_payload;
-use crate::schema::{RegisteredAgentTypeSchema, SchemaType, SchemaValue, TypedSchemaValue};
+use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
@@ -121,7 +121,7 @@ oplog_payload! {
         },
         GolemAgentGetConfigValue {
             path: Vec<String>,
-            expected_type: SchemaType
+            expected_type: SchemaGraph
         },
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName

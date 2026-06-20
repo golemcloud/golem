@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::{AgentError, AgentType};
+use crate::model::agent::AgentError;
 use crate::model::parsed_function_name::ParsedFunctionName;
-use crate::schema::adapters::agent::schema_agent_type_to_legacy;
 use crate::schema::agent::AgentTypeSchema;
 use crate::schema::agent::wit::{decode_agent_error, decode_agent_type, wire};
 use anyhow::anyhow;
@@ -38,9 +37,7 @@ const FUNCTION_NAME: &str = "discover-agent-types";
 /// Returns the schema-native [`AgentTypeSchema`] model. This is the canonical
 /// extraction path: it does not downgrade to the legacy `AgentType`, so it
 /// preserves capability types (`QuotaToken`, `Secret`) and rich scalars that
-/// the legacy `AnalysedType` model cannot represent. Use
-/// [`extract_agent_types_with_streams`] only where the legacy model is still
-/// required (e.g. the legacy proto registry path in `golem-cli`).
+/// the legacy schema model cannot represent.
 pub async fn extract_agent_type_schemas_with_streams(
     wasm_path: &Path,
     stdout: Option<impl StdoutStream + 'static>,
@@ -171,52 +168,6 @@ pub async fn extract_agent_type_schemas(
     enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentTypeSchema>> {
     extract_agent_type_schemas_with_streams(
-        wasm_path,
-        None::<pipe::MemoryOutputPipe>,
-        None::<pipe::MemoryOutputPipe>,
-        fail_on_missing_discover_method,
-        enable_fs_cache,
-    )
-    .await
-}
-
-/// Legacy variant of [`extract_agent_type_schemas_with_streams`] that downgrades
-/// each discovered agent type to the legacy [`AgentType`] model.
-///
-/// Only for callers still bound to the legacy model (e.g. the legacy proto
-/// registry path in `golem-cli`). This conversion is lossy: agent types using
-/// capability types or rich scalars with no legacy counterpart will fail here.
-pub async fn extract_agent_types_with_streams(
-    wasm_path: &Path,
-    stdout: Option<impl StdoutStream + 'static>,
-    stderr: Option<impl StdoutStream + 'static>,
-    fail_on_missing_discover_method: bool,
-    enable_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentType>> {
-    let schemas = extract_agent_type_schemas_with_streams(
-        wasm_path,
-        stdout,
-        stderr,
-        fail_on_missing_discover_method,
-        enable_fs_cache,
-    )
-    .await?;
-    schemas
-        .iter()
-        .map(|schema| {
-            schema_agent_type_to_legacy(schema)
-                .map_err(|e| anyhow!("Failed to convert discovered agent type: {e:?}"))
-        })
-        .collect()
-}
-
-/// Same as extract_agent_types_with_streams, but inherits stdout and stderr from the current process
-pub async fn extract_agent_types(
-    wasm_path: &Path,
-    fail_on_missing_discover_method: bool,
-    enable_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentType>> {
-    extract_agent_types_with_streams(
         wasm_path,
         None::<pipe::MemoryOutputPipe>,
         None::<pipe::MemoryOutputPipe>,

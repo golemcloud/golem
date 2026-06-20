@@ -1014,21 +1014,8 @@ impl AppCommandHandler {
         // Emit schema evolution warnings
         for (component_name, new_props) in &deploy_diff.deployable_components {
             if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
-                // TEMP: `validate_schema_evolution` is still a legacy-`AgentType`
-                // positional checker. Both sides are now schema-native, so lower
-                // them to legacy here until that module is ported.
-                let old_agent_types = old_agent_types
-                    .iter()
-                    .map(golem_common::schema::adapters::schema_agent_type_to_legacy)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(anyhow::Error::msg)?;
-                let new_agent_types = new_props
-                    .agent_types
-                    .iter()
-                    .map(golem_common::schema::adapters::schema_agent_type_to_legacy)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(anyhow::Error::msg)?;
-                let warnings = validate_schema_evolution(&old_agent_types, &new_agent_types);
+                let warnings =
+                    validate_schema_evolution(old_agent_types, &new_props.agent_types);
                 for w in &warnings {
                     log_warn_action(
                         "Schema evolution",

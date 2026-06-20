@@ -23,7 +23,6 @@ use crate::base_model::{
     AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
 };
 use crate::{declare_enums, declare_structs, declare_unions};
-use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{HashMap, HashSet};
 
 declare_enums! {
@@ -41,8 +40,6 @@ declare_unions! {
     }
 
     #[derive(
-        IntoValue,
-        FromValue,
         golem_schema_derive::IntoSchema,
         golem_schema_derive::FromSchema
     )]
@@ -55,18 +52,11 @@ declare_unions! {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "full",
-    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
-)]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
-)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct UntypedAgentConfigEntry {
     pub path: Vec<String>,
-    pub value: golem_wasm::Value,
+    pub value: crate::schema::SchemaValue,
 }
 
 declare_structs! {
@@ -75,12 +65,10 @@ declare_structs! {
         pub value: NormalizedJsonValue
     }
 
-    // Schema-native local agent-config carrier. Unlike `UntypedAgentConfigEntry`
-    // (the `raw-local-agent-config-entry` WIT form carrying `golem_wasm::Value`),
-    // this type holds a `TypedSchemaValue` and is NOT coupled to the legacy
-    // `golem_wasm` value reflection. Its guest-facing WIT realization
+    // Schema-native local agent-config carrier. This type holds a
+    // `TypedSchemaValue`. Its guest-facing WIT realization
     // (`local-agent-config-entry`) is produced via the schema WIT bridge
-    // (`encode_typed`) at the public-oplog edge, not through `IntoValue`.
+    // (`encode_typed`) at the public-oplog edge.
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct TypedAgentConfigEntry {
@@ -153,8 +141,6 @@ declare_structs! {
     }
 
     #[derive(
-        IntoValue,
-        FromValue,
         golem_schema_derive::IntoSchema,
         golem_schema_derive::FromSchema
     )]
@@ -165,8 +151,6 @@ declare_structs! {
     }
 
     #[derive(
-        IntoValue,
-        FromValue,
         golem_schema_derive::IntoSchema,
         golem_schema_derive::FromSchema
     )]
@@ -197,15 +181,10 @@ impl TryFrom<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
     type Error = String;
 
     fn try_from(value: TypedAgentConfigEntry) -> Result<Self, Self::Error> {
-        let inner = crate::schema::adapters::schema_value_to_value(
-            value.value.graph(),
-            value.value.root_type(),
-            value.value.value(),
-        )
-        .map_err(|e| e.to_string())?;
+        let (_graph, schema_value) = value.value.into_parts();
         Ok(Self {
             path: value.path,
-            value: inner,
+            value: schema_value,
         })
     }
 }

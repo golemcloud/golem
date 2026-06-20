@@ -23,7 +23,7 @@ use crate::get_oplog_entry;
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
-use desert_rust::BinaryCodec;
+use golem_common::model::NamedRetryPolicy;
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
@@ -32,9 +32,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::{NamedRetryPolicy, ScheduleId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::fmt;
@@ -1298,26 +1296,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_header_error(&mut self, err: HeaderError) -> wasmtime::Result<BindingsHeaderError> {
         self.observe_function_call("http::types", "convert_header_error");
         Host::convert_header_error(&mut self.as_wasi_http_view(), err)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-#[wit_transparent]
-pub struct SerializableScheduleId {
-    pub data: Vec<u8>,
-}
-
-impl SerializableScheduleId {
-    pub fn from_domain(schedule_id: &ScheduleId) -> Self {
-        let data = golem_common::serialization::serialize(schedule_id)
-            .unwrap()
-            .to_vec();
-        Self { data }
-    }
-
-    pub fn as_domain(&self) -> Result<ScheduleId, String> {
-        golem_common::serialization::deserialize(&self.data)
     }
 }
 

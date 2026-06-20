@@ -21,7 +21,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
-use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -1074,8 +1073,6 @@ impl Error for GolemSpecificWasmTrap {}
     Serialize,
     Deserialize,
     BinaryCodec,
-    IntoValue,
-    FromValue,
 )]
 pub enum InterruptKind {
     Interrupt(Timestamp),

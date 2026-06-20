@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMethod, AgentType, ParsedAgentId};
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -50,14 +50,13 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
     OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
-use golem_common::schema::adapters::agent::schema_agent_type_to_legacy;
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
 use golem_schema::schema::wit::{decode_typed, decode_value, encode_value};
 
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_wasm::{CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, WasmRpcEntry};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -69,6 +68,49 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+/// Host-side resource table entry backing the `golem:agent/host.wasm-rpc` resource.
+pub struct WasmRpcEntry {
+    pub payload: Box<dyn std::any::Any + Send + Sync>,
+}
+
+/// Type-erased payload of a [`FutureInvokeResultEntry`] that can be polled for readiness.
+#[async_trait::async_trait]
+pub trait SubscribeAny: std::any::Any {
+    async fn ready(&mut self);
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// Host-side resource table entry backing the `golem:agent/host.future-invoke-result` resource.
+pub struct FutureInvokeResultEntry {
+    pub payload: Box<dyn SubscribeAny + Send + Sync>,
+    /// Tracks child Pollable rep indices created by `subscribe()`.
+    /// Used to defer parent deletion until all children are dropped,
+    /// because JS GC does not guarantee LIFO drop order.
+    pub child_pollables: Vec<u32>,
+    /// Set to `true` when the guest drops the parent while children still exist.
+    /// The parent entry stays alive until the last child pollable is dropped.
+    pub drop_pending: bool,
+}
+
+#[async_trait::async_trait]
+impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
+    async fn ready(&mut self) {
+        self.payload.ready().await
+    }
+}
+
+impl wasmtime_wasi::DynamicPollable for FutureInvokeResultEntry {
+    fn override_index(&self) -> Option<u32> {
+        None
+    }
+}
+
+/// Host-side resource table entry backing the `golem:agent/host.cancellation-token` resource.
+pub struct CancellationTokenEntry {
+    pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
+}
 
 fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
     match err {
@@ -107,12 +149,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
         // Share the canonical agent type through `WasmRpcEntryPayload`. Every
-        // subsequent RPC entry resolves the per-method input/output
-        // `DataSchema` from this cached value to drive the typed flow.
-        let remote_agent_type: Arc<AgentType> = Arc::new(
-            schema_agent_type_to_legacy(&registered_agent_type.agent_type)
-                .map_err(|err| anyhow::anyhow!("Invalid agent type metadata: {err}"))?,
-        );
+        // subsequent RPC entry resolves the per-method input/output schema from
+        // this cached value to drive the typed flow.
+        let remote_agent_type: Arc<AgentTypeSchema> =
+            Arc::new(registered_agent_type.agent_type.clone());
 
         let agent_id = golem_common::model::agent::ParsedAgentId::try_new(
             golem_common::model::agent::AgentTypeName(agent_type_name),
@@ -787,7 +827,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn subscribe(
         &mut self,
         this: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
         let parent_rep = this.rep();
         let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
@@ -1285,22 +1325,6 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
-    async fn parse_uuid(
-        &mut self,
-        uuid: String,
-    ) -> anyhow::Result<Result<golem_wasm::Uuid, String>> {
-        Ok(uuid::Uuid::parse_str(&uuid)
-            .map(|uuid| uuid.into())
-            .map_err(|e| e.to_string()))
-    }
-
-    async fn uuid_to_string(&mut self, uuid: golem_wasm::Uuid) -> anyhow::Result<String> {
-        let uuid: uuid::Uuid = uuid.into();
-        Ok(uuid.to_string())
-    }
-}
-
 impl<Ctx: WorkerCtx> core_wire::Host for DurableWorkerCtx<Ctx> {
     async fn parse_uuid(
         &mut self,
@@ -1324,7 +1348,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: Vec<AgentConfigEntryDto>,
     durability: &Durability<GolemRpcWasmRpcNew>,
     span: Arc<InvocationContextSpan>,
-    remote_agent_type: Arc<AgentType>,
+    remote_agent_type: Arc<AgentTypeSchema>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let stack = ctx.clone_as_inherited_stack(span.span_id());
 
@@ -1379,7 +1403,7 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     target_environment_id: EnvironmentId,
     target_fingerprint: AgentFingerprint,
     span: Arc<InvocationContextSpan>,
-    remote_agent_type: Arc<AgentType>,
+    remote_agent_type: Arc<AgentTypeSchema>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
     let entry = ctx.table().push(WasmRpcEntry {
@@ -1686,7 +1710,7 @@ pub struct WasmRpcEntryPayload {
     /// flow. Sourced from the durable `get_agent_type` lookup performed in
     /// [`HostWasmRpc::new`], so it is consistent across live execution and
     /// replay.
-    pub remote_agent_type: Arc<AgentType>,
+    pub remote_agent_type: Arc<AgentTypeSchema>,
 }
 
 impl Debug for WasmRpcEntryPayload {
@@ -1702,9 +1726,9 @@ impl Debug for WasmRpcEntryPayload {
 /// `wasmtime::Error` trap, since `schedule_cancelable_invocation` has no
 /// way to return `Err(RpcError)` to the guest.
 fn find_agent_method<'a>(
-    agent_type: &'a AgentType,
+    agent_type: &'a AgentTypeSchema,
     method_name: &str,
-) -> anyhow::Result<&'a AgentMethod> {
+) -> anyhow::Result<&'a AgentMethodSchema> {
     agent_type
         .methods
         .iter()
@@ -1727,7 +1751,7 @@ fn find_agent_method<'a>(
 /// opened — a deterministic check that replay reproduces, surfaced as
 /// [`InternalRpcError`] so the caller can return `Err(RpcError)` to the guest.
 fn resolve_method_and_lift_input(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     method_name: &str,
     input: core_wire::SchemaValueTree,
 ) -> Result<SchemaValue, InternalRpcError> {

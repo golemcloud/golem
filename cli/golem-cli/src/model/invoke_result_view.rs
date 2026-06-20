@@ -17,7 +17,7 @@ use crate::log::log_error;
 use anyhow::anyhow;
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::{AgentType, DataSchema};
+use golem_common::schema::agent::{AgentTypeSchema, OutputSchema};
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ impl InvokeResultView {
     pub fn new_agent_invoke(
         idempotency_key: IdempotencyKey,
         result: AgentInvocationResult,
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
         method_name: &str,
     ) -> Self {
         let source_language = SourceLanguage::from(agent_type.source_language.as_str());
@@ -90,7 +90,7 @@ impl InvokeResultView {
 
     fn try_get_agent_results(
         result: &AgentInvocationResult,
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
         method_name: &str,
     ) -> anyhow::Result<(bool, Option<TypedSchemaValue>)> {
         let method = agent_type
@@ -99,8 +99,7 @@ impl InvokeResultView {
             .find(|m| m.name == method_name)
             .ok_or_else(|| anyhow!("Method '{method_name}' not found in agent type"))?;
 
-        if matches!(&method.output_schema, DataSchema::Tuple(schemas) if schemas.elements.is_empty())
-        {
+        if matches!(&method.output_schema, OutputSchema::Unit) {
             return Ok((true, None));
         }
 

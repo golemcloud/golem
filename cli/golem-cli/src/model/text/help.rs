@@ -22,9 +22,9 @@ use crate::model::text::fmt::{
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::{
-    AgentType, AgentTypeName, DeployedRegisteredAgentType, ElementSchema, ParsedAgentId,
-};
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
+use golem_common::schema::{SchemaGraph, SchemaType};
+use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::model::component::ComponentName;
 use indoc::indoc;
 use std::path::PathBuf;
@@ -191,7 +191,7 @@ impl AvailableFunctionNamesHelp {
     pub fn new_agent(
         component: &ComponentDto,
         agent_id: &ParsedAgentId,
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
     ) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
@@ -327,7 +327,7 @@ impl TextView for AvailableAgentConstructorsHelp {
 
 pub struct ArgumentError {
     pub argument_index: usize,
-    pub parameter_type: Option<ElementSchema>,
+    pub parameter_type: Option<(SchemaGraph, SchemaType)>,
     pub value: Option<String>,
     pub error: Option<String>,
     pub source_language: SourceLanguage,
@@ -371,50 +371,10 @@ impl TextView for ParameterErrorTableView {
 
 fn render_parameter_type_for_language(
     source_language: &SourceLanguage,
-    parameter_type: &ElementSchema,
+    parameter_type: &(SchemaGraph, SchemaType),
 ) -> String {
-    match parameter_type {
-        ElementSchema::ComponentModel(cm) => {
-            // Adapt the legacy AnalysedType at the boundary.
-            match golem_common::schema::adapters::analysed_type_to_schema_graph(&cm.element_type) {
-                Ok(graph) => {
-                    let root = graph.root.clone();
-                    render_type_for_language(source_language, &graph, &root, true)
-                }
-                Err(_) => "<unknown>".to_string(),
-            }
-        }
-        ElementSchema::UnstructuredText(text_descriptor) => {
-            let mut result = "text".to_string();
-            if let Some(restrictions) = &text_descriptor.restrictions {
-                result.push('[');
-                result.push_str(
-                    &restrictions
-                        .iter()
-                        .map(|restriction| restriction.language_code.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                result.push(']');
-            }
-            result
-        }
-        ElementSchema::UnstructuredBinary(binary_descriptor) => {
-            let mut result = "binary".to_string();
-            if let Some(restrictions) = &binary_descriptor.restrictions {
-                result.push('[');
-                result.push_str(
-                    &restrictions
-                        .iter()
-                        .map(|restriction| restriction.mime_type.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                result.push(']');
-            }
-            result
-        }
-    }
+    let (graph, schema) = parameter_type;
+    render_type_for_language(source_language, graph, schema, true)
 }
 
 pub struct EnvironmentNameHelp;

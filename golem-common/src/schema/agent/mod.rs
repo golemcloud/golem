@@ -37,10 +37,60 @@ use crate::base_model::agent::{
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
-use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_type::{NamedFieldType, SchemaType};
+use crate::schema::schema_value::SchemaValue;
+use crate::schema::validation::value::validate_value;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use uuid::Uuid;
+
+/// Name of the synthetic single user-supplied field that carries the parts of
+/// a multimodal agent input (`list<variant<… Role::Multimodal>>`).
+pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
+
+/// Name of the synthetic field used to wrap a single-value (non-multimodal)
+/// agent output that has no declared field name of its own.
+pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
+
+/// Lift raw client JSON (a bare schema-native [`SchemaValue`]) plus an agent
+/// constructor/method [`InputSchema`] and its owning [`SchemaGraph`] into a
+/// validated [`TypedSchemaValue`].
+///
+/// The agent's named-type definitions ([`SchemaGraph::defs`]) are preserved so
+/// `SchemaType::Ref`s in the field bodies resolve during validation.
+pub fn json_input_schema_value_to_typed_schema_value(
+    json: JsonValue,
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
+) -> Result<TypedSchemaValue, String> {
+    let value: SchemaValue =
+        serde_json::from_value(json).map_err(|e| format!("invalid schema value: {e}"))?;
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    let typed = TypedSchemaValue::new(
+        SchemaGraph {
+            defs: graph.defs.clone(),
+            root: SchemaType::record(fields),
+        },
+        value.clone(),
+    );
+    validate_value(typed.graph(), typed.root_type(), &value).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|err| err.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    Ok(typed)
+}
 
 /// Input parameter list for an agent constructor or method.
 ///
@@ -365,11 +415,8 @@ pub struct AgentTypeSchema {
 
 /// Schema-layer form of an agent config declaration.
 ///
-/// Mirrors the legacy [`AgentConfigDeclaration`](crate::base_model::agent::AgentConfigDeclaration),
-/// with the `value_type` carried as a schema-native [`SchemaType`] instead of
-/// the legacy `AnalysedType`. This keeps [`AgentTypeSchema`] free of the legacy
-/// value/type carriers (the shared [`AgentConfigDeclaration`](crate::base_model::agent::AgentConfigDeclaration)
-/// stays in place for the legacy `AgentType` path — see N1/A3).
+/// Carries the `value_type` as a schema-native [`SchemaType`]. This keeps
+/// [`AgentTypeSchema`] free of the legacy value/type carriers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]

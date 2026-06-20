@@ -30,8 +30,8 @@ use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::{anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
-use golem_common::schema::adapters::data_schema::multimodal_variant_cases;
-use golem_common::schema::adapters::unstructured::{
+use golem_common::schema::multimodal::multimodal_variant_cases;
+use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
 };
 use golem_common::schema::agent::{

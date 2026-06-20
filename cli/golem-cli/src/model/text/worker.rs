@@ -31,10 +31,6 @@ use comfy_table::{
     Table as ComfyTable,
 };
 use golem_common::model::AgentStatus;
-use golem_common::model::agent::{
-    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-};
 use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
@@ -43,7 +39,6 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::schema::TypedSchemaValue;
-use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -1072,10 +1067,6 @@ fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
     }
 }
 
-fn value_to_string(value: &ValueAndType) -> String {
-    print_value_and_type(value).expect("Failed to convert value to string")
-}
-
 fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
     golem_common::schema::render::value_to_cli_text(value.graph(), value.root_type(), value.value())
         .unwrap_or_else(|err| format!("<rendering error: {err}>"))
@@ -1089,78 +1080,6 @@ fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue, source_language: 
 // TODO: pretty print
 fn format_agent_name(agent_name: &RawAgentId) -> String {
     textwrap::wrap(&agent_name.to_string(), 80).join("\n")
-}
-
-#[allow(dead_code)]
-fn log_data_value(pad: &str, value: &DataValue, source_language: &SourceLanguage) {
-    if source_language.is_known() {
-        // Adapt at the boundary: walk the legacy DataValue into a
-        // TypedSchemaValue using the element-embedded type info, then call
-        // the schema-typed renderer.
-        let rendered =
-            match golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(value) {
-                Ok(typed) => {
-                    crate::agent_id_display::render_typed_schema_value(&typed, source_language)
-                }
-                Err(err) => format!("<rendering error: {err}>"),
-            };
-        logln(format!("{pad}  {rendered}"));
-    } else {
-        match value {
-            DataValue::Tuple(values) => {
-                logln(format!("{pad}  tuple:"));
-                for value in &values.elements {
-                    log_element_value(&format!("{pad}    "), value);
-                }
-            }
-            DataValue::Multimodal(values) => {
-                logln(format!("{pad}  multi-modal:"));
-                for value in &values.elements {
-                    log_element_value(&format!("{pad}    "), &value.value);
-                }
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn log_element_value(pad: &str, value: &ElementValue) {
-    match value {
-        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-            logln(format!("{pad}- {}", value_to_string(value)));
-        }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Url(url) => {
-                logln(format!("{pad}- URL: {}", format_id(&url.value)));
-            }
-            TextReference::Inline(inline) => {
-                logln(format!("{pad}- Inline: {}", format_id(&inline.data)));
-                if let Some(text_type) = &inline.text_type {
-                    logln(format!(
-                        "{pad}  Language code: {}",
-                        format_id(&text_type.language_code)
-                    ));
-                }
-            }
-        },
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Url(url) => {
-                    logln(format!("{pad}- URL: {}", format_id(&url.value)));
-                }
-                BinaryReference::Inline(inline) => {
-                    logln(format!(
-                        "{pad}- Inline: {} bytes",
-                        format_id(&inline.data.len().to_string())
-                    ));
-                    logln(format!(
-                        "{pad}  MIME type: {}",
-                        format_id(&inline.binary_type.mime_type)
-                    ));
-                }
-            }
-        }
-    }
 }
 
 fn log_optional_error(pad: &str, error: &Option<String>) {

@@ -149,62 +149,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl golem_wasm::IntoValue for $name {
-            fn into_value(self) -> golem_wasm::Value {
-                let (hi, lo) = self.0.as_u64_pair();
-                golem_wasm::Value::Record(vec![golem_wasm::Value::Record(vec![
-                    golem_wasm::Value::U64(hi),
-                    golem_wasm::Value::U64(lo),
-                ])])
-            }
-
-            fn get_type() -> golem_wasm::analysis::AnalysedType {
-                let uuid_type = $name::uuid_analysed_type();
-                let rec = golem_wasm::analysis::analysed_type::record(vec![
-                    golem_wasm::analysis::analysed_type::field("uuid", uuid_type),
-                ]);
-                let wit_name: &str = $wit_name;
-                let wit_owner: &str = $wit_owner;
-                let rec = if !wit_name.is_empty() { rec.named(wit_name) } else { rec };
-                if !wit_owner.is_empty() { rec.owned(wit_owner) } else { rec }
-            }
-        }
-
-        impl $name {
-            pub fn uuid_analysed_type() -> golem_wasm::analysis::AnalysedType {
-                golem_wasm::analysis::analysed_type::record(vec![
-                    golem_wasm::analysis::analysed_type::field(
-                        "high-bits",
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                    golem_wasm::analysis::analysed_type::field(
-                        "low-bits",
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                ])
-                .named("uuid")
-                .owned("golem:core@1.5.0/types")
-            }
-        }
-
-        impl golem_wasm::FromValue for $name {
-            fn from_value(value: golem_wasm::Value) -> Result<$name, String> {
-                match value {
-                    golem_wasm::Value::Record(mut fields) if fields.len() == 1 => {
-                        match fields.remove(0) {
-                            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
-                                let hi = u64::from_value(fields.remove(0))?;
-                                let lo = u64::from_value(fields.remove(0))?;
-                                Ok($name(uuid::Uuid::from_u64_pair(hi, lo)))
-                            }
-                            other => Err(format!("Expected a record with two u64 fields, got {other:?}"))
-                        }
-                    }
-                    other => Err(format!("Expected a record with one record field, got {other:?}"))
-                }
-            }
-        }
-
         $(
             #[cfg(feature = "full")]
             impl TryFrom<$proto_type> for $name {
@@ -245,7 +189,6 @@ macro_rules! declare_revision {
             Ord,
             Hash,
             ::serde::Serialize,
-            ::golem_wasm_derive::IntoValue,
             ::derive_more::Display,
         )]
         #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
@@ -345,18 +288,6 @@ macro_rules! declare_revision {
             {
                 let value = i64::deserialize(deserializer)?;
                 $name::try_from(value).map_err(serde::de::Error::custom)
-            }
-        }
-
-        impl ::golem_wasm::FromValue for $name {
-            fn from_value(value: ::golem_wasm::Value) -> Result<Self, String> {
-                match value {
-                    ::golem_wasm::Value::U64(inner) => $name::try_from(inner),
-                    _ => Err(format!(
-                        "Unexpected value for {}: {value:?}",
-                        stringify!($name)
-                    )),
-                }
             }
         }
 

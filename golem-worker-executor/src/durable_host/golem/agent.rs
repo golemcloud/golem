@@ -32,17 +32,13 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
-use golem_common::schema::adapters::analysed_type::{
-    analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
-};
-use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
 use golem_common::schema::schema_value::SchemaValue;
-use golem_common::schema::validation::subtyping::is_assignable;
+use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
@@ -116,7 +112,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
         key: &[String],
         key_str: &str,
+        expected_graph: &SchemaGraph,
         expected_type: &SchemaType,
+        declared_graph: &SchemaGraph,
         declared_type: &SchemaType,
     ) -> anyhow::Result<SchemaValue> {
         let config_value = self.state.agent_config.get(key);
@@ -124,24 +122,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // Future automatic-update transforms belong here, where both
         // the component-declared type and the guest-expected type are
         // available together with the stored local config value.
-        if declared_type != expected_type {
+        if !schema_types_compatible(declared_graph, declared_type, expected_graph, expected_type) {
             return Err(anyhow!(
                 "declared and expected type for config key {key_str} are not compatible"
             ));
         }
 
-        match (expected_type, config_value) {
+        match (resolve_schema_ref(expected_graph, expected_type), config_value) {
             (SchemaType::Option { .. }, None) => Ok(SchemaValue::Option { inner: None }),
-            // The stored local config is a legacy typed value (its storage is
-            // migrated in a later wave); project it into the schema-native
-            // value the agent surface works in, driven by its stored type.
-            (_, Some(stored)) => {
-                value_to_schema_value(&stored.value, &stored.typ).map_err(|e| {
-                    anyhow!(
-                        "Local config value for key {key_str} is not representable as a schema value: {e}"
-                    )
-                })
-            }
+            // The stored local config is already a schema-native typed value.
+            (_, Some(stored)) => Ok(stored.value().clone()),
             (_, None) => Err(anyhow!("required config key {key_str} is missing value")),
         }
     }
@@ -157,7 +147,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         path: Vec<String>,
         path_str: &str,
-        expected_type: SchemaType,
+        expected_graph: SchemaGraph,
+        declared_graph: &SchemaGraph,
         declared_type: &SchemaType,
     ) -> anyhow::Result<SchemaValue> {
         // Future automatic-update transforms belong here, where both
@@ -166,7 +157,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // This deterministic validation must happen before opening the
         // durable function; replay must not be able to skip it and return
         // a previously persisted config value.
-        if declared_type != &expected_type {
+        if !schema_types_compatible(
+            declared_graph,
+            declared_type,
+            &expected_graph,
+            &expected_graph.root,
+        ) {
             return Err(anyhow!(
                 "declared and expected type for secret key {path_str} are not compatible"
             ));
@@ -187,7 +183,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
             let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
-            let result_schema = match (&expected_type, agent_secret) {
+            let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
+
+            let result_schema = match (expected_root, agent_secret) {
                 // No secret stored; `Option<_>` resolves to `None`.
                 (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
 
@@ -198,23 +196,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     ));
                 }
 
-                // Secret exists. Compatibility uses the secret's own
-                // graph so any [`SchemaType::Ref`] in the secret's root
-                // resolves through `secret.secret_type` — including a
-                // ref to `Option<T>` matched against an inline
+                // Secret exists. Compatibility is checked cross-graph so any
+                // [`SchemaType::Ref`] on either side resolves through its own
+                // graph — including a ref to `Option<T>` matched against an
                 // `Option<T>` expected type.
-                (expected_type, Some(secret)) => {
+                (_, Some(secret)) => {
                     if !schema_types_compatible(
                         &secret.secret_type,
-                        expected_type,
                         &secret.secret_type.root,
+                        &expected_graph,
+                        &expected_graph.root,
                     ) {
                         return Err(anyhow!(
                             "declared and expected type for config key {path_str} are not compatible"
                         ));
                     }
 
-                    match (expected_type, &secret.secret_value) {
+                    match (expected_root, &secret.secret_value) {
                         // Missing-value secrets with an `Option<_>`
                         // expected type collapse to `None`.
                         (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
@@ -226,15 +224,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             };
 
-            // The oplog payload now stores the resolved value schema-natively;
-            // the guest-supplied `expected_type` is self-contained (no refs)
-            // and is recorded as the request metadata.
+            // The oplog payload stores the resolved value schema-natively; the
+            // guest-supplied `expected_type` graph is recorded as the request
+            // metadata.
             let persisted = durability
                 .persist(
                     self,
                     HostRequestGolemAgentGetConfigValue {
                         path,
-                        expected_type: expected_type.clone(),
+                        expected_type: expected_graph,
                     },
                     HostResponseGolemAgentGetConfigValue {
                         result: result_schema,
@@ -342,12 +340,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-/// Structural type equality, resolving any [`SchemaType::Ref`] nodes
-/// against `graph`. Bidirectional [`is_assignable`] collapses to type
-/// equality on the same graph; the guest-supplied inline side has no
-/// refs to resolve, while the secret's `Ref`s are followed via `graph`.
-fn schema_types_compatible(graph: &SchemaGraph, left: &SchemaType, right: &SchemaType) -> bool {
-    is_assignable(graph, left, right) && is_assignable(graph, right, left)
+/// Cross-graph structural type equality, resolving any [`SchemaType::Ref`]
+/// nodes on each side against its own graph. Used to compare the
+/// component-declared config type, the guest-supplied expected type, and the
+/// stored secret type, each of which carries its own [`SchemaGraph`].
+fn schema_types_compatible(
+    graph_a: &SchemaGraph,
+    type_a: &SchemaType,
+    graph_b: &SchemaGraph,
+    type_b: &SchemaType,
+) -> bool {
+    is_equivalent_cross_graph(graph_a, type_a, graph_b, type_b)
+}
+
+/// Follow a chain of [`SchemaType::Ref`] nodes in `graph` to the first
+/// non-`Ref` structural type. Cycle-guarded; returns the last seen type if a
+/// ref cannot be resolved or a cycle is detected.
+fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
+    let mut seen = std::collections::HashSet::new();
+    while let SchemaType::Ref { id, .. } = ty {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        match graph.lookup(id) {
+            Some(def) => ty = &def.body,
+            None => break,
+        }
+    }
+    ty
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -502,27 +522,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .parsed_agent_id()
             .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
 
-        // The guest passes the expected type as a `schema-graph`. Lift its
-        // root to a single inline `SchemaType` (flattening any refs) so the
-        // resolvers below operate on one schema-native type representation.
+        // The guest passes the expected type as a self-contained
+        // `schema-graph`; the resolvers below operate directly on it, following
+        // any [`SchemaType::Ref`] against its `defs`.
         let expected_graph = decode_graph(&expected).map_err(|e| {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
-        let expected_type_flattened = schema_type_to_analysed_type(
-            &expected_graph,
-            &expected_graph.root,
-        )
-        .map_err(|e| {
-            anyhow!(
-                "Expected config type for path {path_str} is not representable as a flat type: {e}"
-            )
-        })?;
-        let expected_type =
-            analysed_type_to_schema_type_inline(&expected_type_flattened).map_err(|e| {
-                anyhow!(
-                    "Expected config type for path {path_str} is not representable as SchemaType: {e}"
-                )
-            })?;
 
         let agent_type = self
             .component_metadata()
@@ -537,7 +542,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let schema_value: SchemaValue = match declaration {
             // Allow reading undeclared optional config keys so that
             // newer agents can run against older component schemas.
-            None if matches!(expected_type, SchemaType::Option { .. }) => {
+            None if matches!(
+                resolve_schema_ref(&expected_graph, &expected_graph.root),
+                SchemaType::Option { .. }
+            ) =>
+            {
                 SchemaValue::Option { inner: None }
             }
             None => return Err(anyhow!("No config declared for path {path_str}")),
@@ -545,7 +554,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .resolve_local_config(
                     &path,
                     &path_str,
-                    &expected_type,
+                    &expected_graph,
+                    &expected_graph.root,
+                    &agent_type.schema,
                     declaration_value_type
                         .as_ref()
                         .expect("existing config declaration must have a value type"),
@@ -554,7 +565,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 self.resolve_secret_config(
                     path,
                     &path_str,
-                    expected_type,
+                    expected_graph,
+                    &agent_type.schema,
                     declaration_value_type
                         .as_ref()
                         .expect("existing config declaration must have a value type"),

@@ -14,13 +14,11 @@
 
 use crate::mcp::schema::field_name_mapping;
 use golem_common::base_model::agent::AgentTypeName;
-use golem_common::schema::adapters::{
-    is_multimodal_schema_type, multimodal_variant_cases, resolve_ref,
-};
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, FieldSource, InputSchema, NamedField, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::multimodal::{is_multimodal_schema_type, multimodal_variant_cases};
 use golem_common::schema::schema_type::SchemaType;
 use rmcp::model::{
     GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole,
@@ -178,7 +176,7 @@ fn describe_input(
 }
 
 fn describe_output_type(graph: &SchemaGraph, ty: &SchemaType) -> String {
-    match resolve_ref(graph, ty) {
+    match graph.resolve_ref(ty) {
         Ok(SchemaType::Text { restrictions, .. }) => match &restrictions.languages {
             Some(langs) if !langs.is_empty() => format!(
                 "text with one of the following language codes: {}",

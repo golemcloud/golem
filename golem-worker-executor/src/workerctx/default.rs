@@ -68,13 +68,13 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId,
 };
+use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_wasm::Uri;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
@@ -677,7 +677,7 @@ impl HostFutureInvokeResult for Context {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 

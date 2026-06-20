@@ -22,20 +22,22 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::schema::adapters::analysed_type_to_schema_graph;
-use golem_common::schema::adapters::unstructured::{
+use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
-use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
-use golem_common::schema::{InputSchema, OutputSchema, Role, SchemaGraph, SchemaType};
+use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, NamedFieldType, ResultSpec, TextRestrictions,
+};
+use golem_common::schema::{
+    InputSchema, OutputSchema, Role, SchemaGraph, SchemaType, SchemaTypeDef,
+};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema, CorsOptions,
     MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment, PathSegmentType,
     QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
 };
 use golem_service_base::model::SafeIndex;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{field, option, record, result, result_err, str};
 use http::Method;
 use serde_json::{Value, json};
 use test_r::test;
@@ -50,13 +52,58 @@ fn agent_type_name(name: &str) -> golem_common::model::agent::AgentTypeName {
 
 /// A single response carrying a component-model type. Named composites become
 /// `defs` + a `Ref` root, so the emitter renders them via `$ref`.
-fn cm_response(ty: AnalysedType) -> CompiledOutputSchema {
-    let graph = analysed_type_to_schema_graph(&ty).expect("lower response type");
+fn cm_response(ty: SchemaType) -> CompiledOutputSchema {
+    let graph = SchemaGraph::anonymous(ty);
+    cm_response_graph(graph)
+}
+
+fn cm_response_graph(graph: SchemaGraph) -> CompiledOutputSchema {
     let root = graph.root.clone();
     CompiledOutputSchema {
         graph,
         output_schema: OutputSchema::Single(Box::new(root)),
     }
+}
+
+fn field(name: &str, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.to_string(),
+        body,
+        metadata: MetadataEnvelope::default(),
+    }
+}
+
+fn record(fields: Vec<NamedFieldType>) -> SchemaType {
+    SchemaType::record(fields)
+}
+
+fn str() -> SchemaType {
+    SchemaType::string()
+}
+
+fn option(inner: SchemaType) -> SchemaType {
+    SchemaType::option(inner)
+}
+
+fn result(ok: SchemaType, err: SchemaType) -> SchemaType {
+    SchemaType::result(ResultSpec {
+        ok: Some(Box::new(ok)),
+        err: Some(Box::new(err)),
+    })
+}
+
+fn result_ok(ok: SchemaType) -> SchemaType {
+    SchemaType::result(ResultSpec {
+        ok: Some(Box::new(ok)),
+        err: None,
+    })
+}
+
+fn result_err(err: SchemaType) -> SchemaType {
+    SchemaType::result(ResultSpec {
+        ok: None,
+        err: Some(Box::new(err)),
+    })
 }
 
 fn unit_response() -> CompiledOutputSchema {
@@ -130,11 +177,17 @@ fn multimodal_response() -> CompiledOutputSchema {
     }
 }
 
-fn json_body(ty: AnalysedType) -> RequestBodySchema {
+fn json_body(ty: SchemaType) -> RequestBodySchema {
     RequestBodySchema::JsonBody {
         expected: CompiledSchema {
-            graph: analysed_type_to_schema_graph(&ty).expect("lower request body type"),
+            graph: SchemaGraph::anonymous(ty),
         },
+    }
+}
+
+fn json_body_graph(graph: SchemaGraph) -> RequestBodySchema {
+    RequestBodySchema::JsonBody {
+        expected: CompiledSchema { graph },
     }
 }
 
@@ -381,9 +434,7 @@ fn result_void_err_maps_500_to_no_content() {
             }],
             RequestBodySchema::Unused,
             vec![],
-            cm_response(golem_wasm::analysis::analysed_type::result_ok(record(
-                vec![field("value", str())],
-            ))),
+            cm_response(result_ok(record(vec![field("value", str())]))),
             None,
         ),
         "/rok",
@@ -949,18 +1000,21 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
 fn named_type_shared_across_routes_appears_once_in_components() {
     // A named record used as both a request body and a response should appear
     // exactly once in components/schemas, referenced by `$ref`.
-    let named = AnalysedType::Record(golem_wasm::analysis::TypeRecord {
-        name: Some("User".to_string()),
-        owner: None,
-        fields: vec![field("id", str())],
-    });
+    let named = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: TypeId("User".to_string()),
+            name: Some("User".to_string()),
+            body: record(vec![field("id", str())]),
+        }],
+        root: SchemaType::ref_to(TypeId("User".to_string())),
+    };
 
     let route_a = call_agent_route(
         Method::POST,
         vec![PathSegment::Literal {
             value: "a".to_string(),
         }],
-        json_body(named.clone()),
+        json_body_graph(named.clone()),
         vec![],
         unit_response(),
         None,
@@ -972,7 +1026,7 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         }],
         RequestBodySchema::Unused,
         vec![],
-        cm_response(named),
+        cm_response_graph(named),
         None,
     );
 

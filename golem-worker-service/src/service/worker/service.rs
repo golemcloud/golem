@@ -45,7 +45,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
-use golem_common::schema::adapters::json_input_schema_value_to_typed_schema_value;
+use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::{SchemaType, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;

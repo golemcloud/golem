@@ -59,7 +59,7 @@ use raw_imports::*;
 // - PublicOplogEntry
 //
 // the oplog representation presented to users through queries, with enriched information
-// with JSON and poem codecs, convertible to/from golem_wasm::Value and (hand-written) lucene query matching
+// with JSON and poem codecs and (hand-written) lucene query matching
 //
 // The macro's DSL requires the following items for each oplog entry to be specified:
 // - hint: false|true

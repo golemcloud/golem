@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::mcp::invoke::{schema_binary_value_from_json, schema_text_value_from_json};
-use golem_common::schema::adapters::resolve_ref;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::render::json_value::from_json_value;
 use golem_common::schema::schema_type::SchemaType;
@@ -32,7 +31,8 @@ pub fn extract_multimodal_element_value(
     graph: &SchemaGraph,
     index: usize,
 ) -> Result<SchemaValue, String> {
-    let resolved = resolve_ref(graph, case_schema)
+    let resolved = graph
+        .resolve_ref(case_schema)
         .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))?;
     match resolved {
         SchemaType::Text { restrictions, .. } => {

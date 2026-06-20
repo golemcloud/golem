@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, DataSchema, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
@@ -51,9 +51,9 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
-use golem_common::schema::adapters::{data_schema_to_input_schema, data_schema_to_output_schema};
 use golem_common::schema::{
-    NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+    InputSchema, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -946,15 +946,10 @@ async fn enrich_golem_rpc_scheduled_invocation(
 fn resolve_agent_type_from_worker_name(
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
     worker_name: &str,
-) -> Option<golem_common::model::agent::AgentType> {
+) -> Option<golem_common::schema::agent::AgentTypeSchema> {
     ParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
-        .and_then(|type_name| {
-            metadata
-                .find_legacy_agent_type_by_name(&type_name)
-                .ok()
-                .flatten()
-        })
+        .and_then(|type_name| metadata.find_agent_type_by_name(&type_name))
 }
 
 /// A schema-native empty value (`()`), used as the best-effort fallback when
@@ -971,13 +966,12 @@ fn empty_typed_schema_value() -> TypedSchemaValue {
 
 /// Pair a schema-native invocation **input** value (a parameter record, see
 /// [`crate::worker::invocation::lower_invocation`]) with the record schema
-/// derived from the agent's declared input [`DataSchema`].
+/// derived from the agent's declared [`InputSchema`].
 fn input_value_to_typed_schema_value(
-    input_schema: &DataSchema,
+    input_schema: &InputSchema,
     value: SchemaValue,
 ) -> Result<TypedSchemaValue, String> {
-    let input = data_schema_to_input_schema(input_schema).map_err(|e| e.to_string())?;
-    let fields = input
+    let fields = input_schema
         .fields()
         .iter()
         .map(|field| NamedFieldType {
@@ -993,15 +987,14 @@ fn input_value_to_typed_schema_value(
 }
 
 /// Pair a schema-native invocation **output** value with the schema derived
-/// from the agent method's declared output [`DataSchema`]. A `unit` output is
+/// from the agent method's declared [`OutputSchema`]. A `unit` output is
 /// represented by the canonical empty tuple (see
 /// [`crate::worker::invocation::decode_invoke_output`]).
 fn output_value_to_typed_schema_value(
-    output_schema: &DataSchema,
+    output_schema: &OutputSchema,
     value: SchemaValue,
 ) -> Result<TypedSchemaValue, String> {
-    let output = data_schema_to_output_schema(output_schema).map_err(|e| e.to_string())?;
-    let root = match output.schema() {
+    let root = match output_schema.schema() {
         Some(ty) => ty.clone(),
         None => SchemaType::tuple(Vec::new()),
     };

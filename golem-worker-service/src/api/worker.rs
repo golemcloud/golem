@@ -1151,37 +1151,38 @@ mod tests {
     use golem_common::model::AgentId;
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
-        NamedElementSchemas, Snapshotting,
-    };
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-    use golem_common::schema::adapters::agent::agent_type_to_schema;
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        SchemaGraph,
+    };
     use golem_service_base::model::component::Component;
     use test_r::test;
     use uuid::Uuid;
 
-    fn test_agent_type(mode: AgentMode) -> AgentType {
-        AgentType {
+    fn test_agent_type(mode: AgentMode) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName("weather-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            methods: vec![AgentMethod {
+            methods: vec![AgentMethodSchema {
                 name: "run".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![],
                 read_only: None,
             }],
@@ -1211,7 +1212,7 @@ mod tests {
                 vec![],
                 None,
                 None,
-                vec![agent_type_to_schema(&test_agent_type(mode)).unwrap()],
+                vec![test_agent_type(mode)],
                 std::collections::BTreeMap::new(),
             ),
             created_at: Utc::now(),

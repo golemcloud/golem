@@ -30,11 +30,11 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId, Timestamp,
 };
+use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_wasm::Uri;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -437,7 +437,7 @@ impl HostFutureInvokeResult for DebugContext {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
