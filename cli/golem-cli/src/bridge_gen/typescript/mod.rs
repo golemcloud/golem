@@ -2261,7 +2261,7 @@ impl TypeScriptBridgeGenerator {
         )
     }
 
-    /// Converts a name to a JS/TS identifier (camelCase for cross-language, as-is for same language).
+    /// Converts a name to a JS/TS identifier.
     fn to_js_ident(&self, name: &str) -> String {
         if self.same_language {
             escape_js_ident(name)
@@ -2273,15 +2273,6 @@ impl TypeScriptBridgeGenerator {
     /// Converts a method name to PascalCase for use in generated function names like `encodeXxxInput`.
     /// These are internal generated names, not user-facing API names, so always use PascalCase.
     fn to_method_pascal(&self, name: &str) -> String {
-        if self.same_language {
-            // Already camelCase; capitalize the first letter to get PascalCase
-            let mut chars = name.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        } else {
-            name.to_upper_camel_case()
-        }
+        name.to_upper_camel_case()
     }
 }

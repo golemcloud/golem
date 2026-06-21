@@ -32,6 +32,7 @@ use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
+use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -41,6 +42,16 @@ use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+fn assert_secret_type_is_string(secret_type: &SchemaGraph) {
+    let expected = SchemaGraph::anonymous(SchemaType::string());
+    assert!(is_equivalent_cross_graph(
+        secret_type,
+        &secret_type.root,
+        &expected,
+        &expected.root,
+    ));
+}
 
 #[test]
 #[tracing::instrument]
@@ -623,10 +634,7 @@ async fn deploy_creates_missing_secret_from_default(
         .unwrap();
 
     assert_eq!(secret.path.0, secret_path);
-    assert_eq!(
-        secret.secret_type,
-        SchemaGraph::anonymous(SchemaType::string())
-    );
+    assert_secret_type_is_string(&secret.secret_type);
     assert_eq!(
         secret.secret_value,
         Some(SchemaValue::String("foo".to_string()))
@@ -692,10 +700,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
         .unwrap();
 
     assert_eq!(secret.path.0, secret_path);
-    assert_eq!(
-        secret.secret_type,
-        SchemaGraph::anonymous(SchemaType::string())
-    );
+    assert_secret_type_is_string(&secret.secret_type);
 
     // Existing value must be preserved
     assert_eq!(
@@ -763,10 +768,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         .unwrap();
 
     assert_eq!(secret.path.0, secret_path);
-    assert_eq!(
-        secret.secret_type,
-        SchemaGraph::anonymous(SchemaType::string())
-    );
+    assert_secret_type_is_string(&secret.secret_type);
 
     assert_eq!(
         secret.secret_value,

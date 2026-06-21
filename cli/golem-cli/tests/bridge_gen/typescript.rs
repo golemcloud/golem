@@ -111,7 +111,7 @@ fn bridge_tests_schema_value_encoding(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
     let package_dir = generated_package_dir(pkg.target_dir(), "foo-agent");
-    let index_ts = std::fs::read_to_string(package_dir.join("src/index.ts")).unwrap();
+    let index_ts = std::fs::read_to_string(package_dir.join("foo-agent-client.ts")).unwrap();
     assert!(index_ts.contains("kind"));
     assert!(index_ts.contains("SchemaValue"));
 }
@@ -128,10 +128,10 @@ fn test_type_naming_rust_foo_agent_for_ts_bridge() {
 
 fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
     let package_name = bridge_client_directory_name(&agent_type.type_name);
-    let mut generator = TypeScriptBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    let package_dir = target_dir.join(package_name);
+    let mut generator = TypeScriptBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
 
-    let package_dir = target_dir.join(package_name);
     assert!(
         std::process::Command::new("npm")
             .arg("install")

@@ -51,7 +51,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_all(&mut self) -> anyhow::Result<Result<Vec<(String, String)>, Error>> {
-        let entries = self
+        let mut entries: Vec<_> = self
             .state
             .agent_config
             .iter()
@@ -60,6 +60,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .map(|rendered| (render_config_path(path), rendered))
             })
             .collect();
+
+        entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
 
         Ok(Ok(entries))
     }
