@@ -85,9 +85,18 @@ fn wide_graph(n: usize) -> (SchemaGraph, SchemaValue) {
     // scans deep into the defs vec), plus a list<tree>.
     let root = SchemaType::record(vec![
         field("first", SchemaType::ref_to(TypeId::new("t000"))),
-        field("middle", SchemaType::ref_to(TypeId::new(format!("t{:03}", n / 2)))),
-        field("last", SchemaType::ref_to(TypeId::new(format!("t{:03}", n - 1)))),
-        field("trees", SchemaType::list(SchemaType::ref_to(TypeId::new("tree")))),
+        field(
+            "middle",
+            SchemaType::ref_to(TypeId::new(format!("t{:03}", n / 2))),
+        ),
+        field(
+            "last",
+            SchemaType::ref_to(TypeId::new(format!("t{:03}", n - 1))),
+        ),
+        field(
+            "trees",
+            SchemaType::list(SchemaType::ref_to(TypeId::new("tree"))),
+        ),
     ]);
 
     let graph = SchemaGraph {

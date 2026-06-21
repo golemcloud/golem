@@ -53,12 +53,7 @@ function scopeKey(scope: TypeScope): string {
     case 'object':
     case 'method':
     case 'constructor':
-      return JSON.stringify([
-        scope.scope,
-        scope.name,
-        scope.parameterName,
-        scope.hasQuestionMark,
-      ]);
+      return JSON.stringify([scope.scope, scope.name, scope.parameterName, scope.hasQuestionMark]);
   }
 }
 

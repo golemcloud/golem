@@ -1181,11 +1181,7 @@ fn discriminator_matches(index: &GraphIndex, branch: &UnionBranch, body: &Schema
     }
 }
 
-fn string_view<'a>(
-    index: &GraphIndex,
-    ty: &SchemaType,
-    value: &'a SchemaValue,
-) -> Option<&'a str> {
+fn string_view<'a>(index: &GraphIndex, ty: &SchemaType, value: &'a SchemaValue) -> Option<&'a str> {
     match (resolve(index, ty), value) {
         (Some(_), SchemaValue::String(s)) => Some(s.as_str()),
         (Some(_), SchemaValue::Text(t)) => Some(t.text.as_str()),

@@ -298,9 +298,14 @@ mod tests {
             root: SchemaType::bool(),
         };
         let index = GraphIndex::new(&graph);
-        assert!(index.index.is_none(), "small graph must use linear fallback");
+        assert!(
+            index.index.is_none(),
+            "small graph must use linear fallback"
+        );
         assert_eq!(
-            index.lookup(&TypeId::new("a")).and_then(|d| d.name.as_deref()),
+            index
+                .lookup(&TypeId::new("a"))
+                .and_then(|d| d.name.as_deref()),
             Some("first-a"),
             "first definition must win on duplicate ids"
         );

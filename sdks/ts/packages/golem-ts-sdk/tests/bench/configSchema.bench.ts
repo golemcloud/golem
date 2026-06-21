@@ -99,18 +99,14 @@ cachedConfigSchema(complexType, complexScope, onError);
 
 describe('config schema generation: simple scalar', () => {
   bench('uncached (before)', () => uncached(simpleType, simpleScope), { time: TIME });
-  bench(
-    'cached (after)',
-    () => void cachedConfigSchema(simpleType, simpleScope, onError),
-    { time: TIME },
-  );
+  bench('cached (after)', () => void cachedConfigSchema(simpleType, simpleScope, onError), {
+    time: TIME,
+  });
 });
 
 describe('config schema generation: nested record', () => {
   bench('uncached (before)', () => uncached(complexType, complexScope), { time: TIME });
-  bench(
-    'cached (after)',
-    () => void cachedConfigSchema(complexType, complexScope, onError),
-    { time: TIME },
-  );
+  bench('cached (after)', () => void cachedConfigSchema(complexType, complexScope, onError), {
+    time: TIME,
+  });
 });

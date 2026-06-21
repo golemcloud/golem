@@ -273,7 +273,8 @@ impl RegistryService for BenchRegistryService {
     async fn get_current_environment_state(
         &self,
         _: EnvironmentId,
-    ) -> Result<golem_service_base::model::environment::EnvironmentState, RegistryServiceError> {
+    ) -> Result<golem_service_base::model::environment::EnvironmentState, RegistryServiceError>
+    {
         unimplemented!()
     }
     async fn get_resource_definition_by_id(
