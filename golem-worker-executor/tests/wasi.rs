@@ -69,6 +69,16 @@ inherit_test_dep!(
 );
 inherit_test_dep!(Tracing);
 
+fn sorted_config_entries(value: SchemaValue) -> SchemaValue {
+    let SchemaValue::List { mut elements } = value else {
+        return value;
+    };
+
+    elements.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+
+    SchemaValue::List { elements }
+}
+
 #[test]
 #[tracing::instrument]
 async fn write_stdout(
@@ -3112,11 +3122,13 @@ async fn wasi_config_initial_worker_config(
     {
         // get all keys
 
-        let result = executor
-            .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+        let result = sorted_config_entries(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
+                .await?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("expected return value"))?,
+        );
 
         assert_eq!(
             result,
@@ -3263,11 +3275,13 @@ async fn wasi_config_component_update(
         .await?;
 
     {
-        let result = executor
-            .invoke_and_await_agent(&updated_component, &agent_id, "get_all", data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value"))?;
+        let result = sorted_config_entries(
+            executor
+                .invoke_and_await_agent(&updated_component, &agent_id, "get_all", data_value!())
+                .await?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("expected return value"))?,
+        );
 
         assert_eq!(
             result,

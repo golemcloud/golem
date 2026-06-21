@@ -603,13 +603,7 @@ async fn rate_limit_reject_stops_at_limit(
             &component,
             &agent_id,
             "reserve_in_loop",
-            data_value!(
-                "api-calls".to_string(),
-                10u64,
-                host.clone(),
-                port as u64,
-                100u64
-            ),
+            data_value!("api-calls".to_string(), 10u64, host.clone(), port, 100u64),
         )
         .await?
         .into_return_value()
@@ -696,7 +690,7 @@ async fn quota_token_rpc_rust(
             4u64,
             2u64,
             "localhost".to_string(),
-            port as u64,
+            port,
             4u64
         ),
     )
@@ -794,8 +788,8 @@ async fn quota_token_rpc_ts(
             4u64,
             2u64,
             "localhost".to_string(),
-            port as u64,
-            4u64
+            port as f64,
+            4f64
         ),
     )
     .await?;
@@ -895,7 +889,7 @@ async fn rate_limit_throttle_two_agents(
                 &component,
                 &agent_id,
                 "reserve_in_loop",
-                data_value!("shared-rate".to_string(), 10u64, host, port as u64, 4u64),
+                data_value!("shared-rate".to_string(), 10u64, host, port, 4u64),
             )
             .await?;
 

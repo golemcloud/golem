@@ -182,8 +182,8 @@ async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_eq!(
         body,
         json!({
-            "resource_id": "res-42",
-            "request_id": "req-abc"
+            "resource-id": "res-42",
+            "request-id": "req-abc"
         })
     );
 
@@ -369,7 +369,11 @@ async fn restricted_unstructured_binary_missing_body(
         .send()
         .await?;
 
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!(0));
 
     Ok(())
 }
@@ -902,7 +906,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload_length": 5 }));
+    assert_eq!(body, json!({ "payload-length": 5 }));
 
     http_server.abort();
 

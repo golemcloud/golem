@@ -28,9 +28,11 @@ abstract class BasePrincipal {
 
 class OidcPrincipal extends BasePrincipal {
   readonly tag = 'oidc' as const;
+  readonly val: HostOidcPrincipal;
 
   constructor(readonly inner: HostOidcPrincipal) {
     super();
+    this.val = inner;
   }
 
   get sub() {
@@ -67,9 +69,11 @@ class OidcPrincipal extends BasePrincipal {
 
 class AgentPrincipal extends BasePrincipal {
   readonly tag = 'agent' as const;
+  readonly val: HostAgentPrincipal;
 
   constructor(readonly inner: HostAgentPrincipal) {
     super();
+    this.val = inner;
   }
 
   get agentId() {
@@ -79,9 +83,11 @@ class AgentPrincipal extends BasePrincipal {
 
 class GolemUserPrincipal extends BasePrincipal {
   readonly tag = 'golem-user' as const;
+  readonly val: HostGolemUserPrincipal;
 
   constructor(readonly inner: HostGolemUserPrincipal) {
     super();
+    this.val = inner;
   }
 
   get accountId() {

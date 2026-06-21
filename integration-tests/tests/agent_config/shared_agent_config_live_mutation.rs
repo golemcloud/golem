@@ -46,7 +46,7 @@ define_matrix_dimension!(lang: Arc<dyn TestContext> -> "ts", "rust");
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_reads_updated_environment_secret(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,

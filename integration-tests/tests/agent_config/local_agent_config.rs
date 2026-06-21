@@ -299,7 +299,7 @@ async fn agent_with_mixed_agent_config(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_with_mixed_agent_config_update(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,

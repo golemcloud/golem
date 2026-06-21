@@ -811,7 +811,6 @@ async fn auto_update_on_idle_via_host_function(
 
     let (high_bits, low_bits) = agent_id.component_id.0.as_u64_pair();
     user.invoke_and_await_agent(&host_api_component, &host_api_agent_id, "update_worker", {
-        use golem_common::schema::schema_value::VariantValuePayload;
         use golem_common::schema::{
             SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, build_input_record,
         };
@@ -836,10 +835,7 @@ async fn auto_update_on_idle_via_host_function(
                 ],
             }),
             ph(SchemaValue::U64(updated_component.revision.into())),
-            ph(SchemaValue::Variant(VariantValuePayload {
-                case: 0,
-                payload: None,
-            })),
+            ph(SchemaValue::Enum { case: 0 }),
         ])
         .expect("data_value")
     })
