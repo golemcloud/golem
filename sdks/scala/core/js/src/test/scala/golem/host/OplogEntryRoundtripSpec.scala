@@ -405,22 +405,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       )
     },
     test("Start durable host-call marker from dynamic") {
-      val vatDyn = js.Dynamic.literal(
-        value = js.Dynamic.literal(nodes = js.Array(js.Dynamic.literal(tag = "prim-s32", `val` = 42))),
-        typ = js.Dynamic.literal(nodes =
-          js.Array(
-            js.Dynamic
-              .literal(name = js.undefined, owner = js.undefined, `type` = js.Dynamic.literal(tag = "prim-s32-type"))
-          )
-        )
-      )
       val raw = wrapEntry(
         "start",
         js.Dynamic.literal(
           timestamp = ts(),
           parentStartIndex = js.undefined,
           functionName = "wasi:io/read",
-          request = vatDyn,
+          request = sampleTypedJs,
           durableFunctionType = js.Dynamic.literal(tag = "read-remote")
         )
       )

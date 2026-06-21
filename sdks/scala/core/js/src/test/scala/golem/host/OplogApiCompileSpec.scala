@@ -187,11 +187,11 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           None,
           "wasi:io/read",
-          Some(sampleVat),
+          Some(sampleTyped),
           DurabilityApi.DurableFunctionType.ReadRemote
         )
       ),
-      OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleVat), forcedCommit = true)),
+      OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleTyped), forcedCommit = true)),
       OplogEntry.Cancelled(CancelledParameters(ts, BigInt(5), None)),
       OplogEntry.AgentInvocationStarted(
         AgentInvocationStartedParameters(

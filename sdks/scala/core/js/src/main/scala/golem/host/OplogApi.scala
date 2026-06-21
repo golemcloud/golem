@@ -72,21 +72,21 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
     functionName: String,
-    request: Option[WitValueTypes.ValueAndType],
+    request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
 
   final case class EndParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
-    response: Option[WitValueTypes.ValueAndType],
+    response: Option[TypedSchemaValue],
     forcedCommit: Boolean
   )
 
   final case class CancelledParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
-    partial: Option[WitValueTypes.ValueAndType]
+    partial: Option[TypedSchemaValue]
   )
 
   final case class LocalSpanData(
@@ -632,7 +632,7 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
       functionName = raw.functionName,
-      request = raw.request.toOption.map(WitValueTypes.ValueAndType.fromJs),
+      request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
@@ -640,7 +640,7 @@ object OplogApi {
     EndParameters(
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
-      response = raw.response.toOption.map(WitValueTypes.ValueAndType.fromJs),
+      response = raw.response.toOption.map(typedFromJs),
       forcedCommit = raw.forcedCommit
     )
 
@@ -648,7 +648,7 @@ object OplogApi {
     CancelledParameters(
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
-      partial = raw.partial.toOption.map(WitValueTypes.ValueAndType.fromJs)
+      partial = raw.partial.toOption.map(typedFromJs)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =
