@@ -15,6 +15,7 @@
 use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
+use golem_common::schema::agent::typed_schema_value_with_projected_defs;
 use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{
@@ -58,10 +59,10 @@ pub fn ensure_required_agent_secrets_are_configured(
 
     let agent_type = component
         .metadata
-        .find_agent_type_by_name(&agent_id.agent_type)
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
-    for config_entry in agent_type.config {
+    for config_entry in &agent_type.config {
         if config_entry.source != AgentConfigSource::Secret {
             continue;
         }
@@ -69,10 +70,11 @@ pub fn ensure_required_agent_secrets_are_configured(
         let canonical_agent_secret_path =
             CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_entry.path);
 
-        let declared_graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: config_entry.value_type.clone(),
-        };
+        // The declared type's refs resolve against the agent's shared `defs`, so
+        // pass the agent graph plus the borrowed `value_type` directly instead of
+        // materializing a per-entry graph that clones the whole `defs` registry.
+        let declared_graph = &agent_type.schema;
+        let declared_type = &config_entry.value_type;
 
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
@@ -80,8 +82,8 @@ pub fn ensure_required_agent_secrets_are_configured(
                 if !is_equivalent_cross_graph(
                     secret_graph,
                     &secret_graph.root,
-                    &declared_graph,
-                    &declared_graph.root,
+                    declared_graph,
+                    declared_type,
                 ) {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has invalid type",
@@ -97,7 +99,7 @@ pub fn ensure_required_agent_secrets_are_configured(
                     )));
                 }
             }
-            None if is_optional_type(&declared_graph, &declared_graph.root) => {}
+            None if is_optional_type(declared_graph, declared_type) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
@@ -121,7 +123,7 @@ pub fn parse_worker_creation_agent_config(
 
     let agent_type = component
         .metadata
-        .find_agent_type_by_name(&agent_id.agent_type)
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
     let mut initial_agent_config = Vec::new();
@@ -138,20 +140,19 @@ pub fn parse_worker_creation_agent_config(
                 ))
             })?;
 
-        let graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: config_declaration.value_type.clone(),
-        };
+        // Decode + validate against the agent's shared graph and the declared
+        // `value_type` (refs resolve through the agent's `defs`).
+        let declared_type = &config_declaration.value_type;
 
-        let schema_value: SchemaValue = from_json_value(&graph, &graph.root, &entry.value.0)
-            .map_err(|err| {
+        let schema_value: SchemaValue =
+            from_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(|err| {
                 WorkerExecutorError::invalid_request(format!(
                     "config value for path {} is not a valid schema value: {err}",
                     entry.path.join(".")
                 ))
             })?;
 
-        validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
+        validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
             WorkerExecutorError::invalid_request(format!(
                 "config value for path {} does not match expected schema: [{}]",
                 entry.path.join("."),
@@ -163,9 +164,18 @@ pub fn parse_worker_creation_agent_config(
             ))
         })?;
 
+        // The stored entry is a single-root carrier, so project the agent
+        // graph's defs to exactly those reachable from `value_type` instead of
+        // cloning the whole registry.
+        let value = typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            config_declaration.value_type.clone(),
+            schema_value,
+        );
+
         initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,
-            value: TypedSchemaValue::new(graph, schema_value),
+            value,
         });
     }
 
@@ -181,7 +191,7 @@ pub fn parse_worker_creation_agent_config(
 
         let config = effective_agent_config(initial_agent_config.clone(), component_config)?;
 
-        validate_agent_config(&config, &agent_type)?;
+        validate_agent_config(&config, agent_type)?;
     }
 
     Ok(initial_agent_config)
@@ -220,15 +230,16 @@ pub fn validate_agent_config(
             continue;
         };
 
-        let declared_graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: entry.value_type.clone(),
-        };
+        // Refs in the declared `value_type` resolve against the agent's shared
+        // `defs`; pass the agent graph plus the borrowed type directly instead of
+        // cloning the whole `defs` registry into a per-entry graph.
+        let declared_graph = &agent_type.schema;
+        let declared_type = &entry.value_type;
 
         match config.get(&entry.path) {
             Some(config_value) => {
-                validate_value(&declared_graph, &declared_graph.root, config_value.value())
-                    .map_err(|errors| {
+                validate_value(declared_graph, declared_type, config_value.value()).map_err(
+                    |errors| {
                         WorkerExecutorError::invalid_request(format!(
                             "Type mismatch for config {}: [{}]",
                             entry.path.join("."),
@@ -238,9 +249,10 @@ pub fn validate_agent_config(
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ))
-                    })?;
+                    },
+                )?;
             }
-            None if is_optional_type(&declared_graph, &declared_graph.root) => {}
+            None if is_optional_type(declared_graph, declared_type) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Config {} was not provided a value",

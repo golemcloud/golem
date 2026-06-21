@@ -1170,10 +1170,10 @@ fn parse_provision_config_from_component_metadata(
     config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
     let agent_type = component_metadata
-        .find_agent_type_by_name(agent_type_name)
+        .find_agent_type_by_name_ref(agent_type_name)
         .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
 
-    parse_provision_config_from_agent_type_schema(&agent_type, agent_type_name, config)
+    parse_provision_config_from_agent_type_schema(agent_type, agent_type_name, config)
 }
 
 fn parse_provision_config_from_agent_type_schema(

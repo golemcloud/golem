@@ -983,13 +983,13 @@ async fn enrich_golem_rpc_scheduled_invocation(
     payload
 }
 
-fn resolve_agent_type_from_worker_name(
-    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+fn resolve_agent_type_from_worker_name<'a>(
+    metadata: &'a golem_common::model::component_metadata::ComponentMetadata,
     worker_name: &str,
-) -> Option<golem_common::schema::agent::AgentTypeSchema> {
+) -> Option<&'a golem_common::schema::agent::AgentTypeSchema> {
     ParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
-        .and_then(|type_name| metadata.find_agent_type_by_name(&type_name))
+        .and_then(|type_name| metadata.find_agent_type_by_name_ref(&type_name))
 }
 
 /// A schema-native empty value (`()`), used as the best-effort fallback when

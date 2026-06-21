@@ -166,6 +166,10 @@ harness = false
 name = "structural_format"
 harness = false
 
+[[bench]]
+name = "invocation_hotpath"
+harness = false
+
 [dev-dependencies]
 anyhow = { workspace = true }
 assert2 = { workspace = true }

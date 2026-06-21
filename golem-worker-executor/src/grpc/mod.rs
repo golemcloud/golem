@@ -1136,7 +1136,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &component_metadata.metadata,
         ) && let Some(agent_type) = component_metadata
             .metadata
-            .find_agent_type_by_name(&agent_id.agent_type)
+            .find_agent_type_by_name_ref(&agent_id.agent_type)
             && agent_type.mode == AgentMode::Ephemeral
         {
             return Err(WorkerExecutorError::invalid_request(
@@ -1163,7 +1163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {

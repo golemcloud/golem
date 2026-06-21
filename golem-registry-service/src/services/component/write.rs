@@ -51,10 +51,10 @@ use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentNa
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
-use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::SchemaValue;
+use golem_common::schema::agent::{AgentTypeSchema, typed_schema_value_with_projected_defs};
 use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
-use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -868,23 +868,23 @@ fn validate_and_transform_config_entries(
             );
         }
 
-        // The DTO carries the config value as plain user JSON. Decode it with
-        // the schema graph (schema-guided), resolving refs against the agent
-        // graph, then validate it against the declaration's schema-native
-        // `value_type` and store the schema-native `TypedSchemaValue` directly.
-        let graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: matching_declaration.value_type.clone(),
-        };
+        // The DTO carries the config value as plain user JSON. Decode it
+        // (schema-guided) against the agent graph and the declaration's
+        // schema-native `value_type` (refs resolve through the agent's `defs`),
+        // validate it, then store a self-contained `TypedSchemaValue` whose defs
+        // are projected to exactly those reachable from `value_type`.
+        let declared_type = &matching_declaration.value_type;
 
-        let schema_value: SchemaValue = from_json_value(&graph, &graph.root, &config_value.value.0)
-            .map_err(|err| ComponentError::AgentConfigTypeMismatch {
-                agent: agent_type.type_name.clone(),
-                key: config_value.path.clone(),
-                errors: vec![format!("config value is not a valid schema value: {err}")],
-            })?;
+        let schema_value: SchemaValue =
+            from_json_value(&agent_type.schema, declared_type, &config_value.value.0).map_err(
+                |err| ComponentError::AgentConfigTypeMismatch {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.path.clone(),
+                    errors: vec![format!("config value is not a valid schema value: {err}")],
+                },
+            )?;
 
-        validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
+        validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
             ComponentError::AgentConfigTypeMismatch {
                 agent: agent_type.type_name.clone(),
                 key: config_value.path.clone(),
@@ -899,9 +899,15 @@ fn validate_and_transform_config_entries(
             });
         }
 
+        let value = typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            matching_declaration.value_type.clone(),
+            schema_value,
+        );
+
         results.push(TypedAgentConfigEntry {
             path: config_value.path,
-            value: TypedSchemaValue::new(graph, schema_value),
+            value,
         });
     }
 
@@ -942,15 +948,15 @@ fn check_config_entries_match(
         // "validate" against the new shape. The comparison is cross-graph so
         // the stored value's own graph is compared against the updated agent
         // graph, and coinductive so recursive types terminate.
-        let new_graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: matching_declaration.value_type.clone(),
-        };
+        // Compare the stored value's own graph against the updated agent graph
+        // plus the borrowed declared `value_type`; `is_equivalent_cross_graph`
+        // resolves refs through `defs` and never reads `graph.root`, so there is
+        // no need to clone the agent's whole `defs` into a temporary graph.
         if !is_equivalent_cross_graph(
             entry.value.graph(),
             entry.value.root_type(),
-            &new_graph,
-            &new_graph.root,
+            &agent_type.schema,
+            &matching_declaration.value_type,
         ) {
             return Err(ComponentError::AgentConfigOldConfigNotValid {
                 agent: agent_type.type_name.clone(),

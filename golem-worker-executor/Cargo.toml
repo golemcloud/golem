@@ -108,11 +108,16 @@ wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
+[[bench]]
+name = "invocation_lowering"
+harness = false
+
 [dev-dependencies]
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
+criterion = { workspace = true }
 axum = { workspace = true }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }

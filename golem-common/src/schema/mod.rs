@@ -43,6 +43,7 @@ pub use agent::{
     AutoInjectedKind, FALLBACK_OUTPUT_FIELD_NAME, FieldSource, InputSchema,
     MULTIMODAL_PARTS_FIELD_NAME, NamedField, OutputSchema, ParsedAgentId,
     RegisteredAgentTypeSchema, build_input_record, json_input_schema_value_to_typed_schema_value,
+    typed_schema_value_with_projected_defs,
 };
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,

@@ -16,10 +16,8 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import { TypeScope } from './internal/mapping/types/scope';
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import { schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
-import { mapTsTypeToResolvedGraph } from './internal/mapping/types/resolvedMapper';
-import { resolvedGraphToSchemaType } from './internal/mapping/types/schemaType';
+import { cachedConfigSchema } from './internal/mapping/types/configSchemaCache';
 import { deserializeGraph } from './internal/mapping/values/schemaValue';
-import * as Either from './newTypes/either';
 
 export class Secret<T> {
   private readonly path: string[];
@@ -87,12 +85,12 @@ export class Config<T> {
 
 function loadConfigKey(path: string[], type: Type.Type): any {
   const scope = TypeScope.object('config', path.at(-1)!, type.optional);
-  const graph = Either.getOrThrowWith(
-    mapTsTypeToResolvedGraph(type, scope),
+  const { graph, schemaGraph } = cachedConfigSchema(
+    type,
+    scope,
     (err) => new Error(`Failed to analyse config type at path '${path.join('.')}': ${err}`),
   );
 
-  const schemaGraph = resolvedGraphToSchemaType(graph).graph;
   const valueTree = getConfigValue(path, schemaGraphToWit(schemaGraph));
 
   return deserializeGraph(schemaValueFromWit(valueTree), graph);

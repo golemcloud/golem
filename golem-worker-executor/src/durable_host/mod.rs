@@ -2533,7 +2533,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
                 .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
                         "Agent type {} not found in updated agent metadata",
@@ -2549,7 +2549,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .unwrap_or_default(),
             )?;
 
-            validate_agent_config(&updated_agent_config, &agent_type)?;
+            validate_agent_config(&updated_agent_config, agent_type)?;
 
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;

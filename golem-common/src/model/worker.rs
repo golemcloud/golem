@@ -17,7 +17,6 @@ use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
-use crate::schema::{SchemaGraph, TypedSchemaValue};
 use std::collections::BTreeMap;
 
 impl TypedAgentConfigEntry {
@@ -61,7 +60,7 @@ impl UntypedAgentConfigEntry {
         })?;
 
         let agent_type = component_metadata
-            .find_agent_type_by_name(agent_type_name)
+            .find_agent_type_by_name_ref(agent_type_name)
             .ok_or_else(|| {
                 format!("did not find expected agent type {agent_type_name} in the metadata")
             })?;
@@ -79,15 +78,18 @@ impl UntypedAgentConfigEntry {
 
         // Reattach the agent's native config schema graph (so named/ref
         // composites are preserved) to the stored schema value. Refs in
-        // `value_type` are resolved against the agent's full `SchemaGraph`.
-        let graph = SchemaGraph {
-            defs: agent_type.schema.defs.clone(),
-            root: declaration.value_type.clone(),
-        };
+        // `value_type` resolve against the agent's `SchemaGraph`; the resulting
+        // carrier is single-root, so project the defs to exactly those reachable
+        // from `value_type` instead of cloning the whole registry.
+        let value = crate::schema::agent::typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            declaration.value_type.clone(),
+            self.value,
+        );
 
         Ok(TypedAgentConfigEntry {
             path: self.path,
-            value: TypedSchemaValue::new(graph, self.value),
+            value,
         })
     }
 }

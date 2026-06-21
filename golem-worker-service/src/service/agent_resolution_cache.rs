@@ -46,8 +46,9 @@ struct CurrentDeploymentRevisions {
 }
 
 pub struct AgentResolutionCache {
-    cache: Cache<AgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
-    pinned_cache: Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
+    cache: Cache<AgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
+    pinned_cache:
+        Cache<PinnedAgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
     current_revisions: scc::HashMap<EnvironmentId, CurrentDeploymentRevisions>,
 }
@@ -89,7 +90,7 @@ impl AgentResolutionCache {
         agent_type_name: &AgentTypeName,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+    ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = AgentResolutionCacheKey {
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
@@ -117,6 +118,7 @@ impl AgentResolutionCache {
                 registry
                     .resolve_agent_type_by_names(&app, &env, &agent, None, owner.as_deref(), &auth)
                     .await
+                    .map(Arc::new)
             })
             .await?;
 
@@ -140,7 +142,7 @@ impl AgentResolutionCache {
         deployment_revision: DeploymentRevision,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+    ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = PinnedAgentResolutionCacheKey {
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
@@ -168,6 +170,7 @@ impl AgentResolutionCache {
                         &auth,
                     )
                     .await
+                    .map(Arc::new)
             })
             .await
     }

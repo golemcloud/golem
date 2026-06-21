@@ -18,7 +18,6 @@ import { AgentType, TypedAgentConfigValue } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { Uuid } from '../uuid';
 import { AgentClassName } from '../agentClassName';
-import * as Either from '../newTypes/either';
 import { RemoteMethod } from '../baseAgent';
 import { awaitPollable, throwIfAborted } from './pollableUtils';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
@@ -27,8 +26,7 @@ import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { RuntimeOutput, RuntimeParam } from './typeInfoInternal';
 import { decodeOutput, encodeInputRecord } from './mapping/values/boundaryValue';
 import { schemaValueFromWit, schemaValueToWit, typedSchemaValueToWit } from './schema-model';
-import { mapTsTypeToResolvedGraph } from './mapping/types/resolvedMapper';
-import { resolvedGraphToSchemaType } from './mapping/types/schemaType';
+import { cachedConfigSchema } from './mapping/types/configSchemaCache';
 import { serializeGraph } from './mapping/values/schemaValue';
 import { TypeScope } from './mapping/types/scope';
 import { ParsedAgentId } from '../agentId';
@@ -451,8 +449,9 @@ function serializeRpcConfigObject(
     }
 
     const scope = TypeScope.object('config', prop.path.at(-1)!, prop.type.optional);
-    const graph = Either.getOrThrowWith(
-      mapTsTypeToResolvedGraph(prop.type, scope),
+    const { graph, schemaGraph } = cachedConfigSchema(
+      prop.type,
+      scope,
       (err) =>
         new Error(
           `Failed to construct schema for rpc config property \`${prop.path.join('.')}\`: ${err}`,
@@ -460,7 +459,6 @@ function serializeRpcConfigObject(
     );
 
     const value = serializeGraph(current, graph);
-    const schemaGraph = resolvedGraphToSchemaType(graph).graph;
 
     result.push({
       path: prop.path,

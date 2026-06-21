@@ -562,7 +562,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && last_oplog_idx <= OplogIndex::from_u64(2)
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
-            let init_input = agent_id.parameters.clone().into_parts().1;
+            let init_input = agent_id.parameters.value().clone();
             worker
                 .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                     idempotency_key: init_idempotency_key,
@@ -4169,13 +4169,11 @@ fn resolve_agent_properties<T: HasConfig>(
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     let resolved_agent_type =
-        agent_id.and_then(|id| metadata.find_agent_type_by_name(&id.agent_type));
+        agent_id.and_then(|id| metadata.find_agent_type_by_name_ref(&id.agent_type));
 
-    let agent_mode = resolved_agent_type
-        .as_ref()
-        .map_or(AgentMode::Durable, |at| at.mode);
+    let agent_mode = resolved_agent_type.map_or(AgentMode::Durable, |at| at.mode);
 
-    let snapshot_policy = if let Some(agent_type) = resolved_agent_type.as_ref() {
+    let snapshot_policy = if let Some(agent_type) = resolved_agent_type {
         // Agent with explicit metadata — use agent-level snapshotting config
         resolve_snapshot_policy(
             &deps.config().oplog.default_snapshotting,

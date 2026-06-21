@@ -28,8 +28,7 @@ use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::wit::decode_agent_error;
 use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
-use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
-use golem_common::schema::validation::value::validate_value;
+use golem_common::schema::validation::value::validate_record_fields;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value, encode_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -633,7 +632,7 @@ pub fn lower_invocation(
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
             validate_schema_input_against_method_schema(
                 &input,
-                &agent_type,
+                agent_type,
                 &method.input_schema,
                 &method_name,
             )?;
@@ -732,18 +731,14 @@ fn validate_schema_input_against_method_schema(
         )));
     }
 
-    let record_type = SchemaType::record(
+    validate_record_fields(
+        &agent_type.schema,
         user_fields
             .iter()
-            .map(|field| NamedFieldType {
-                name: field.name.clone(),
-                body: field.schema.clone(),
-                metadata: field.metadata.clone(),
-            })
-            .collect(),
-    );
-
-    validate_value(&agent_type.schema, &record_type, input).map_err(|errors| {
+            .map(|field| (field.name.as_str(), &field.schema)),
+        fields,
+    )
+    .map_err(|errors| {
         WorkerExecutorError::invalid_request(format!(
             "Method '{method_name}': invalid input parameter value: {}",
             errors
@@ -758,13 +753,13 @@ fn validate_schema_input_against_method_schema(
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
 /// is available, otherwise the single declared agent type (or an error when the
 /// component declares zero or multiple types and no id was provided).
-fn resolve_agent_type(
-    component_metadata: &ComponentMetadata,
+fn resolve_agent_type<'a>(
+    component_metadata: &'a ComponentMetadata,
     agent_id: Option<&ParsedAgentId>,
-) -> Result<AgentTypeSchema, WorkerExecutorError> {
+) -> Result<&'a AgentTypeSchema, WorkerExecutorError> {
     match agent_id {
         Some(id) => component_metadata
-            .find_agent_type_by_name(&id.agent_type)
+            .find_agent_type_by_name_ref(&id.agent_type)
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "Agent type '{}' not found in component",
@@ -772,7 +767,7 @@ fn resolve_agent_type(
                 ))
             }),
         None => match component_metadata.agent_types() {
-            [single] => Ok(single.clone()),
+            [single] => Ok(single),
             [] => Err(WorkerExecutorError::invalid_request(
                 "component declares no agent types".to_string(),
             )),
@@ -781,5 +776,160 @@ fn resolve_agent_type(
                     .to_string(),
             )),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::Empty;
+    use golem_common::base_model::agent::Snapshotting;
+    use golem_common::base_model::component_metadata::KnownExports;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::agent::{AgentTypeName, Principal};
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::schema::TypedSchemaValue;
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
+    };
+    use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::SchemaType;
+    use std::collections::BTreeMap;
+    use test_r::test;
+
+    const AGENT_TYPE: &str = "test-agent";
+    const METHOD_NAME: &str = "do-work";
+
+    /// Component metadata with one agent type whose `do-work` method takes two
+    /// user-supplied parameters (`count: u32`, `label: string`) plus an
+    /// auto-injected `principal` field.
+    fn metadata() -> ComponentMetadata {
+        let method = AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("label", SchemaType::string()),
+                NamedField::auto_injected(
+                    "principal",
+                    golem_common::schema::agent::AutoInjectedKind::Principal,
+                    SchemaType::string(),
+                ),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        };
+        let at = AgentTypeSchema {
+            type_name: AgentTypeName(AGENT_TYPE.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(Vec::new()),
+            },
+            methods: vec![method],
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
+        };
+        ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![at],
+            BTreeMap::new(),
+        )
+    }
+
+    fn agent_id() -> ParsedAgentId {
+        let parameters = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+            SchemaValue::Record { fields: Vec::new() },
+        );
+        ParsedAgentId::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+    }
+
+    fn method_invocation(input: SchemaValue) -> AgentInvocation {
+        AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::new("k".to_string()),
+            method_name: METHOD_NAME.to_string(),
+            input,
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
+        }
+    }
+
+    #[test]
+    fn method_with_valid_input_lowers_ok() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
+        };
+        let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
+            .expect("valid input should lower");
+        assert_eq!(lowered.display_name, METHOD_NAME);
+        assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
+    fn method_with_non_record_input_is_rejected() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        let Err(err) = lower_invocation(
+            method_invocation(SchemaValue::U32(1)),
+            &metadata,
+            Some(&agent_id),
+        ) else {
+            panic!("non-record input must be rejected");
+        };
+        assert!(
+            err.to_string().contains("expected input parameter record"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn method_with_wrong_arity_is_rejected() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        // Only one value for two user-supplied parameters.
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7)],
+        };
+        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
+        else {
+            panic!("arity mismatch must be rejected");
+        };
+        assert!(
+            err.to_string().contains("expected 2 parameters, got 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn method_with_field_type_mismatch_is_rejected() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        // Second field should be a string.
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7), SchemaValue::Bool(true)],
+        };
+        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
+        else {
+            panic!("field type mismatch must be rejected");
+        };
+        assert!(
+            err.to_string().contains("invalid input parameter value"),
+            "unexpected error: {err}"
+        );
     }
 }

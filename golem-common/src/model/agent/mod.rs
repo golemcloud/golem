@@ -266,7 +266,8 @@ pub fn typed_constructor_parameters(
             })
             .collect(),
     );
-    let mut graph = agent_type.schema.clone();
-    graph.root = root;
-    TypedSchemaValue::new(graph, value)
+    // The result is a single-root carrier, so project the agent graph's defs to
+    // exactly those reachable from this constructor record instead of cloning
+    // the whole multi-root registry.
+    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
 }

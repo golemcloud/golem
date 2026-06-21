@@ -149,11 +149,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
+        let component_id: golem_common::model::component::ComponentId =
+            registered_agent_type.implemented_by.component_id;
+
         // Share the canonical agent type through `WasmRpcEntryPayload`. Every
         // subsequent RPC entry resolves the per-method input/output schema from
-        // this cached value to drive the typed flow.
-        let remote_agent_type: Arc<AgentTypeSchema> =
-            Arc::new(registered_agent_type.agent_type.clone());
+        // this cached value to drive the typed flow. `registered_agent_type` is
+        // owned and no longer used, so move its agent type into the `Arc` rather
+        // than cloning the whole schema graph.
+        let remote_agent_type: Arc<AgentTypeSchema> = Arc::new(registered_agent_type.agent_type);
 
         let agent_id = golem_common::model::agent::ParsedAgentId::try_new(
             golem_common::model::agent::AgentTypeName(agent_type_name),
@@ -161,9 +165,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             phantom_id.map(|id| id.into()),
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        let component_id: golem_common::model::component::ComponentId =
-            registered_agent_type.implemented_by.component_id;
         let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
 

@@ -873,7 +873,7 @@ impl WorkerService {
             )
             .await?;
 
-        let registered_agent_type = resolved.registered_agent_type;
+        let registered_agent_type = &resolved.registered_agent_type;
         let _environment_id = resolved.environment_id;
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
@@ -970,7 +970,7 @@ impl WorkerService {
             }
         };
 
-        let registered_agent_type = resolved.registered_agent_type;
+        let registered_agent_type = &resolved.registered_agent_type;
         let environment_id = resolved.environment_id;
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
@@ -1090,7 +1090,7 @@ impl WorkerService {
                     .await?;
                 let decode_agent_type = component_metadata_for_decode
                     .metadata
-                    .find_agent_type_by_name(&agent_type_name)
+                    .find_agent_type_by_name_ref(&agent_type_name)
                     .ok_or_else(|| {
                         WorkerServiceError::Internal(format!(
                             "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",

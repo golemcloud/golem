@@ -122,8 +122,8 @@ pub fn resolve_read_only_method(
     agent_type: &AgentTypeName,
     method_name: &str,
 ) -> Option<AgentMethodSchema> {
-    let at = metadata.find_agent_type_by_name(agent_type)?;
-    at.methods.into_iter().find(|m| m.name == method_name)
+    let at = metadata.find_agent_type_by_name_ref(agent_type)?;
+    at.methods.iter().find(|m| m.name == method_name).cloned()
 }
 
 /// Statically classifies an [`AgentInvocation`] for cache invalidation

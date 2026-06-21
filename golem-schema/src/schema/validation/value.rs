@@ -15,7 +15,7 @@
 //! Structural validation that a [`SchemaValue`] matches a given
 //! [`SchemaType`] inside a [`SchemaGraph`].
 
-use crate::schema::graph::SchemaGraph;
+use crate::schema::graph::{GraphIndex, SchemaGraph};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
@@ -25,7 +25,6 @@ use crate::schema::schema_value::{
     BinaryValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue,
     SecretValuePayload, TextValuePayload,
 };
-use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
 
@@ -442,7 +441,56 @@ pub fn validate_value(
 ) -> Result<(), Vec<ValueError>> {
     let mut errors = Vec::new();
     let mut path = ValuePath::new();
-    check(graph, ty, value, &mut path, &mut errors);
+    let index = GraphIndex::new(graph);
+    check(&index, ty, value, &mut path, &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Validate the field values of a record against a set of named field types
+/// defined in `graph`, **without** materialising a temporary record
+/// [`SchemaType`].
+///
+/// This is the allocation-light counterpart of validating a `Record` value
+/// against `SchemaType::record(fields)`: each `(name, body)` pair is borrowed
+/// from the caller's schema, so only the field name is cloned (for the error
+/// path segment) — never the (potentially large) field `SchemaType` or its
+/// metadata. The produced [`ValueError`]s carry the same `.field("name")…`
+/// [`ValuePath`] context as validating the equivalent record type would.
+///
+/// `fields` and `values` must be in matching parameter order; a length
+/// mismatch is reported as a single [`ValueError::RecordArityMismatch`] at the
+/// root, exactly as the record-validation path does.
+pub fn validate_record_fields<'g, 'f, I>(
+    graph: &'g SchemaGraph,
+    fields: I,
+    values: &[SchemaValue],
+) -> Result<(), Vec<ValueError>>
+where
+    I: ExactSizeIterator<Item = (&'f str, &'f SchemaType)>,
+{
+    let mut errors = Vec::new();
+    let mut path = ValuePath::new();
+    let index = GraphIndex::new(graph);
+
+    if fields.len() != values.len() {
+        errors.push(ValueError::RecordArityMismatch {
+            path: path.snapshot(),
+            expected: fields.len(),
+            found: values.len(),
+        });
+        return Err(errors);
+    }
+
+    for ((name, body), v) in fields.zip(values.iter()) {
+        path.push(ValuePathSegment::Field(name.to_string()));
+        check(&index, body, v, &mut path, &mut errors);
+        path.pop();
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -554,23 +602,30 @@ fn shape_mismatch(
 /// pushing a [`ValueError::DanglingRef`] or [`ValueError::RecursiveRef`]
 /// on failure.
 fn resolve_refs_at_value_node<'a>(
-    graph: &'a SchemaGraph,
+    index: &GraphIndex<'a>,
     mut ty: &'a SchemaType,
     path: &ValuePath,
     errors: &mut Vec<ValueError>,
 ) -> Option<&'a SchemaType> {
-    let mut seen: HashSet<TypeId> = HashSet::new();
+    // A pure alias chain (`Ref -> Ref -> …`) at a single value position can
+    // visit each named definition at most once before it must revisit one and
+    // therefore cycle. Bounding the hop count by the number of definitions lets
+    // us detect such cycles without allocating a `HashSet` or cloning the
+    // (`String`-backed) `TypeId` on the common, allocation-free happy path.
+    let max_hops = index.defs_len();
+    let mut hops = 0usize;
     loop {
         match ty {
             SchemaType::Ref { id, .. } => {
-                if !seen.insert(id.clone()) {
+                if hops > max_hops {
                     errors.push(ValueError::RecursiveRef {
                         path: path.snapshot(),
                         type_id: id.clone(),
                     });
                     return None;
                 }
-                match graph.lookup(id) {
+                hops += 1;
+                match index.lookup(id) {
                     Some(def) => {
                         ty = &def.body;
                     }
@@ -588,9 +643,9 @@ fn resolve_refs_at_value_node<'a>(
     }
 }
 
-fn check(
-    graph: &SchemaGraph,
-    ty: &SchemaType,
+fn check<'a>(
+    index: &GraphIndex<'a>,
+    ty: &'a SchemaType,
     value: &SchemaValue,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
@@ -600,7 +655,7 @@ fn check(
     // a value-shrinking constructor (record field, list element, etc.)
     // a fresh scope is established, so recursive types backed by finite
     // values are validated at every level.
-    let Some(ty) = resolve_refs_at_value_node(graph, ty, path, errors) else {
+    let Some(ty) = resolve_refs_at_value_node(index, ty, path, errors) else {
         return;
     };
 
@@ -654,7 +709,7 @@ fn check(
             }
             for (field, v) in fields.iter().zip(vs.iter()) {
                 path.push(ValuePathSegment::Field(field.name.clone()));
-                check(graph, &field.body, v, path, errors);
+                check(index, &field.body, v, path, errors);
                 path.pop();
             }
         }
@@ -673,7 +728,7 @@ fn check(
             match (&case.payload, &vp.payload) {
                 (Some(case_ty), Some(payload)) => {
                     path.push(ValuePathSegment::VariantPayload);
-                    check(graph, case_ty, payload, path, errors);
+                    check(index, case_ty, payload, path, errors);
                     path.pop();
                 }
                 (None, None) => {}
@@ -719,7 +774,7 @@ fn check(
             }
             for (i, (t, v)) in elements.iter().zip(vs.iter()).enumerate() {
                 path.push(ValuePathSegment::Index(i));
-                check(graph, t, v, path, errors);
+                check(index, t, v, path, errors);
                 path.pop();
             }
         }
@@ -727,7 +782,7 @@ fn check(
         (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
             for (i, v) in elements.iter().enumerate() {
                 path.push(ValuePathSegment::Index(i));
-                check(graph, element, v, path, errors);
+                check(index, element, v, path, errors);
                 path.pop();
             }
         }
@@ -748,7 +803,7 @@ fn check(
             }
             for (i, v) in elements.iter().enumerate() {
                 path.push(ValuePathSegment::Index(i));
-                check(graph, element, v, path, errors);
+                check(index, element, v, path, errors);
                 path.pop();
             }
         }
@@ -761,10 +816,10 @@ fn check(
         ) => {
             for (i, (k, v)) in entries.iter().enumerate() {
                 path.push(ValuePathSegment::MapKey(i));
-                check(graph, key, k, path, errors);
+                check(index, key, k, path, errors);
                 path.pop();
                 path.push(ValuePathSegment::MapValue(i));
-                check(graph, vty, v, path, errors);
+                check(index, vty, v, path, errors);
                 path.pop();
             }
         }
@@ -772,7 +827,7 @@ fn check(
         (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => {
             if let Some(v) = v {
                 path.push(ValuePathSegment::OptionInner);
-                check(graph, inner, v, path, errors);
+                check(index, inner, v, path, errors);
                 path.pop();
             }
         }
@@ -781,7 +836,7 @@ fn check(
             ResultValuePayload::Ok { value: v } => match (&spec.ok, v) {
                 (Some(t), Some(v)) => {
                     path.push(ValuePathSegment::ResultOk);
-                    check(graph, t, v, path, errors);
+                    check(index, t, v, path, errors);
                     path.pop();
                 }
                 (None, None) => {}
@@ -799,7 +854,7 @@ fn check(
             ResultValuePayload::Err { value: v } => match (&spec.err, v) {
                 (Some(t), Some(v)) => {
                     path.push(ValuePathSegment::ResultErr);
-                    check(graph, t, v, path, errors);
+                    check(index, t, v, path, errors);
                     path.pop();
                 }
                 (None, None) => {}
@@ -826,9 +881,9 @@ fn check(
                 Some(branch) => {
                     path.push(ValuePathSegment::UnionBody);
                     let mut sub_errors = Vec::new();
-                    check(graph, &branch.body, &vp.body, path, &mut sub_errors);
+                    check(index, &branch.body, &vp.body, path, &mut sub_errors);
                     errors.extend(sub_errors);
-                    if !discriminator_matches(graph, branch, &vp.body) {
+                    if !discriminator_matches(index, branch, &vp.body) {
                         errors.push(ValueError::UnionDiscriminatorMismatch {
                             path: path.snapshot(),
                             tag: vp.tag.clone(),
@@ -1075,19 +1130,19 @@ fn check_quota_token(
     }
 }
 
-fn discriminator_matches(graph: &SchemaGraph, branch: &UnionBranch, body: &SchemaValue) -> bool {
+fn discriminator_matches(index: &GraphIndex, branch: &UnionBranch, body: &SchemaValue) -> bool {
     match &branch.discriminator {
-        DiscriminatorRule::Prefix { prefix } => string_view(graph, &branch.body, body)
+        DiscriminatorRule::Prefix { prefix } => string_view(index, &branch.body, body)
             .map(|s| s.starts_with(prefix.as_str()))
             .unwrap_or(false),
-        DiscriminatorRule::Suffix { suffix } => string_view(graph, &branch.body, body)
+        DiscriminatorRule::Suffix { suffix } => string_view(index, &branch.body, body)
             .map(|s| s.ends_with(suffix.as_str()))
             .unwrap_or(false),
-        DiscriminatorRule::Contains { substring } => string_view(graph, &branch.body, body)
+        DiscriminatorRule::Contains { substring } => string_view(index, &branch.body, body)
             .map(|s| s.contains(substring.as_str()))
             .unwrap_or(false),
         DiscriminatorRule::Regex { regex } => {
-            let Some(s) = string_view(graph, &branch.body, body) else {
+            let Some(s) = string_view(index, &branch.body, body) else {
                 return false;
             };
             match regex::Regex::new(regex.as_str()) {
@@ -1096,7 +1151,7 @@ fn discriminator_matches(graph: &SchemaGraph, branch: &UnionBranch, body: &Schem
             }
         }
         DiscriminatorRule::FieldEquals(field_disc) => {
-            let Some(record) = record_view(graph, &branch.body, body) else {
+            let Some(record) = record_view(index, &branch.body, body) else {
                 return false;
             };
             let pos = record
@@ -1118,7 +1173,7 @@ fn discriminator_matches(graph: &SchemaGraph, branch: &UnionBranch, body: &Schem
             }
         }
         DiscriminatorRule::FieldAbsent { field_name } => {
-            let Some(record) = record_view(graph, &branch.body, body) else {
+            let Some(record) = record_view(index, &branch.body, body) else {
                 return false;
             };
             !record.field_names.iter().any(|n| n == field_name)
@@ -1127,11 +1182,11 @@ fn discriminator_matches(graph: &SchemaGraph, branch: &UnionBranch, body: &Schem
 }
 
 fn string_view<'a>(
-    graph: &SchemaGraph,
+    index: &GraphIndex,
     ty: &SchemaType,
     value: &'a SchemaValue,
 ) -> Option<&'a str> {
-    match (resolve(graph, ty), value) {
+    match (resolve(index, ty), value) {
         (Some(_), SchemaValue::String(s)) => Some(s.as_str()),
         (Some(_), SchemaValue::Text(t)) => Some(t.text.as_str()),
         (Some(_), SchemaValue::Url { url }) => Some(url.as_str()),
@@ -1146,11 +1201,11 @@ struct RecordView<'a> {
 }
 
 fn record_view<'a>(
-    graph: &SchemaGraph,
+    index: &GraphIndex,
     ty: &SchemaType,
     value: &'a SchemaValue,
 ) -> Option<RecordView<'a>> {
-    let resolved = resolve_record(graph, ty)?;
+    let resolved = resolve_record(index, ty)?;
     match value {
         SchemaValue::Record { fields } if fields.len() == resolved.len() => Some(RecordView {
             field_names: resolved,
@@ -1160,17 +1215,21 @@ fn record_view<'a>(
     }
 }
 
-fn resolve<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> Option<&'a SchemaType> {
+fn resolve<'a>(index: &GraphIndex<'a>, ty: &'a SchemaType) -> Option<&'a SchemaType> {
     let mut current = ty;
-    let mut visited: Vec<&TypeId> = Vec::new();
+    // Bounded by the number of named defs: a pure alias chain can visit each
+    // def at most once before it must revisit one and cycle (see
+    // `resolve_refs_at_value_node`). This avoids per-node allocation/cloning.
+    let max_hops = index.defs_len();
+    let mut hops = 0usize;
     loop {
         match current {
             SchemaType::Ref { id, .. } => {
-                if visited.contains(&id) {
+                if hops > max_hops {
                     return None;
                 }
-                visited.push(id);
-                match graph.lookup(id) {
+                hops += 1;
+                match index.lookup(id) {
                     Some(def) => current = &def.body,
                     None => return None,
                 }
@@ -1180,8 +1239,8 @@ fn resolve<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> Option<&'a SchemaT
     }
 }
 
-fn resolve_record(graph: &SchemaGraph, ty: &SchemaType) -> Option<Vec<String>> {
-    let resolved = resolve(graph, ty)?;
+fn resolve_record(index: &GraphIndex, ty: &SchemaType) -> Option<Vec<String>> {
+    let resolved = resolve(index, ty)?;
     match resolved {
         SchemaType::Record { fields, .. } => Some(fields.iter().map(|f| f.name.clone()).collect()),
         _ => None,

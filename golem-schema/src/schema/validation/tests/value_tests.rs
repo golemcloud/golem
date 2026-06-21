@@ -25,7 +25,9 @@ use crate::schema::schema_value::{
     SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
-use crate::schema::validation::value::{ValueError, ValuePathSegment, validate_value};
+use crate::schema::validation::value::{
+    ValueError, ValuePathSegment, validate_record_fields, validate_value,
+};
 use chrono::Utc;
 use proptest::prelude::*;
 use test_r::test;
@@ -635,6 +637,208 @@ fn mutual_pure_ref_cycle_returns_recursive_ref_error() {
             .iter()
             .any(|e| matches!(e, ValueError::RecursiveRef { .. })),
         "expected RecursiveRef, got {errors:?}"
+    );
+}
+
+/// `validate_record_fields` must produce byte-identical results to validating a
+/// `Record` value against the equivalent `SchemaType::record(...)` — both on
+/// success and on failure (same `ValueError`s with the same `.field(...)`
+/// paths). This pins the Opt5 borrowed-field path to the temp-record path.
+fn assert_record_validation_equivalent(
+    graph: &SchemaGraph,
+    fields: &[NamedFieldType],
+    values: &[SchemaValue],
+) {
+    let record_type = SchemaType::record(fields.to_vec());
+    let via_temp_record = validate_value(
+        graph,
+        &record_type,
+        &SchemaValue::Record {
+            fields: values.to_vec(),
+        },
+    );
+    let via_borrowed = validate_record_fields(
+        graph,
+        fields.iter().map(|f| (f.name.as_str(), &f.body)),
+        values,
+    );
+    assert_eq!(
+        via_temp_record, via_borrowed,
+        "validate_record_fields diverged from temp-record validate_value"
+    );
+}
+
+#[test]
+fn validate_record_fields_matches_temp_record_on_success() {
+    let graph = SchemaGraph::anonymous(SchemaType::record(Vec::new()));
+    let fields = vec![
+        NamedFieldType {
+            name: "count".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "label".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "items".to_string(),
+            body: SchemaType::list(SchemaType::u8()),
+            metadata: Default::default(),
+        },
+    ];
+    let values = vec![
+        SchemaValue::U32(7),
+        SchemaValue::String("hi".to_string()),
+        SchemaValue::List {
+            elements: (0..4).map(SchemaValue::U8).collect(),
+        },
+    ];
+    assert_record_validation_equivalent(&graph, &fields, &values);
+}
+
+#[test]
+fn validate_record_fields_matches_temp_record_on_field_type_mismatch() {
+    let graph = SchemaGraph::anonymous(SchemaType::record(Vec::new()));
+    let fields = vec![
+        NamedFieldType {
+            name: "count".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "label".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+    ];
+    // Second field has the wrong shape: must produce a ShapeMismatch at
+    // `.field("label")` from both paths.
+    let values = vec![SchemaValue::U32(7), SchemaValue::Bool(true)];
+    assert_record_validation_equivalent(&graph, &fields, &values);
+    assert!(
+        validate_record_fields(
+            &graph,
+            fields.iter().map(|f| (f.name.as_str(), &f.body)),
+            &values,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn validate_record_fields_matches_temp_record_on_arity_mismatch() {
+    let graph = SchemaGraph::anonymous(SchemaType::record(Vec::new()));
+    let fields = vec![
+        NamedFieldType {
+            name: "a".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "b".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+    ];
+    let values = vec![SchemaValue::U32(1)];
+    assert_record_validation_equivalent(&graph, &fields, &values);
+}
+
+#[test]
+fn validate_record_fields_matches_temp_record_with_refs() {
+    // Field schemas that Ref into the graph's defs — exercises the same
+    // GraphIndex-backed resolution the temp-record path uses.
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: TypeId::new("Inner"),
+            name: Some("Inner".to_string()),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "x".to_string(),
+                body: SchemaType::s32(),
+                metadata: Default::default(),
+            }]),
+        }],
+        root: SchemaType::record(Vec::new()),
+    };
+    let fields = vec![NamedFieldType {
+        name: "inner".to_string(),
+        body: SchemaType::ref_to(TypeId::new("Inner")),
+        metadata: Default::default(),
+    }];
+    // Wrong-typed leaf inside the referenced record → ShapeMismatch deep in the
+    // path; both paths must agree.
+    let bad_values = vec![SchemaValue::Record {
+        fields: vec![SchemaValue::String("not-an-s32".to_string())],
+    }];
+    assert_record_validation_equivalent(&graph, &fields, &bad_values);
+    let good_values = vec![SchemaValue::Record {
+        fields: vec![SchemaValue::S32(1)],
+    }];
+    assert_record_validation_equivalent(&graph, &fields, &good_values);
+}
+
+#[test]
+fn full_length_acyclic_alias_chain_to_structural_validates() {
+    // An acyclic alias chain that visits every named def exactly once before
+    // reaching a structural type must validate. This pins the off-by-one in the
+    // hop-bounded cycle detector: a chain of `defs.len()` ref hops is legal and
+    // must not be misreported as `RecursiveRef`.
+    let n = 8;
+    let mut defs = Vec::with_capacity(n);
+    for i in 0..n {
+        let body = if i + 1 < n {
+            SchemaType::ref_to(TypeId::new(format!("a{}", i + 1)))
+        } else {
+            SchemaType::bool()
+        };
+        defs.push(SchemaTypeDef {
+            id: TypeId::new(format!("a{i}")),
+            name: None,
+            body,
+        });
+    }
+    let graph = SchemaGraph {
+        defs,
+        root: SchemaType::ref_to(TypeId::new("a0")),
+    };
+    validate_value(&graph, &graph.root, &SchemaValue::Bool(true))
+        .expect("full-length acyclic alias chain must validate");
+}
+
+#[test]
+fn full_length_acyclic_alias_chain_to_missing_is_dangling_not_recursive() {
+    // Same maximal acyclic chain, but the final hop points at a missing def.
+    // The bounded detector must still report `DanglingRef` (not `RecursiveRef`)
+    // — this is exactly the case that distinguishes `hops > defs.len()` from a
+    // too-tight `hops >= defs.len()` bound.
+    let n = 8;
+    let mut defs = Vec::with_capacity(n);
+    for i in 0..n {
+        let body = if i + 1 < n {
+            SchemaType::ref_to(TypeId::new(format!("a{}", i + 1)))
+        } else {
+            SchemaType::ref_to(TypeId::new("missing"))
+        };
+        defs.push(SchemaTypeDef {
+            id: TypeId::new(format!("a{i}")),
+            name: None,
+            body,
+        });
+    }
+    let graph = SchemaGraph {
+        defs,
+        root: SchemaType::ref_to(TypeId::new("a0")),
+    };
+    let errors = validate_value(&graph, &graph.root, &SchemaValue::Bool(true))
+        .expect_err("missing terminal def must fail");
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ValueError::DanglingRef { type_id, .. } if type_id == &TypeId::new("missing")
+        )),
+        "expected DanglingRef(missing), got {errors:?}"
     );
 }
 

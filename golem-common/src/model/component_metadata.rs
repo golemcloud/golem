@@ -246,11 +246,22 @@ impl ComponentMetadata {
     }
 
     pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentTypeSchema> {
+        self.find_agent_type_by_name_ref(agent_type).cloned()
+    }
+
+    /// Borrowing variant of [`find_agent_type_by_name`](Self::find_agent_type_by_name).
+    ///
+    /// Hot paths (invocation lowering, read-only classification) only need to
+    /// read a handful of fields and must not clone the whole [`AgentTypeSchema`]
+    /// (which owns the agent's full [`SchemaGraph`]) on every call.
+    pub fn find_agent_type_by_name_ref(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Option<&AgentTypeSchema> {
         self.data
             .agent_types
             .iter()
             .find(|t| &t.type_name == agent_type)
-            .cloned()
     }
 }
 
