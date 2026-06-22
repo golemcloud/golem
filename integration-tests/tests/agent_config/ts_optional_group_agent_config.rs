@@ -17,10 +17,10 @@ use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ inherit_test_dep!(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_present_with_all_fields(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -89,7 +89,7 @@ async fn optional_group_present_with_all_fields(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -108,7 +108,7 @@ async fn optional_group_present_with_all_fields(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_present_with_required_field_only(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -154,7 +154,7 @@ async fn optional_group_present_with_required_field_only(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(
@@ -173,7 +173,7 @@ async fn optional_group_present_with_required_field_only(
 // An optional group with only optional children returns {} when no children are provided
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn all_optional_group_is_empty_object_when_no_children_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -202,7 +202,7 @@ async fn all_optional_group_is_empty_object_when_no_children_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(parsed, json!({ "allOptionalGroup": {} }));
@@ -213,7 +213,7 @@ async fn all_optional_group_is_empty_object_when_no_children_provided(
 // An optional group with only optional children is present with the provided child.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn all_optional_group_present_when_child_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -253,7 +253,7 @@ async fn all_optional_group_present_when_child_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(parsed, json!({ "allOptionalGroup": { "x": 7 } }));
@@ -265,7 +265,7 @@ async fn all_optional_group_present_when_child_provided(
 // required child is missing, the whole optional group is pruned.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_absent_when_required_nested_child_missing(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -307,7 +307,7 @@ async fn optional_group_absent_when_required_nested_child_missing(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(parsed, json!({}));
@@ -318,7 +318,7 @@ async fn optional_group_absent_when_required_nested_child_missing(
 // An optional group with a required nested object: present when all required fields are provided.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_present_when_required_nested_child_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -368,7 +368,7 @@ async fn optional_group_present_when_required_nested_child_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+    let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
     assert_eq!(

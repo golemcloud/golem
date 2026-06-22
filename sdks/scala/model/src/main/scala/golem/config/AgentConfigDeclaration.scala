@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.data.ElementSchema
+import golem.schema.SchemaGraph
 
 sealed trait AgentConfigSource extends Product with Serializable
 
@@ -28,5 +28,5 @@ object AgentConfigSource {
 final case class AgentConfigDeclaration(
   source: AgentConfigSource,
   path: List[String],
-  valueType: ElementSchema
+  valueType: SchemaGraph
 )

@@ -16,12 +16,11 @@
 
 package golem.runtime.rpc
 
-import golem.host.js._
+import golem.host.js.schema.JsSchemaValueTree
 import golem.BaseAgent
 import golem.runtime.AgentMethod
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation}
 import golem.runtime.autowire.AgentImplementation
-import golem.runtime.rpc.RpcValueCodec
 import zio._
 import zio.test._
 
@@ -52,45 +51,43 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
 
         val agentType = golem.runtime.macros.AgentClientMacro.agentType[AsyncEchoAgent]
 
+        // The host loopback returns the single output `some(tree)` for "echo".
         val rpc = new RpcInvoker {
-          override def invokeAndAwait(functionName: String, input: JsDataValue): Either[String, JsDataValue] =
+          override def invokeAndAwait(
+            functionName: String,
+            input: JsSchemaValueTree
+          ): Either[String, Option[JsSchemaValueTree]] =
             if (functionName != "echo") Left(s"unexpected method: $functionName")
-            else {
-              import golem.GolemSchema._
-              val witValue = RpcValueCodec.encodeValue("hello world")
-              witValue.map { wv =>
-                JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv)))
-              }
-            }
+            else Right(SchemaRpcCodec.encodeSingleResult("hello world"))
 
-          override def asyncInvokeAndAwait(functionName: String, input: JsDataValue): scala.concurrent.Future[JsDataValue] =
-            if (functionName != "echo") scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
-            else {
-              import golem.GolemSchema._
-              val witValue = RpcValueCodec.encodeValue("hello world")
-              witValue match {
-                case Right(wv) => scala.concurrent.Future.successful(JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv))))
-                case Left(err) => scala.concurrent.Future.failed(js.JavaScriptException(err))
-              }
-            }
+          override def asyncInvokeAndAwait(
+            functionName: String,
+            input: JsSchemaValueTree
+          ): scala.concurrent.Future[Option[JsSchemaValueTree]] =
+            if (functionName != "echo")
+              scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
+            else scala.concurrent.Future.successful(SchemaRpcCodec.encodeSingleResult("hello world"))
 
-          override def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (scala.concurrent.Future[JsDataValue], CancellationToken) =
+          override def cancelableAsyncInvokeAndAwait(
+            functionName: String,
+            input: JsSchemaValueTree
+          ): (scala.concurrent.Future[Option[JsSchemaValueTree]], CancellationToken) =
             (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
 
-          override def invoke(functionName: String, input: JsDataValue): Either[String, Unit] =
+          override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
             Left("not used")
 
           override def scheduleInvocation(
             @unused datetime: golem.Datetime,
             @unused functionName: String,
-            @unused input: JsDataValue
+            @unused input: JsSchemaValueTree
           ): Either[String, Unit] =
             Left("not used")
 
           override def scheduleCancelableInvocation(
             @unused datetime: golem.Datetime,
             @unused functionName: String,
-            @unused input: JsDataValue
+            @unused input: JsSchemaValueTree
           ): Either[String, CancellationToken] =
             Left("not used")
         }

@@ -23,7 +23,6 @@ use golem_common::model::{AgentId, AgentStatus};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -34,6 +33,7 @@ inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 use golem_common::model::quota::ResourceDefinition;
+use golem_common::schema::SchemaValue;
 
 async fn provision_capacity_resource(
     client: &impl RegistryServiceClient,
@@ -127,7 +127,12 @@ async fn reserve_and_commit_succeeds(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Record(vec![Value::U64(50), Value::U64(50)]));
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U64(50), SchemaValue::U64(50)]
+        }
+    );
     Ok(())
 }
 
@@ -167,7 +172,12 @@ async fn partial_commit_returns_unused_capacity(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Record(vec![Value::U64(100), Value::U64(20)]));
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U64(100), SchemaValue::U64(20)]
+        }
+    );
 
     let second = user
         .invoke_and_await_agent(
@@ -180,7 +190,7 @@ async fn partial_commit_returns_unused_capacity(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(second, Value::Bool(true));
+    assert_eq!(second, SchemaValue::Bool(true));
     Ok(())
 }
 
@@ -219,7 +229,7 @@ async fn drop_without_commit_is_zero_commit(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(reserved, Value::U64(80));
+    assert_eq!(reserved, SchemaValue::U64(80));
 
     let second = user
         .invoke_and_await_agent(
@@ -232,7 +242,7 @@ async fn drop_without_commit_is_zero_commit(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(second, Value::Bool(false));
+    assert_eq!(second, SchemaValue::Bool(false));
 
     Ok(())
 }
@@ -273,7 +283,7 @@ async fn reject_policy_returns_failed_reservation(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Bool(false));
+    assert_eq!(result, SchemaValue::Bool(false));
     Ok(())
 }
 
@@ -319,7 +329,12 @@ async fn split_tokens_are_independently_functional(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Record(vec![Value::U64(10), Value::U64(10)]));
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U64(10), SchemaValue::U64(10)]
+        }
+    );
     Ok(())
 }
 
@@ -364,7 +379,7 @@ async fn merge_and_reserve_succeeds(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::U64(20));
+    assert_eq!(result, SchemaValue::U64(20));
     Ok(())
 }
 
@@ -418,7 +433,7 @@ async fn acquire_and_drop_does_not_panic(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Bool(true));
+    assert_eq!(result, SchemaValue::Bool(true));
     Ok(())
 }
 
@@ -470,7 +485,7 @@ async fn shared_quota_across_two_agents(
         let ret = res??
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
-        if let Value::U64(n) = ret {
+        if let SchemaValue::U64(n) = ret {
             total_reserved += n;
         } else {
             anyhow::bail!("unexpected return type: {ret:?}");
@@ -588,13 +603,7 @@ async fn rate_limit_reject_stops_at_limit(
             &component,
             &agent_id,
             "reserve_in_loop",
-            data_value!(
-                "api-calls".to_string(),
-                10u64,
-                host.clone(),
-                port as u64,
-                100u64
-            ),
+            data_value!("api-calls".to_string(), 10u64, host.clone(), port, 100u64),
         )
         .await?
         .into_return_value()
@@ -603,7 +612,7 @@ async fn rate_limit_reject_stops_at_limit(
     http_server.abort();
 
     let server_count = received.load(Ordering::SeqCst);
-    let Value::U64(agent_count) = calls_made else {
+    let SchemaValue::U64(agent_count) = calls_made else {
         anyhow::bail!("unexpected return: {calls_made:?}");
     };
 
@@ -681,7 +690,7 @@ async fn quota_token_rpc_rust(
             4u64,
             2u64,
             "localhost".to_string(),
-            port as u64,
+            port,
             4u64
         ),
     )
@@ -779,8 +788,8 @@ async fn quota_token_rpc_ts(
             4u64,
             2u64,
             "localhost".to_string(),
-            port as u64,
-            4u64
+            port as f64,
+            4f64
         ),
     )
     .await?;
@@ -880,7 +889,7 @@ async fn rate_limit_throttle_two_agents(
                 &component,
                 &agent_id,
                 "reserve_in_loop",
-                data_value!("shared-rate".to_string(), 10u64, host, port as u64, 4u64),
+                data_value!("shared-rate".to_string(), 10u64, host, port, 4u64),
             )
             .await?;
 

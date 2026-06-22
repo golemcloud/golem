@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::AgentType;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicPermissionPattern;
+use crate::schema::AgentTypeSchema;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -186,7 +186,7 @@ pub struct ComponentMetadataInnerData {
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
 
     /// Per-agent-type provisioning configuration: env, config, plugins, files.
     /// Kept separate from agent type declarations so AgentType stays a pure declaration type.

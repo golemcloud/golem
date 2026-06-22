@@ -29,9 +29,7 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    AgentMethod, AgentType, DataSchema, LegacyParsedAgentId, UntypedDataValue,
-};
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -52,18 +50,13 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
     OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
-use golem_common::schema::TypedSchemaValue;
-use golem_common::schema::adapters::{
-    typed_input_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
-    untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,
-};
-use golem_common::schema::agent::InputSchema;
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
+use golem_schema::schema::wit::{decode_typed, decode_value, encode_value};
 
-use golem_wasm::{
-    CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
-};
+use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
+use golem_schema::schema::wit::wire as core_wire;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -76,7 +69,49 @@ use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+
+/// Host-side resource table entry backing the `golem:agent/host.wasm-rpc` resource.
+pub struct WasmRpcEntry {
+    pub payload: Box<dyn std::any::Any + Send + Sync>,
+}
+
+/// Type-erased payload of a [`FutureInvokeResultEntry`] that can be polled for readiness.
+#[async_trait::async_trait]
+pub trait SubscribeAny: std::any::Any {
+    async fn ready(&mut self);
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// Host-side resource table entry backing the `golem:agent/host.future-invoke-result` resource.
+pub struct FutureInvokeResultEntry {
+    pub payload: Box<dyn SubscribeAny + Send + Sync>,
+    /// Tracks child Pollable rep indices created by `subscribe()`.
+    /// Used to defer parent deletion until all children are dropped,
+    /// because JS GC does not guarantee LIFO drop order.
+    pub child_pollables: Vec<u32>,
+    /// Set to `true` when the guest drops the parent while children still exist.
+    /// The parent entry stays alive until the last child pollable is dropped.
+    pub drop_pending: bool,
+}
+
+#[async_trait::async_trait]
+impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
+    async fn ready(&mut self) {
+        self.payload.ready().await
+    }
+}
+
+impl wasmtime_wasi::DynamicPollable for FutureInvokeResultEntry {
+    fn override_index(&self) -> Option<u32> {
+        None
+    }
+}
+
+/// Host-side resource table entry backing the `golem:agent/host.cancellation-token` resource.
+pub struct CancellationTokenEntry {
+    pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
+}
 
 fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
     match err {
@@ -91,55 +126,66 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        constructor: core_wire::SchemaValueTree,
+        phantom_id: Option<core_wire::Uuid>,
         config: Vec<
-            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
-            self,
-            agent_type_name.clone(),
-        )
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent type '{}' not found", agent_type_name))?;
+        let registered_agent_type = self
+            .get_agent_type_schema_model(golem_common::model::agent::AgentTypeName(
+                agent_type_name.clone(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Agent type '{}' not found", agent_type_name))?;
 
-        let input = golem_common::model::agent::DataValue::try_from_bindings(
-            constructor,
-            agent_type.agent_type.constructor.input_schema.clone(),
+        let input = schema_value_tree_to_typed_constructor_parameters(
+            &constructor,
+            &registered_agent_type.agent_type,
         )
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
-        // Convert the bindings-side agent type into the common-model
-        // form once and share it through `WasmRpcEntryPayload`. Every
-        // subsequent RPC entry resolves the per-method input/output
-        // `DataSchema` from this cached value to drive the typed flow.
-        let remote_agent_type: Arc<AgentType> =
-            Arc::new(AgentType::from(agent_type.agent_type.clone()));
+        let component_id: golem_common::model::component::ComponentId =
+            registered_agent_type.implemented_by.component_id;
 
-        let agent_id = golem_common::model::agent::LegacyParsedAgentId::new(
+        // Share the canonical agent type through `WasmRpcEntryPayload`. Every
+        // subsequent RPC entry resolves the per-method input/output schema from
+        // this cached value to drive the typed flow. `registered_agent_type` is
+        // owned and no longer used, so move its agent type into the `Arc` rather
+        // than cloning the whole schema graph.
+        let remote_agent_type: Arc<AgentTypeSchema> = Arc::new(registered_agent_type.agent_type);
+
+        let agent_id = golem_common::model::agent::ParsedAgentId::try_new(
             golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        let component_id: golem_common::model::component::ComponentId =
-            agent_type.implemented_by.into();
         let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
 
         let config = config
             .into_iter()
             .map(|c| {
-                let value_and_type = ValueAndType::from(c.value);
-                let encoded = value_and_type
-                    .to_json_value()
-                    .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
+                // The config value travels as a self-contained
+                // `golem:core@2.0.0` typed-schema-value. Decode it and render
+                // the inner `SchemaValue` as plain (schema-guided) JSON,
+                // matching the `AgentConfigEntryDto` service-boundary contract:
+                // the DTO carries plain user JSON which
+                // `parse_worker_creation_agent_config` decodes with the schema
+                // graph (`from_json_value`).
+                let typed = decode_typed(&c.value)
+                    .map_err(|err| anyhow::anyhow!("Invalid agent config value: {err}"))?;
+                let encoded = golem_common::schema::render::to_json_value(
+                    typed.graph(),
+                    typed.root_type(),
+                    typed.value(),
+                )
+                .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
 
                 Ok::<_, anyhow::Error>(AgentConfigEntryDto {
                     path: c.path,
@@ -192,10 +238,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<WasmRpcEntry>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<
-        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-    > {
+        input: core_wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
         // Trap immediately if the invocation is restricted to read-only side effects.
         self.check_read_only_allows("golem::rpc::wasm-rpc::invoke-and-await")
             .map_err(wasmtime::Error::from)?;
@@ -234,12 +278,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // directly without opening durability or recording an oplog
         // entry — replay reaches the same outcome via the same code
         // path.
-        let (input_typed, output_schema) =
+        let input_value =
             match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
                 Ok(parts) => parts,
                 Err(rpc_error) => return Ok(Err(rpc_error.into())),
             };
-        let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
         let oplog_index = self.state.oplog.current_oplog_index().await;
         let idempotency_key = self.derive_idempotency_key(oplog_index);
@@ -252,7 +295,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
-            input: input_untyped.clone(),
+            input: input_value.clone(),
             remote_agent_type: None,
             remote_agent_parameters: None,
         };
@@ -264,24 +307,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let result_untyped: Result<UntypedDataValue, InternalRpcError> = 'result: {
+        let result: Result<SchemaValue, InternalRpcError> = 'result: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(persisted) => {
-                        break 'result match persisted.result {
-                            // Re-validate the persisted reply against the current
-                            // declared output schema. A mismatch is a permanent
-                            // `ProtocolError`; it never emits a new oplog entry.
-                            Ok(untyped) => {
-                                match output_untyped_to_typed(untyped.clone(), &output_schema) {
-                                    Ok(_) => Ok(untyped),
-                                    Err(err) => Err(InternalRpcError::ProtocolError {
-                                        details: format!("invalid RPC output: {err}"),
-                                    }),
-                                }
-                            }
-                            Err(err) => Err(err.into()),
-                        };
+                        break 'result persisted.result.map_err(Into::into);
                     }
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
@@ -289,106 +319,75 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
-            let result_typed: Result<TypedSchemaValue, InternalRpcError> =
-                loop {
-                    let stack = self.clone_as_inherited_stack(span.span_id());
+            let result: Result<SchemaValue, InternalRpcError> = loop {
+                let stack = self.clone_as_inherited_stack(span.span_id());
 
-                    let interrupt_signal = self
-                        .execution_status
-                        .read()
-                        .unwrap()
-                        .create_await_interrupt_signal();
-                    let rpc = self.rpc();
-                    let created_by = self.created_by();
-                    let agent_id = self.agent_id().clone();
-                    let auth_ctx = self.agent_auth_ctx();
+                let interrupt_signal = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let rpc = self.rpc();
+                let created_by = self.created_by();
+                let agent_id = self.agent_id().clone();
+                let auth_ctx = self.agent_auth_ctx();
 
-                    let either_result = futures::future::select(
-                        rpc.invoke_and_await(
-                            &remote_agent_id,
-                            Some(idempotency_key.clone()),
-                            method_name.clone(),
-                            input_untyped.clone(),
-                            created_by,
-                            &agent_id,
-                            &env,
-                            stack,
-                            &auth_ctx,
-                        ),
-                        interrupt_signal,
-                    )
-                    .await;
-                    let result_untyped = match either_result {
-                        Either::Left((result, _)) => result,
-                        Either::Right((interrupt_kind, _)) => {
-                            tracing::info!("Interrupted while waiting for RPC result");
-                            handle.abandon_for_trap();
-                            return Err(interrupt_kind.into());
-                        }
-                    };
-
-                    // Lift the reply against the declared output schema
-                    // before the retry classifier sees it: a schema
-                    // mismatch is a protocol-level fault, classified as
-                    // permanent so it is persisted into the oplog instead
-                    // of triggering a transient retry. On replay, the same
-                    // permanent error is reconstructed below from the
-                    // persisted untyped payload.
-                    let result_typed: Result<TypedSchemaValue, InternalRpcError> =
-                        match result_untyped {
-                            Ok(untyped) => output_untyped_to_typed(untyped, &output_schema)
-                                .map_err(|err| InternalRpcError::ProtocolError {
-                                    details: format!("invalid RPC output: {err}"),
-                                }),
-                            Err(err) => Err(err),
-                        };
-                    match handle
-                        .try_trigger_retry_or_loop_with_properties(
-                            self,
-                            &result_typed,
-                            classify_rpc_error,
-                            retry_properties.clone(),
-                        )
-                        .await?
-                    {
-                        InternalRetryResult::Persist => break result_typed,
-                        InternalRetryResult::RetryInternally => continue,
+                let either_result = futures::future::select(
+                    rpc.invoke_and_await(
+                        &remote_agent_id,
+                        Some(idempotency_key.clone()),
+                        method_name.clone(),
+                        input_value.clone(),
+                        created_by,
+                        &agent_id,
+                        &env,
+                        stack,
+                        &auth_ctx,
+                    ),
+                    interrupt_signal,
+                )
+                .await;
+                let result: Result<SchemaValue, InternalRpcError> = match either_result {
+                    Either::Left((result, _)) => result,
+                    Either::Right((interrupt_kind, _)) => {
+                        tracing::info!("Interrupted while waiting for RPC result");
+                        handle.abandon_for_trap();
+                        return Err(interrupt_kind.into());
                     }
                 };
-
-            // Project typed → untyped for the oplog payload. A
-            // projection failure here is a permanent protocol fault
-            // (the typed value's shape does not match a legal
-            // [`UntypedDataValue`] layout) and is persisted as such, so
-            // replay reproduces the same outcome from the persisted
-            // payload instead of re-running the projection.
-            let result_untyped: Result<UntypedDataValue, InternalRpcError> = match result_typed {
-                Ok(typed) => typed_schema_value_to_untyped_data_value(&typed).map_err(|err| {
-                    InternalRpcError::ProtocolError {
-                        details: format!(
-                            "Failed to convert typed RPC result to legacy form: {err}"
-                        ),
-                    }
-                }),
-                Err(err) => Err(err),
+                match handle
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &result,
+                        classify_rpc_error,
+                        retry_properties.clone(),
+                    )
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
             };
+
             handle
                 .complete(
                     self,
                     HostResponseGolemRpcInvokeAndAwait {
-                        result: result_untyped.clone().map_err(Into::into),
+                        result: result.clone().map_err(Into::into),
                     },
                 )
                 .await?;
-            result_untyped
+            result
         };
 
         self.finish_span(span.span_id()).await?;
 
-        match result_untyped {
-            Ok(untyped) => {
-                let data_value: golem_common::model::agent::bindings::golem::agent::common::DataValue = untyped.into();
-                Ok(Ok(data_value))
+        match result {
+            Ok(value) => {
+                // Project the schema-native reply to the WIT
+                // `option<schema-value-tree>` shape (`none` for a `unit`
+                // output) at the guest-facing boundary.
+                Ok(Ok(schema_value_to_wire_output(&value)))
             }
             Err(err) => {
                 error!("RPC error: {err}");
@@ -401,7 +400,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<WasmRpcEntry>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: core_wire::SchemaValueTree,
     ) -> anyhow::Result<Result<(), RpcError>> {
         // Trap immediately if the invocation is restricted to read-only side effects.
         self.check_read_only_allows("golem::rpc::wasm-rpc::invoke")
@@ -435,16 +434,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
-        // Resolve per-method schemas and lift the input before opening
-        // durability (see `invoke_and_await` for the rationale). The
-        // method's output schema is not needed because `invoke`
-        // discards the remote reply.
-        let (input_typed, _) =
+        // Resolve the method and lift the input before opening durability
+        // (see `invoke_and_await` for the rationale).
+        let input_value =
             match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
                 Ok(parts) => parts,
                 Err(rpc_error) => return Ok(Err(rpc_error.into())),
             };
-        let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
         let oplog_index = self.state.oplog.current_oplog_index().await;
         let idempotency_key = self.derive_idempotency_key(oplog_index);
@@ -457,7 +453,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
-            input: input_untyped.clone(),
+            input: input_value.clone(),
             remote_agent_type: None,
             remote_agent_parameters: None,
         };
@@ -487,7 +483,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         &remote_agent_id,
                         Some(idempotency_key.clone()),
                         method_name.clone(),
-                        input_untyped.clone(),
+                        input_value.clone(),
                         self.created_by(),
                         self.agent_id(),
                         &env,
@@ -531,7 +527,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         this: Resource<WasmRpcEntry>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: core_wire::SchemaValueTree,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         // Trap immediately if the invocation is restricted to read-only side effects.
         self.check_read_only_allows("golem::rpc::wasm-rpc::async-invoke-and-await")
@@ -581,21 +577,28 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
                 .await?;
 
-        // Resolve per-method schemas and lift the input. Failures here
-        // are deterministic functions of the cached remote agent type
-        // and the guest payload, so they are reported as the future's
-        // baked-in result rather than as wasmtime traps. The future
-        // surfaces the error on the first `get`.
-        let (input_typed, output_schema) =
-            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input.clone()) {
+        // Resolve the method and lift the input. Failures here are
+        // deterministic functions of the cached remote agent type and the
+        // guest payload, so they are reported as the future's baked-in result
+        // rather than as wasmtime traps. The future surfaces the error on the
+        // first `get`.
+        let input_value =
+            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
                 Ok(parts) => parts,
                 Err(rpc_error) => {
-                    let input_untyped: UntypedDataValue = input.into();
+                    // The method/input could not be resolved. The recorded
+                    // request `input` is only informational here — the future
+                    // is baked with the error result and `get` never re-issues
+                    // the call — so an empty placeholder is used. Live and
+                    // replay agree because `get` surfaces the persisted result,
+                    // not this input.
                     let request = HostRequestGolemRpcInvoke {
                         remote_agent_id: remote_agent_id.agent_id(),
                         idempotency_key: idempotency_key.clone(),
                         method_name: method_name.clone(),
-                        input: input_untyped,
+                        input: SchemaValue::Tuple {
+                            elements: Vec::new(),
+                        },
                         remote_agent_type: None,
                         remote_agent_parameters: None,
                     };
@@ -612,7 +615,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     return Ok(fut);
                 }
             };
-        let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
         let agent_id = self.agent_id().clone();
         let created_by = self.created_by();
@@ -620,7 +622,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
-            input: input_untyped,
+            input: input_value.clone(),
             remote_agent_type: None,
             remote_agent_parameters: None,
         };
@@ -665,8 +667,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_id,
                 idempotency_key,
                 method_name,
-                input_typed.clone(),
-                output_schema.clone(),
+                input_value.clone(),
                 created_by,
                 agent_id,
                 env,
@@ -695,8 +696,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self_created_by: created_by,
                     env,
                     method_name,
-                    method_parameters: input_typed,
-                    output_schema,
+                    method_parameters: input_value,
                     idempotency_key,
                     span_id: span.span_id().clone(),
                     begin_index,
@@ -721,7 +721,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: core_wire::SchemaValueTree,
     ) -> anyhow::Result<()> {
         let token = self
             .schedule_cancelable_invocation(this, scheduled_time, method_name, input)
@@ -735,7 +735,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         datetime: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: core_wire::SchemaValueTree,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         // Trap immediately if the invocation is restricted to read-only side effects.
         self.check_read_only_allows("golem::rpc::wasm-rpc::schedule-cancelable-invocation")
@@ -747,18 +747,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // an open durable function. `schedule_cancelable_invocation`
         // has no `RpcError` return channel, so these are surfaced as
         // wasmtime traps.
-        let (remote_agent_id, target_worker_fingerprint, input_untyped) = {
+        let (remote_agent_id, target_worker_fingerprint, input_value) = {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
             let remote_agent_id = payload.remote_agent_id.clone();
             let target_worker_fingerprint = payload.target_fingerprint;
             let remote_agent_type = payload.remote_agent_type.clone();
 
-            let method = find_agent_method(&remote_agent_type, &method_name)?;
-            let input_typed = input_data_value_to_typed_input(input, &method.input_schema)?;
-            let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
+            // Validate the method exists, then transport the input as a
+            // schema-free `SchemaValue` (the callee validates against its own
+            // schema when it lowers the scheduled invocation).
+            find_agent_method(&remote_agent_type, &method_name)?;
+            let input_value =
+                decode_value(&input).map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
 
-            (remote_agent_id, target_worker_fingerprint, input_untyped)
+            (remote_agent_id, target_worker_fingerprint, input_value)
         };
         let scheduled_at =
             chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
@@ -793,7 +796,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_id: remote_agent_id.agent_id(),
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
-                input: input_untyped.clone(),
+                input: input_value.clone(),
                 datetime: datetime.into(),
                 remote_agent_type: None,
                 remote_agent_parameters: None,
@@ -833,7 +836,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             invocation: Box::new(AgentInvocation::AgentMethod {
                 idempotency_key,
                 method_name,
-                input: input_untyped,
+                input: input_value,
                 invocation_context: stack,
                 principal: Principal::anonymous(),
             }),
@@ -885,7 +888,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn subscribe(
         &mut self,
         this: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
         let parent_rep = this.rep();
         let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
@@ -902,11 +905,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn get(
         &mut self,
         this: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
-    > {
+    ) -> anyhow::Result<Option<Result<Option<core_wire::SchemaValueTree>, RpcError>>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
 
@@ -947,7 +946,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
             #[allow(clippy::type_complexity)]
             let (result, serializable_invoke_request, serializable_invoke_result, begin_index): (
-                Result<Option<Result<TypedSchemaValue, RpcError>>, anyhow::Error>,
+                Result<Option<Result<SchemaValue, RpcError>>, anyhow::Error>,
                 HostRequestGolemRpcInvoke,
                 SerializableInvokeResult,
                 OplogIndex,
@@ -1099,12 +1098,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             }
 
             match result {
-                Ok(Some(Ok(typed))) => {
-                    // Typed → untyped → bindings::DataValue at the
-                    // guest-facing boundary.
-                    let untyped = typed_rpc_output_to_untyped(&typed)?;
-                    let data_value: golem_common::model::agent::bindings::golem::agent::common::DataValue = untyped.into();
-                    Ok(Some(Ok(data_value)))
+                Ok(Some(Ok(value))) => {
+                    // Project the schema-native output to the WIT
+                    // `option<schema-value-tree>` shape (`none` for `unit`)
+                    // at the guest-facing boundary.
+                    Ok(Some(Ok(schema_value_to_wire_output(&value))))
                 }
                 Ok(Some(Err(error))) => Ok(Some(Err(error))),
                 Ok(None) => Ok(None),
@@ -1202,10 +1200,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             match serialized_invoke_result {
                 SerializableInvokeResult::Pending => Ok(None),
                 SerializableInvokeResult::Completed(result) => match result {
-                    Ok(untyped) => {
-                        let data_value: golem_common::model::agent::bindings::golem::agent::common::DataValue = untyped.into();
-                        Ok(Some(Ok(data_value)))
-                    }
+                    // The persisted reply is already schema-native; project it
+                    // to the WIT `option<schema-value-tree>` shape directly.
+                    Ok(value) => Ok(Some(Ok(schema_value_to_wire_output(&value)))),
                     Err(error) => {
                         let rpc_error: InternalRpcError = error.into();
                         let rpc_error: RpcError = rpc_error.into();
@@ -1244,24 +1241,19 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     method_name,
                     method_parameters,
                     ..
-                } => {
-                    // Project the in-memory typed input back to the
-                    // legacy form for the persisted invoke request.
-                    let input_untyped = typed_rpc_input_to_untyped(method_parameters)?;
-                    (
-                        true,
-                        remote_agent_id.agent_id(),
-                        idempotency_key.clone(),
-                        HostRequestGolemRpcInvoke {
-                            remote_agent_id: remote_agent_id.agent_id(),
-                            idempotency_key: idempotency_key.clone(),
-                            method_name: method_name.clone(),
-                            input: input_untyped,
-                            remote_agent_type: None,
-                            remote_agent_parameters: None,
-                        },
-                    )
-                }
+                } => (
+                    true,
+                    remote_agent_id.agent_id(),
+                    idempotency_key.clone(),
+                    HostRequestGolemRpcInvoke {
+                        remote_agent_id: remote_agent_id.agent_id(),
+                        idempotency_key: idempotency_key.clone(),
+                        method_name: method_name.clone(),
+                        input: method_parameters.clone(),
+                        remote_agent_type: None,
+                        remote_agent_parameters: None,
+                    },
+                ),
                 FutureInvokeResultState::Completed { request, .. }
                 | FutureInvokeResultState::Cancelled { request, .. }
                 | FutureInvokeResultState::Consumed { request, .. } => (
@@ -1318,15 +1310,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     begin_index,
                     ..
                 } => {
-                    // The persisted cancelled state stores the request
-                    // in legacy form; project the typed input back.
-                    let input_untyped = typed_rpc_input_to_untyped(method_parameters)?;
                     *state = FutureInvokeResultState::Cancelled {
                         request: HostRequestGolemRpcInvoke {
                             remote_agent_id: remote_agent_id.agent_id(),
                             idempotency_key: idempotency_key.clone(),
                             method_name: method_name.clone(),
-                            input: input_untyped,
+                            input: method_parameters.clone(),
                             remote_agent_type: None,
                             remote_agent_parameters: None,
                         },
@@ -1428,17 +1417,17 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> core_wire::Host for DurableWorkerCtx<Ctx> {
     async fn parse_uuid(
         &mut self,
         uuid: String,
-    ) -> anyhow::Result<Result<golem_wasm::Uuid, String>> {
+    ) -> anyhow::Result<Result<core_wire::Uuid, String>> {
         Ok(uuid::Uuid::parse_str(&uuid)
             .map(|uuid| uuid.into())
             .map_err(|e| e.to_string()))
     }
 
-    async fn uuid_to_string(&mut self, uuid: golem_wasm::Uuid) -> anyhow::Result<String> {
+    async fn uuid_to_string(&mut self, uuid: core_wire::Uuid) -> anyhow::Result<String> {
         let uuid: uuid::Uuid = uuid.into();
         Ok(uuid.to_string())
     }
@@ -1451,7 +1440,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     env: &[(String, String)],
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
-    remote_agent_type: Arc<AgentType>,
+    remote_agent_type: Arc<AgentTypeSchema>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let stack = ctx.clone_as_inherited_stack(span.span_id());
 
@@ -1517,7 +1506,7 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     target_environment_id: EnvironmentId,
     target_fingerprint: AgentFingerprint,
     span: Arc<InvocationContextSpan>,
-    remote_agent_type: Arc<AgentType>,
+    remote_agent_type: Arc<AgentTypeSchema>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
     let entry = ctx.table().push(WasmRpcEntry {
@@ -1552,39 +1541,32 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
     method_name: String,
-    input: TypedRpcInput,
-    output_schema: DataSchema,
+    input: SchemaValue,
     created_by: AccountId,
     agent_id: AgentId,
     env: Vec<(String, String)>,
     stack: InvocationContextStack,
     retry_params: Option<TaskRetryParams<Ctx>>,
     auth_ctx: AuthCtx,
-) -> AbortOnDropJoinHandle<Result<Result<TypedSchemaValue, InternalRpcError>, Error>> {
+) -> AbortOnDropJoinHandle<Result<Result<SchemaValue, InternalRpcError>, Error>> {
     let invoke = move || {
         let rpc = rpc.clone();
         let remote_agent_id = remote_agent_id.clone();
         let idempotency_key = idempotency_key.clone();
         let method_name = method_name.clone();
         let input = input.clone();
-        let output_schema = output_schema.clone();
+        let created_by = created_by;
         let agent_id = agent_id.clone();
         let env = env.clone();
         let stack = stack.clone();
         let auth_ctx = auth_ctx.clone();
         async move {
-            // Convert typed → untyped only at the legacy `Rpc::*`
-            // boundary.
-            let input_untyped = typed_input_to_untyped_data_value(&input.schema, &input.values)
-                .map_err(|err| InternalRpcError::ProtocolError {
-                    details: format!("failed to convert typed RPC input to legacy form: {err}"),
-                })?;
             let result = rpc
                 .invoke_and_await(
                     &remote_agent_id,
                     Some(idempotency_key),
                     method_name,
-                    input_untyped,
+                    input,
                     created_by,
                     &agent_id,
                     &env,
@@ -1592,13 +1574,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     &auth_ctx,
                 )
                 .await?;
-            // Re-type the legacy reply against the declared output
-            // schema; a schema mismatch is a permanent protocol error.
-            untyped_data_value_to_typed_schema_output(result, &output_schema).map_err(|err| {
-                InternalRpcError::ProtocolError {
-                    details: format!("invalid RPC output: {err}"),
-                }
-            })
+            Ok(result)
         }
     };
 
@@ -1652,7 +1628,7 @@ fn handle_completed_rpc_result(
     span_id: &SpanId,
 ) -> Result<
     (
-        Result<Option<Result<TypedSchemaValue, RpcError>>, anyhow::Error>,
+        Result<Option<Result<SchemaValue, RpcError>>, anyhow::Error>,
         HostRequestGolemRpcInvoke,
         SerializableInvokeResult,
         OplogIndex,
@@ -1679,29 +1655,6 @@ fn handle_completed_rpc_result(
     };
     let begin_index = entry.begin_index();
     let span_id = span_id.clone();
-    // Borrow-check the persisted result and project typed → untyped
-    // *before* swapping the state to `Consumed`. A projection failure
-    // is permanent (the typed result's shape does not match a legal
-    // `UntypedDataValue` layout) and is reported as
-    // `InternalRpcError::ProtocolError`, so the caller can emit the
-    // oplog record, end the durable function, finish the span, and
-    // return `Ok(Err(RpcError))` to the guest along the normal path.
-    if let FutureInvokeResultState::Completed {
-        result: Ok(Ok(typed)),
-        ..
-    } = entry
-        && let Err(err) = typed_schema_value_to_untyped_data_value(typed)
-    {
-        let rpc_error = InternalRpcError::ProtocolError {
-            details: format!("Failed to convert typed RPC result to legacy form: {err}"),
-        };
-        *entry = FutureInvokeResultState::Completed {
-            request: request.clone(),
-            result: Ok(Err(rpc_error)),
-            span_id: span_id.clone(),
-            begin_index,
-        };
-    }
     let result = std::mem::replace(
         entry,
         FutureInvokeResultState::Consumed {
@@ -1715,17 +1668,12 @@ fn handle_completed_rpc_result(
     } = result
     {
         Ok(match result {
-            Ok(Ok(typed)) => {
-                // Pre-check above guarantees projection succeeds.
-                let untyped = typed_schema_value_to_untyped_data_value(&typed)
-                    .expect("typed → untyped projection pre-validated above");
-                (
-                    Ok(Some(Ok(typed))),
-                    request,
-                    SerializableInvokeResult::Completed(Ok(untyped)),
-                    begin_index,
-                )
-            }
+            Ok(Ok(typed)) => (
+                Ok(Some(Ok(typed.clone()))),
+                request,
+                SerializableInvokeResult::Completed(Ok(typed)),
+                begin_index,
+            ),
             Ok(Err(rpc_error)) => (
                 Ok(Some(Err(rpc_error.clone().into()))),
                 request,
@@ -1762,12 +1710,12 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     default_retry_policy: NamedRetryPolicy,
     agent_config_retry_policies: Vec<NamedRetryPolicy>,
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
-    enrichment: Option<(&LegacyParsedAgentId, bool)>,
+    enrichment: Option<(&ParsedAgentId, bool)>,
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 ) -> anyhow::Result<(
-    Result<Option<Result<TypedSchemaValue, RpcError>>, anyhow::Error>,
+    Result<Option<Result<SchemaValue, RpcError>>, anyhow::Error>,
     HostRequestGolemRpcInvoke,
     SerializableInvokeResult,
     OplogIndex,
@@ -1781,7 +1729,6 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         env,
         method_name,
         method_parameters,
-        output_schema,
         idempotency_key,
         span_id,
         auth_ctx,
@@ -1791,12 +1738,11 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         return Err(anyhow::anyhow!("unexpected state entry"));
     };
 
-    let input_untyped = typed_rpc_input_to_untyped(method_parameters)?;
     let request = HostRequestGolemRpcInvoke {
         remote_agent_id: remote_agent_id.agent_id(),
         idempotency_key: idempotency_key.clone(),
         method_name: method_name.clone(),
-        input: input_untyped,
+        input: method_parameters.clone(),
         remote_agent_type: None,
         remote_agent_parameters: None,
     };
@@ -1832,7 +1778,6 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         idempotency_key.clone(),
         method_name.clone(),
         method_parameters.clone(),
-        output_schema.clone(),
         *self_created_by,
         self_agent_id.clone(),
         env.clone(),
@@ -1864,12 +1809,11 @@ pub struct WasmRpcEntryPayload {
     pub span_id: SpanId,
     pub target_fingerprint: AgentFingerprint,
     /// Cached remote agent type, used to resolve per-method input/output
-    /// schemas when bridging the WIT-bindgen / oplog legacy
-    /// [`UntypedDataValue`] payload to the in-process
-    /// [`TypedSchemaValue`] flow. Sourced from the durable
-    /// `get_agent_type` lookup performed in [`HostWasmRpc::new`], so it
-    /// is consistent across live execution and replay.
-    pub remote_agent_type: Arc<AgentType>,
+    /// schemas for the in-process [`SchemaValue`] / [`TypedSchemaValue`]
+    /// flow. Sourced from the durable `get_agent_type` lookup performed in
+    /// [`HostWasmRpc::new`], so it is consistent across live execution and
+    /// replay.
+    pub remote_agent_type: Arc<AgentTypeSchema>,
 }
 
 impl Debug for WasmRpcEntryPayload {
@@ -1885,9 +1829,9 @@ impl Debug for WasmRpcEntryPayload {
 /// `wasmtime::Error` trap, since `schedule_cancelable_invocation` has no
 /// way to return `Err(RpcError)` to the guest.
 fn find_agent_method<'a>(
-    agent_type: &'a AgentType,
+    agent_type: &'a AgentTypeSchema,
     method_name: &str,
-) -> anyhow::Result<&'a AgentMethod> {
+) -> anyhow::Result<&'a AgentMethodSchema> {
     agent_type
         .methods
         .iter()
@@ -1900,36 +1844,21 @@ fn find_agent_method<'a>(
         })
 }
 
-/// Typed in-process representation of an RPC call's input parameters.
+/// Resolve and lift the guest-side input value tree into the schema-native
+/// [`SchemaValue`] carrier used across the executor↔executor RPC hop.
 ///
-/// Mirrors the design's `InputSchema = Parameters(Vec<NamedField>)` (§4.7
-/// of the value-type-refactor doc): an ordered list of named parameters
-/// plus a positionally aligned vector of [`SchemaValue`]s. This is the
-/// natural typed shape for inputs and avoids the single-root constraint of
-/// [`TypedSchemaValue`] (which only fits a single-rooted output value).
-#[derive(Clone)]
-struct TypedRpcInput {
-    schema: InputSchema,
-    values: Vec<SchemaValue>,
-}
-
-/// Resolve the per-method input/output schemas from the cached remote
-/// agent type and lift the guest-side [`bindings::DataValue`] into a
-/// [`TypedRpcInput`] for the in-process typed flow.
-///
-/// All failures are deterministic functions of (agent type, method
-/// name, guest input) — replay reproduces them — so they are returned
-/// as [`InternalRpcError`] for the caller to surface as `Err(RpcError)`
-/// to the guest:
-/// - unknown method → [`InternalRpcError::NotFound`]
-/// - input that does not match the declared input schema →
-///   [`InternalRpcError::ProtocolError`]
+/// The wire value tree is transported as a schema-free [`SchemaValue`]; each
+/// end validates it against its own declared schema (the callee when it lowers
+/// the invocation, see [`lower_invocation`](crate::worker::invocation)). The
+/// method is resolved only to fast-fail an unknown method before durability is
+/// opened — a deterministic check that replay reproduces, surfaced as
+/// [`InternalRpcError`] so the caller can return `Err(RpcError)` to the guest.
 fn resolve_method_and_lift_input(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     method_name: &str,
-    input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-) -> Result<(TypedRpcInput, DataSchema), InternalRpcError> {
-    let method = agent_type
+    input: core_wire::SchemaValueTree,
+) -> Result<SchemaValue, InternalRpcError> {
+    agent_type
         .methods
         .iter()
         .find(|m| m.name == method_name)
@@ -1939,59 +1868,26 @@ fn resolve_method_and_lift_input(
                 agent_type.type_name
             ),
         })?;
-    let input_schema = method.input_schema.clone();
-    let output_schema = method.output_schema.clone();
-    let untyped: UntypedDataValue = input.into();
-    let (schema, values) =
-        untyped_data_value_to_typed_input(untyped, &input_schema).map_err(|err| {
-            InternalRpcError::ProtocolError {
-                details: format!("Invalid RPC input for method '{method_name}': {err}"),
-            }
-        })?;
-    Ok((TypedRpcInput { schema, values }, output_schema))
+    decode_value(&input).map_err(|err| InternalRpcError::ProtocolError {
+        details: format!("Invalid RPC input for method '{method_name}': {err}"),
+    })
 }
 
-/// Convert a guest-side [`bindings::DataValue`] (already lowered to
-/// [`UntypedDataValue`]) into a schema-driven [`TypedRpcInput`] using the
-/// method's input schema. Used on the schedule path where the failure is
-/// surfaced as a `wasmtime::Error` trap.
-fn input_data_value_to_typed_input(
-    input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    input_schema: &DataSchema,
-) -> anyhow::Result<TypedRpcInput> {
-    let untyped: UntypedDataValue = input.into();
-    let (schema, values) = untyped_data_value_to_typed_input(untyped, input_schema)
-        .map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
-    Ok(TypedRpcInput { schema, values })
-}
-
-/// Project a [`TypedRpcInput`] back into the legacy [`UntypedDataValue`]
-/// for crossing the oplog / `Rpc::*` boundaries.
-fn typed_rpc_input_to_untyped(input: &TypedRpcInput) -> anyhow::Result<UntypedDataValue> {
-    typed_input_to_untyped_data_value(&input.schema, &input.values)
-        .map_err(|err| anyhow::anyhow!("Failed to convert typed RPC input to legacy form: {err}"))
-}
-
-/// Project a [`TypedSchemaValue`] (an RPC output) back into the legacy
-/// [`UntypedDataValue`] for crossing the oplog / `Rpc::*` boundaries.
-/// Failures here would mean the typed value's root shape does not match
-/// any of the canonical output layouts (empty tuple, multimodal list, or
-/// any other single-rooted value).
-fn typed_rpc_output_to_untyped(typed: &TypedSchemaValue) -> anyhow::Result<UntypedDataValue> {
-    typed_schema_value_to_untyped_data_value(typed)
-        .map_err(|err| anyhow::anyhow!("Failed to convert typed RPC output to legacy form: {err}"))
-}
-
-/// Convert an [`UntypedDataValue`] returned by the legacy `Rpc::*`
-/// boundary into a [`TypedSchemaValue`] using the method's output
-/// schema. A failure here indicates a protocol-level mismatch between
-/// the remote agent and its declared schema (treated as permanent).
-fn output_untyped_to_typed(
-    output: UntypedDataValue,
-    output_schema: &DataSchema,
-) -> anyhow::Result<TypedSchemaValue> {
-    untyped_data_value_to_typed_schema_output(output, output_schema)
-        .map_err(|err| anyhow::anyhow!("Invalid RPC output: {err}"))
+/// Project an RPC output [`SchemaValue`] into the WIT
+/// `option<schema-value-tree>` result shape used by `invoke-and-await` and
+/// `future-invoke-result.get`.
+///
+/// Per the `golem:agent@2.0.0` contract a declared `unit` output (the
+/// canonical empty tuple) maps to `none`, while a `single` output maps to
+/// `some(value)`. A method that declares a single `()`/empty-tuple output is
+/// structurally indistinguishable from `unit` here and is likewise reported as
+/// `none`; both live and replay paths funnel through this helper, so the choice
+/// is applied consistently.
+fn schema_value_to_wire_output(value: &SchemaValue) -> Option<core_wire::SchemaValueTree> {
+    match value {
+        SchemaValue::Tuple { elements } if elements.is_empty() => None,
+        value => Some(encode_value(value)),
+    }
 }
 
 pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
@@ -2046,13 +1942,13 @@ pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
 enum FutureInvokeResultState {
     Pending {
         request: HostRequestGolemRpcInvoke,
-        handle: AbortOnDropJoinHandle<Result<Result<TypedSchemaValue, InternalRpcError>, Error>>,
+        handle: AbortOnDropJoinHandle<Result<Result<SchemaValue, InternalRpcError>, Error>>,
         span_id: SpanId,
         begin_index: OplogIndex,
     },
     Completed {
         request: HostRequestGolemRpcInvoke,
-        result: Result<Result<TypedSchemaValue, InternalRpcError>, Error>,
+        result: Result<Result<SchemaValue, InternalRpcError>, Error>,
         span_id: SpanId,
         begin_index: OplogIndex,
     },
@@ -2062,11 +1958,7 @@ enum FutureInvokeResultState {
         self_created_by: AccountId,
         env: Vec<(String, String)>,
         method_name: String,
-        method_parameters: TypedRpcInput,
-        /// Needed when the deferred state is materialised into a live
-        /// invocation (see [`handle_deferred_rpc_dispatch`]), so the
-        /// spawned task can re-type the legacy `Rpc::*` reply.
-        output_schema: DataSchema,
+        method_parameters: SchemaValue,
         idempotency_key: IdempotencyKey,
         span_id: SpanId,
         begin_index: OplogIndex,

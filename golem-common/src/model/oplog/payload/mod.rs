@@ -17,7 +17,7 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType, UntypedDataValue};
+use crate::model::agent::AgentTypeName;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::PayloadId;
@@ -38,19 +38,22 @@ use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
 };
 use crate::oplog_payload;
+use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
     DeserializationContext, SerializationContext,
 };
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{IntoValueAndType, ValueAndType};
-use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
+pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
+pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
+pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
 
 oplog_payload! {
     HostRequest => {
@@ -118,7 +121,7 @@ oplog_payload! {
         },
         GolemAgentGetConfigValue {
             path: Vec<String>,
-            expected_type: AnalysedType
+            expected_type: SchemaGraph
         },
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
@@ -130,26 +133,26 @@ oplog_payload! {
             remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
             method_name: String,
-            input: UntypedDataValue,
-            #[from_value(skip)]
+            input: SchemaValue,
+            #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
             remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry
-            #[transient(None::<DataValue>)]
-            #[from_value(skip)]
-            remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
+            #[transient(None::<TypedSchemaValue>)]
+            #[schema(skip)]
+            remote_agent_parameters: Option<TypedSchemaValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocation {
             remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
             method_name: String,
-            input: UntypedDataValue,
+            input: SchemaValue,
             datetime: SerializableDateTime,
-            #[from_value(skip)]
+            #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
             remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry
-            #[from_value(skip)]
-            #[transient(None::<DataValue>)]
-            remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
+            #[schema(skip)]
+            #[transient(None::<TypedSchemaValue>)]
+            remote_agent_parameters: Option<TypedSchemaValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocationCancellation {
             schedule_id: SerializableScheduleId
@@ -260,7 +263,7 @@ oplog_payload! {
             result: Result<SerializableFileTimes, FileSystemError>,
         },
         GolemAgentGetConfigValue {
-            result: golem_wasm::Value,
+            result: SchemaValue,
         },
         GolemAgentWebhookUrl {
             result: Result<String, String>
@@ -297,10 +300,10 @@ oplog_payload! {
             result: Result<(), String>,
         },
         GolemAgentAgentTypes {
-            result: Result<Vec<RegisteredAgentType>, String>
+            result: Result<Vec<RegisteredAgentTypeSchema>, String>
         },
         GolemAgentAgentType {
-            result: Result<Option<RegisteredAgentType>, String>
+            result: Result<Option<RegisteredAgentTypeSchema>, String>
         },
         GolemRdbmsColumns {
             result: Result<Vec<SerializableDbColumn>, SerializableRdbmsError>
@@ -318,7 +321,7 @@ oplog_payload! {
             request: Result<SerializableRdbmsRequest, SerializableRdbmsError>
         },
         GolemRpcInvokeAndAwait {
-            result: Result<UntypedDataValue, SerializableRpcError>
+            result: Result<SchemaValue, SerializableRpcError>
         },
         GolemRpcInvokeGet {
             result: SerializableInvokeResult
@@ -329,7 +332,7 @@ oplog_payload! {
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
         HttpFutureTrailersGet {
-            result:  Result<Option<Result<Result<Option<HashMap<String, Vec<Vec<u8>>>>, SerializableHttpErrorCode>, ()>>, String>
+            result: HttpFutureTrailersGetResult
         },
         HttpResponse {
             response: SerializableHttpResponse
@@ -566,27 +569,6 @@ pub mod host_functions {
     }
 }
 
-impl golem_wasm::IntoValue for host_functions::HostFunctionName {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::String(self.to_string())
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::str()
-    }
-}
-
-impl golem_wasm::FromValue for host_functions::HostFunctionName {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::String(s) => Ok(Self::from(s.as_str())),
-            other => Err(format!(
-                "Expected String for HostFunctionName, got {other:?}"
-            )),
-        }
-    }
-}
-
 pub enum OplogPayload<T: BinaryCodec + Debug + Clone + PartialEq> {
     Inline(Box<T>),
     SerializedInline {
@@ -746,97 +728,6 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> BinaryDeserializer for OplogPay
             other => Err(desert_rust::Error::DeserializationFailure(format!(
                 "Invalid tag for OplogPayload: {other}"
             ))),
-        }
-    }
-}
-
-impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::IntoValue for OplogPayload<T> {
-    fn into_value(self) -> golem_wasm::Value {
-        match self {
-            OplogPayload::Inline(value) => {
-                let bytes = serialize(&value).expect("Failed to serialize OplogPayload::Inline");
-                golem_wasm::Value::Variant {
-                    case_idx: 0,
-                    case_value: Some(Box::new(bytes.into_value())),
-                }
-            }
-            OplogPayload::SerializedInline { bytes, .. } => golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(bytes.into_value())),
-            },
-            OplogPayload::External {
-                payload_id,
-                md5_hash,
-                ..
-            } => golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(golem_wasm::Value::Record(vec![
-                    payload_id.0.into_value(),
-                    md5_hash.into_value(),
-                ]))),
-            },
-        }
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::*;
-        let uuid_type = record(vec![field("high-bits", u64()), field("low-bits", u64())])
-            .named("uuid")
-            .owned("golem:core@1.5.0/types");
-        variant(vec![
-            case("inline", list(u8())),
-            case(
-                "external",
-                record(vec![
-                    field("payload-id", uuid_type),
-                    field("md5-hash", list(u8())),
-                ])
-                .named("oplog-external-payload")
-                .owned("golem:api@1.5.0/oplog"),
-            ),
-        ])
-        .named("oplog-payload")
-        .owned("golem:api@1.5.0/oplog")
-    }
-}
-
-impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::FromValue for OplogPayload<T> {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Variant {
-                case_idx,
-                case_value,
-            } => match case_idx {
-                0 => {
-                    let bytes = Vec::<u8>::from_value(
-                        *case_value.ok_or("Expected case_value for inline")?,
-                    )?;
-                    Ok(OplogPayload::SerializedInline {
-                        bytes,
-                        cached: None,
-                    })
-                }
-                1 => {
-                    let record_value = *case_value.ok_or("Expected case_value for external")?;
-                    match record_value {
-                        golem_wasm::Value::Record(fields) if fields.len() == 2 => {
-                            let mut iter = fields.into_iter();
-                            let payload_id = PayloadId(Uuid::from_value(iter.next().unwrap())?);
-                            let md5_hash = Vec::<u8>::from_value(iter.next().unwrap())?;
-                            Ok(OplogPayload::External {
-                                payload_id,
-                                md5_hash,
-                                cached: None,
-                            })
-                        }
-                        other => Err(format!(
-                            "Expected Record with 2 fields for oplog-external-payload, got {other:?}"
-                        )),
-                    }
-                }
-                _ => Err(format!("Invalid case_idx for OplogPayload: {case_idx}")),
-            },
-            other => Err(format!("Expected Variant for OplogPayload, got {other:?}")),
         }
     }
 }

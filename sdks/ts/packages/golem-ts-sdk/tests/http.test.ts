@@ -16,7 +16,7 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/internal/http/query';
-import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@1.5.0';
+import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@2.0.0';
 import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
@@ -163,7 +163,8 @@ describe('validateHttpMountWithConstructor', () => {
   function constructorVars(...names: string[]) {
     return {
       inputSchema: {
-        val: names.map((n) => [n, {}]),
+        tag: 'parameters',
+        val: names.map((n) => ({ name: n, source: { tag: 'user-supplied' }, schema: 0 })),
       },
     } as any;
   }
@@ -222,10 +223,15 @@ describe('validateHttpEndpoint', () => {
       description: '',
       promptHint: '',
       inputSchema: {
-        tag: 'tuple',
-        val: vars.map((v) => [v, { tag: 'component-model', val: { nodes: [] } }]),
+        tag: 'parameters',
+        val: vars.map((v) => ({
+          name: v,
+          source: { tag: 'user-supplied' as const },
+          schema: 0,
+          metadata: { aliases: [], examples: [] },
+        })),
       },
-      outputSchema: { tag: 'tuple', val: [] },
+      outputSchema: { tag: 'unit' },
       httpEndpoint: endpoints,
     };
   }

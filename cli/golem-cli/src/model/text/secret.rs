@@ -17,6 +17,7 @@ use crate::model::text::fmt::*;
 
 use comfy_table::Cell;
 use golem_common::model::agent_secret::AgentSecretDto;
+use golem_common::schema::SchemaValue;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,20 +105,12 @@ fn secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(Strin
         .fmt_field("Path", &view.path, format_main_id)
         .fmt_field("ID", &view.id, format_id)
         .fmt_field("Revision", &view.revision.get(), format_id)
-        .fmt_field("Secret Type", &view.secret_type, |st| {
-            // Adapt the legacy AnalysedType at the boundary into a schema graph
-            // before delegating to the schema-typed type renderer.
-            match golem_common::schema::adapters::analysed_type_to_schema_graph(st) {
-                Ok(graph) => {
-                    let root = graph.root.clone();
-                    render_type_for_language(&SourceLanguage::default(), &graph, &root, false)
-                }
-                Err(_) => "<unknown>".to_string(),
-            }
+        .fmt_field("Secret Type", &view.secret_type, |graph| {
+            render_type_for_language(&SourceLanguage::default(), graph, &graph.root, false)
         })
         .fmt_field_option("Secret Value", &view.secret_value, |v| {
             if show_sensitive {
-                v.to_string()
+                render_schema_value(v)
             } else {
                 "***".to_string()
             }
@@ -126,12 +119,16 @@ fn secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(Strin
     fields.build()
 }
 
-fn format_secret_value(show_sensitive: bool, secret_value: &Option<serde_json::Value>) -> String {
+fn render_schema_value(value: &SchemaValue) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<unrenderable>".to_string())
+}
+
+fn format_secret_value(show_sensitive: bool, secret_value: &Option<SchemaValue>) -> String {
     if show_sensitive {
         secret_value
             .as_ref()
-            .unwrap_or(&serde_json::Value::Null)
-            .to_string()
+            .map(render_schema_value)
+            .unwrap_or_else(|| "null".to_string())
     } else {
         "***".to_string()
     }
@@ -218,8 +215,7 @@ mod tests {
         AgentSecretDto, AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
     };
     use golem_common::model::environment::EnvironmentId;
-    use golem_wasm::analysis::analysed_type::str;
-    use serde_json::json;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
     use test_r::test;
 
     fn sample_secret() -> AgentSecretDto {
@@ -232,8 +228,8 @@ mod tests {
                 .unwrap(),
             path: CanonicalAgentSecretPath(vec!["token".to_string()]),
             revision: AgentSecretRevision::new(7).unwrap(),
-            secret_type: str(),
-            secret_value: Some(json!("***")),
+            secret_type: SchemaGraph::anonymous(SchemaType::string()),
+            secret_value: Some(SchemaValue::String("***".to_string())),
         }
     }
 

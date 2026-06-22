@@ -29,10 +29,9 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true, features = ["host"] }
 
 golem-service-base = { workspace = true, features = ["worker-executor"] }
-golem-wasm = { workspace = true, default-features = true }
-golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -109,11 +108,16 @@ wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
+[[bench]]
+name = "invocation_lowering"
+harness = false
+
 [dev-dependencies]
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
+criterion = { workspace = true }
 axum = { workspace = true }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }

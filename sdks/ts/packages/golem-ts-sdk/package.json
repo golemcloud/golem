@@ -28,6 +28,15 @@
       "golem:agent/host@1.5.0": [
         "types/golem_agent_1_5_0_host.d.ts"
       ],
+      "golem:agent/common@2.0.0": [
+        "types/golem_agent_2_0_0_common.d.ts"
+      ],
+      "golem:agent/host@2.0.0": [
+        "types/golem_agent_2_0_0_host.d.ts"
+      ],
+      "golem:core/types@2.0.0": [
+        "types/golem_core_2_0_0_types.d.ts"
+      ],
       "golem:rdbms/ignite2@1.5.0": [
         "types/golem_rdbms_1_5_0_ignite2.d.ts"
       ]

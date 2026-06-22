@@ -17,56 +17,68 @@
 package golem.runtime.autowire
 
 import golem.Principal
-import golem.data.GolemSchema
-import golem.host.js._
-import golem.runtime.MethodMetadata
 import golem.FutureInterop
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
+import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
 
+/**
+ * A wired agent method: decodes the `golem:agent@2.0.0` method input (a
+ * `schema-value-tree` whose root encodes the parameter-list record) via its
+ * [[InputRecordCodec]], invokes the handler, and encodes the result via its
+ * [[OutputCodec]].
+ *
+ * The result is the host `option<schema-value-tree>`, modelled here as a Scala
+ * [[Option]]: a `unit` output encodes [[None]] (host `none`); a `single` output
+ * encodes `Some(tree)`. The guest export bridges this to / from `js.undefined`.
+ */
 trait MethodBinding[Instance] {
   def metadata: MethodMetadata
 
-  def inputSchema: JsDataSchema
-
-  def outputSchema: JsDataSchema
-
-  def invoke(instance: Instance, payload: JsDataValue, principal: Principal): js.Promise[JsDataValue]
+  def invoke(instance: Instance, input: JsSchemaValueTree, principal: Principal): js.Promise[Option[JsSchemaValueTree]]
 }
 
 object MethodBinding {
-  def sync[Instance, In, Out](methodMetadata: MethodMetadata)(
-    handler: (Instance, In, Principal) => Out
-  )(implicit inSchema: GolemSchema[In], outSchema: GolemSchema[Out]): MethodBinding[Instance] =
-    async[Instance, In, Out](methodMetadata)((instance, input, principal) =>
+  def sync[Instance, In, Out](
+    methodMetadata: MethodMetadata,
+    inputCodec: InputRecordCodec[In],
+    outputCodec: OutputCodec[Out]
+  )(handler: (Instance, In, Principal) => Out): MethodBinding[Instance] =
+    async[Instance, In, Out](methodMetadata, inputCodec, outputCodec)((instance, input, principal) =>
       Future.successful(handler(instance, input, principal))
     )
 
-  def async[Instance, In, Out](methodMetadata: MethodMetadata)(
-    handler: (Instance, In, Principal) => Future[Out]
-  )(implicit inSchema: GolemSchema[In], outSchema: GolemSchema[Out]): MethodBinding[Instance] =
+  def async[Instance, In, Out](
+    methodMetadata: MethodMetadata,
+    inputCodec: InputRecordCodec[In],
+    outputCodec: OutputCodec[Out]
+  )(handler: (Instance, In, Principal) => Future[Out]): MethodBinding[Instance] =
     new MethodBinding[Instance] {
-      override val metadata: MethodMetadata   = methodMetadata
-      override val inputSchema: JsDataSchema  = HostPayload.schema[In]
-      override val outputSchema: JsDataSchema = HostPayload.schema[Out]
+      override val metadata: MethodMetadata = methodMetadata
 
-      override def invoke(instance: Instance, payload: JsDataValue, principal: Principal): js.Promise[JsDataValue] = {
+      override def invoke(
+        instance: Instance,
+        input: JsSchemaValueTree,
+        principal: Principal
+      ): js.Promise[Option[JsSchemaValueTree]] = {
         val future =
-          HostPayload
-            .decode[In](payload)
+          SchemaPayload
+            .decode[In](input)(inputCodec)
             .fold(
-              err => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err))),
+              err =>
+                Future
+                  .failed[Option[JsSchemaValueTree]](js.JavaScriptException(JsAgentError.invalidInput(err.toString))),
               value =>
-                handler(instance, value, principal).flatMap { out =>
-                  HostPayload.encode[Out](out) match {
-                    case Left(error) => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(error)))
-                    case Right(data) => Future.successful(data)
+                handler(instance, value, principal).map { out =>
+                  outputCodec.into match {
+                    case None       => None
+                    case Some(into) => Some(SchemaPayload.encode(out)(into))
                   }
                 }
             )
-
         FutureInterop.toPromise(future)
       }
     }

@@ -368,7 +368,11 @@ async fn restricted_unstructured_binary_missing_body(
         .send()
         .await?;
 
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body, json!(0.0));
 
     Ok(())
 }

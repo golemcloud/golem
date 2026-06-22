@@ -21,7 +21,6 @@ use golem_common::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateVa
 use golem_common::model::{AgentStatus, RetryConfig};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, drain_connection};
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -173,10 +172,9 @@ async fn ts_with_retry_policy_retries_on_user_land_error(
             data_value!("localhost", port as f64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
-    assert_eq!(result, Value::Bool(true));
+    assert!(result);
     // The server was called at least fail_count+1 times: once per failure plus the final success.
     // With oplog-replay retries the exact count may be higher, but it must be > 3.
     assert!(counter.load(Ordering::SeqCst) > 3);
@@ -216,10 +214,9 @@ async fn ts_http_status_retry_policy_retries_matching_status(
             data_value!("localhost", port as f64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
-    assert_eq!(result, Value::Bool(true));
+    assert!(result);
     assert_eq!(counter.load(Ordering::SeqCst), 4);
 
     Ok(())
@@ -392,14 +389,9 @@ async fn run_manifest_status_retry_test(
             data_value!("localhost", port as f64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
-    assert_eq!(
-        result,
-        Value::Bool(true),
-        "agent must complete successfully"
-    );
+    assert!(result, "agent must complete successfully");
     let observed = counter.load(Ordering::SeqCst);
     assert!(
         observed > fail_count,
@@ -743,8 +735,7 @@ async fn ts_manifest_status_retry_post_with_json_body(
             data_value!("localhost", port as f64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     let observed = counter.load(Ordering::SeqCst);
     let observed_conns = conn_counter.load(Ordering::SeqCst);
@@ -767,9 +758,8 @@ async fn ts_manifest_status_retry_post_with_json_body(
          bypasses the manifest 5xx retry policy"
     );
 
-    assert_eq!(
+    assert!(
         result,
-        Value::Bool(true),
         "agent must complete successfully (host inline status-code retry must transparently re-issue the failing POST request with its JSON body)"
     );
 
@@ -916,8 +906,7 @@ async fn ts_manifest_status_retry_two_sequential_calls_are_both_re_armed(
             data_value!("127.0.0.1", port as f64),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     let observed_a = counter_a.load(Ordering::SeqCst);
     let observed_b = counter_b.load(Ordering::SeqCst);
@@ -925,9 +914,8 @@ async fn ts_manifest_status_retry_two_sequential_calls_are_both_re_armed(
         "two-step server observed: /step-a {observed_a} requests, /step-b {observed_b} requests"
     );
 
-    assert_eq!(
+    assert!(
         result,
-        Value::Bool(true),
         "agent must complete successfully (manifest 5xx retry must re-arm for the second call too)"
     );
     assert_eq!(
@@ -1628,7 +1616,7 @@ fn v2_overrides() -> TestExecutorOverrides {
 
 /// Args for `CheckoutAgentV2.checkout(host, port, customerEmail, amount,
 /// address, sku, qty)`. Centralized so the four tests stay in lockstep.
-fn checkout_args(host: &str, port: u16) -> golem_common::model::agent::DataValue {
+fn checkout_args(host: &str, port: u16) -> golem_common::schema::TypedSchemaValue {
     data_value!(
         host,
         port as f64,
@@ -1712,17 +1700,15 @@ async fn ts_v2_s1_payment_failure_then_reset(
             checkout_args("127.0.0.1", port),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     let _ = reset_handle.await;
 
     let (inv, pay, ship, mail) = backend.snapshot().await;
     eprintln!("S1 final counts: inventory={inv} payment={pay} shipment={ship} email={mail}");
 
-    assert_eq!(
+    assert!(
         result,
-        Value::Bool(true),
         "S1: agent must complete successfully once /payment recovers"
     );
     assert_eq!(
@@ -1809,8 +1795,7 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
             checkout_args("127.0.0.1", port),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     let _ = reset_handle.await;
 
@@ -1821,9 +1806,8 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
          attempts: inventory={inv_a} payment={pay_a} shipment={ship_a} email={mail_a}"
     );
 
-    assert_eq!(
+    assert!(
         result,
-        Value::Bool(true),
         "S2: agent must complete successfully once /shipment recovers"
     );
     assert_eq!(
@@ -2101,15 +2085,13 @@ async fn ts_v2_s4_sustained_70_percent_chaos(
             checkout_args("127.0.0.1", port),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+        .into_typed::<bool>()?;
 
     let (inv, pay, ship, mail) = backend.snapshot().await;
     eprintln!("S4 final counts: inventory={inv} payment={pay} shipment={ship} email={mail}");
 
-    assert_eq!(
+    assert!(
         result,
-        Value::Bool(true),
         "S4: agent must complete successfully despite 70% failure rate"
     );
     assert_eq!(

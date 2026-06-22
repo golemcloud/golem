@@ -52,7 +52,7 @@ import {
   ResultTypeNonExact3,
   ObjectOrBooleanOrUndefined,
 } from './testTypes';
-import { ImportedSourceOrderedUnion } from './importedTestTypes';
+import { ImportedSourceOrderedUnion, ImportedRecTree } from './importedTestTypes';
 import { describe } from 'vitest';
 
 @agent()
@@ -857,5 +857,48 @@ export class ConfigAgent extends BaseAgent {
     const remoteClient = ConfigAgent.newPhantom(1, true);
     await remoteClient.fun1();
     await remoteClient.fun2(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recursive + mutually-recursive agent. Exercises the headline new-schema
+// feature end-to-end through the *live* boundary: real reflection / typegen ->
+// `@agent` registration -> per-agent `SchemaGraph` with `ref` defs ->
+// `ResolvedAgent.invoke`. Array-typed self-references keep finite values free
+// of optional-materialisation noise so round-trips compare with plain `toEqual`.
+// ---------------------------------------------------------------------------
+
+export interface RecTree {
+  value: number;
+  children: RecTree[];
+}
+
+export interface MutualA {
+  label: string;
+  bs: MutualB[];
+}
+
+export interface MutualB {
+  count: number;
+  as: MutualA[];
+}
+
+@agent()
+export class RecursiveAgent extends BaseAgent {
+  constructor(readonly name: string) {
+    super();
+    this.name = name;
+  }
+
+  echoTree(tree: RecTree): RecTree {
+    return tree;
+  }
+
+  echoMutual(a: MutualA): MutualA {
+    return a;
+  }
+
+  echoImportedTree(tree: ImportedRecTree): ImportedRecTree {
+    return tree;
   }
 }

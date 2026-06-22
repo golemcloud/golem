@@ -35,20 +35,23 @@ sealed trait JsIgniteDbValueWithValue extends JsIgniteDbValue {
 }
 
 object JsIgniteDbValue {
-  def dbNull: JsIgniteDbValue                                              = JsShape.tagOnly[JsIgniteDbValue]("db-null")
-  def dbBoolean(v: Boolean): JsIgniteDbValue                               = JsShape.tagged[JsIgniteDbValue]("db-boolean", v.asInstanceOf[js.Any])
-  def dbByte(v: Int): JsIgniteDbValue                                      = JsShape.tagged[JsIgniteDbValue]("db-byte", v.asInstanceOf[js.Any])
-  def dbShort(v: Int): JsIgniteDbValue                                     = JsShape.tagged[JsIgniteDbValue]("db-short", v.asInstanceOf[js.Any])
-  def dbInt(v: Int): JsIgniteDbValue                                       = JsShape.tagged[JsIgniteDbValue]("db-int", v.asInstanceOf[js.Any])
-  def dbLong(v: js.BigInt): JsIgniteDbValue                                = JsShape.tagged[JsIgniteDbValue]("db-long", v.asInstanceOf[js.Any])
-  def dbFloat(v: Double): JsIgniteDbValue                                  = JsShape.tagged[JsIgniteDbValue]("db-float", v.asInstanceOf[js.Any])
-  def dbDouble(v: Double): JsIgniteDbValue                                 = JsShape.tagged[JsIgniteDbValue]("db-double", v.asInstanceOf[js.Any])
-  def dbChar(v: Int): JsIgniteDbValue                                      = JsShape.tagged[JsIgniteDbValue]("db-char", v.asInstanceOf[js.Any])
-  def dbString(v: String): JsIgniteDbValue                                 = JsShape.tagged[JsIgniteDbValue]("db-string", v.asInstanceOf[js.Any])
-  def dbUuid(v: js.Tuple2[js.BigInt, js.BigInt]): JsIgniteDbValue          = JsShape.tagged[JsIgniteDbValue]("db-uuid", v.asInstanceOf[js.Any])
-  def dbDate(v: js.BigInt): JsIgniteDbValue                                = JsShape.tagged[JsIgniteDbValue]("db-date", v.asInstanceOf[js.Any])
-  def dbTimestamp(v: js.Tuple2[js.BigInt, Int]): JsIgniteDbValue           = JsShape.tagged[JsIgniteDbValue]("db-timestamp", v.asInstanceOf[js.Any])
-  def dbTime(v: js.BigInt): JsIgniteDbValue                                = JsShape.tagged[JsIgniteDbValue]("db-time", v.asInstanceOf[js.Any])
-  def dbDecimal(v: String): JsIgniteDbValue                                = JsShape.tagged[JsIgniteDbValue]("db-decimal", v.asInstanceOf[js.Any])
-  def dbByteArray(v: Uint8Array): JsIgniteDbValue                          = JsShape.tagged[JsIgniteDbValue]("db-byte-array", v.asInstanceOf[js.Any])
+  def dbNull: JsIgniteDbValue                                     = JsShape.tagOnly[JsIgniteDbValue]("db-null")
+  def dbBoolean(v: Boolean): JsIgniteDbValue                      = JsShape.tagged[JsIgniteDbValue]("db-boolean", v.asInstanceOf[js.Any])
+  def dbByte(v: Int): JsIgniteDbValue                             = JsShape.tagged[JsIgniteDbValue]("db-byte", v.asInstanceOf[js.Any])
+  def dbShort(v: Int): JsIgniteDbValue                            = JsShape.tagged[JsIgniteDbValue]("db-short", v.asInstanceOf[js.Any])
+  def dbInt(v: Int): JsIgniteDbValue                              = JsShape.tagged[JsIgniteDbValue]("db-int", v.asInstanceOf[js.Any])
+  def dbLong(v: js.BigInt): JsIgniteDbValue                       = JsShape.tagged[JsIgniteDbValue]("db-long", v.asInstanceOf[js.Any])
+  def dbFloat(v: Double): JsIgniteDbValue                         = JsShape.tagged[JsIgniteDbValue]("db-float", v.asInstanceOf[js.Any])
+  def dbDouble(v: Double): JsIgniteDbValue                        = JsShape.tagged[JsIgniteDbValue]("db-double", v.asInstanceOf[js.Any])
+  def dbChar(v: Int): JsIgniteDbValue                             = JsShape.tagged[JsIgniteDbValue]("db-char", v.asInstanceOf[js.Any])
+  def dbString(v: String): JsIgniteDbValue                        = JsShape.tagged[JsIgniteDbValue]("db-string", v.asInstanceOf[js.Any])
+  def dbUuid(v: js.Tuple2[js.BigInt, js.BigInt]): JsIgniteDbValue =
+    JsShape.tagged[JsIgniteDbValue]("db-uuid", v.asInstanceOf[js.Any])
+  def dbDate(v: js.BigInt): JsIgniteDbValue                      = JsShape.tagged[JsIgniteDbValue]("db-date", v.asInstanceOf[js.Any])
+  def dbTimestamp(v: js.Tuple2[js.BigInt, Int]): JsIgniteDbValue =
+    JsShape.tagged[JsIgniteDbValue]("db-timestamp", v.asInstanceOf[js.Any])
+  def dbTime(v: js.BigInt): JsIgniteDbValue       = JsShape.tagged[JsIgniteDbValue]("db-time", v.asInstanceOf[js.Any])
+  def dbDecimal(v: String): JsIgniteDbValue       = JsShape.tagged[JsIgniteDbValue]("db-decimal", v.asInstanceOf[js.Any])
+  def dbByteArray(v: Uint8Array): JsIgniteDbValue =
+    JsShape.tagged[JsIgniteDbValue]("db-byte-array", v.asInstanceOf[js.Any])
 }

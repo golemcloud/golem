@@ -16,20 +16,22 @@ use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
 use crate::model::GuestLanguage;
-use crate::model::component::{render_agent_constructor, render_data_schema};
+use crate::model::component::{
+    render_agent_constructor, render_input_schema, render_output_schema,
+};
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::RawAgentId;
 use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
-    AgentConfigSource, AgentMethod, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    PathSegment,
+    AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
-use golem_wasm::analysis::AnalysedType as LegacyAnalysedType;
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
+use golem_common::schema::graph::SchemaGraph;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -51,7 +53,7 @@ pub struct DeploymentDisplayContext<'a> {
     pub mode: DeploymentDisplayMode,
     pub deployment: &'a diff::Deployment,
     pub diff: &'a diff::DeploymentDiff,
-    pub agent_types_by_component: &'a HashMap<String, Vec<AgentType>>,
+    pub agent_types_by_component: &'a HashMap<String, Vec<AgentTypeSchema>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -136,13 +138,18 @@ mod tests {
         EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId, ResourceLimit, ResourceName,
     };
     use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
-    use golem_wasm::analysis::analysed_type::str as analysed_str;
+    use golem_common::schema::schema_type::SchemaType;
+    use golem_common::schema::{SchemaGraph, SchemaValue};
     use uuid::Uuid;
+
+    fn schema_str() -> SchemaType {
+        SchemaType::string()
+    }
 
     fn secret_dto(
         path: &[&str],
-        secret_type: golem_wasm::analysis::AnalysedType,
-        value: Option<serde_json::Value>,
+        secret_type: SchemaGraph,
+        value: Option<SchemaValue>,
     ) -> AgentSecretDto {
         AgentSecretDto {
             id: AgentSecretId(Uuid::nil()),
@@ -198,7 +205,7 @@ mod tests {
     #[::test_r::test]
     fn environment_setup_secret_type_rendering_matches_between_manifest_and_environment() {
         let mut secret_types = BTreeMap::new();
-        secret_types.insert("superSecret".to_string(), analysed_str());
+        secret_types.insert("superSecret".to_string(), schema_str());
 
         let plan = build_environment_setup_plan(
             vec![DeploymentAgentSecretDefault {
@@ -209,8 +216,8 @@ mod tests {
             Vec::new(),
             vec![secret_dto(
                 &["superSecret"],
-                analysed_str(),
-                Some(serde_json::json!("same-value")),
+                SchemaGraph::anonymous(SchemaType::string()),
+                Some(SchemaValue::String("same-value".to_string())),
             )],
             Vec::new(),
             Vec::new(),
@@ -230,8 +237,8 @@ mod tests {
     #[::test_r::test]
     fn environment_setup_classifies_secret_create_and_skip_existing() {
         let mut secret_types = BTreeMap::new();
-        secret_types.insert("createSecret".to_string(), analysed_str());
-        secret_types.insert("existingSecret".to_string(), analysed_str());
+        secret_types.insert("createSecret".to_string(), schema_str());
+        secret_types.insert("existingSecret".to_string(), schema_str());
 
         let plan = build_environment_setup_plan(
             vec![
@@ -248,8 +255,8 @@ mod tests {
             Vec::new(),
             vec![secret_dto(
                 &["existingSecret"],
-                analysed_str(),
-                Some(serde_json::json!("env")),
+                SchemaGraph::anonymous(SchemaType::string()),
+                Some(SchemaValue::String("env".to_string())),
             )],
             Vec::new(),
             Vec::new(),
@@ -365,7 +372,7 @@ impl EnvironmentSetupDisplay {
 }
 
 pub fn preferred_source_language_for_setup(
-    agent_types_by_component: &HashMap<String, Vec<AgentType>>,
+    agent_types_by_component: &HashMap<String, Vec<AgentTypeSchema>>,
 ) -> SourceLanguage {
     let mut languages = agent_types_by_component
         .values()
@@ -394,7 +401,7 @@ pub fn build_environment_setup_plan(
     current_agent_secrets: Vec<AgentSecretDto>,
     current_retry_policies: Vec<RetryPolicyDto>,
     current_resources: Vec<ResourceDefinition>,
-    secret_types_by_path: &BTreeMap<String, golem_wasm::analysis::AnalysedType>,
+    secret_types_by_path: &BTreeMap<String, golem_common::schema::schema_type::SchemaType>,
     source_language: &SourceLanguage,
 ) -> anyhow::Result<EnvironmentSetupPlan> {
     let mut display = EnvironmentSetupDisplay::default();
@@ -409,7 +416,7 @@ pub fn build_environment_setup_plan(
                 EnvironmentSetupSecretValueDisplay {
                     secret_type: secret_types_by_path
                         .get(&canonical_path_str)
-                        .map(|typ| render_legacy_type_for_language(source_language, typ))
+                        .map(|typ| render_schema_type_for_language(source_language, typ))
                         .unwrap_or_else(|| "unknown".to_string()),
                     value: masked_json_value(&default.secret_value)?,
                 },
@@ -427,9 +434,11 @@ pub fn build_environment_setup_plan(
             Ok((
                 secret.path.to_string(),
                 EnvironmentSetupSecretValueDisplay {
-                    secret_type: render_legacy_type_for_language(
+                    secret_type: render_type_for_language(
                         source_language,
                         &secret.secret_type,
+                        &secret.secret_type.root,
+                        true,
                     ),
                     value,
                 },
@@ -796,7 +805,7 @@ fn display_components(
 
 fn display_agent_type(
     show_sensitive: bool,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     component: Option<&diff::Component>,
 ) -> anyhow::Result<DeploymentDisplayAgentType> {
     let lang = SourceLanguage::from(agent.source_language.as_str());
@@ -830,7 +839,12 @@ fn display_agent_type(
         methods: agent
             .methods
             .iter()
-            .map(|method| (method.name.clone(), display_method(&lang, method)))
+            .map(|method| {
+                (
+                    method.name.clone(),
+                    display_method(&lang, &agent.schema, method),
+                )
+            })
             .collect(),
         dependencies: agent
             .dependencies
@@ -841,7 +855,7 @@ fn display_agent_type(
 }
 
 fn display_config_declarations(
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
 ) -> anyhow::Result<BTreeMap<String, DeploymentDisplayConfigDeclaration>> {
     let lang = SourceLanguage::from(agent.source_language.as_str());
 
@@ -849,16 +863,8 @@ fn display_config_declarations(
         .config
         .iter()
         .map(|config| {
-            // Adapt legacy AnalysedType at the boundary.
-            let value_type = match golem_common::schema::adapters::analysed_type_to_schema_graph(
-                &config.value_type,
-            ) {
-                Ok(graph) => {
-                    let root = graph.root.clone();
-                    render_type_for_language(&lang, &graph, &root, true)
-                }
-                Err(_) => "<unknown>".to_string(),
-            };
+            let value_type =
+                render_type_for_language(&lang, &agent.schema, &config.value_type, true);
             Ok((
                 config.path.join("."),
                 DeploymentDisplayConfigDeclaration {
@@ -872,7 +878,7 @@ fn display_config_declarations(
 
 fn display_config_defaults(
     show_sensitive: bool,
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     provision_config: Option<&diff::AgentTypeProvisionConfig>,
 ) -> anyhow::Result<BTreeMap<String, serde_json::Value>> {
     let provision_values = provision_config
@@ -964,21 +970,17 @@ fn display_plugins(
         .collect()
 }
 
-fn display_method(lang: &SourceLanguage, method: &AgentMethod) -> DeploymentDisplayMethod {
-    let output = render_data_schema(&method.output_schema, lang, false);
+fn display_method(
+    lang: &SourceLanguage,
+    graph: &SchemaGraph,
+    method: &AgentMethodSchema,
+) -> DeploymentDisplayMethod {
+    let output = render_output_schema(graph, &method.output_schema, lang);
+    let input = render_input_schema(graph, &method.input_schema, lang, true);
     let signature = if output.is_empty() {
-        format!(
-            "{}({})",
-            method.name,
-            render_data_schema(&method.input_schema, lang, true)
-        )
+        format!("{}({})", method.name, input)
     } else {
-        format!(
-            "{}({}) -> {}",
-            method.name,
-            render_data_schema(&method.input_schema, lang, true),
-            output
-        )
+        format!("{}({}) -> {}", method.name, input, output)
     };
 
     DeploymentDisplayMethod {
@@ -1316,17 +1318,16 @@ pub enum UpdateStagedComponentError {
 
 pub type UpdateStagedComponentResult<T> = Result<T, UpdateStagedComponentError>;
 
-/// Boundary helper: render a legacy [`LegacyAnalysedType`] via the schema-typed
-/// type renderer by first adapting it into a [`golem_common::schema::SchemaGraph`].
-fn render_legacy_type_for_language(
+/// Render a schema-native [`SchemaType`](golem_common::schema::schema_type::SchemaType)
+/// for the given language. Config secret value types are inline (no graph
+/// refs), so they are wrapped in a self-contained single-root graph.
+fn render_schema_type_for_language(
     source_language: &SourceLanguage,
-    typ: &LegacyAnalysedType,
+    typ: &golem_common::schema::schema_type::SchemaType,
 ) -> String {
-    match golem_common::schema::adapters::analysed_type_to_schema_graph(typ) {
-        Ok(graph) => {
-            let root = graph.root.clone();
-            render_type_for_language(source_language, &graph, &root, true)
-        }
-        Err(_) => "<unknown>".to_string(),
-    }
+    let graph = SchemaGraph {
+        defs: vec![],
+        root: typ.clone(),
+    };
+    render_type_for_language(source_language, &graph, &graph.root, true)
 }

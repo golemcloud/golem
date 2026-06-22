@@ -12,10 +12,78 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{Schema, StructuredSchema, StructuredValue};
-use crate::golem_agentic::golem::agent::common::{ElementSchema, ElementValue, TextDescriptor};
-use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
-use golem_wasm::golem_core_1_5_x::types::{TextReference, TextSource, TextType};
+use crate::SchemaValue;
+use crate::agentic::{Schema, StructuredSchema};
+use crate::schema::VariantValuePayload;
+use std::fmt::Debug;
+
+/// Represents a text value that can either be inline or a URL reference.
+///
+/// `LC` specifies the allowed language codes for inline text. Defaults to
+/// [`AnyLanguage`], which allows all languages.
+#[derive(Debug, Clone)]
+pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
+    Url(String),
+    Text {
+        text: String,
+        language_code: Option<LC>,
+    },
+}
+
+impl<T: AllowedLanguages> UnstructuredText<T> {
+    pub fn from_inline(text: impl Into<String>, language_code: T) -> UnstructuredText<T> {
+        UnstructuredText::Text {
+            text: text.into(),
+            language_code: Some(language_code),
+        }
+    }
+}
+
+impl UnstructuredText<AnyLanguage> {
+    pub fn from_url_any(url: impl Into<String>) -> UnstructuredText<AnyLanguage> {
+        UnstructuredText::Url(url.into())
+    }
+
+    pub fn from_inline_any(text: impl Into<String>) -> UnstructuredText<AnyLanguage> {
+        UnstructuredText::Text {
+            text: text.into(),
+            language_code: None,
+        }
+    }
+}
+
+pub trait AllowedLanguages: Debug + Clone {
+    fn all() -> &'static [&'static str];
+
+    fn from_language_code(code: &str) -> Option<Self>
+    where
+        Self: Sized;
+
+    fn to_language_code(&self) -> String;
+}
+
+#[derive(Debug, Clone)]
+pub struct AnyLanguage(String);
+
+impl AnyLanguage {
+    pub fn new(code: impl Into<String>) -> Self {
+        Self(code.into())
+    }
+}
+
+impl AllowedLanguages for AnyLanguage {
+    fn all() -> &'static [&'static str] {
+        &[]
+    }
+
+    fn from_language_code(code: &str) -> Option<Self> {
+        Some(Self::new(code))
+    }
+
+    fn to_language_code(&self) -> String {
+        self.0.clone()
+    }
+}
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
     fn get_type() -> StructuredSchema {
@@ -24,150 +92,74 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         } else {
             let restrictions = T::all()
                 .iter()
-                .map(|code| TextType {
-                    language_code: code.to_string(),
-                })
+                .map(|code| code.to_string())
                 .collect::<Vec<_>>();
 
             Some(restrictions)
         };
 
-        StructuredSchema::Default(ElementSchema::UnstructuredText(TextDescriptor {
-            restrictions,
-        }))
+        StructuredSchema::Default(crate::agentic::unstructured_text_schema_graph(restrictions))
     }
 
-    fn to_structured_value(self) -> Result<StructuredValue, String> {
+    fn to_schema_value(self) -> Result<SchemaValue, String> {
         match self {
             UnstructuredText::Text {
                 text,
                 language_code,
-            } => {
-                let text_type = language_code.map(|code| TextType {
-                    language_code: code.to_language_code().to_string(),
-                });
-
-                Ok(StructuredValue::Default(ElementValue::UnstructuredText(
-                    TextReference::Inline(TextSource {
-                        data: text,
-                        text_type,
-                    }),
-                )))
-            }
-
-            UnstructuredText::Url(url) => Ok(StructuredValue::Default(
-                ElementValue::UnstructuredText(TextReference::Url(url)),
+            } => Ok(crate::agentic::unstructured_text_inline_value(
+                text,
+                language_code.map(|code| code.to_language_code()),
             )),
+
+            UnstructuredText::Url(url) => Ok(crate::agentic::unstructured_text_url_value(url)),
         }
     }
 
-    fn from_structured_value(
-        value: StructuredValue,
-        _schema: StructuredSchema,
-    ) -> Result<Self, String>
+    fn from_schema_value(value: SchemaValue, _schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
-        let element_value = match value {
-            StructuredValue::Default(value) => Ok(value),
-            StructuredValue::Multimodal(_) => {
-                Err("input mismatch. expected default value, found multimodal".to_string())
-            }
-            StructuredValue::AutoInjected(_) => {
-                Err("input mismatch. expected default value, found auto-injected".to_string())
-            }
-        }?;
-
-        match element_value {
-            ElementValue::ComponentModel(_) => {
-                Err("Expected UnstructuredText ElementValue, got ComponentModel".to_string())
-            }
-            ElementValue::UnstructuredText(text_reference) => match text_reference {
-                TextReference::Url(url) => Ok(UnstructuredText::Url(url)),
-                TextReference::Inline(text_source) => {
-                    let allowed = T::all().iter().map(|s| s.to_string()).collect::<Vec<_>>();
-
-                    let language_code = match text_source.text_type {
-                        Some(text_type) => {
-                            if !allowed.is_empty() && !allowed.contains(&text_type.language_code) {
-                                return Err(format!(
-                                    "Language code '{}' is not allowed. Allowed codes: {}",
-                                    text_type.language_code,
-                                    allowed.join(", ")
-                                ));
-                            }
-
-                            T::from_language_code(&text_type.language_code)
-                        }
-                        None => None,
-                    };
-
-                    Ok(UnstructuredText::Text {
-                        text: text_source.data,
-                        language_code,
-                    })
-                }
-            },
-            ElementValue::UnstructuredBinary(_) => {
-                Err("Expected UnstructuredText ElementValue, got UnstructuredBinary".to_string())
-            }
-        }
-    }
-
-    fn to_element_value(self) -> Result<ElementValue, String> {
-        match self {
-            UnstructuredText::Text {
-                text,
-                language_code,
-            } => {
-                let text_type = language_code.map(|code| TextType {
-                    language_code: code.to_language_code().to_string(),
-                });
-                Ok(ElementValue::UnstructuredText(TextReference::Inline(
-                    TextSource {
-                        data: text,
-                        text_type,
-                    },
-                )))
-            }
-            UnstructuredText::Url(url) => {
-                Ok(ElementValue::UnstructuredText(TextReference::Url(url)))
-            }
-        }
-    }
-
-    fn from_element_value(value: ElementValue) -> Result<Self, String> {
         match value {
-            ElementValue::UnstructuredText(text_reference) => match text_reference {
-                TextReference::Url(url) => Ok(UnstructuredText::Url(url)),
-                TextReference::Inline(text_source) => {
-                    let allowed = T::all().iter().map(|s| s.to_string()).collect::<Vec<_>>();
-
-                    let language_code = match text_source.text_type {
-                        Some(text_type) => {
-                            if !allowed.is_empty() && !allowed.contains(&text_type.language_code) {
-                                return Err(format!(
-                                    "Language code '{}' is not allowed. Allowed codes: {}",
-                                    text_type.language_code,
-                                    allowed.join(", ")
-                                ));
-                            }
-
-                            T::from_language_code(&text_type.language_code)
-                        }
-                        None => None,
-                    };
-
-                    Ok(UnstructuredText::Text {
-                        text: text_source.data,
-                        language_code,
-                    })
+            SchemaValue::Variant(VariantValuePayload { case: 0, payload }) => {
+                match payload.map(|payload| *payload) {
+                    Some(SchemaValue::Text(payload)) => Self::from_text_payload(payload),
+                    Some(other) => Err(format!(
+                        "Expected inline UnstructuredText payload, got: {:?}",
+                        other
+                    )),
+                    None => Err("Missing inline UnstructuredText payload".to_string()),
                 }
-            },
+            }
+            SchemaValue::Variant(VariantValuePayload { case: 1, payload }) => {
+                match payload.map(|payload| *payload) {
+                    Some(SchemaValue::Url { url }) => Ok(UnstructuredText::Url(url)),
+                    Some(other) => Err(format!(
+                        "Expected UnstructuredText URL payload, got: {:?}",
+                        other
+                    )),
+                    None => Err("Missing UnstructuredText URL payload".to_string()),
+                }
+            }
             other => Err(format!(
-                "Expected UnstructuredText ElementValue, got: {:?}",
+                "Expected UnstructuredText schema value, got: {:?}",
                 other
             )),
         }
+    }
+}
+
+impl<T: AllowedLanguages> UnstructuredText<T> {
+    fn from_text_payload(payload: crate::schema::TextValuePayload) -> Result<Self, String> {
+        let language_code = match payload.language {
+            Some(code) => Some(T::from_language_code(&code).ok_or_else(|| {
+                format!("Language code '{code}' is not allowed for UnstructuredText")
+            })?),
+            None => None,
+        };
+
+        Ok(UnstructuredText::Text {
+            text: payload.text,
+            language_code,
+        })
     }
 }

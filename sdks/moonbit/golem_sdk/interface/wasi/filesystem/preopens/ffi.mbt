@@ -4,14 +4,6 @@
 fn wasmImportGetDirectories(p0 : Int) = "wasi:filesystem/preopens@0.2.3" "get-directories"
 
 ///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -19,8 +11,16 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1 i32.const 8 i32.add)
 
 ///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #|(func (param i32) (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 8 i32.sub local.tee 2
   #| local.get 1 call $moonbit.init_array16
   #| local.get 2)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)

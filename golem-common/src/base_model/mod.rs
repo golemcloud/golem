@@ -54,10 +54,6 @@ pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
 use crate::{declare_structs, newtype_uuid};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
-use golem_wasm::{FromValue, IntoValue, Value};
-use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
@@ -129,54 +125,16 @@ impl From<u64> for Timestamp {
     }
 }
 
-impl IntoValue for Timestamp {
-    fn into_value(self) -> Value {
-        let d = self
-            .0
-            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
-        Value::Record(vec![
-            Value::U64(d.whole_seconds() as u64),
-            Value::U32(d.subsec_nanoseconds() as u32),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-            .named("datetime")
-            .owned("wasi:clocks@0.2.3/wall-clock")
-    }
-}
-
-impl FromValue for Timestamp {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Record(fields) if fields.len() == 2 => {
-                let mut iter = fields.into_iter();
-                let seconds = u64::from_value(iter.next().unwrap())?;
-                let nanos = u32::from_value(iter.next().unwrap())?;
-                Ok(Self(
-                    iso8601_timestamp::Timestamp::UNIX_EPOCH
-                        .add(Duration::from_secs(seconds))
-                        .add(Duration::from_nanos(nanos as u64)),
-                ))
-            }
-            other => Err(format!(
-                "Expected a record with two fields for Timestamp, got {other:?}"
-            )),
-        }
-    }
-}
-
 // A stable, per-instance fingerprint for a worker, generated as a random UUID
 // at creation time. Globally unique across recreations of the same agent ID.
 newtype_uuid!(
     AgentFingerprint,
     wit_name: "agent-fingerprint",
-    wit_owner: "golem:core@1.5.0/types"
+    wit_owner: "golem:core@2.0.0/types"
 );
 
 #[cfg(feature = "full")]
-impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
+impl From<Timestamp> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
     fn from(value: Timestamp) -> Self {
         let ms = value.to_millis();
         Self {
@@ -186,15 +144,23 @@ impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
-    derive(
-        desert_rust::BinaryCodec,
-        poem_openapi::Object,
-        golem_wasm_derive::IntoValue,
-        golem_wasm_derive::FromValue
-    )
+    derive(desert_rust::BinaryCodec, poem_openapi::Object,)
 )]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -268,16 +234,6 @@ impl Display for ShardId {
     }
 }
 
-impl golem_wasm::IntoValue for ShardId {
-    fn into_value(self) -> Value {
-        Value::S64(self.value)
-    }
-
-    fn get_type() -> AnalysedType {
-        golem_wasm::analysis::analysed_type::s64()
-    }
-}
-
 #[derive(
     Clone,
     Debug,
@@ -288,8 +244,8 @@ impl golem_wasm::IntoValue for ShardId {
     Hash,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
-    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -298,7 +254,7 @@ impl golem_wasm::IntoValue for ShardId {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "agent-id", owner = "golem:core@1.5.0/types")]
+#[schema(named = "agent-id")]
 pub struct AgentId {
     pub component_id: ComponentId,
     pub agent_id: String,
@@ -354,10 +310,20 @@ impl AsRef<AgentId> for &AgentId {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue,)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -391,14 +357,19 @@ impl Display for PromiseId {
     Default,
     serde::Serialize,
     serde::Deserialize,
-    golem_wasm_derive::IntoValue,
-    golem_wasm_derive::FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
 )]
 #[cfg_attr(feature = "full", desert(transparent))]
+// Newtype over `u64`: represent it transparently in the schema so it matches the
+// WIT/guest representation (plain `u64`), consistent with `desert(transparent)`
+// and the OpenAPI `NewType`. Without this the schema derive would encode it as a
+// single-element tuple, which fails to decode guest-produced `u64` values.
+#[schema(transparent)]
 pub struct OplogIndex(pub(crate) u64);
 
 impl OplogIndex {
@@ -468,8 +439,8 @@ impl From<OplogIndex> for u64 {
     Default,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
-    FromValue,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -549,10 +520,17 @@ pub fn validate_lower_kebab_case_identifier(
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Hash,
+    PartialEq,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
-#[wit_transparent]
 pub struct IdempotencyKey {
     pub value: String,
 }
@@ -661,7 +639,18 @@ pub struct AgentResourceDescription {
 ///
 /// This is always recorded together with the current oplog index, and it can only be used
 /// as a source of truth if there are no newer oplog entries since the record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum AgentStatus {

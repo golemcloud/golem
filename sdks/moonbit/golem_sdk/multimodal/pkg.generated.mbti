@@ -1,0 +1,30 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/multimodal"
+
+import {
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct Multimodal[T] {
+  items : Array[T]
+}
+pub fn[T] Multimodal::new(Array[T]) -> Self[T]
+pub impl[T : MultimodalModality] @schema.FromSchema for Multimodal[T]
+pub impl[T : MultimodalModality] @schema.IntoSchema for Multimodal[T]
+
+// Type aliases
+
+// Traits
+pub(open) trait MultimodalModality {
+  multimodal_type_id() -> String
+  multimodal_cases(@schema_model.SchemaBuilder) -> Array[@schema_model.VariantCaseType]
+  to_modality_value(Self) -> (UInt, @schema_model.SchemaValue)
+  from_modality_value(UInt, @schema_model.SchemaValue) -> Self raise @schema.FromSchemaError
+}
+

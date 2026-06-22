@@ -1,7 +1,7 @@
 package golem:api;
 
 world golem {
-  import golem:agent/host@1.5.0;
+  import golem:agent/host@2.0.0;
   import golem:api/host@1.5.0;
   import golem:api/retry@1.5.0;
   import golem:api/context@1.5.0;
@@ -24,4 +24,20 @@ world golem {
   import golem:rdbms/types@1.5.0;
   import golem:websocket/client@1.5.0;
   import golem:quota/types@1.5.0;
+
+  // Agent guest-export interfaces the executor invokes through bindgen-typed
+  // APIs (replacing the legacy dynamic `Func`/`Val` dispatch + value bridge).
+  // Every agent component exports all three.
+  export golem:agent/guest@2.0.0;
+  export golem:api/save-snapshot@1.5.0;
+  export golem:api/load-snapshot@1.5.0;
+}
+
+// Oplog-processor plugins are a separate component shape: they export
+// `oplog-processor` instead of the agent guest interfaces. This world is used
+// only to generate the executor-side `call_process` export accessor; its second
+// bindgen shares every binding it references with the `golem` world via `with:`,
+// so nothing here is regenerated except the accessor and `account-info`.
+world oplog-processor-plugin {
+  export golem:api/oplog-processor@1.5.0;
 }

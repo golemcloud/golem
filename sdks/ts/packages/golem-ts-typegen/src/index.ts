@@ -39,6 +39,17 @@ import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownType
 import * as fs from 'node:fs';
 import path from 'path';
 
+// Tracks the types currently being expanded along a single traversal path, so a
+// self-reference can be emitted as a finite recursive back-edge instead of being
+// expanded forever. The value is the `owner` the type was first registered with
+// on this path: a recursive back-edge must inherit it verbatim so the downstream
+// mapper resolves the back-edge to the *same* type id as the root definition.
+// (The owner is reference-site dependent — e.g. an imported type carries the
+// import path at the root reference but resolves to `undefined` when re-derived
+// from a same-module self-reference deep inside its own body — so recomputing it
+// at the back-edge would break cross-module recursive types.)
+type VisitedTypes = Map<TsMorphType, string | undefined>;
+
 export function getTypeFromTsMorph(
   tsMorphType: TsMorphType,
   isOptional: boolean,
@@ -50,7 +61,7 @@ export function getTypeFromTsMorph(
       tsMorphType,
       isOptional,
       wellKnownTypes,
-      new Set(),
+      new Map(),
       sourceTypeNode,
     );
   } catch (e) {
@@ -78,7 +89,7 @@ function getTypeFromTsMorphInternal(
   tsMorphType: TsMorphType,
   isOptional: boolean,
   wellKnownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
   sourceTypeNode?: TsMorphNode,
 ): Type.Type {
   const type = unwrapAlias(tsMorphType);
@@ -90,12 +101,15 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'others',
       name: rawName ?? aliasName ?? type.getText(),
-      owner,
+      // Inherit the owner the root definition was registered with on this path,
+      // not the (reference-site dependent) owner re-derived here, so the mapper
+      // resolves this back-edge to the same type id as the root. See VisitedTypes.
+      owner: visitedTypes.get(type),
       optional: isOptional,
       recursive: true,
     };
   }
-  visitedTypes.add(type);
+  visitedTypes.set(type, owner);
 
   if (isExactly(type, wellKnownTypes.object)) {
     const name = rawName ?? aliasName ?? type.getText();
@@ -135,8 +149,8 @@ function getTypeFromTsMorphInternal(
 
   if (isExactly(type, wellKnownTypes.containers.map)) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes, new Set(visitedTypes));
-    const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes, new Set(visitedTypes));
+    const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes, new Map(visitedTypes));
+    const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes, new Map(visitedTypes));
     return {
       kind: 'map',
       name: aliasName,
@@ -204,7 +218,7 @@ function getTypeFromTsMorphInternal(
   if (type.isTuple()) {
     const tupleElems = type
       .getTupleElements()
-      .map((el) => getTypeFromTsMorphInternal(el, false, wellKnownTypes, new Set(visitedTypes)));
+      .map((el) => getTypeFromTsMorphInternal(el, false, wellKnownTypes, new Map(visitedTypes)));
 
     return {
       kind: 'tuple',
@@ -376,10 +390,10 @@ function getTypeFromTsMorphInternal(
 function getCanonicalFallbackUnionTypes(
   unionTypes: TsMorphType[],
   wellKnownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
 ): Type.Type[] {
   const withKeys = unionTypes.map((member, index) => {
-    const mapped = getTypeFromTsMorphInternal(member, false, wellKnownTypes, new Set(visitedTypes));
+    const mapped = getTypeFromTsMorphInternal(member, false, wellKnownTypes, new Map(visitedTypes));
     return {
       index,
       mapped,
@@ -400,7 +414,7 @@ function getSourceOrderedUnionTypes(
   unionType: TsMorphType,
   sourceTypeNode: TsMorphNode | undefined,
   wellKnownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
 ): Type.Type[] | undefined {
   const sourceUnionTypeNode =
     resolveUnionTypeNode(sourceTypeNode) ?? resolveUnionTypeNodeFromType(unionType);
@@ -414,7 +428,7 @@ function getSourceOrderedUnionTypes(
         member.getType(),
         false,
         wellKnownTypes,
-        new Set(visitedTypes),
+        new Map(visitedTypes),
         member,
       ),
     );
@@ -959,7 +973,7 @@ export function loadTypeMetadataFromJsonFile() {
 function propertiesAsSymbols(
   type: TsMorphType,
   wellknownTypes: WellKnownTypes,
-  visitedTypes: Set<TsMorphType>,
+  visitedTypes: VisitedTypes,
 ): Symbol[] {
   return type.getProperties().map((prop) => {
     const firstDeclaration = prop.getDeclarations()[0];
@@ -975,7 +989,7 @@ function propertiesAsSymbols(
       type,
       false,
       wellknownTypes,
-      new Set(visitedTypes),
+      new Map(visitedTypes),
       sourceTypeNode,
     );
     const propName = prop.getName();

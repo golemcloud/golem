@@ -21,7 +21,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
-use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::oplog::OplogCursor;
@@ -1105,9 +1105,9 @@ fn normalize_agent_name_with_latest_component(
 ) -> Result<AgentId> {
     if latest_component.metadata.is_agent()
         && let Ok((parsed_agent_id, agent_type)) =
-            LegacyParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
+            ParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
     {
-        let normalized_agent_id = LegacyParsedAgentId::new_auto_phantom(
+        let normalized_agent_id = ParsedAgentId::new_auto_phantom(
             parsed_agent_id.agent_type,
             parsed_agent_id.parameters,
             parsed_agent_id.phantom_id,
@@ -1151,36 +1151,38 @@ mod tests {
     use golem_common::model::AgentId;
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
-        NamedElementSchemas, Snapshotting,
-    };
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        SchemaGraph,
+    };
     use golem_service_base::model::component::Component;
     use test_r::test;
     use uuid::Uuid;
 
-    fn test_agent_type(mode: AgentMode) -> AgentType {
-        AgentType {
+    fn test_agent_type(mode: AgentMode) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName("weather-agent".to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            methods: vec![AgentMethod {
+            methods: vec![AgentMethodSchema {
                 name: "run".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![],
                 read_only: None,
             }],

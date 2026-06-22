@@ -38,9 +38,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    AgentInvocationMode, AgentPrincipal, Principal, UntypedDataValue,
-};
+use golem_common::model::agent::{AgentInvocationMode, AgentPrincipal, Principal};
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
@@ -48,6 +46,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
@@ -75,20 +74,20 @@ pub trait Rpc: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         auth_ctx: &AuthCtx,
-    ) -> Result<UntypedDataValue, RpcError>;
+    ) -> Result<SchemaValue, RpcError>;
 
     async fn invoke(
         &self,
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -328,13 +327,13 @@ impl Rpc for RemoteInvocationRpc {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         auth_ctx: &AuthCtx,
-    ) -> Result<UntypedDataValue, RpcError> {
+    ) -> Result<SchemaValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
 
         let output = self
@@ -370,7 +369,7 @@ impl Rpc for RemoteInvocationRpc {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -857,13 +856,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         auth_ctx: &AuthCtx,
-    ) -> Result<UntypedDataValue, RpcError> {
+    ) -> Result<SchemaValue, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
         if self
@@ -936,7 +935,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],

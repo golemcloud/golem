@@ -1,7 +1,7 @@
 {
   "components": {
     "schemas": {
-      "JsonBodyResponse": {
+      "golem_it_agent_sdk_rust.http.model.JsonBodyResponse": {
         "additionalProperties": false,
         "properties": {
           "ok": {
@@ -14,7 +14,7 @@
         "title": "JsonBodyResponse",
         "type": "object"
       },
-      "JsonResponse": {
+      "golem_it_agent_sdk_rust.http.model.JsonResponse": {
         "additionalProperties": false,
         "properties": {
           "value": {
@@ -27,7 +27,7 @@
         "title": "JsonResponse",
         "type": "object"
       },
-      "MultiPathVarsResponse": {
+      "golem_it_agent_sdk_rust.http.model.MultiPathVarsResponse": {
         "additionalProperties": false,
         "properties": {
           "joined": {
@@ -40,7 +40,7 @@
         "title": "MultiPathVarsResponse",
         "type": "object"
       },
-      "OkResponse": {
+      "golem_it_agent_sdk_rust.http.model.OkResponse": {
         "additionalProperties": false,
         "properties": {
           "ok": {
@@ -53,7 +53,7 @@
         "title": "OkResponse",
         "type": "object"
       },
-      "OptionalResponse": {
+      "golem_it_agent_sdk_rust.http.model.OptionalResponse": {
         "additionalProperties": false,
         "properties": {
           "value": {
@@ -66,7 +66,7 @@
         "title": "OptionalResponse",
         "type": "object"
       },
-      "PathAndHeaderResponse": {
+      "golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse": {
         "additionalProperties": false,
         "properties": {
           "request_id": {
@@ -83,7 +83,7 @@
         "title": "PathAndHeaderResponse",
         "type": "object"
       },
-      "PathAndQueryResponse": {
+      "golem_it_agent_sdk_rust.http.model.PathAndQueryResponse": {
         "additionalProperties": false,
         "properties": {
           "id": {
@@ -102,7 +102,7 @@
         "title": "PathAndQueryResponse",
         "type": "object"
       },
-      "PreflightRequest": {
+      "golem_it_agent_sdk_rust.http.model.PreflightRequest": {
         "additionalProperties": false,
         "properties": {
           "name": {
@@ -115,7 +115,7 @@
         "title": "PreflightRequest",
         "type": "object"
       },
-      "PreflightResponse": {
+      "golem_it_agent_sdk_rust.http.model.PreflightResponse": {
         "additionalProperties": false,
         "properties": {
           "received": {
@@ -128,7 +128,7 @@
         "title": "PreflightResponse",
         "type": "object"
       },
-      "RemainingPathResponse": {
+      "golem_it_agent_sdk_rust.http.model.RemainingPathResponse": {
         "additionalProperties": false,
         "properties": {
           "tail": {
@@ -141,7 +141,7 @@
         "title": "RemainingPathResponse",
         "type": "object"
       },
-      "ResourceResponse": {
+      "golem_it_agent_sdk_rust.http.model.ResourceResponse": {
         "additionalProperties": false,
         "properties": {
           "id": {
@@ -162,7 +162,7 @@
         "title": "ResourceResponse",
         "type": "object"
       },
-      "ResourceUpdate": {
+      "golem_it_agent_sdk_rust.http.model.ResourceUpdate": {
         "additionalProperties": false,
         "properties": {
           "description": {
@@ -200,7 +200,7 @@
         "title": "ResourceUpdate",
         "type": "object"
       },
-      "ResultErrResponse": {
+      "golem_it_agent_sdk_rust.http.model.ResultErrResponse": {
         "additionalProperties": false,
         "properties": {
           "error": {
@@ -213,7 +213,7 @@
         "title": "ResultErrResponse",
         "type": "object"
       },
-      "ResultOkResponse": {
+      "golem_it_agent_sdk_rust.http.model.ResultOkResponse": {
         "additionalProperties": false,
         "properties": {
           "value": {
@@ -226,7 +226,7 @@
         "title": "ResultOkResponse",
         "type": "object"
       },
-      "StringPathVarResponse": {
+      "golem_it_agent_sdk_rust.http.model.StringPathVarResponse": {
         "additionalProperties": false,
         "properties": {
           "value": {
@@ -239,7 +239,7 @@
         "title": "StringPathVarResponse",
         "type": "object"
       },
-      "WebhookResponse": {
+      "golem_it_agent_sdk_rust.http.model.WebhookResponse": {
         "additionalProperties": false,
         "properties": {
           "payload_length": {
@@ -284,7 +284,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OkResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.OkResponse"
                 }
               }
             },
@@ -405,7 +405,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "body": {
-                    "$ref": "#/components/schemas/PreflightRequest"
+                    "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.PreflightRequest"
                   }
                 },
                 "required": [
@@ -423,7 +423,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PreflightResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.PreflightResponse"
                 }
               }
             },
@@ -454,7 +454,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OkResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.OkResponse"
                 }
               }
             },
@@ -600,7 +600,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonBodyResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.JsonBodyResponse"
                 }
               }
             },
@@ -653,7 +653,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MultiPathVarsResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.MultiPathVarsResponse"
                 }
               }
             },
@@ -706,7 +706,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PathAndHeaderResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse"
                 }
               }
             },
@@ -762,7 +762,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PathAndQueryResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.PathAndQueryResponse"
                 }
               }
             },
@@ -806,7 +806,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "update": {
-                    "$ref": "#/components/schemas/ResourceUpdate"
+                    "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResourceUpdate"
                   }
                 },
                 "required": [
@@ -824,7 +824,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResourceResponse"
                 }
               }
             },
@@ -866,7 +866,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResourceResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResourceResponse"
                 }
               }
             },
@@ -929,7 +929,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.JsonResponse"
                 }
               }
             },
@@ -995,7 +995,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OptionalResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.OptionalResponse"
                 }
               }
             },
@@ -1040,7 +1040,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResultOkResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultOkResponse"
                 }
               }
             },
@@ -1050,7 +1050,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResultErrResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultErrResponse"
                 }
               }
             },
@@ -1081,7 +1081,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResultOkResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultOkResponse"
                 }
               }
             },
@@ -1118,7 +1118,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResultErrResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultErrResponse"
                 }
               }
             },
@@ -1161,7 +1161,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RemainingPathResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.RemainingPathResponse"
                 }
               }
             },
@@ -1259,7 +1259,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StringPathVarResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.StringPathVarResponse"
                 }
               }
             },
@@ -1390,7 +1390,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebhookResponse"
+                  "$ref": "#/components/schemas/golem_it_agent_sdk_rust.http.model.WebhookResponse"
                 }
               }
             },

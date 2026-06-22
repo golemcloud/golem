@@ -12,48 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Recursive in-memory mirror of the `golem:core@2.0.0` schema model.
+//! Compatibility layer around [`golem_schema`].
 //!
-//! The WIT package describes a flat, index-based representation suitable for
-//! wire transport. Rust consumers work with a recursive form that mechanically
-//! converts to and from the flat form. The conversion lives in [`wit`], which
-//! is gated on the `full` feature because it depends on the `wit-bindgen` /
-//! `wasmtime` bindings re-exported from `golem-wasm`.
+//! The schema/value core lives in `golem-schema` so the Rust SDK and the Golem
+//! services can share one native model while selecting guest or host WIT
+//! bindings through crate features. `golem-common` keeps only the platform
+//! extension modules layered on top of that core.
 
-#[cfg(feature = "full")]
-pub mod adapters;
 pub mod agent;
-pub mod canonical;
-pub mod conversion;
-pub mod derive;
-pub mod graph;
-pub mod metadata;
+mod common_impls;
 #[cfg(feature = "full")]
 pub mod protobuf;
 pub mod render;
-pub mod schema_type;
-pub mod schema_value;
 pub mod validation;
-#[cfg(feature = "full")]
-pub mod wit;
 
-/// Proptest strategies for `SchemaType` / `SchemaValue` / `SchemaGraph`,
-/// available to this crate's tests and (behind the `proptest` feature) to
-/// downstream crates' test code.
 #[cfg(any(test, feature = "proptest"))]
-pub mod proptest_strategies;
+pub use golem_schema::schema::proptest_strategies;
+#[cfg(feature = "full")]
+pub use golem_schema::schema::wit;
+pub use golem_schema::schema::{
+    canonical, conversion, derive, graph, metadata, multimodal, schema_type, schema_value,
+    unstructured,
+};
 
 #[cfg(test)]
 mod tests;
 
 pub use agent::{
     AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-    AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema, ParsedAgentId,
-    RegisteredAgentTypeSchema,
+    AutoInjectedKind, FALLBACK_OUTPUT_FIELD_NAME, FieldSource, InputSchema,
+    MULTIMODAL_PARTS_FIELD_NAME, NamedField, OutputSchema, ParsedAgentId,
+    RegisteredAgentTypeSchema, build_input_record, json_input_schema_value_to_typed_schema_value,
+    typed_schema_value_with_projected_defs,
 };
 pub use conversion::{
-    DecodeError, FromSchema, FromSchemaError, IntoSchema, MergeError, SchemaBuilder,
-    merge_agent_graphs, try_into_schema_graph,
+    DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
+    SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
 };
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};

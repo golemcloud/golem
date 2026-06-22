@@ -1,28 +1,22 @@
-use golem_rust::bindings::golem::api::host::{
-    AgentAnyFilter, AgentMetadata, ComponentId as HostComponentId, GetAgents, UpdateMode,
-    get_agent_metadata, get_oplog_index, get_self_metadata, resolve_agent_id,
-    resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
+use golem_rust::retry::{
+    CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, RetryPolicy, RetryPredicate,
+    get_retry_policies, get_retry_policy_by_name, remove_retry_policy, set_retry_policy,
+    use_retry_policy,
 };
 use golem_rust::{
-    agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
-    atomically, atomically_async, get_promise, fork, oplog_commit,
-    fallible_transaction, infallible_transaction,
-    use_idempotence_mode, use_persistence_level,
-    with_persistence_level, with_persistence_level_async,
-    Checkpoint, CheckpointResultExt, PersistenceLevel,
-    ForkResult, PromiseId, Transaction, Uuid,
-};
-use golem_rust::retry::{
-    get_retry_policies, get_retry_policy_by_name, set_retry_policy, remove_retry_policy,
-    use_retry_policy, NamedRetryPolicy, RetryPolicy, RetryPredicate,
-};
-use golem_rust::bindings::golem::api::retry::{
-    PolicyNode, PredicateNode, CountBoxConfig,
+    AgentAnyFilter, AgentId, AgentMetadata, Checkpoint, CheckpointResultExt, ComponentId,
+    ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId, Transaction,
+    UpdateMode, Uuid, agent_definition, agent_implementation, atomically, atomically_async,
+    fallible_transaction, fork, generate_idempotency_key, get_agent_metadata, get_oplog_index,
+    get_promise, get_self_metadata, golem_operation, infallible_transaction, oplog_commit,
+    resolve_agent_id, resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
+    use_idempotence_mode, use_persistence_level, with_persistence_level,
+    with_persistence_level_async,
 };
 use golem_wasi_http::{Client, Response};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Schema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,
@@ -55,21 +49,13 @@ pub trait GolemHostApi {
     fn jump(&self) -> u64;
     fn get_workers(
         &self,
-        component_id: HostComponentId,
+        component_id: ComponentId,
         filter: Option<AgentAnyFilter>,
         precise: bool,
     ) -> Vec<AgentMetadata>;
     fn get_self_uri(&self) -> AgentMetadata;
-    fn get_worker_metadata(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-    ) -> Option<AgentMetadata>;
-    fn update_worker(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-        component_revision: u64,
-        update_mode: UpdateMode,
-    );
+    fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
+    fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode);
     fn generate_idempotency_keys(&self) -> (Uuid, Uuid);
 
     fn list_retry_policy_names(&self) -> Vec<String>;
@@ -269,29 +255,33 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     async fn fallible_transaction_test(&self) -> u64 {
-        fallible_transaction(|tx| golem_rust::boxed(async move {
-            tx.transaction_step(1).await?;
-            tx.transaction_step(2).await?;
-            if tx.transaction_step(3).await? {
-                tx.fail("fail after 3".to_string()).await?
-            }
-            tx.transaction_step(4).await?;
-            Ok(11)
-        }))
+        fallible_transaction(|tx| {
+            golem_rust::boxed(async move {
+                tx.transaction_step(1).await?;
+                tx.transaction_step(2).await?;
+                if tx.transaction_step(3).await? {
+                    tx.fail("fail after 3".to_string()).await?
+                }
+                tx.transaction_step(4).await?;
+                Ok(11)
+            })
+        })
         .await
         .expect("Transaction failed")
     }
 
     async fn infallible_transaction_test(&self) -> u64 {
-        infallible_transaction(|tx| golem_rust::boxed(async move {
-            let _ = tx.transaction_step(1).await;
-            let _ = tx.transaction_step(2).await;
-            if tx.transaction_step(3).await.unwrap() {
-                panic!("crash after 3");
-            }
-            let _ = tx.transaction_step(4).await;
-            11
-        }))
+        infallible_transaction(|tx| {
+            golem_rust::boxed(async move {
+                let _ = tx.transaction_step(1).await;
+                let _ = tx.transaction_step(2).await;
+                if tx.transaction_step(3).await.unwrap() {
+                    panic!("crash after 3");
+                }
+                let _ = tx.transaction_step(4).await;
+                11
+            })
+        })
         .await
     }
 
@@ -400,7 +390,7 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn get_workers(
         &self,
-        component_id: HostComponentId,
+        component_id: ComponentId,
         filter: Option<AgentAnyFilter>,
         precise: bool,
     ) -> Vec<AgentMetadata> {
@@ -421,19 +411,11 @@ impl GolemHostApi for GolemHostApiImpl {
         get_self_metadata()
     }
 
-    fn get_worker_metadata(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-    ) -> Option<AgentMetadata> {
+    fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata> {
         get_agent_metadata(&agent_id)
     }
 
-    fn update_worker(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-        component_revision: u64,
-        update_mode: UpdateMode,
-    ) {
+    fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode) {
         update_agent(&agent_id, component_revision, update_mode);
     }
 
@@ -444,10 +426,7 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn list_retry_policy_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = get_retry_policies()
-            .into_iter()
-            .map(|p| p.name)
-            .collect();
+        let mut names: Vec<String> = get_retry_policies().into_iter().map(|p| p.name).collect();
         names.sort();
         names
     }

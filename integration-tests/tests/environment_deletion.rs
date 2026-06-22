@@ -17,13 +17,13 @@ use axum::Router;
 use axum::routing::post;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::{AgentStatus, PromiseId};
+use golem_common::schema::FromSchema;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::FromValue;
 use pretty_assertions::assert_matches;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -372,18 +372,18 @@ async fn complete_promise_in_deleted_environment_results_in_404(
         .invoke_and_await_agent(&component, &agent_id, "getPromise", data_value!())
         .await?;
 
-    let promise_id_vat = result
-        .into_return_value_and_type()
+    let promise_id_value = result
+        .into_return_value()
         .ok_or_else(|| anyhow!("expected promise id return value"))?;
     let promise_id =
-        PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
+        <PromiseId as FromSchema>::from_value(&promise_id_value).map_err(|e| anyhow!("{e}"))?;
 
     // Suspend the agent on the promise.
     user.invoke_agent(
         &component,
         &agent_id,
         "awaitPromise",
-        data_value!(promise_id_vat),
+        data_value!(promise_id.clone()),
     )
     .await?;
 

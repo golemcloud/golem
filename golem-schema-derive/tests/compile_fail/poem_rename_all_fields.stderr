@@ -1,0 +1,5 @@
+error: PoemSchema does not support `#[serde(rename_all_fields = ...)]`
+  --> tests/compile_fail/poem_rename_all_fields.rs:18:42
+   |
+18 | #[serde(tag = "kind", content = "value", rename_all_fields = "camelCase")]
+   |                                          ^^^^^^^^^^^^^^^^^

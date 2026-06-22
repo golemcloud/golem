@@ -20,22 +20,32 @@ use wstd::http::{Body, Client, Request};
 pub trait QuotaRpcReceiver {
     fn new(name: String) -> Self;
 
-    async fn reserve_and_call_in_loop(&self, child_token: QuotaToken, host: String, port: u16, max_iterations: u64);
+    async fn reserve_and_call_in_loop(
+        &self,
+        child_token: QuotaToken,
+        host: String,
+        port: u16,
+        max_iterations: u64,
+    );
 }
 
 pub struct QuotaRpcReceiverImpl {
-    _name: String
+    _name: String,
 }
 
 #[agent_implementation]
 impl QuotaRpcReceiver for QuotaRpcReceiverImpl {
     fn new(name: String) -> Self {
-        Self {
-            _name: name
-        }
+        Self { _name: name }
     }
 
-    async fn reserve_and_call_in_loop(&self, token: QuotaToken, host: String, port: u16, max_iterations: u64) {
+    async fn reserve_and_call_in_loop(
+        &self,
+        token: QuotaToken,
+        host: String,
+        port: u16,
+        max_iterations: u64,
+    ) {
         for _ in 0..max_iterations {
             match token.reserve(1) {
                 Err(_) => break,

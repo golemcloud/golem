@@ -32,22 +32,224 @@
 //! the value tree.
 
 use crate::base_model::agent::{
-    AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
+    AgentConfigSource, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
     ReadOnlyConfig, RegisteredAgentTypeImplementer, Snapshotting,
 };
-use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
-use crate::schema::metadata::MetadataEnvelope;
-use crate::schema::schema_type::SchemaType;
+use crate::schema::graph::{GraphIndex, SchemaGraph, SchemaTypeDef, TypedSchemaValue};
+use crate::schema::metadata::{MetadataEnvelope, TypeId};
+use crate::schema::schema_type::{NamedFieldType, SchemaType};
+use crate::schema::schema_value::SchemaValue;
+use crate::schema::validation::value::validate_value;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use uuid::Uuid;
+
+/// Name of the synthetic single user-supplied field that carries the parts of
+/// a multimodal agent input (`list<variant<… Role::Multimodal>>`).
+pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
+
+/// Name of the synthetic field used to wrap a single-value (non-multimodal)
+/// agent output that has no declared field name of its own.
+pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
+
+/// Lift raw client JSON (a bare schema-native [`SchemaValue`]) plus an agent
+/// constructor/method [`InputSchema`] and its owning [`SchemaGraph`] into a
+/// validated [`TypedSchemaValue`].
+///
+/// The synthesized input record is the single root of the returned value, so
+/// its `defs` are projected to exactly the named-type definitions reachable
+/// from that root (see [`SchemaGraph`] and [`reachable_defs`]). This keeps the
+/// result self-contained — every `SchemaType::Ref` in the field bodies resolves
+/// during validation and for any later receiver — while dropping the rest of
+/// the agent's multi-root definition registry, which the value can never
+/// reference.
+pub fn json_input_schema_value_to_typed_schema_value(
+    json: JsonValue,
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
+) -> Result<TypedSchemaValue, String> {
+    let value: SchemaValue =
+        serde_json::from_value(json).map_err(|e| format!("invalid schema value: {e}"))?;
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    let root = SchemaType::record(fields);
+    let result_graph = SchemaGraph {
+        defs: reachable_defs(graph, &root),
+        root,
+    };
+    validate_value(&result_graph, &result_graph.root, &value).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|err| err.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    Ok(TypedSchemaValue::new(result_graph, value))
+}
+
+/// Build a self-contained [`TypedSchemaValue`] from an already-validated
+/// [`SchemaValue`] and an explicit `root`, projecting `graph`'s definitions to
+/// exactly those reachable from `root`.
+///
+/// Use this when `value` has already been decoded/validated against `graph` and
+/// `root` and only a self-contained carrier needs to be produced: it projects
+/// the reachable definition subset (see [`reachable_defs`]) instead of cloning
+/// the agent's whole multi-root `defs` registry. This is the projection half of
+/// [`json_input_schema_value_to_typed_schema_value`], without the JSON decode
+/// and validation steps.
+pub fn typed_schema_value_with_projected_defs(
+    graph: &SchemaGraph,
+    root: SchemaType,
+    value: SchemaValue,
+) -> TypedSchemaValue {
+    let defs = reachable_defs(graph, &root);
+    TypedSchemaValue::new(SchemaGraph { defs, root }, value)
+}
+
+/// Collect, in the source graph's definition order, the named definitions of
+/// `graph` that are transitively reachable from `root` through
+/// [`SchemaType::Ref`] indirections.
+///
+/// A [`TypedSchemaValue`] is a self-contained, single-root carrier, so its
+/// `defs` must be exactly the definitions reachable from its `root`. The source
+/// `graph` here is the agent's whole multi-root definition registry; projecting
+/// to the reachable subset honors that contract and avoids cloning defs the
+/// value can never reference.
+///
+/// Dangling refs (no matching def in `graph`) are skipped; validation of the
+/// value against the projected graph reports them. Each reachable id is emitted
+/// once, first-def-wins on duplicate ids, matching [`SchemaGraph::lookup`].
+fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
+    // Seed the worklist from refs in the synthesized root. The common
+    // primitive/no-ref input returns here without building any lookup index.
+    let mut stack: Vec<&'a TypeId> = Vec::new();
+    collect_refs(root, &mut stack);
+    if stack.is_empty() {
+        return Vec::new();
+    }
+
+    let index = GraphIndex::new(graph);
+    let mut reachable: HashSet<&'a str> = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if !reachable.insert(id.as_str()) {
+            continue;
+        }
+        if let Some(def) = index.lookup(id) {
+            collect_refs(&def.body, &mut stack);
+        }
+    }
+
+    // Emit reachable defs in the source graph's order. Removing each id as it is
+    // emitted yields first-def-wins on duplicate ids (matching
+    // [`SchemaGraph::lookup`]) without a second visited set.
+    graph
+        .defs
+        .iter()
+        .filter(|d| reachable.remove(d.id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Push every [`SchemaType::Ref`] id directly contained in `ty` (descending
+/// through all structural children, but not following the refs themselves) onto
+/// `out`. All schema alternatives are visited — every variant case, every union
+/// branch, both result arms — so projection follows *schema* reachability, not
+/// the shape of any particular value.
+fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
+    match ty {
+        SchemaType::Ref { id, .. } => out.push(id),
+        SchemaType::Record { fields, .. } => {
+            for field in fields {
+                collect_refs(&field.body, out);
+            }
+        }
+        SchemaType::Variant { cases, .. } => {
+            for case in cases {
+                if let Some(payload) = &case.payload {
+                    collect_refs(payload, out);
+                }
+            }
+        }
+        SchemaType::Tuple { elements, .. } => {
+            for element in elements {
+                collect_refs(element, out);
+            }
+        }
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            collect_refs(element, out);
+        }
+        SchemaType::Map { key, value, .. } => {
+            collect_refs(key, out);
+            collect_refs(value, out);
+        }
+        SchemaType::Option { inner, .. } => collect_refs(inner, out),
+        SchemaType::Result { spec, .. } => {
+            if let Some(ok) = &spec.ok {
+                collect_refs(ok, out);
+            }
+            if let Some(err) = &spec.err {
+                collect_refs(err, out);
+            }
+        }
+        SchemaType::Union { spec, .. } => {
+            for branch in &spec.branches {
+                collect_refs(&branch.body, out);
+            }
+        }
+        SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
+            if let Some(inner) = inner {
+                collect_refs(inner, out);
+            }
+        }
+        // Leaf nodes carrying no child `SchemaType`. Listed explicitly (no
+        // wildcard) so a future ref-bearing variant forces this match to be
+        // updated.
+        SchemaType::Bool { .. }
+        | SchemaType::S8 { .. }
+        | SchemaType::S16 { .. }
+        | SchemaType::S32 { .. }
+        | SchemaType::S64 { .. }
+        | SchemaType::U8 { .. }
+        | SchemaType::U16 { .. }
+        | SchemaType::U32 { .. }
+        | SchemaType::U64 { .. }
+        | SchemaType::F32 { .. }
+        | SchemaType::F64 { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::String { .. }
+        | SchemaType::Enum { .. }
+        | SchemaType::Flags { .. }
+        | SchemaType::Text { .. }
+        | SchemaType::Binary { .. }
+        | SchemaType::Path { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. }
+        | SchemaType::Quantity { .. }
+        | SchemaType::Secret { .. }
+        | SchemaType::QuotaToken { .. } => {}
+    }
+}
 
 /// Input parameter list for an agent constructor or method.
 ///
 /// The single [`InputSchema::Parameters`] case carries an ordered list of
 /// [`NamedField`]s. Each field carries its name, its schema, its metadata,
 /// and a [`FieldSource`] that tells the runtime where the value comes from.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum InputSchema {
     Parameters(Vec<NamedField>),
 }
@@ -72,8 +274,11 @@ impl InputSchema {
 /// Multimodal outputs are expressed as
 /// `Single(list<variant<…>> with role = Multimodal)`, not as a separate enum
 /// case.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum OutputSchema {
     /// Method returns no value.
     Unit,
@@ -92,7 +297,10 @@ impl OutputSchema {
 }
 
 /// A single named field inside [`InputSchema::Parameters`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct NamedField {
     /// Field name in the input parameter list. Unique within the enclosing
     /// [`InputSchema::Parameters`].
@@ -134,8 +342,13 @@ impl NamedField {
 }
 
 /// Where the value for a field comes from at invocation time.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum FieldSource {
     /// The caller provides the value when invoking the constructor or method.
     #[default]
@@ -149,8 +362,11 @@ pub enum FieldSource {
 ///
 /// Today this is limited to [`Principal`](AutoInjectedKind::Principal). New
 /// kinds are added here as the auto-injection surface grows.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum AutoInjectedKind {
     /// The authenticated principal of the calling identity.
     Principal,
@@ -161,7 +377,9 @@ pub enum AutoInjectedKind {
 /// Carries the constructor parameters as a self-contained
 /// [`TypedSchemaValue`] pair so receivers can interpret the parameter values
 /// without an external schema registry.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ParsedAgentId {
     /// Agent type identifier (e.g. `"weather-agent"`).
     pub agent_type: AgentTypeName,
@@ -187,11 +405,59 @@ impl ParsedAgentId {
     }
 }
 
+/// Combine ordered, independently-typed argument values into a single record
+/// [`TypedSchemaValue`] representing an agent method's (or constructor's)
+/// parameter list.
+///
+/// Each argument carries its own [`SchemaGraph`]; their named definitions are
+/// merged (deduplicated by `TypeId`) and each argument's root type becomes a
+/// positional field (`p0`, `p1`, …) of the resulting record. The value is a
+/// [`SchemaValue::Record`](crate::schema::schema_value::SchemaValue::Record)
+/// of the argument values in declaration order.
+///
+/// This is the schema-native replacement for the test DSL's legacy
+/// `data_value!` builder: callers pass values whose types implement
+/// [`IntoSchema`](crate::schema::IntoSchema) and obtain a self-contained typed
+/// carrier ready to hand to the invocation DSL.
+pub fn build_input_record(
+    args: Vec<TypedSchemaValue>,
+) -> Result<TypedSchemaValue, crate::schema::MergeError> {
+    use crate::schema::conversion::merge_agent_graphs;
+    use crate::schema::schema_type::NamedFieldType;
+    use crate::schema::schema_value::SchemaValue;
+
+    let merged = merge_agent_graphs(args.iter().map(|arg| arg.graph().clone()))?;
+
+    let mut fields = Vec::with_capacity(args.len());
+    let mut values = Vec::with_capacity(args.len());
+    for (idx, arg) in args.into_iter().enumerate() {
+        let (graph, value) = arg.into_parts();
+        fields.push(NamedFieldType {
+            name: format!("p{idx}"),
+            body: graph.root,
+            metadata: MetadataEnvelope::default(),
+        });
+        values.push(value);
+    }
+
+    let graph = SchemaGraph {
+        defs: merged.defs,
+        root: SchemaType::record(fields),
+    };
+    Ok(TypedSchemaValue::new(
+        graph,
+        SchemaValue::Record { fields: values },
+    ))
+}
+
 /// Constructor signature for an agent type, schema-layer form.
 ///
 /// Mirrors the legacy `AgentConstructor`, with `input_schema` replaced by the
 /// new [`InputSchema`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentConstructorSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -208,7 +474,10 @@ pub struct AgentConstructorSchema {
 /// (`http_endpoint`, `read_only`) are carried verbatim from the legacy
 /// representation during the transition; they are not part of the schema
 /// layer's core concern.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentMethodSchema {
     pub name: String,
     pub description: String,
@@ -228,7 +497,10 @@ pub struct AgentMethodSchema {
 /// published, so it brings a self-contained graph rather than sharing a
 /// namespace with the parent agent. Constructor and method input/output
 /// bodies may use [`SchemaType::Ref`] resolving against `schema.defs`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentDependencySchema {
     pub type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,7 +530,10 @@ pub struct AgentDependencySchema {
 /// agents that coincidentally define a same-named type do not share
 /// definitions, and a dependency cannot reference defs from its parent
 /// agent's graph.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct AgentTypeSchema {
     pub type_name: AgentTypeName,
     pub description: String,
@@ -283,13 +558,30 @@ pub struct AgentTypeSchema {
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub config: Vec<AgentConfigDeclaration>,
+    pub config: Vec<AgentConfigDeclarationSchema>,
+}
+
+/// Schema-layer form of an agent config declaration.
+///
+/// Carries the `value_type` as a schema-native [`SchemaType`]. This keeps
+/// [`AgentTypeSchema`] free of the legacy value/type carriers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct AgentConfigDeclarationSchema {
+    pub source: AgentConfigSource,
+    pub path: Vec<String>,
+    pub value_type: SchemaType,
 }
 
 /// Schema-model form of a registered agent type. Mirrors the legacy
 /// `RegisteredAgentType`, with `agent_type` replaced by [`AgentTypeSchema`].
 /// Used by the MCP export path (`CompiledMcp`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct RegisteredAgentTypeSchema {
     pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
@@ -315,7 +607,60 @@ impl AgentTypeSchema {
         self.config.sort_by(|a, b| a.path.cmp(&b.path));
         self
     }
+
+    pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
+        agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+        agent_types.into_iter().map(Self::normalized).collect()
+    }
+
+    /// Validates the semantic constraints of the agent type. Mirrors the legacy
+    /// `AgentType::validate`: ephemeral agents must not declare read-only
+    /// methods (there is no shared state to read from).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.mode == AgentMode::Ephemeral {
+            for method in &self.methods {
+                if method.read_only.is_some() {
+                    return Err(format!(
+                        "Agent type '{}' is ephemeral but method '{}' is marked as read-only. \
+                         Read-only methods have no benefit on ephemeral agents (no shared state to read from). \
+                         Remove the read-only marker or make the agent durable.",
+                        self.type_name, method.name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
+
+/// `wasmtime`-generated bindings for the shared `golem:agent/common@2.0.0`
+/// interface (the schema-based agent model) and the `golem:api/retry@1.5.0`
+/// retry-policy types. The worker-executor's `preview2` bindgen remaps
+/// `golem:agent/common@2.0.0` onto these types so the host and `golem-common`
+/// share one definition. This is the single agent bindgen in the workspace.
+#[cfg(feature = "full")]
+pub mod bindings {
+    wasmtime::component::bindgen!({
+          path: "wit",
+          world: "golem-common-schema",
+          imports: {
+            default: async | trappable,
+          },
+          exports: { default: async },
+          require_store_data_send: true,
+          anyhow: true,
+          with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+          },
+          wasmtime_crate: ::wasmtime
+    });
+}
+
+/// Conversions between the recursive in-memory agent schema types in this
+/// module and the flat, index-based `golem:agent/common@2.0.0` wire bindings
+/// in [`bindings`].
+#[cfg(feature = "full")]
+pub mod wit;
 
 #[cfg(test)]
 mod tests;

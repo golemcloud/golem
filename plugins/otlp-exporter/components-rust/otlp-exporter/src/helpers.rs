@@ -1,6 +1,6 @@
 use golem_rust::bindings::golem::api::context::AttributeValue;
 use golem_rust::bindings::golem::api::oplog::{Timestamp, WorkerError, WrappedFunctionType};
-use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use golem_rust::wasip2::clocks::wall_clock::Datetime;
 use std::collections::HashMap;
 

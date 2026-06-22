@@ -425,30 +425,97 @@ The request body is encoded as multipart/form-data containing metadata and the W
   "currentRevision": 0,
   "agentTypes": [
     {
-      "typeName": "string",
+      "type_name": "string",
       "description": "string",
-      "sourceLanguage": "string",
+      "source_language": "string",
+      "schema": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      },
       "constructor": {
         "name": "string",
         "description": "string",
-        "promptHint": "string",
-        "inputSchema": {
-          "type": "Multimodal",
-          "elements": [
+        "prompt_hint": "string",
+        "input_schema": {
+          "tag": "parameters",
+          "value": [
             {
               "name": "string",
+              "source": {
+                "tag": "user-supplied"
+              },
               "schema": {
-                "type": "ComponentModel",
-                "elementType": {
-                  "type": "Variant",
-                  "name": "string",
-                  "owner": "string",
-                  "cases": [
-                    {
-                      "name": "string",
-                      "typ": {}
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
-                  ]
+                  }
+                }
+              },
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
                 }
               }
             }
@@ -459,52 +526,54 @@ The request body is encoded as multipart/form-data containing metadata and the W
         {
           "name": "string",
           "description": "string",
-          "promptHint": "string",
-          "inputSchema": {
-            "type": "Multimodal",
-            "elements": [
+          "prompt_hint": "string",
+          "input_schema": {
+            "tag": "parameters",
+            "value": [
               {
                 "name": "string",
+                "source": {
+                  "tag": "user-supplied"
+                },
                 "schema": {
-                  "type": "ComponentModel",
-                  "elementType": {
-                    "type": "Variant",
-                    "name": "string",
-                    "owner": "string",
-                    "cases": [
-                      {
-                        "name": "string",
-                        "typ": {}
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
-                    ]
+                    }
+                  }
+                },
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
                 }
               }
             ]
           },
-          "outputSchema": {
-            "type": "Multimodal",
-            "elements": [
-              {
-                "name": "string",
-                "schema": {
-                  "type": "ComponentModel",
-                  "elementType": {
-                    "type": "Variant",
-                    "name": "string",
-                    "owner": "string",
-                    "cases": [
-                      {
-                        "name": "string",
-                        "typ": {}
-                      }
-                    ]
-                  }
-                }
-              }
-            ]
+          "output_schema": {
+            "tag": "unit"
           },
-          "httpEndpoint": [
+          "http_endpoint": [
             {
               "httpMethod": {
                 "type": "Patch"
@@ -537,7 +606,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
               }
             }
           ],
-          "readOnly": {
+          "read_only": {
             "cachePolicy": {
               "type": "UntilWrite"
             },
@@ -547,29 +616,96 @@ The request body is encoded as multipart/form-data containing metadata and the W
       ],
       "dependencies": [
         {
-          "typeName": "string",
+          "type_name": "string",
           "description": "string",
+          "schema": {
+            "defs": [
+              {
+                "id": "string",
+                "name": "string",
+                "body": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "root": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          },
           "constructor": {
             "name": "string",
             "description": "string",
-            "promptHint": "string",
-            "inputSchema": {
-              "type": "Multimodal",
-              "elements": [
+            "prompt_hint": "string",
+            "input_schema": {
+              "tag": "parameters",
+              "value": [
                 {
                   "name": "string",
+                  "source": {
+                    "tag": "user-supplied"
+                  },
                   "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
-                      ]
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
                   }
                 }
@@ -580,52 +716,54 @@ The request body is encoded as multipart/form-data containing metadata and the W
             {
               "name": "string",
               "description": "string",
-              "promptHint": "string",
-              "inputSchema": {
-                "type": "Multimodal",
-                "elements": [
+              "prompt_hint": "string",
+              "input_schema": {
+                "tag": "parameters",
+                "value": [
                   {
                     "name": "string",
+                    "source": {
+                      "tag": "user-supplied"
+                    },
                     "schema": {
-                      "type": "ComponentModel",
-                      "elementType": {
-                        "type": "Variant",
-                        "name": "string",
-                        "owner": "string",
-                        "cases": [
-                          {
-                            "name": "string",
-                            "typ": {}
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
                           }
-                        ]
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
                     }
                   }
                 ]
               },
-              "outputSchema": {
-                "type": "Multimodal",
-                "elements": [
-                  {
-                    "name": "string",
-                    "schema": {
-                      "type": "ComponentModel",
-                      "elementType": {
-                        "type": "Variant",
-                        "name": "string",
-                        "owner": "string",
-                        "cases": [
-                          {
-                            "name": "string",
-                            "typ": {}
-                          }
-                        ]
-                      }
-                    }
-                  }
-                ]
+              "output_schema": {
+                "tag": "unit"
               },
-              "httpEndpoint": [
+              "http_endpoint": [
                 {
                   "httpMethod": {
                     "type": "Patch"
@@ -658,7 +796,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
                   }
                 }
               ],
-              "readOnly": {
+              "read_only": {
                 "cachePolicy": {
                   "type": "UntilWrite"
                 },
@@ -669,7 +807,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
         }
       ],
       "mode": "Durable",
-      "httpMount": {
+      "http_mount": {
         "pathPrefix": [
           {
             "type": "Literal",
@@ -701,16 +839,24 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "path": [
             "string"
           ],
-          "valueType": {
-            "type": "Variant",
-            "name": "string",
-            "owner": "string",
-            "cases": [
-              {
-                "name": "string",
-                "typ": {}
+          "value_type": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
               }
-            ]
+            }
           }
         }
       ]

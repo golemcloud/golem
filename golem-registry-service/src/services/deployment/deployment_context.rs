@@ -29,8 +29,7 @@ use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
-    RegisteredAgentTypeImplementer,
+    AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
@@ -42,23 +41,20 @@ use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_common::schema::adapters::analysed_type::{
-    analysed_type_to_schema_graph, schema_graph_to_analysed_type,
-};
-use golem_common::schema::adapters::value::value_to_schema_value;
+use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::render;
+use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
     pub webhook_domain_and_segments: Option<(Domain, Vec<String>)>,
 }
@@ -197,6 +193,7 @@ impl DeploymentContext {
                 let constructor_parameters = ok_or_continue!(
                     build_http_agent_constructor_parameters(
                         http_mount,
+                        &registered_agent_type.agent_type.schema,
                         &registered_agent_type.agent_type.constructor.input_schema,
                         &make_mount_validation_error
                     ),
@@ -355,25 +352,31 @@ impl DeploymentContext {
                 let canonical_agent_secret_path =
                     CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
 
-                // Project the agent-type-declared value type (legacy
-                // `AnalysedType`) into the schema layer so all downstream
-                // structures live in the new model.
-                let config_secret_schema = ok_or_continue!(
-                    analysed_type_to_schema_graph(&config.value_type).map_err(|e| {
-                        DeployValidationError::AgentSecretDefaultTypeMismatch {
-                            path: canonical_agent_secret_path.clone(),
-                            errors: vec![format!("Invalid secret type declared by agent: {e}")],
-                        }
-                    }),
-                    errors
-                );
+                // The agent-type-declared secret value type is already a
+                // schema-native `SchemaType`; pair it with the agent's shared
+                // graph defs so any `SchemaType::Ref` inside resolves.
+                let config_secret_schema = SchemaGraph {
+                    defs: agent_type.agent_type.schema.defs.clone(),
+                    root: config.value_type.clone(),
+                };
 
                 match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {
                         e.insert(config_secret_schema.clone());
                     }
                     hash_map::Entry::Occupied(e) => {
-                        if *e.get() != config_secret_schema {
+                        let seen_secret_schema = e.get();
+                        // Compare the two agent-declared secret types
+                        // structurally across their own graphs: each agent type
+                        // carries its own `defs`, so a raw `SchemaGraph` equality
+                        // would spuriously differ even when the secret type is
+                        // logically identical.
+                        if !is_equivalent_cross_graph(
+                            seen_secret_schema,
+                            &seen_secret_schema.root,
+                            &config_secret_schema,
+                            &config_secret_schema.root,
+                        ) {
                             ok_or_continue!(
                                 Err(DeployValidationError::AgentSecretTypeConflict {
                                     path: canonical_agent_secret_path
@@ -390,7 +393,12 @@ impl DeploymentContext {
                     env_secrets.get(&canonical_agent_secret_path)
                 {
                     // secret does exist in environment, we need to check that types are compatible with deployment
-                    if environment_agent_secret_declaration.secret_type != config_secret_schema {
+                    if !is_equivalent_cross_graph(
+                        &environment_agent_secret_declaration.secret_type,
+                        &environment_agent_secret_declaration.secret_type.root,
+                        &config_secret_schema,
+                        &config_secret_schema.root,
+                    ) {
                         if replace_incompatible_agent_secrets {
                             let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
@@ -568,9 +576,11 @@ impl DeploymentContext {
 /// [`DeployValidationError::AgentSecretDefaultTypeMismatch`] when the JSON
 /// payload cannot be decoded into a [`SchemaValue`] for the given graph.
 ///
-/// The deployment request DTO carries legacy-shaped JSON, so parsing goes
-/// through `ValueAndType::parse_with_type` and the result is promoted to
-/// the schema layer via [`value_to_schema_value`].
+/// The deployment request DTO carries ergonomic, human-shaped JSON (raw
+/// scalars, field-named record objects). It is decoded directly into a
+/// schema-native [`SchemaValue`] via [`render::from_json_value`], which both
+/// type-checks the payload against the agent-declared schema and produces the
+/// value in one step.
 fn parse_default_secret_value(
     path: &CanonicalAgentSecretPath,
     default: Option<&&DeploymentAgentSecretDefault>,
@@ -578,26 +588,10 @@ fn parse_default_secret_value(
 ) -> Result<Option<golem_common::schema::schema_value::SchemaValue>, DeployValidationError> {
     default
         .map(|sd| {
-            let legacy_type = schema_graph_to_analysed_type(schema).map_err(|e| {
+            render::from_json_value(schema, &schema.root, &sd.secret_value).map_err(|e| {
                 DeployValidationError::AgentSecretDefaultTypeMismatch {
                     path: path.clone(),
-                    errors: vec![format!(
-                        "Failed to project secret schema to AnalysedType: {e}"
-                    )],
-                }
-            })?;
-            let vat = ValueAndType::parse_with_type(&sd.secret_value, &legacy_type).map_err(
-                |errors| DeployValidationError::AgentSecretDefaultTypeMismatch {
-                    path: path.clone(),
-                    errors,
-                },
-            )?;
-            value_to_schema_value(&vat.value, &legacy_type).map_err(|e| {
-                DeployValidationError::AgentSecretDefaultTypeMismatch {
-                    path: path.clone(),
-                    errors: vec![format!(
-                        "Failed to promote secret value to schema layer: {e}"
-                    )],
+                    errors: vec![e.to_string()],
                 }
             })
         })

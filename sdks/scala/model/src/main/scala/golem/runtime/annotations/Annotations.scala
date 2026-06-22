@@ -42,17 +42,3 @@ final class agentImplementation() extends StaticAnnotation
 @Retention(RetentionPolicy.RUNTIME)
 @Target(Array(ElementType.TYPE))
 final class id() extends StaticAnnotation
-
-/**
- * Overrides the language code used by multimodal/unstructured text derivation.
- */
-@Retention(RetentionPolicy.RUNTIME)
-@Target(Array(ElementType.TYPE, ElementType.METHOD, ElementType.FIELD, ElementType.PARAMETER))
-final class languageCode(val value: String) extends StaticAnnotation
-
-/**
- * Overrides the MIME type used by multimodal/unstructured binary derivation.
- */
-@Retention(RetentionPolicy.RUNTIME)
-@Target(Array(ElementType.TYPE, ElementType.METHOD, ElementType.FIELD, ElementType.PARAMETER))
-final class mimeType(val value: String) extends StaticAnnotation

@@ -19,14 +19,13 @@ use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod, ReadOnlyConfig};
+use golem_common::model::agent::{AgentTypeName, HttpMethod, ReadOnlyConfig};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_common::model::{AgentId, OplogIndex, PromiseId};
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
+use golem_common::schema::{InputSchema, MetadataEnvelope, OutputSchema, SchemaGraph, SchemaType};
 use hmac::{Hmac, Mac};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sha2::Sha256;
@@ -62,7 +61,7 @@ impl fmt::Display for PathSegment {
     }
 }
 
-/// reduced version of AnalysedType for types that can be parsed from query params and headers.
+/// reduced version of SchemaType for types that can be parsed from query params and headers.
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum PathSegmentType {
@@ -79,55 +78,59 @@ pub enum PathSegmentType {
     U8,
     S8,
     Bool,
-    Enum(golem_wasm::analysis::TypeEnum),
+    Enum(Vec<String>),
 }
 
-impl From<&PathSegmentType> for AnalysedType {
+impl From<&PathSegmentType> for SchemaType {
     fn from(value: &PathSegmentType) -> Self {
+        let metadata = MetadataEnvelope::default();
         match value {
-            PathSegmentType::Str => analysed_type::str(),
-            PathSegmentType::Chr => analysed_type::chr(),
-            PathSegmentType::F64 => analysed_type::f64(),
-            PathSegmentType::F32 => analysed_type::f32(),
-            PathSegmentType::U64 => analysed_type::u64(),
-            PathSegmentType::S64 => analysed_type::s64(),
-            PathSegmentType::U32 => analysed_type::u32(),
-            PathSegmentType::S32 => analysed_type::s32(),
-            PathSegmentType::U16 => analysed_type::u16(),
-            PathSegmentType::S16 => analysed_type::s16(),
-            PathSegmentType::U8 => analysed_type::u8(),
-            PathSegmentType::S8 => analysed_type::s8(),
-            PathSegmentType::Bool => analysed_type::bool(),
-            PathSegmentType::Enum(inner) => AnalysedType::Enum(inner.clone()),
+            PathSegmentType::Str => SchemaType::String { metadata },
+            PathSegmentType::Chr => SchemaType::Char { metadata },
+            PathSegmentType::F64 => SchemaType::F64 { metadata },
+            PathSegmentType::F32 => SchemaType::F32 { metadata },
+            PathSegmentType::U64 => SchemaType::U64 { metadata },
+            PathSegmentType::S64 => SchemaType::S64 { metadata },
+            PathSegmentType::U32 => SchemaType::U32 { metadata },
+            PathSegmentType::S32 => SchemaType::S32 { metadata },
+            PathSegmentType::U16 => SchemaType::U16 { metadata },
+            PathSegmentType::S16 => SchemaType::S16 { metadata },
+            PathSegmentType::U8 => SchemaType::U8 { metadata },
+            PathSegmentType::S8 => SchemaType::S8 { metadata },
+            PathSegmentType::Bool => SchemaType::Bool { metadata },
+            PathSegmentType::Enum(cases) => SchemaType::Enum {
+                cases: cases.clone(),
+                metadata,
+            },
         }
     }
 }
 
-impl TryFrom<AnalysedType> for PathSegmentType {
+impl TryFrom<SchemaType> for PathSegmentType {
     type Error = String;
 
-    fn try_from(value: AnalysedType) -> Result<Self, Self::Error> {
+    fn try_from(value: SchemaType) -> Result<Self, Self::Error> {
         match value {
-            AnalysedType::Str(_) => Ok(PathSegmentType::Str),
-            AnalysedType::Chr(_) => Ok(PathSegmentType::Chr),
-            AnalysedType::F64(_) => Ok(PathSegmentType::F64),
-            AnalysedType::F32(_) => Ok(PathSegmentType::F32),
-            AnalysedType::U64(_) => Ok(PathSegmentType::U64),
-            AnalysedType::S64(_) => Ok(PathSegmentType::S64),
-            AnalysedType::U32(_) => Ok(PathSegmentType::U32),
-            AnalysedType::S32(_) => Ok(PathSegmentType::S32),
-            AnalysedType::U16(_) => Ok(PathSegmentType::U16),
-            AnalysedType::S16(_) => Ok(PathSegmentType::S16),
-            AnalysedType::U8(_) => Ok(PathSegmentType::U8),
-            AnalysedType::S8(_) => Ok(PathSegmentType::S8),
-            AnalysedType::Bool(_) => Ok(PathSegmentType::Bool),
-            AnalysedType::Enum(e) => Ok(PathSegmentType::Enum(e.clone())),
-            _ => Err("Unsupported analyzed type for path segment".into()),
+            SchemaType::String { .. } => Ok(PathSegmentType::Str),
+            SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
+            SchemaType::F64 { .. } => Ok(PathSegmentType::F64),
+            SchemaType::F32 { .. } => Ok(PathSegmentType::F32),
+            SchemaType::U64 { .. } => Ok(PathSegmentType::U64),
+            SchemaType::S64 { .. } => Ok(PathSegmentType::S64),
+            SchemaType::U32 { .. } => Ok(PathSegmentType::U32),
+            SchemaType::S32 { .. } => Ok(PathSegmentType::S32),
+            SchemaType::U16 { .. } => Ok(PathSegmentType::U16),
+            SchemaType::S16 { .. } => Ok(PathSegmentType::S16),
+            SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
+            SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
+            SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
+            SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases)),
+            _ => Err("Unsupported schema type for path segment".into()),
         }
     }
 }
 
-/// reduced version of AnalysedType for types that can be parsed from headers and query params.
+/// reduced version of SchemaType for types that can be parsed from headers and query params.
 /// * option maps to optional params
 /// * list maps to
 ///     * repeated query params
@@ -148,56 +151,97 @@ pub enum QueryOrHeaderType {
     },
 }
 
-impl From<QueryOrHeaderType> for AnalysedType {
+impl From<QueryOrHeaderType> for SchemaType {
     fn from(value: QueryOrHeaderType) -> Self {
+        let metadata = MetadataEnvelope::default();
         match value {
             QueryOrHeaderType::Primitive(inner) => (&inner).into(),
-            QueryOrHeaderType::Option { name, owner, inner } => AnalysedType::Option(TypeOption {
-                name,
-                owner,
-                inner: Box::new(AnalysedType::from(&*inner)),
-            }),
-            QueryOrHeaderType::List { name, owner, inner } => AnalysedType::List(TypeList {
-                name,
-                owner,
-                inner: Box::new(AnalysedType::from(&*inner)),
-            }),
+            QueryOrHeaderType::Option { inner, .. } => SchemaType::Option {
+                inner: Box::new(SchemaType::from(&*inner)),
+                metadata,
+            },
+            QueryOrHeaderType::List { inner, .. } => SchemaType::List {
+                element: Box::new(SchemaType::from(&*inner)),
+                metadata,
+            },
         }
     }
 }
 
-impl TryFrom<AnalysedType> for QueryOrHeaderType {
+impl TryFrom<SchemaType> for QueryOrHeaderType {
     type Error = String;
 
-    fn try_from(value: AnalysedType) -> Result<Self, Self::Error> {
+    fn try_from(value: SchemaType) -> Result<Self, Self::Error> {
         match value {
-            AnalysedType::Option(TypeOption { name, owner, inner }) => Ok(Self::Option {
-                name,
-                owner,
+            SchemaType::Option { inner, .. } => Ok(Self::Option {
+                name: None,
+                owner: None,
                 inner: Box::new(PathSegmentType::try_from(*inner)?),
             }),
-            AnalysedType::List(TypeList { name, owner, inner }) => Ok(Self::List {
-                name,
-                owner,
-                inner: Box::new(PathSegmentType::try_from(*inner)?),
+            SchemaType::List { element, .. } => Ok(Self::List {
+                name: None,
+                owner: None,
+                inner: Box::new(PathSegmentType::try_from(*element)?),
             }),
             other => Ok(Self::Primitive(
                 PathSegmentType::try_from(other)
-                    .map_err(|_| "Unsupported analyzed type for query or header")?,
+                    .map_err(|_| "Unsupported schema type for query or header")?,
             )),
         }
     }
+}
+
+/// A self-contained schema carrier persisted in a compiled route.
+///
+/// `graph.root` is the exact root being parsed/rendered/invoked and `graph.defs`
+/// carry the per-agent named-type definitions, so any `SchemaType::Ref` inside
+/// `root` resolves at runtime without an `AgentTypeSchema` lookup (the worker
+/// custom-API runtime has no access to the agent type after deployment).
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledSchema {
+    pub graph: SchemaGraph,
+}
+
+/// Self-contained constructor/method input schema persisted in a compiled route.
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledInputSchema {
+    pub graph: SchemaGraph,
+    pub input_schema: InputSchema,
+}
+
+/// Self-contained method output schema persisted in a compiled route.
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct CompiledOutputSchema {
+    pub graph: SchemaGraph,
+    pub output_schema: OutputSchema,
 }
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RequestBodySchema {
     Unused,
-    JsonBody { expected_type: AnalysedType },
-    UnrestrictedBinary,
-    RestrictedBinary { allowed_mime_types: Vec<String> },
-    UnrestrictedText,
-    RestrictedText { allowed_language_codes: Vec<String> },
+    /// JSON request body whose `expected.graph.root` is the record of the
+    /// remaining (non-path/query/header) input fields.
+    JsonBody {
+        expected: CompiledSchema,
+    },
+    /// Raw binary request body; `expected.graph.root` is an unstructured binary
+    /// carrier — either the canonical `variant { inline, url }` wrapper or a
+    /// bare `SchemaType::Binary` rich scalar (its restrictions carry the allowed
+    /// MIME types).
+    BinaryBody {
+        expected: CompiledSchema,
+    },
+    /// Raw text request body; `expected.graph.root` is an unstructured text
+    /// carrier — either the canonical `variant { inline, url }` wrapper or a
+    /// bare `SchemaType::Text` rich scalar (its restrictions carry the allowed
+    /// languages).
+    TextBody {
+        expected: CompiledSchema,
+    },
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -253,6 +297,7 @@ pub struct CompiledRoute {
     pub cors: CorsOptions,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub enum RouteBehaviour {
@@ -268,11 +313,20 @@ pub struct CallAgentBehaviour {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
+    /// Self-contained schema of the agent constructor input. Used by the runtime
+    /// to build the `TypedSchemaValue` for the agent id from the constructor
+    /// parameters.
+    pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
     pub phantom: bool,
     pub method_name: String,
+    /// Self-contained schema of the agent method input. Used by the runtime to
+    /// reconstruct the full positional `SchemaValue::Record` from the bound
+    /// HTTP method parameters, injecting auto-injected fields in declaration
+    /// order.
+    pub method_input: CompiledInputSchema,
     pub method_parameters: Vec<MethodParameter>,
-    pub expected_agent_response: DataSchema,
+    pub expected_agent_response: CompiledOutputSchema,
     #[desert(default)]
     pub method_description: Option<String>,
     /// The read-only configuration carried over from the `AgentMethod` this route

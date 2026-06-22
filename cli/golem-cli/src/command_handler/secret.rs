@@ -31,8 +31,8 @@ use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretDto, AgentSecretId, AgentSecretPath, CanonicalAgentSecretPath,
 };
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_common::schema::validation::validate_value;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -123,31 +123,28 @@ impl SecretCommandHandler {
         let clients = self.ctx.golem_clients().await?;
 
         let source_language = self.guess_source_language().await;
-        // The new schema-typed parser returns `(SchemaGraph, SchemaType)`; the
-        // legacy REST DTO still carries an `AnalysedType` for the secret type,
-        // so adapt at the boundary here.
-        let secret_type: AnalysedType =
-            match parse_type_for_language(&secret_type, &source_language) {
-                Ok((graph, ty)) => schema_to_analysed_type_at_boundary(&graph, &ty)?,
-                Err(_) => {
-                    // If the detected language parser fails, try all other parsers
-                    match parse_type_for_language(
-                        &secret_type,
-                        &SourceLanguage::Other(String::new()),
-                    ) {
-                        Ok((graph, ty)) => schema_to_analysed_type_at_boundary(&graph, &ty)?,
-                        Err(_) => match serde_json::from_str(&secret_type) {
-                            Ok(res) => res,
-                            Err(json_err) => {
-                                log_error(format!("Malformed secret type provided: {json_err}"));
-                                bail!(NonSuccessfulExit);
-                            }
-                        },
-                    }
+        // The schema-typed parser returns `(SchemaGraph, SchemaType)` where the
+        // graph's root is the parsed type; the REST DTO carries the secret type
+        // as a schema-native `SchemaGraph` directly.
+        let secret_type: SchemaGraph = match parse_type_for_language(&secret_type, &source_language)
+        {
+            Ok((graph, _ty)) => graph,
+            Err(_) => {
+                // If the detected language parser fails, try all other parsers
+                match parse_type_for_language(&secret_type, &SourceLanguage::Other(String::new())) {
+                    Ok((graph, _ty)) => graph,
+                    Err(_) => match serde_json::from_str::<SchemaGraph>(&secret_type) {
+                        Ok(graph) => graph,
+                        Err(json_err) => {
+                            log_error(format!("Malformed secret type provided: {json_err}"));
+                            bail!(NonSuccessfulExit);
+                        }
+                    },
                 }
-            };
+            }
+        };
 
-        let secret_value: Option<serde_json::Value> = match secret_value {
+        let secret_value: Option<SchemaValue> = match secret_value {
             Some(sv) => Some(self.parse_secret_value(&sv, &secret_type, &source_language)?),
             None => None,
         };
@@ -199,7 +196,7 @@ impl SecretCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let secret_value: Option<serde_json::Value> = match secret_value {
+        let secret_value: Option<SchemaValue> = match secret_value {
             Some(sv) => {
                 Some(self.parse_secret_value(&sv, &current.secret_type, &source_language)?)
             }
@@ -275,11 +272,11 @@ impl SecretCommandHandler {
     fn parse_secret_value(
         &self,
         input: &str,
-        secret_type: &AnalysedType,
+        secret_type: &SchemaGraph,
         source_language: &SourceLanguage,
-    ) -> anyhow::Result<serde_json::Value> {
-        match parse_secret_value_to_json(input, secret_type, source_language) {
-            Ok(json) => Ok(json),
+    ) -> anyhow::Result<SchemaValue> {
+        match parse_secret_value_to_schema_value(input, secret_type, source_language) {
+            Ok(value) => Ok(value),
             Err(msg) => {
                 log_error(msg);
                 bail!(NonSuccessfulExit);
@@ -314,66 +311,44 @@ impl SecretCommandHandler {
     }
 }
 
-fn parse_secret_value_to_json(
+fn parse_secret_value_to_schema_value(
     input: &str,
-    secret_type: &AnalysedType,
+    secret_type: &SchemaGraph,
     source_language: &SourceLanguage,
-) -> Result<serde_json::Value, String> {
-    // Try the schema-typed language-specific parser first, then fall back to
-    // raw JSON. We convert at the boundary because the REST DTO still
-    // carries the legacy `AnalysedType` form.
-    let graph = golem_common::schema::adapters::analysed_type_to_schema_graph(secret_type)
-        .map_err(|err| format!("schema adapter error while parsing secret value: {err}"))?;
-    if let Ok(parsed_value) = parse_value_for_language(input, &graph, &graph.root, source_language)
-        && let Ok(legacy_value) = golem_common::schema::adapters::schema_value_to_value(
-            &graph,
-            &graph.root,
-            &parsed_value,
-        )
-        && let Ok(json) =
-            golem_wasm::ValueAndType::new(legacy_value, secret_type.clone()).to_json_value()
+) -> Result<SchemaValue, String> {
+    // Try the schema-typed language-specific value parser first. It accepts
+    // ergonomic, language-flavored input (e.g. bare numbers, unquoted enum
+    // cases) and produces a schema-native `SchemaValue` directly.
+    if let Ok(parsed_value) =
+        parse_value_for_language(input, secret_type, &secret_type.root, source_language)
     {
-        return Ok(json);
+        return Ok(parsed_value);
     }
-    // Fall back to raw JSON, but only accept it if it coerces into
-    // `secret_type`. Without this validation a user could store any JSON
-    // for any secret type and the mismatch would only surface much later
-    // at the consumer.
-    match serde_json::from_str::<serde_json::Value>(input) {
-        Ok(json) => {
-            golem_wasm::ValueAndType::parse_with_type(&json, secret_type).map_err(|errs| {
+    // Fall back to a raw schema-native `SchemaValue` JSON, but only accept it
+    // if it conforms to `secret_type`. Without this validation a user could
+    // store any value for any secret type and the mismatch would only surface
+    // much later at the consumer.
+    match serde_json::from_str::<SchemaValue>(input) {
+        Ok(value) => {
+            validate_value(secret_type, &secret_type.root, &value).map_err(|errs| {
                 format!(
                     "Secret value does not match the expected type: {}",
-                    errs.join("; ")
+                    errs.iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 )
             })?;
-            Ok(json)
+            Ok(value)
         }
         Err(err) => {
-            // If the expected type is a plain string and the input is not valid JSON,
-            // treat the raw input as the string value (ergonomic fallback).
-            if matches!(secret_type, AnalysedType::Str(_)) {
-                Ok(serde_json::Value::String(input.to_string()))
+            // If the expected type is a plain string and the input is not valid
+            // JSON, treat the raw input as the string value (ergonomic fallback).
+            if matches!(secret_type.root, SchemaType::String { .. }) {
+                Ok(SchemaValue::String(input.to_string()))
             } else {
                 Err(format!("Secret value is not valid: {err}"))
             }
-        }
-    }
-}
-
-/// Boundary helper: convert a parsed `(SchemaGraph, SchemaType)` back to
-/// the legacy `AnalysedType` for the REST DTO. Logs and bails on failure.
-fn schema_to_analysed_type_at_boundary(
-    graph: &golem_common::schema::graph::SchemaGraph,
-    ty: &golem_common::schema::schema_type::SchemaType,
-) -> anyhow::Result<AnalysedType> {
-    match golem_common::schema::adapters::schema_type_to_analysed_type(graph, ty) {
-        Ok(ty) => Ok(ty),
-        Err(err) => {
-            log_error(format!(
-                "Unsupported secret type (cannot map to legacy AnalysedType): {err}"
-            ));
-            bail!(NonSuccessfulExit);
         }
     }
 }
@@ -383,72 +358,67 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use golem_wasm::analysis::{
-        NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr,
-        TypeU32,
-    };
+    use golem_common::schema::schema_type::NamedFieldType;
     use proptest::prelude::*;
 
     fn other_lang() -> SourceLanguage {
         SourceLanguage::Other(String::new())
     }
 
-    fn option_u32_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            name: None,
-            owner: None,
-            inner: Box::new(AnalysedType::U32(TypeU32)),
-        })
+    fn graph_of(root: SchemaType) -> SchemaGraph {
+        SchemaGraph::anonymous(root)
     }
 
-    fn list_u32_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            name: None,
-            owner: None,
-            inner: Box::new(AnalysedType::U32(TypeU32)),
-        })
+    fn option_u32_graph() -> SchemaGraph {
+        graph_of(SchemaType::option(SchemaType::u32()))
     }
 
-    /// Generates an arbitrary record schema paired with a matching JSON object,
-    /// with 1–5 fields of mixed simple types (String, U32, S32, F64, Bool).
-    /// Uses hash_map to guarantee unique field names.
-    fn arb_record_schema_and_json() -> impl Strategy<Value = (AnalysedType, serde_json::Value)> {
-        let arb_field_value = prop_oneof![
-            any::<String>()
-                .prop_map(|s| (AnalysedType::Str(TypeStr), serde_json::Value::String(s))),
-            any::<u32>().prop_map(|n| (AnalysedType::U32(TypeU32), serde_json::json!(n))),
-            any::<i32>().prop_map(|n| (AnalysedType::S32(TypeS32), serde_json::json!(n))),
+    fn list_u32_graph() -> SchemaGraph {
+        graph_of(SchemaType::list(SchemaType::u32()))
+    }
+
+    /// Generates an arbitrary record schema paired with a matching
+    /// `SchemaValue`, with 1–5 fields of mixed simple types (String, U32, S32,
+    /// F64, Bool). Field names are pure lowercase so the TS renderer/parser
+    /// round-trips them identically (lowerCamelCase is the identity here) and
+    /// `hash_map` guarantees uniqueness.
+    fn arb_record_schema_and_value() -> impl Strategy<Value = (SchemaType, SchemaValue)> {
+        let arb_field = prop_oneof![
+            any::<String>().prop_map(|s| (SchemaType::string(), SchemaValue::String(s))),
+            any::<u32>().prop_map(|n| (SchemaType::u32(), SchemaValue::U32(n))),
+            any::<i32>().prop_map(|n| (SchemaType::s32(), SchemaValue::S32(n))),
             decimal_f64_input().prop_map(|s| {
-                let v = serde_json::from_str::<serde_json::Value>(&s).unwrap();
-                (AnalysedType::F64(TypeF64), v)
-            }),
-            any::<bool>().prop_map(|b| (AnalysedType::Bool(TypeBool), serde_json::json!(b))),
-        ];
-        proptest::collection::hash_map("[a-z][a-zA-Z0-9]{0,8}", arb_field_value, 1..=5).prop_map(
-            |fields| {
-                let mut json_map = serde_json::Map::new();
-                let type_fields: Vec<NameTypePair> = fields
-                    .into_iter()
-                    .map(|(name, (typ, val))| {
-                        json_map.insert(name.clone(), val);
-                        NameTypePair { name, typ }
-                    })
-                    .collect();
                 (
-                    AnalysedType::Record(TypeRecord {
-                        name: None,
-                        owner: None,
-                        fields: type_fields,
-                    }),
-                    serde_json::Value::Object(json_map),
+                    SchemaType::f64(),
+                    SchemaValue::F64(s.parse::<f64>().unwrap()),
                 )
-            },
-        )
+            }),
+            any::<bool>().prop_map(|b| (SchemaType::bool(), SchemaValue::Bool(b))),
+        ];
+        proptest::collection::hash_map("[a-z]{1,8}", arb_field, 1..=5).prop_map(|fields| {
+            let mut type_fields = Vec::with_capacity(fields.len());
+            let mut value_fields = Vec::with_capacity(fields.len());
+            for (name, (typ, val)) in fields {
+                type_fields.push(NamedFieldType {
+                    name,
+                    body: typ,
+                    metadata: Default::default(),
+                });
+                value_fields.push(val);
+            }
+            (
+                SchemaType::record(type_fields),
+                SchemaValue::Record {
+                    fields: value_fields,
+                },
+            )
+        })
     }
 
     /// Identifiers, API keys, paths — strings whose first character cannot
     /// start any JSON value (keywords t/f/n, digits, `-`, `"`, `[`, `{`),
-    /// so they are structurally guaranteed to not parse as JSON.
+    /// so they are structurally guaranteed to not parse as a language value
+    /// or a raw `SchemaValue` JSON, exercising the bare-string fallback.
     /// Covers:
     /// 1. API keys: sk-abc123, Bearer token123
     /// 2. Connection strings: postgres://user:pass@localhost/db
@@ -458,9 +428,10 @@ mod tests {
         "[a-eg-mo-su-zA-Z][a-zA-Z0-9_./@: -]*"
     }
 
-    /// Generates valid JSON string literals by serializing arbitrary Rust strings
-    /// through serde_json, guaranteeing the output is always a properly quoted
-    /// and escaped JSON value (e.g. `"hello"`, `"line\nbreak"`, `"has \"quotes\""`)
+    /// Generates valid double-quoted string literals by serializing arbitrary
+    /// Rust strings through serde_json, guaranteeing the output is always a
+    /// properly quoted and escaped value (e.g. `"hello"`, `"line\nbreak"`,
+    /// `"has \"quotes\""`) that the language value parser accepts.
     fn json_encoded_string() -> impl Strategy<Value = String> {
         any::<String>().prop_map(|s| serde_json::to_string(&s).unwrap())
     }
@@ -474,66 +445,69 @@ mod tests {
     proptest! {
         #[test]
         fn non_json_str_returned_as_is(input in bare_secret_value()) {
-            let result = parse_secret_value_to_json(&input, &AnalysedType::Str(TypeStr), &other_lang());
-            prop_assert_eq!(result, Ok(serde_json::Value::String(input)));
+            let result = parse_secret_value_to_schema_value(&input, &graph_of(SchemaType::string()), &other_lang());
+            prop_assert_eq!(result, Ok(SchemaValue::String(input)));
         }
 
         #[test]
         fn json_encoded_str_is_decoded(json_input in json_encoded_string()) {
             let expected: String = serde_json::from_str(&json_input).unwrap();
-            let result = parse_secret_value_to_json(&json_input, &AnalysedType::Str(TypeStr), &other_lang());
-            prop_assert_eq!(result, Ok(serde_json::Value::String(expected)));
+            let result = parse_secret_value_to_schema_value(&json_input, &graph_of(SchemaType::string()), &other_lang());
+            prop_assert_eq!(result, Ok(SchemaValue::String(expected)));
         }
 
         #[test]
         fn decimal_string_accepted_for_u32_type(n in any::<u32>()) {
-            let result = parse_secret_value_to_json(&n.to_string(), &AnalysedType::U32(TypeU32), &other_lang());
-            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+            let result = parse_secret_value_to_schema_value(&n.to_string(), &graph_of(SchemaType::u32()), &other_lang());
+            prop_assert_eq!(result, Ok(SchemaValue::U32(n)));
         }
 
         #[test]
         fn decimal_string_accepted_for_s32_type(n in any::<i32>()) {
-            let result = parse_secret_value_to_json(&n.to_string(), &AnalysedType::S32(TypeS32), &other_lang());
-            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+            let result = parse_secret_value_to_schema_value(&n.to_string(), &graph_of(SchemaType::s32()), &other_lang());
+            prop_assert_eq!(result, Ok(SchemaValue::S32(n)));
         }
 
         #[test]
         fn decimal_string_accepted_for_f64_type(input in decimal_f64_input()) {
-            let result = parse_secret_value_to_json(&input, &AnalysedType::F64(TypeF64), &other_lang());
-            let expected = serde_json::from_str::<serde_json::Value>(&input).unwrap();
-            prop_assert_eq!(result, Ok(expected));
+            let result = parse_secret_value_to_schema_value(&input, &graph_of(SchemaType::f64()), &other_lang());
+            prop_assert_eq!(result, Ok(SchemaValue::F64(input.parse::<f64>().unwrap())));
         }
 
         #[test]
         fn bool_literal_accepted_for_bool_type(b in any::<bool>()) {
-            let result = parse_secret_value_to_json(&b.to_string(), &AnalysedType::Bool(TypeBool), &other_lang());
-            prop_assert_eq!(result, Ok(serde_json::json!(b)));
+            let result = parse_secret_value_to_schema_value(&b.to_string(), &graph_of(SchemaType::bool()), &other_lang());
+            prop_assert_eq!(result, Ok(SchemaValue::Bool(b)));
         }
 
         #[test]
-        fn json_array_accepted_for_list_type(values in proptest::collection::vec(any::<u32>(), 0..=20)) {
-            let json_str = serde_json::to_string(&values).unwrap();
-            let result = parse_secret_value_to_json(&json_str, &list_u32_type(), &other_lang());
-            let expected: serde_json::Value = serde_json::to_value(&values).unwrap();
+        fn array_accepted_for_list_type(values in proptest::collection::vec(any::<u32>(), 0..=20)) {
+            let input = format!("[{}]", values.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
+            let result = parse_secret_value_to_schema_value(&input, &list_u32_graph(), &other_lang());
+            let expected = SchemaValue::List {
+                elements: values.into_iter().map(SchemaValue::U32).collect(),
+            };
             prop_assert_eq!(result, Ok(expected));
         }
 
         #[test]
-        fn json_object_accepted_for_record_type((rec_type, json) in arb_record_schema_and_json()) {
-            let result = parse_secret_value_to_json(&json.to_string(), &rec_type, &other_lang());
-            prop_assert_eq!(result, Ok(json));
+        fn object_accepted_for_record_type((rec_type, value) in arb_record_schema_and_value()) {
+            let graph = graph_of(rec_type.clone());
+            let input = crate::agent_id_display::render_schema_value(&graph, &rec_type, &value, &other_lang());
+            let result = parse_secret_value_to_schema_value(&input, &graph, &other_lang());
+            prop_assert_eq!(result, Ok(value));
         }
 
         #[test]
         fn non_numeric_input_rejected_for_numeric_type(
             input in bare_secret_value(),
             typ in prop_oneof![
-                Just(AnalysedType::U32(TypeU32)),
-                Just(AnalysedType::S32(TypeS32)),
-                Just(AnalysedType::F64(TypeF64)),
+                Just(SchemaType::u32()),
+                Just(SchemaType::s32()),
+                Just(SchemaType::f64()),
             ],
         ) {
-            let result = parse_secret_value_to_json(&input, &typ, &other_lang());
+            let result = parse_secret_value_to_schema_value(&input, &graph_of(typ), &other_lang());
             prop_assert!(result.is_err());
             prop_assert!(result.unwrap_err().contains("Secret value is not valid"));
         }
@@ -542,8 +516,36 @@ mod tests {
     #[test]
     fn option_null_accepted() {
         assert_eq!(
-            parse_secret_value_to_json("null", &option_u32_type(), &other_lang()),
-            Ok(serde_json::json!(null))
+            parse_secret_value_to_schema_value("null", &option_u32_graph(), &other_lang()),
+            Ok(SchemaValue::Option { inner: None })
+        );
+    }
+
+    #[test]
+    fn raw_schema_value_json_accepted_as_fallback() {
+        // A raw, schema-native `SchemaValue` JSON (the tagged `kind`/`value`
+        // form) is accepted when it conforms to the secret type, even though
+        // the language value parser doesn't recognise it.
+        let graph = graph_of(SchemaType::u32());
+        let input = serde_json::to_string(&SchemaValue::U32(7)).unwrap();
+        assert_eq!(
+            parse_secret_value_to_schema_value(&input, &graph, &other_lang()),
+            Ok(SchemaValue::U32(7))
+        );
+    }
+
+    #[test]
+    fn raw_schema_value_json_rejected_when_type_mismatches() {
+        // The raw `SchemaValue` fallback still validates against the secret
+        // type: a string value supplied for a u32 secret is rejected.
+        let graph = graph_of(SchemaType::u32());
+        let input = serde_json::to_string(&SchemaValue::String("x".into())).unwrap();
+        let result = parse_secret_value_to_schema_value(&input, &graph, &other_lang());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Secret value does not match the expected type")
         );
     }
 }

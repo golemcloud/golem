@@ -31,10 +31,8 @@ use serde_json::{Map, Value, json};
 /// is a named `Ref`). Named definitions reachable from `ty` — including the
 /// synthesised per-union-branch schemas — are merged into `components` under
 /// their `TypeId` keys: an identical entry is deduplicated, a conflicting one
-/// is an error. The document-wide [`SchemaGraphBuilder`] disambiguates names,
+/// is an error. The document-wide schema graph builder disambiguates names,
 /// so a real conflict here indicates a bug.
-///
-/// [`SchemaGraphBuilder`]: golem_common::schema::adapters::SchemaGraphBuilder
 pub fn render_schema(
     graph: &SchemaGraph,
     ty: &SchemaType,

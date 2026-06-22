@@ -4,7 +4,7 @@
 pub(all) enum AgentMode {
   DURABLE
   EPHEMERAL
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn AgentMode::ordinal(self : AgentMode) -> Int {
@@ -24,22 +24,69 @@ pub fn AgentMode::from(self : Int) -> AgentMode {
 }
 
 ///|
+pub(all) enum AutoInjectedKind {
+  PRINCIPAL
+} derive(Show, Eq)
+
+///|
+pub fn AutoInjectedKind::ordinal(self : AutoInjectedKind) -> Int {
+  match self {
+    PRINCIPAL => 0
+  }
+}
+
+///|
+pub fn AutoInjectedKind::from(self : Int) -> AutoInjectedKind {
+  match self {
+    0 => PRINCIPAL
+    _ => panic()
+  }
+}
+
+///|
+pub(all) enum FieldSource {
+  UserSupplied
+  AutoInjected(AutoInjectedKind)
+} derive(Show, Eq)
+
+///|
+pub(all) struct NamedField {
+  name : String
+  source : FieldSource
+  schema : Int
+  metadata : @types.MetadataEnvelope
+} derive(Show, Eq)
+
+///|
+/// Ordered, named input parameters with per-field source annotation.
+pub(all) enum InputSchema {
+  Parameters(Array[NamedField])
+} derive(Show, Eq)
+
+///|
+/// Output is either unit (no value) or a single value of the given type.
+pub(all) enum OutputSchema {
+  Unit
+  Single(Int)
+} derive(Show, Eq)
+
+///|
 pub(all) enum CachePolicy {
   NoCache
   UntilWrite
   Ttl(UInt64)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct ReadOnlyConfig {
   cache_policy : CachePolicy
   uses_principal : Bool
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct CorsOptions {
   allowed_patterns : Array[String]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum HttpMethod {
@@ -53,13 +100,13 @@ pub(all) enum HttpMethod {
   Trace
   Patch
   Custom(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum SystemVariable {
   AGENT_TYPE
   AGENT_VERSION
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn SystemVariable::ordinal(self : SystemVariable) -> Int {
@@ -81,7 +128,7 @@ pub fn SystemVariable::from(self : Int) -> SystemVariable {
 ///|
 pub(all) struct PathVariable {
   variable_name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum PathSegment {
@@ -89,24 +136,24 @@ pub(all) enum PathSegment {
   SystemVariable(SystemVariable)
   PathVariable(PathVariable)
   RemainingPathVariable(PathVariable)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct HeaderVariable {
   header_name : String
   variable_name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct QueryVariable {
   query_param_name : String
   variable_name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct AuthDetails {
   required : Bool
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct HttpMountDetails {
@@ -115,7 +162,7 @@ pub(all) struct HttpMountDetails {
   phantom_agent : Bool
   cors_options : CorsOptions
   webhook_suffix : Array[PathSegment]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct HttpEndpointDetails {
@@ -125,7 +172,7 @@ pub(all) struct HttpEndpointDetails {
   query_vars : Array[QueryVariable]
   auth_details : AuthDetails?
   cors_options : CorsOptions
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct AgentMethod {
@@ -133,10 +180,10 @@ pub(all) struct AgentMethod {
   description : String
   http_endpoint : Array[HttpEndpointDetails]
   prompt_hint : String?
-  input_schema : @types.DataSchema
-  output_schema : @types.DataSchema
+  input_schema : InputSchema
+  output_schema : OutputSchema
   read_only : ReadOnlyConfig?
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct OidcPrincipal {
@@ -150,17 +197,17 @@ pub(all) struct OidcPrincipal {
   picture : String?
   preferred_username : String?
   claims : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct AgentPrincipal {
   agent_id : @types.AgentId
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct GolemUserPrincipal {
   account_id : @types.AccountId
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Principal {
@@ -168,42 +215,45 @@ pub(all) enum Principal {
   Agent(AgentPrincipal)
   GolemUser(GolemUserPrincipal)
   Anonymous
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct AgentConstructor {
   name : String?
   description : String
   prompt_hint : String?
-  input_schema : @types.DataSchema
-} derive(Debug, Eq)
+  input_schema : InputSchema
+} derive(Show, Eq)
 
 ///|
+/// Dependent agent type. All schema roots inside it resolve against its own
+/// `schema`, not against the parent agent-type's graph.
 pub(all) struct AgentDependency {
   type_name : String
   description : String?
+  schema : @types.SchemaGraph
   constructor_ : AgentConstructor
   methods : Array[AgentMethod]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum SnapshottingConfig {
   Default
   Periodic(UInt64)
   EveryNInvocation(UInt)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Snapshotting {
   Disabled
   Enabled(SnapshottingConfig)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum AgentConfigSource {
   LOCAL
   SECRET
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn AgentConfigSource::ordinal(self : AgentConfigSource) -> Int {
@@ -226,14 +276,21 @@ pub fn AgentConfigSource::from(self : Int) -> AgentConfigSource {
 pub(all) struct AgentConfigDeclaration {
   source : AgentConfigSource
   path : Array[String]
-  value_type : @types.WitType
-} derive(Debug, Eq)
+  value_type : Int
+} derive(Show, Eq)
 
 ///|
+/// Full agent type declaration.
+///
+/// `schema` is the per-agent type-node pool. Constructor / method / config
+/// schema roots below are `type-node-index` values into `schema`. The
+/// `schema.root` field is a structurally-required placeholder and is not the
+/// semantic root of the agent type.
 pub(all) struct AgentType {
   type_name : String
   description : String
   source_language : String
+  schema : @types.SchemaGraph
   constructor_ : AgentConstructor
   methods : Array[AgentMethod]
   dependencies : Array[AgentDependency]
@@ -241,20 +298,20 @@ pub(all) struct AgentType {
   http_mount : HttpMountDetails?
   snapshotting : Snapshotting
   config : Array[AgentConfigDeclaration]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Associates an agent type with a component that implements it
 pub(all) struct RegisteredAgentType {
   agent_type : AgentType
   implemented_by : @types.ComponentId
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct TypedAgentConfigValue {
   path : Array[String]
-  value : @types.ValueAndType
-} derive(Debug, Eq)
+  value : @types.TypedSchemaValue
+} derive(Show, Eq)
 
 ///|
 /// Agent-level failures
@@ -263,5 +320,5 @@ pub(all) suberror AgentError {
   InvalidMethod(String)
   InvalidType(String)
   InvalidAgentId(String)
-  CustomError(@types.ValueAndType)
-} derive(Debug, Eq)
+  CustomError(@types.TypedSchemaValue)
+} derive(Show, Eq)

@@ -22,7 +22,6 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }

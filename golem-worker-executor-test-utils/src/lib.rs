@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -51,6 +51,9 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
 };
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::schema::SchemaValue;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -69,8 +72,6 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
-use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -1465,7 +1466,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -1579,7 +1580,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -1694,10 +1695,10 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
         config: Vec<
-            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
@@ -1709,10 +1710,9 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<
-        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-    > {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>
+    {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -1722,7 +1722,7 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<Result<(), RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
@@ -1731,7 +1731,7 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
@@ -1743,7 +1743,7 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
@@ -1755,7 +1755,7 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
@@ -1771,7 +1771,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
@@ -1779,9 +1779,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
+        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
@@ -2095,7 +2093,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
@@ -3276,13 +3274,13 @@ impl Rpc for FailingRpc {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         auth_ctx: &AuthCtx,
-    ) -> Result<UntypedDataValue, ServiceRpcError> {
+    ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -3313,7 +3311,7 @@ impl Rpc for FailingRpc {
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],

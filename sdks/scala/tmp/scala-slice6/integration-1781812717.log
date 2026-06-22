@@ -1,0 +1,990 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-2/sdks/scala/project
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+=== golem deploy (exit=1) ===
+Selected app: scala-examples, env: local, server: local - builtin (http://localhost:9881/)
+Selecting components
+  Found components: scala:examples
+  Selected components and layers:
+    scala:examples: scala.js, scala:examples
+Building components
+  Building scala:examples
+    Executing external command 'bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'' in directory /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents
+bash | [info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+bash | [info] loading settings for project root from build.sbt, plugins.sbt...
+bash | [info] loading project definition from /Users/vigoo/projects/golem/golem-2/sdks/scala/project
+bash | [info] loading settings for project root from build.sbt...
+bash | [info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+bash | [info] Forcing Scala version to 3.8.2 on all projects.
+bash | [info] Reapplying settings...
+bash | [info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+bash | [info] set current project to golem-scala-test-agents (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+bash | [info] compiling 56 Scala sources to /Users/vigoo/projects/golem/golem-2/sdks/scala/model/.jvm/target/scala-3.8.2/classes ...
+bash | [info] compiling 56 Scala sources to /Users/vigoo/projects/golem/golem-2/sdks/scala/model/.js/target/scala-3.8.2/classes ...
+bash | parsed config (v3.10.4): /Users/vigoo/projects/golem/golem-2/sdks/scala/.scalafmt.conf
+bash | [info] [golem] Generated Scala.js agent registration for example into golem.runtime.__generated.autoregister.example (34 impls, 2 pkgs).
+bash | [info] [golem] Generated 34 RPC client object(s).
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:39:46 
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:39:46 
+bash | [warn] 39 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+bash | [warn] 39 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+bash | [warn]    |                                              ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |                                              ^
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:42:57 
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigBuilder.scala:42:57 
+bash | [warn] 42 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+bash | [warn]    |                                                         ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn] 42 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn]    |                                                         ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:32:46 
+bash | [warn] 32 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+bash | [warn]    |                                              ^
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:32:46 
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] 32 |  private def isSecret(reflect: Reflect.Bound[_]): Boolean =
+bash | [warn]    |                                              ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:35:57 
+bash | [warn] 35 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+bash | [warn]    |                                                         ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/config/ConfigIntrospection.scala:35:57 
+bash | [warn] 35 |  private def isTupleRecord(rec: Reflect.Record[Binding, _]): Boolean = {
+bash | [warn]    |                                                         ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/DataInterop.scala:149:90 
+bash | [warn] 149 |  private def isTupleRecord(rec: Reflect.Record[_root_.zio.blocks.schema.binding.Binding, _]): Boolean = {
+bash | [warn]     |                                                                                          ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/DataInterop.scala:149:90 
+bash | [warn] 149 |  private def isTupleRecord(rec: Reflect.Record[_root_.zio.blocks.schema.binding.Binding, _]): Boolean = {
+bash | [warn]     |                                                                                          ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:169:46 
+bash | [warn] 169 |        val av     = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:170:46 
+bash | [warn] 170 |        val bv     = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:199:48 
+bash | [warn] 199 |              a  <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:169:46 
+bash | [warn] 169 |        val av     = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:200:48 
+bash | [warn] 200 |              b  <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:170:46 
+bash | [warn] 170 |        val bv     = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:199:48 
+bash | [warn] 199 |              a  <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:212:46 
+bash | [warn] 212 |        val av     = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:200:48 
+bash | [warn] 200 |              b  <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:213:46 
+bash | [warn] 213 |        val bv     = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:212:46 
+bash | [warn] 212 |        val av     = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:221:47 
+bash | [warn] 221 |              a <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:222:47 
+bash | [warn] 222 |              b <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:213:46 
+bash | [warn] 213 |        val bv     = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                              ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:251:49 
+bash | [warn] 251 |        val av        = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:252:49 
+bash | [warn] 252 |        val bv        = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:221:47 
+bash | [warn] 221 |              a <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:253:49 
+bash | [warn] 253 |        val cv        = DataInterop.toData[C](c)(cSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:222:47 
+bash | [warn] 222 |              b <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:284:48 
+bash | [warn] 284 |              a  <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:251:49 
+bash | [warn] 251 |        val av        = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:285:48 
+bash | [warn] 285 |              b  <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:252:49 
+bash | [warn] 252 |        val bv        = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:253:49 
+bash | [warn] 253 |        val cv        = DataInterop.toData[C](c)(cSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:286:48 
+bash | [warn] 286 |              c  <- DataInterop.fromData[C](cv)(cSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:284:48 
+bash | [warn] 284 |              a  <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:285:48 
+bash | [warn] 285 |              b  <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:286:48 
+bash | [warn] 286 |              c  <- DataInterop.fromData[C](cv)(cSchema)
+bash | [warn]     |                                                ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:298:49 
+bash | [warn] 298 |        val av        = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:299:49 
+bash | [warn] 299 |        val bv        = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:298:49 
+bash | [warn] 298 |        val av        = DataInterop.toData[A](a)(aSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:300:49 
+bash | [warn] 300 |        val cv        = DataInterop.toData[C](c)(cSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:299:49 
+bash | [warn] 299 |        val bv        = DataInterop.toData[B](b)(bSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:308:47 
+bash | [warn] 308 |              a <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:309:47 
+bash | [warn] 309 |              b <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:310:47 
+bash | [warn] 310 |              c <- DataInterop.fromData[C](cv)(cSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:300:49 
+bash | [warn] 300 |        val cv        = DataInterop.toData[C](c)(cSchema)
+bash | [warn]     |                                                 ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:331:51 
+bash | [warn] 331 |      val dataValue = DataInterop.toData[A](value)(baseSchema)
+bash | [warn]     |                                                   ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:308:47 
+bash | [warn] 308 |              a <- DataInterop.fromData[A](av)(aSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:340:49 
+bash | [warn] 340 |              DataInterop.fromData[A](dataValue)(baseSchema)
+bash | [warn]     |                                                 ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:309:47 
+bash | [warn] 309 |              b <- DataInterop.fromData[B](bv)(bSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:354:64 
+bash | [warn] 354 |      Right(ElementValue.Component(DataInterop.toData[A](value)(baseSchema)))
+bash | [warn]     |                                                                ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:359:45 
+bash | [warn] 359 |          DataInterop.fromData[A](dataValue)(baseSchema)
+bash | [warn]     |                                             ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:310:47 
+bash | [warn] 310 |              c <- DataInterop.fromData[C](cv)(cSchema)
+bash | [warn]     |                                               ^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:331:51 
+bash | [warn] 331 |      val dataValue = DataInterop.toData[A](value)(baseSchema)
+bash | [warn]     |                                                   ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:340:49 
+bash | [warn] 340 |              DataInterop.fromData[A](dataValue)(baseSchema)
+bash | [warn]     |                                                 ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:354:64 
+bash | [warn] 354 |      Right(ElementValue.Component(DataInterop.toData[A](value)(baseSchema)))
+bash | [warn]     |                                                                ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/data/GolemSchema.scala:359:45 
+bash | [warn] 359 |          DataInterop.fromData[A](dataValue)(baseSchema)
+bash | [warn]     |                                             ^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/AgentImplementationType.scala:35:38 
+bash | [warn] 35 |  configBuilder: Option[ConfigBuilder[_]] = None,
+bash | [warn]    |                                      ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/AgentImplementationType.scala:35:38 
+bash | [warn] 35 |  configBuilder: Option[ConfigBuilder[_]] = None,
+bash | [warn]    |                                      ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:45 
+bash | [warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+bash | [warn]    |                                             ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:48 
+bash | [warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+bash | [warn]    |                                                ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:45 
+bash | [warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+bash | [warn]    |                                             ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/AgentType.scala:41:48 
+bash | [warn] 41 |  type AnyMethod[Trait] = AgentMethod[Trait, _, _]
+bash | [warn]    |                                                ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:61:42 
+bash | [warn] 61 |        scala.concurrent.ExecutionContext.parasitic
+bash | [warn]    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:73:80 
+bash | [warn] 73 |      raw(instance, bytes).map(_ => instance)(scala.concurrent.ExecutionContext.parasitic)
+bash | [warn]    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:61:42 
+bash | [warn] 61 |        scala.concurrent.ExecutionContext.parasitic
+bash | [warn]    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/model/src/main/scala/golem/runtime/SnapshotHandlers.scala:73:80 
+bash | [warn] 73 |      raw(instance, bytes).map(_ => instance)(scala.concurrent.ExecutionContext.parasitic)
+bash | [warn]    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] 34 warnings found
+bash | [info] done compiling
+bash | [warn] 34 warnings found
+bash | [info] done compiling
+bash | [info] compiling 8 Scala sources to /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/target/scala-3.8.2/classes ...
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentClientMacro.scala:327:59 
+bash | [warn] 327 |            '{ InputRecordCodec.single[a](${ Expr(name) })($into, $from) }.asExprOf[InputRecordCodec[In]]
+bash | [warn]     |                                                           ^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentClientMacro.scala:368:33 
+bash | [warn] 368 |      '{ OutputCodec.single[Out]($into, $from) }
+bash | [warn]     |                                 ^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:205:57 
+bash | [warn] 205 |        val configBuilderExpr: Expr[Option[ConfigBuilder[_]]] = configParam match {
+bash | [warn]     |                                                         ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:233:60 
+bash | [warn] 233 |                        '{ Some($builderExpr: ConfigBuilder[_]) }
+bash | [warn]     |                                                            ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:699:88 
+bash | [warn] 699 |  private def detectConfigBuilder[Trait: Type](using Quotes): Expr[Option[ConfigBuilder[_]]] = {
+bash | [warn]     |                                                                                        ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:720:54 
+bash | [warn] 720 |                  '{ Some($builderExpr: ConfigBuilder[_]) }
+bash | [warn]     |                                                      ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:536:60 
+bash | [warn] 536 |          '{ InputRecordCodec.single[Ctor](${ Expr(name) })($into, $from) }
+bash | [warn]     |                                                            ^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:929:59 
+bash | [warn] 929 |            '{ InputRecordCodec.single[a](${ Expr(name) })($into, $from) }.asExprOf[InputRecordCodec[In]]
+bash | [warn]     |                                                           ^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/macros/src/main/scala-3/golem/runtime/macros/AgentImplementationMacro.scala:970:33 
+bash | [warn] 970 |      '{ OutputCodec.single[Out]($into, $from) }
+bash | [warn]     |                                 ^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] 9 warnings found
+bash | [info] done compiling
+bash | [info] compiling 76 Scala sources to /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/target/scala-3.8.2/classes ...
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala-3/golem/runtime/autowire/AgentImplementation.scala:27:59 
+bash | [warn] 27 |    implType: golem.runtime.AgentImplementationType[Trait, _]
+bash | [warn]    |                                                           ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:46:39 
+bash | [warn] 46 |  def unwrapOrRevert[T](result: Either[_, T]): T =
+bash | [warn]    |                                       ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:56:42 
+bash | [warn] 56 |  def runOrRevert[T](fn: => Future[Either[_, T]]): Future[T] =
+bash | [warn]    |                                          ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/Checkpoint.scala:88:56 
+bash | [warn] 88 |  def withCheckpoint[T](fn: Checkpoint => Future[Either[_, T]]): Future[T] = {
+bash | [warn]    |                                                        ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:375:105 
+bash | [warn] 375 |    awaitPromiseRaw(promiseId).map(fromUint8Array)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]     |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:396:62 
+bash | [warn] 396 |      }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:437:60 
+bash | [warn] 437 |    }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/HostApi.scala:514:62 
+bash | [warn] 514 |        scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+bash | [warn]     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/config/ConfigHolder.scala:20:38 
+bash | [warn] 20 |  private var _current: Option[Config[_]] = None
+bash | [warn]    |                                      ^
+bash | [warn]    |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:253:67 
+bash | [warn] 253 |      case Bit(bs)              => JsMysqlDbValue.bit(js.Array(bs: _*))
+bash | [warn]     |                                                                   ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:706:67 
+bash | [warn] 706 |      case Bit(bs)           => JsPostgresDbValue.bit(js.Array(bs: _*))
+bash | [warn]     |                                                                   ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:707:70 
+bash | [warn] 707 |      case VarBit(bs)        => JsPostgresDbValue.varbit(js.Array(bs: _*))
+bash | [warn]     |                                                                      ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:717:69 
+bash | [warn] 717 |      case Vector(v)         => JsPostgresDbValue.vector(js.Array(v: _*))
+bash | [warn]     |                                                                     ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:718:70 
+bash | [warn] 718 |      case HalfVec(v)        => JsPostgresDbValue.halfvec(js.Array(v: _*))
+bash | [warn]     |                                                                      ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:720:79 
+bash | [warn] 720 |        JsPostgresDbValue.sparsevec(JsPgSparseVec(sv.dim, js.Array(sv.indices: _*), js.Array(sv.values: _*)))
+bash | [warn]     |                                                                               ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/Rdbms.scala:720:104 
+bash | [warn] 720 |        JsPostgresDbValue.sparsevec(JsPgSparseVec(sv.dim, js.Array(sv.indices: _*), js.Array(sv.values: _*)))
+bash | [warn]     |                                                                                                        ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:126:47 
+bash | [warn] 126 |        JsWitNode.recordValue(js.Array(fields: _*))
+bash | [warn]     |                                               ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:131:69 
+bash | [warn] 131 |      case FlagsValue(flags) => JsWitNode.flagsValue(js.Array(flags: _*))
+bash | [warn]     |                                                                     ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:132:69 
+bash | [warn] 132 |      case TupleValue(elems) => JsWitNode.tupleValue(js.Array(elems: _*))
+bash | [warn]     |                                                                     ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:133:68 
+bash | [warn] 133 |      case ListValue(elems)  => JsWitNode.listValue(js.Array(elems: _*))
+bash | [warn]     |                                                                    ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:279:73 
+bash | [warn] 279 |      case EnumType(cases)     => JsWitTypeNode.enumType(js.Array(cases: _*))
+bash | [warn]     |                                                                         ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:280:74 
+bash | [warn] 280 |      case FlagsType(flags)    => JsWitTypeNode.flagsType(js.Array(flags: _*))
+bash | [warn]     |                                                                          ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/host/WitValueTypes.scala:281:74 
+bash | [warn] 281 |      case TupleType(elems)    => JsWitTypeNode.tupleType(js.Array(elems: _*))
+bash | [warn]     |                                                                          ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentConstructor.scala:54:28 
+bash | [warn] 54 |          .decode[A](input)(inputCodec)
+bash | [warn]    |                            ^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentRequestBuilder.scala:108:70 
+bash | [warn] 108 |      corsOptions = JsCorsOptions(js.Array(mount.corsAllowedPatterns: _*)),
+bash | [warn]     |                                                                      ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/AgentRequestBuilder.scala:127:62 
+bash | [warn] 127 |      case Some(patterns) => JsCorsOptions(js.Array(patterns: _*))
+bash | [warn]     |                                                              ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/MethodBinding.scala:69:31 
+bash | [warn] 69 |            .decode[In](input)(inputCodec)
+bash | [warn]    |                               ^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/MethodBinding.scala:78:70 
+bash | [warn] 78 |                    case Some(into) => Some(SchemaPayload.encode(out)(into))
+bash | [warn]    |                                                                      ^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitTypeBuilder.scala:89:69 
+bash | [warn] 89 |          (JsWitTypeNode.tupleType(js.Array(elements.map(buildNode): _*)), js.undefined: js.UndefOr[String])
+bash | [warn]    |                                                                     ^
+bash | [warn]    |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitTypeBuilder.scala:107:50 
+bash | [warn] 107 |          (JsWitTypeNode.enumType(js.Array(cases: _*)), name.fold[js.UndefOr[String]](js.undefined)(identity))
+bash | [warn]     |                                                  ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:85:85 
+bash | [warn] 85 |          indicesEither.map(indices => JsWitNode.listValue(js.Array(indices.reverse: _*)))
+bash | [warn]    |                                                                                     ^
+bash | [warn]    |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]    |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:186:71 
+bash | [warn] 186 |          case "list-value"  => JsWitNode.listValue(js.Array(reversed: _*))
+bash | [warn]     |                                                                       ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:187:72 
+bash | [warn] 187 |          case "tuple-value" => JsWitNode.tupleValue(js.Array(reversed: _*))
+bash | [warn]     |                                                                        ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:188:71 
+bash | [warn] 188 |          case _             => JsWitNode.listValue(js.Array(reversed: _*))
+bash | [warn]     |                                                                       ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:203:74 
+bash | [warn] 203 |          case "record-value" => JsWitNode.recordValue(js.Array(reversed: _*))
+bash | [warn]     |                                                                          ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:204:73 
+bash | [warn] 204 |          case "tuple-value"  => JsWitNode.tupleValue(js.Array(reversed: _*))
+bash | [warn]     |                                                                         ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/autowire/WitValueBuilder.scala:205:73 
+bash | [warn] 205 |          case _              => JsWitNode.tupleValue(js.Array(reversed: _*))
+bash | [warn]     |                                                                         ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:121:51 
+bash | [warn] 121 |    def trigger[In](method: AgentMethod[Trait, In, _], input: In): Future[Unit] =
+bash | [warn]     |                                                   ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:124:52 
+bash | [warn] 124 |    def schedule[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[Unit] =
+bash | [warn]     |                                                    ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:128:37 
+bash | [warn] 128 |      method: AgentMethod[Trait, In, _],
+bash | [warn]     |                                     ^
+bash | [warn]     |`_` is deprecated for wildcard arguments of types: use `?` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:72:47 
+bash | [warn] 72 |    try Right(SchemaRpcCodec.encodeArgs(input)(inputCodec))
+bash | [warn]    |                                               ^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:84:103 
+bash | [warn] 84 |      case OutputMetadata.Single(_) => SchemaRpcCodec.decodeSingleResult[Out](result)(outputCodec.from.get)
+bash | [warn]    |                                                                                      ^^^^^^^^^^^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:145:68 
+bash | [warn] 145 |            }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala:162:66 
+bash | [warn] 162 |          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:96:68 
+bash | [warn] 96 |            }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]    |Implicit parameters should be provided with a `using` clause.
+bash | [warn]    |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]    |To disable the warning, please use the following option:
+bash | [warn]    |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:114:70 
+bash | [warn] 114 |              }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+bash | [warn]     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bash | [warn]     |Implicit parameters should be provided with a `using` clause.
+bash | [warn]     |This code can be rewritten automatically under -rewrite -source 3.7-migration.
+bash | [warn]     |To disable the warning, please use the following option:
+bash | [warn]     |  "-Wconf:msg=Implicit parameters should be provided with a `using` clause:s"
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/host/AgentHostApi.scala:161:53 
+bash | [warn] 161 |    AgentRegistryModule.getConfigValue(js.Array(key: _*), expected)
+bash | [warn]     |                                                     ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/wasi/KeyValue.scala:124:31 
+bash | [warn] 124 |      val arr = js.Array(keys: _*)
+bash | [warn]     |                               ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/wasi/KeyValue.scala:132:64 
+bash | [warn] 132 |      EventualBatchModule.deleteMany(underlying, js.Array(keys: _*))
+bash | [warn]     |                                                                ^
+bash | [warn]     |The syntax `x: _*` is no longer supported for vararg splices; use `x*` instead
+bash | [warn]     |This construct can be rewritten automatically under -rewrite -source 3.4-migration.
+bash | [warn] -- [E030] Match case Unreachable Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala:142:13 
+bash | [warn] 142 |        case Some(res) =>
+bash | [warn]     |             ^^^^^^^^^
+bash | [warn]     |             Unreachable case
+bash | [warn] 50 warnings found
+bash | [info] done compiling
+bash | [info] compiling 84 Scala sources to /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/target/scala-3.8.2/classes ...
+bash | [warn] Failed to parse `-Wconf` configuration: cat=unused:s
+bash | [warn] unknown category: unused
+bash | [warn] -- [E029] Pattern Match Exhaustivity Warning: /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/src/main/scala/example/integrationtests/OplogInspectorImpl.scala:72:4 
+bash | [warn] 72 |    e match {
+bash | [warn]    |    ^
+bash | [warn]    |match may not be exhaustive.
+bash | [warn]    |
+bash | [warn]    |It would fail on pattern case: golem.host.OplogApi.OplogEntry.FilesystemStorageUsageUpdate(_)
+bash | [warn]    |
+bash | [warn]    | longer explanation available when compiling with `-explain`
+bash | [warn] two warnings found
+bash | [info] done compiling
+bash | [info] Full optimizing /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/target/scala-3.8.2/golem-scala-test-agents-opt
+bash | [info] [golem] Building Scala.js bundle for scala:examples ...
+bash | [info] [golem] Wrote Scala.js bundle to /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/scala.js
+bash | [success] Total time: 21 s, completed Jun 18, 2026, 9:59:05 PM
+    Injecting JS module /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/scala.js into QuickJS WASM /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.generated/agent_guest.wasm
+    Pre-initializing JS component /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.dynamic.wasm into /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.preinitialized.wasm
+Reading component from /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.dynamic.wasm...
+Pre-initializing component (init_func=wizer-initialize)...
+Writing pre-initialized component to /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.preinitialized.wasm...
+Done! Input: 20597.2 KB, Output: 88087.3 KB
+Adding metadata to components
+  Adding metadata to scala:examples
+Preparing deployment
+  Extracting scala:examples agent types from /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.wasm
+
+
+
+Summary 
+  Failed to prepare deployment [ERROR]
+    error: Function discover-agent-types not found in interface golem:agent/guest@1.5.0
+
+=== end golem deploy ===
+=== golem deploy (exit=1) ===
+Selected app: scala-examples, env: local, server: local - builtin (http://localhost:9881/)
+Selecting components
+  Found components: scala:examples
+  Selected components and layers:
+    scala:examples: scala.js, scala:examples
+Building components
+  Building scala:examples
+    Skipping executing external command 'bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'' in directory /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents [UP-TO-DATE]
+    Skipping injecting JS module /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/scala.js into QuickJS WASM /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.generated/agent_guest.wasm [UP-TO-DATE]
+    Skipping pre-initializing JS component /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.dynamic.wasm into /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.preinitialized.wasm [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to scala:examples [UP-TO-DATE]
+Preparing deployment
+  Extracting scala:examples agent types from /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.wasm
+
+
+
+Summary 
+  Failed to prepare deployment [ERROR]
+    error: Function discover-agent-types not found in interface golem:agent/guest@1.5.0
+
+=== end golem deploy ===
+[error] Uncaught exception when running tests: java.lang.RuntimeException: golem deploy failed after retry (exit=1):
+[error] Selected app: scala-examples, env: local, server: local - builtin (http://localhost:9881/)
+[error] Selecting components
+[error]   Found components: scala:examples
+[error]   Selected components and layers:
+[error]     scala:examples: scala.js, scala:examples
+[error] Building components
+[error]   Building scala:examples
+[error]     Skipping executing external command 'bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'' in directory /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents [UP-TO-DATE]
+[error]     Skipping injecting JS module /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/scala.js into QuickJS WASM /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.generated/agent_guest.wasm [UP-TO-DATE]
+[error]     Skipping pre-initializing JS component /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.dynamic.wasm into /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.preinitialized.wasm [UP-TO-DATE]
+[error] Adding metadata to components
+[error]   Skipping adding metadata to scala:examples [UP-TO-DATE]
+[error] Preparing deployment
+[error]   Extracting scala:examples agent types from /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.wasm
+[error] 
+[error] 
+[error] 
+[error] Summary 
+[error]   Failed to prepare deployment [ERROR]
+[error]     error: Function discover-agent-types not found in interface golem:agent/guest@1.5.0
+[error] 
+[error] 	at golem.integration.GolemServer$.deploy$$anonfun$1$$anonfun$2$$anonfun$1$$anonfun$1(GolemExamplesIntegrationSpec.scala:151)
+[error] 	at zio.ZIO$.fail$$anonfun$1(ZIO.scala:3247)
+[error] 	at zio.ZIO$.failCause$$anonfun$1(ZIO.scala:3258)
+[error] 	at golem.integration.GolemServer.deploy(GolemExamplesIntegrationSpec.scala:153)
+[error] 	at golem.integration.GolemServer.layer(GolemExamplesIntegrationSpec.scala:285)
+[error] 	at golem.integration.GolemServer.layer(GolemExamplesIntegrationSpec.scala:286)
+[error] 	at zio.process.Process.execute(Process.scala:45)
+[error] 	at zio.Runtime$unsafe$.fromLayer(Runtime.scala:342)
+[error] 	at zio.test.sbt.TestRunner.getSharedRuntime(TestRunner.scala:79)
+[error] 	at zio.test.sbt.TestRunner.tasks(TestRunner.scala:57)
+[error] 	at zio.test.sbt.TestRunner.tasks(TestRunner.scala:42)
+[error] 	at sbt.ForkMain$Run.runTests(ForkMain.java:345)
+[error] 	at sbt.ForkMain$Run.run(ForkMain.java:192)
+[error] 	at sbt.ForkMain$Run.access$100(ForkMain.java:187)
+[error] 	at sbt.ForkMain.main(ForkMain.java:178)
+[error] 	at sbt.ForkMain.main(ForkMain.java:164)
+[error] sbt.ForkMain$ForkError: zio.FiberFailure: golem deploy failed after retry (exit=1):
+[error] Selected app: scala-examples, env: local, server: local - builtin (http://localhost:9881/)
+[error] Selecting components
+[error]   Found components: scala:examples
+[error]   Selected components and layers:
+[error]     scala:examples: scala.js, scala:examples
+[error] Building components
+[error]   Building scala:examples
+[error]     Skipping executing external command 'bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'' in directory /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents [UP-TO-DATE]
+[error]     Skipping injecting JS module /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/scala.js into QuickJS WASM /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.generated/agent_guest.wasm [UP-TO-DATE]
+[error]     Skipping pre-initializing JS component /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.dynamic.wasm into /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.preinitialized.wasm [UP-TO-DATE]
+[error] Adding metadata to components
+[error]   Skipping adding metadata to scala:examples [UP-TO-DATE]
+[error] Preparing deployment
+[error]   Extracting scala:examples agent types from /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.wasm
+[error] 
+[error] 
+[error] 
+[error] Summary 
+[error]   Failed to prepare deployment [ERROR]
+[error]     error: Function discover-agent-types not found in interface golem:agent/guest@1.5.0
+[error] 
+[error] 	at golem.integration.GolemServer.deploy(GolemExamplesIntegrationSpec.scala:153)
+[error] 	at golem.integration.GolemServer.layer(GolemExamplesIntegrationSpec.scala:285)
+[error] 	at golem.integration.GolemServer.layer(GolemExamplesIntegrationSpec.scala:286)
+[error] 	at zio.process.Process.execute(Process.scala:45)
+[error] 	at zio.Runtime$unsafe$.fromLayer(Runtime.scala:342)
+[error] 	at zio.test.sbt.TestRunner.getSharedRuntime(TestRunner.scala:79)
+[error] 	at zio.test.sbt.TestRunner.tasks(TestRunner.scala:57)
+[error] 	at zio.test.sbt.TestRunner.tasks(TestRunner.scala:42)
+[error] 	at sbt.ForkMain$Run.runTests(ForkMain.java:345)
+[error] 	at sbt.ForkMain$Run.run(ForkMain.java:192)
+[error] 	at sbt.ForkMain$Run.access$100(ForkMain.java:187)
+[error] 	at sbt.ForkMain.main(ForkMain.java:178)
+[error] 	at sbt.ForkMain.main(ForkMain.java:164)
+[error] Caused by: sbt.ForkMain$ForkError: java.lang.RuntimeException: golem deploy failed after retry (exit=1):
+[error] Selected app: scala-examples, env: local, server: local - builtin (http://localhost:9881/)
+[error] Selecting components
+[error]   Found components: scala:examples
+[error]   Selected components and layers:
+[error]     scala:examples: scala.js, scala:examples
+[error] Building components
+[error]   Building scala:examples
+[error]     Skipping executing external command 'bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'' in directory /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents [UP-TO-DATE]
+[error]     Skipping injecting JS module /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/scala.js into QuickJS WASM /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.generated/agent_guest.wasm [UP-TO-DATE]
+[error]     Skipping pre-initializing JS component /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.dynamic.wasm into /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.preinitialized.wasm [UP-TO-DATE]
+[error] Adding metadata to components
+[error]   Skipping adding metadata to scala:examples [UP-TO-DATE]
+[error] Preparing deployment
+[error]   Extracting scala:examples agent types from /Users/vigoo/projects/golem/golem-2/sdks/scala/test-agents/.golem/agents/scala_examples.wasm
+[error] 
+[error] 
+[error] 
+[error] Summary 
+[error]   Failed to prepare deployment [ERROR]
+[error]     error: Function discover-agent-types not found in interface golem:agent/guest@1.5.0
+[error] 
+[error] 	at golem.integration.GolemServer$.deploy$$anonfun$1$$anonfun$2$$anonfun$1$$anonfun$1(GolemExamplesIntegrationSpec.scala:151)
+[error] 	at zio.ZIO$.fail$$anonfun$1(ZIO.scala:3247)
+[error] 	at zio.ZIO$.failCause$$anonfun$1(ZIO.scala:3258)
+[error] 	at zio.internal.FiberRuntime.runLoop(FiberRuntime.scala:1214)
+[error] 	at zio.internal.FiberRuntime.evaluateEffect(FiberRuntime.scala:435)
+[error] 	at zio.internal.FiberRuntime.evaluateMessageWhileSuspended(FiberRuntime.scala:508)
+[error] 	at zio.internal.FiberRuntime.drainQueueOnCurrentThread(FiberRuntime.scala:272)
+[error] 	at zio.internal.FiberRuntime.run(FiberRuntime.scala:160)
+[error] 	at zio.internal.ZScheduler$$anon$3.run(ZScheduler.scala:404)
+[info] Completed tests
+[error] Error during tests:
+[error] 	Forked test harness failed: java.io.EOFException
+[error] 	at java.base/java.io.ObjectInputStream$BlockDataInputStream.peekByte(ObjectInputStream.java:3232)
+[error] 	at java.base/java.io.ObjectInputStream.readObject0(ObjectInputStream.java:1713)
+[error] 	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:540)
+[error] 	at java.base/java.io.ObjectInputStream.readObject(ObjectInputStream.java:498)
+[error] 	at sbt.React.react(ForkTests.scala:202)
+[error] 	at sbt.ForkTests$Acceptor$1$.run(ForkTests.scala:133)
+[error] 	at java.base/java.lang.Thread.run(Thread.java:1583)
+[error] (integrationTests / Test / test) sbt.TestsFailedException: Tests unsuccessful
+[error] Total time: 45 s, completed Jun 18, 2026, 9:59:26 PM

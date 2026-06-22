@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { parseUuid, uuidToString, Uuid as RawUuid } from 'golem:core/types@1.5.0';
+import { parseUuid, uuidToString, Uuid as RawUuid } from 'golem:core/types@2.0.0';
 
 /**
  * Rich UUID class that is structurally compatible with the WIT binding type
- * `{ highBits: bigint; lowBits: bigint }` from `golem:core/types@1.5.0`.
+ * `{ highBits: bigint; lowBits: bigint }` from `golem:core/types@2.0.0`.
  */
 export class Uuid {
   readonly highBits: bigint;

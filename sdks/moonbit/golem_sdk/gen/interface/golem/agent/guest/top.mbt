@@ -3,19 +3,27 @@
 ///|
 /// Initializes the agent of a given type with the given constructor parameters.
 /// If called a second time, it fails.
+///
+/// `input` is a value tree whose root encodes the constructor's parameter
+/// list (one record field per declared `named-field`, in declaration order).
+/// The guest interprets it against its own constructor `input-schema`.
 declare pub fn initialize(
   agent_type : String,
-  input : @types.DataValue,
+  input : @types.SchemaValueTree,
   principal : @common.Principal,
 ) -> Result[Unit, @common.AgentError]
 
 ///|
-/// Invokes an agent. If create was not called before, it fails
+/// Invokes an agent. If create was not called before, it fails.
+///
+/// `input` is a value tree whose root encodes the method's parameter list.
+/// The result is `none` when the method's `output-schema` is `unit`, and
+/// `some(value)` for a `single` output.
 declare pub fn invoke(
   method_name : String,
-  input : @types.DataValue,
+  input : @types.SchemaValueTree,
   principal : @common.Principal,
-) -> Result[@types.DataValue, @common.AgentError]
+) -> Result[@types.SchemaValueTree?, @common.AgentError]
 
 ///|
 /// Gets the agent type. If create was not called before, it fails

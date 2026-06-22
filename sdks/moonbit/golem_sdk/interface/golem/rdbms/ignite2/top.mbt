@@ -8,7 +8,7 @@ pub(all) suberror Error_ {
   QueryExecutionFailure(String)
   QueryResponseFailure(String)
   Other(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// ── Value types (maps 1-to-1 onto ignite_client::IgniteValue) ─────────────
@@ -29,29 +29,29 @@ pub(all) enum DbValue {
   DbTime(Int64)
   DbDecimal(String)
   DbByteArray(FixedArray[Byte])
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// ── Metadata ───────────────────────────────────────────────────────────────
 pub(all) struct DbColumn {
   ordinal : UInt64
   name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DbRow {
   values : Array[DbValue]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DbResult {
   columns : Array[DbColumn]
   rows : Array[DbRow]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// ── Resources ──────────────────────────────────────────────────────────────
-pub(all) struct DbResultStream(Int) derive(Debug, Eq)
+pub(all) struct DbResultStream(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -61,7 +61,7 @@ pub fn DbResultStream::drop(self : DbResultStream) -> Unit {
 }
 
 ///|
-pub(all) struct DbTransaction(Int) derive(Debug, Eq)
+pub(all) struct DbTransaction(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -71,7 +71,7 @@ pub fn DbTransaction::drop(self : DbTransaction) -> Unit {
 }
 
 ///|
-pub(all) struct DbConnection(Int) derive(Debug, Eq)
+pub(all) struct DbConnection(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -190,8 +190,8 @@ pub fn DbResultStream::get_next(
               let lifted = match mbt_ffi_load8_u(iter_base + 0) {
                 0 => DbValue::DbNull
                 1 => DbValue::DbBoolean(mbt_ffi_load8_u(iter_base + 8) != 0)
-                2 => DbValue::DbByte(mbt_ffi_load8(iter_base + 8) - 0x100)
-                3 => DbValue::DbShort(mbt_ffi_load16(iter_base + 8) - 0x10000)
+                2 => DbValue::DbByte(mbt_ffi_load8(iter_base + 8))
+                3 => DbValue::DbShort(mbt_ffi_load16(iter_base + 8))
                 4 => DbValue::DbInt(mbt_ffi_load32(iter_base + 8))
                 5 => DbValue::DbLong(mbt_ffi_load64(iter_base + 8))
                 6 => DbValue::DbFloat(mbt_ffi_loadf32(iter_base + 8))
@@ -489,8 +489,8 @@ pub fn DbTransaction::query(
           let lifted = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::DbNull
             1 => DbValue::DbBoolean(mbt_ffi_load8_u(iter_base + 8) != 0)
-            2 => DbValue::DbByte(mbt_ffi_load8(iter_base + 8) - 0x100)
-            3 => DbValue::DbShort(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            2 => DbValue::DbByte(mbt_ffi_load8(iter_base + 8))
+            3 => DbValue::DbShort(mbt_ffi_load16(iter_base + 8))
             4 => DbValue::DbInt(mbt_ffi_load32(iter_base + 8))
             5 => DbValue::DbLong(mbt_ffi_load64(iter_base + 8))
             6 => DbValue::DbFloat(mbt_ffi_loadf32(iter_base + 8))
@@ -1378,8 +1378,8 @@ pub fn DbConnection::query(
           let lifted = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::DbNull
             1 => DbValue::DbBoolean(mbt_ffi_load8_u(iter_base + 8) != 0)
-            2 => DbValue::DbByte(mbt_ffi_load8(iter_base + 8) - 0x100)
-            3 => DbValue::DbShort(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            2 => DbValue::DbByte(mbt_ffi_load8(iter_base + 8))
+            3 => DbValue::DbShort(mbt_ffi_load16(iter_base + 8))
             4 => DbValue::DbInt(mbt_ffi_load32(iter_base + 8))
             5 => DbValue::DbLong(mbt_ffi_load64(iter_base + 8))
             6 => DbValue::DbFloat(mbt_ffi_loadf32(iter_base + 8))

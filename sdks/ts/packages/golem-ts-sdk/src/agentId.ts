@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataValue, makeAgentId, parseAgentId } from 'golem:agent/host@1.5.0';
+import { makeAgentId, parseAgentId } from 'golem:agent/host@2.0.0';
 import { Uuid } from './uuid';
-import { Uuid as RawUuid } from 'golem:core/types@1.5.0';
+import { Uuid as RawUuid } from 'golem:core/types@2.0.0';
+import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
 
 /**
  * Globally unique ID of an `agent`.
  *
- * A LegacyParsedAgentId wraps the string representation of an agent ID and can parse it
+ * A ParsedAgentId wraps the string representation of an agent ID and can parse it
  * into its constituent parts: agent type name, constructor parameters, and optional phantom ID.
+ *
+ * Constructor parameters are carried as the schema-native {@link SchemaValue} (the recursive
+ * in-memory value); the embedded type graph the host returns is discarded because the SDK
+ * re-derives parameter types from the agent's registered runtime metadata.
  */
 export class ParsedAgentId {
   readonly value: string;
 
-  parsedCache: [string, DataValue, Uuid | undefined] | undefined = undefined;
+  parsedCache: [string, SchemaValue, Uuid | undefined] | undefined = undefined;
 
   constructor(agentId: string) {
     this.value = agentId;
@@ -34,12 +39,12 @@ export class ParsedAgentId {
   /**
    * Constructs a ParsedAgentId from the given agent type name, parameters and an optional phantom ID.
    * @param agentTypeName Agent type name in kebab-case
-   * @param parameters Constructor parameter values encoded as DataValue
+   * @param parameters Constructor parameter values encoded as a {@link SchemaValue} record
    * @param phantomId Optional phantom ID
    */
-  static make(agentTypeName: string, parameters: DataValue, phantomId?: RawUuid): ParsedAgentId {
+  static make(agentTypeName: string, parameters: SchemaValue, phantomId?: RawUuid): ParsedAgentId {
     const normalized = phantomId ? Uuid.from(phantomId) : undefined;
-    const value = makeAgentId(agentTypeName, parameters, normalized);
+    const value = makeAgentId(agentTypeName, schemaValueToWit(parameters), normalized);
     const result = new ParsedAgentId(value);
     result.parsedCache = [agentTypeName, parameters, normalized];
     return result;
@@ -49,10 +54,14 @@ export class ParsedAgentId {
    * Returns the parsed agent ID.
    * @returns a tuple of the agent type name, parameters and an optional phantom ID
    */
-  parsed(): [string, DataValue, Uuid | undefined] {
+  parsed(): [string, SchemaValue, Uuid | undefined] {
     if (!this.parsedCache) {
-      const [typeName, params, rawPhantomId] = parseAgentId(this.value);
-      this.parsedCache = [typeName, params, rawPhantomId ? Uuid.from(rawPhantomId) : undefined];
+      const [typeName, typedParams, rawPhantomId] = parseAgentId(this.value);
+      this.parsedCache = [
+        typeName,
+        schemaValueFromWit(typedParams.value),
+        rawPhantomId ? Uuid.from(rawPhantomId) : undefined,
+      ];
     }
     return this.parsedCache;
   }

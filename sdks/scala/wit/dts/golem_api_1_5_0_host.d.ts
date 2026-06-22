@@ -3,7 +3,7 @@
  * the durability and transactional guarantees the executor provides.
  */
 declare module 'golem:api/host@1.5.0' {
-  import * as golemCore150Types from 'golem:core/types@1.5.0';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
    * Create a new promise
@@ -150,12 +150,11 @@ declare module 'golem:api/host@1.5.0' {
      */
     get(): Uint8Array | undefined;
   }
-  export type ComponentId = golemCore150Types.ComponentId;
-  export type Uuid = golemCore150Types.Uuid;
-  export type ValueAndType = golemCore150Types.ValueAndType;
-  export type AgentId = golemCore150Types.AgentId;
-  export type PromiseId = golemCore150Types.PromiseId;
-  export type OplogIndex = golemCore150Types.OplogIndex;
+  export type ComponentId = golemCore200Types.ComponentId;
+  export type Uuid = golemCore200Types.Uuid;
+  export type AgentId = golemCore200Types.AgentId;
+  export type PromiseId = golemCore200Types.PromiseId;
+  export type OplogIndex = golemCore200Types.OplogIndex;
   export type Pollable = wasiIo023Poll.Pollable;
   /**
    * Represents a Golem component's version
