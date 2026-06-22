@@ -952,6 +952,32 @@ impl AgentInvocationResult {
             _ => false,
         }
     }
+
+    /// Wraps this result for `Debug` rendering that redacts any host-managed
+    /// capability material (`Secret` / `QuotaToken`) in the embedded
+    /// invocation output. Use at tracing / diagnostic / error-formatting
+    /// boundaries instead of the derived `Debug`.
+    pub fn redacted_debug(&self) -> RedactedAgentInvocationResult<'_> {
+        RedactedAgentInvocationResult(self)
+    }
+}
+
+/// `Debug` wrapper produced by [`AgentInvocationResult::redacted_debug`].
+pub struct RedactedAgentInvocationResult<'a>(&'a AgentInvocationResult);
+
+impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            AgentInvocationResult::AgentMethod { output } => f
+                .debug_struct("AgentMethod")
+                .field(
+                    "output",
+                    &crate::schema::redacted_schema_value_debug(output),
+                )
+                .finish(),
+            other => std::fmt::Debug::fmt(other, f),
+        }
+    }
 }
 
 impl AgentInvocation {

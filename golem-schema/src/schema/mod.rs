@@ -18,6 +18,7 @@ pub mod canonical;
 pub mod conversion;
 pub mod derive;
 pub mod graph;
+pub mod host_managed;
 pub mod metadata;
 pub mod multimodal;
 #[cfg(feature = "full")]
@@ -44,6 +45,7 @@ pub use conversion::{
 #[cfg(feature = "derive")]
 pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
+pub use host_managed::{HostManagedKind, RedactedSchemaValue, redacted_schema_value_debug};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,

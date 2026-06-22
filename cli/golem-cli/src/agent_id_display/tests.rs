@@ -345,3 +345,44 @@ fn source_language_from_str() {
         SourceLanguage::Other("go".to_string())
     );
 }
+
+#[test]
+fn capability_values_render_as_redacted_in_every_language() {
+    use golem_common::schema::schema_type::{QuotaTokenSpec, SecretSpec};
+    use golem_common::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+
+    let langs = [
+        SourceLanguage::Rust,
+        SourceLanguage::TypeScript,
+        SourceLanguage::Scala,
+        SourceLanguage::MoonBit,
+    ];
+
+    let secret_ty = SchemaType::secret(SecretSpec::default());
+    let secret_val = SchemaValue::Secret(SecretValuePayload {
+        secret_ref: "shhh-do-not-log".to_string(),
+    });
+    let secret_graph = SchemaGraph::anonymous(secret_ty.clone());
+
+    let quota_ty = SchemaType::quota_token(QuotaTokenSpec {
+        resource_name: Some("gpu-quota".to_string()),
+    });
+    let quota_val = SchemaValue::QuotaToken(QuotaTokenValuePayload {
+        environment_id: uuid::Uuid::nil().into(),
+        resource_name: "gpu-quota".to_string(),
+        expected_use: 1,
+        last_credit: 0,
+        last_credit_at: chrono::Utc::now(),
+    });
+    let quota_graph = SchemaGraph::anonymous(quota_ty.clone());
+
+    for lang in &langs {
+        let secret = render_schema_value(&secret_graph, &secret_ty, &secret_val, lang);
+        assert_eq!(secret, "<redacted: secret>", "lang={lang}");
+        assert!(!secret.contains("shhh-do-not-log"), "lang={lang}");
+
+        let quota = render_schema_value(&quota_graph, &quota_ty, &quota_val, lang);
+        assert_eq!(quota, "<redacted: quota-token>", "lang={lang}");
+        assert!(!quota.contains("gpu-quota"), "lang={lang}");
+    }
+}
