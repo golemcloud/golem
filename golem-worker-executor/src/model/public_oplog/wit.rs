@@ -1717,6 +1717,12 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     delta,
                 }),
             ),
+            M::CardRevoked { timestamp, card_id } => {
+                Ok(Self::CardRevoked(oplog::CardRevokedParameters {
+                    timestamp: timestamp.into(),
+                    card_id: card_id.into(),
+                }))
+            }
             M::CreateResource {
                 timestamp,
                 id,

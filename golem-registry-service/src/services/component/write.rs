@@ -105,7 +105,7 @@ impl ComponentWriteService {
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_types: &[AgentType],
+        agent_types: &[AgentTypeSchema],
         environment_name: &EnvironmentName,
         component_name: &ComponentName,
     ) -> Result<BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>, ComponentError> {

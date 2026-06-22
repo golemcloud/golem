@@ -261,7 +261,7 @@ pub enum InvocationStrictness {
 pub(crate) fn agent_effective_surface_from_component_metadata(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &LegacyParsedAgentId,
+    agent_id: &ParsedAgentId,
 ) -> golem_common::model::card::EffectiveSurface {
     let template = component
         .metadata
