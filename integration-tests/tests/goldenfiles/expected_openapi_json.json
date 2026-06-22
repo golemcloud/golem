@@ -69,16 +69,16 @@
       "golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse": {
         "additionalProperties": false,
         "properties": {
-          "request-id": {
+          "request_id": {
             "type": "string"
           },
-          "resource-id": {
+          "resource_id": {
             "type": "string"
           }
         },
         "required": [
-          "resource-id",
-          "request-id"
+          "resource_id",
+          "request_id"
         ],
         "title": "PathAndHeaderResponse",
         "type": "object"
@@ -242,14 +242,14 @@
       "golem_it_agent_sdk_rust.http.model.WebhookResponse": {
         "additionalProperties": false,
         "properties": {
-          "payload-length": {
+          "payload_length": {
             "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "payload-length"
+          "payload_length"
         ],
         "title": "WebhookResponse",
         "type": "object"

@@ -22,7 +22,7 @@
 //! and to the server's own (de)serialization, by construction. There is no
 //! dependency on the legacy `AnalysedType` / `IntoValue` / `FromValue` surface.
 
-use crate::bridge_gen::rust::rust::to_rust_ident;
+use crate::bridge_gen::rust::rust::{is_valid_rust_ident, to_rust_ident};
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use crate::fs;
@@ -1962,7 +1962,7 @@ impl RustBridgeGenerator {
     }
 
     fn to_rust_case_name(&self, name: &str) -> String {
-        if self.same_language {
+        if self.same_language && is_valid_rust_ident(name) {
             to_rust_ident(name, true)
         } else {
             to_rust_ident(name, false).to_upper_camel_case()

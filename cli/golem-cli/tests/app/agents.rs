@@ -225,7 +225,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     run_and_assert(
         &ctx,
         "fun_map",
-        &[r#"[("foo", 1), ("bar", 2), ("baz", 3)]"#],
+        &[r#"{"foo" => 1, "bar" => 2, "baz" => 3}"#],
     )
     .await;
 
@@ -233,8 +233,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     {
         list_u8: [1, 2, 3, 4, 5],
         list_str: ["foo", "bar", "baz"],
-        map_num: [("pi", 3.14), ("e", 2.71), ("phi", 1.61)],
-        map_text: [(1, "one"), (2, "two"), (3, "three")]
+        map_num: {"pi" => 3.14, "e" => 2.71, "phi" => 1.61},
+        map_text: {1 => "one", 2 => "two", 3 => "three"}
     }
     "#;
 
@@ -274,7 +274,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 symbol: 'm',
             }
         ],
-        map: [("a", 1), ("b", 2)],
+        map: {"a" => 1, "b" => 2},
         option: Some("optional value"),
         result: Ok("result value")
     }
@@ -317,8 +317,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         collections: {
             list_u8: [10, 20, 30],
             list_str: ["x", "y", "z"],
-            map_num: [("a", 1.11), ("b", 2.22), ("c", 3.33)],
-            map_text: [(100, "hundred"), (200, "two hundred"), (300, "three hundred")]
+            map_num: {"a" => 1.11, "b" => 2.22, "c" => 3.33},
+            map_text: {100 => "hundred", 200 => "two hundred", 300 => "three hundred"}
         },
         simple_struct: {
             name: "comp_simple",
@@ -335,7 +335,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 symbol: 'i',
             },
             list: [],
-            map: [],
+            map: {},
             option: None,
             result: Ok("nested result")
         },
@@ -368,7 +368,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             symbol: 'r',
         },
         list: [],
-        map: [],
+        map: {},
         option: None,
         result: Ok("result in nested")
     })
@@ -388,7 +388,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             symbol: 'o',
         },
         list: [],
-        map: [],
+        map: {},
         option: None,
         result: Err("error in nested")
     })
@@ -753,7 +753,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}
     "#;
 
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
@@ -826,7 +826,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funBoolean", &["true"]).await;
 
     // A map type
-    run_and_assert(&ctx, "funMap", &[r#"[["foo", 42], ["bar", 42]]"#]).await;
+    run_and_assert(&ctx, "funMap", &[r#"{"foo" => 42, "bar" => 42}"#]).await;
 
     assert!(outputs.success_or_dump());
 
@@ -886,13 +886,13 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: {"foo" => 42, "foo" => 42, "foo" => 42}, k: {n: 42}}"#,
             r#"{tag: "UnionType2", value: "foo"}"#,
             r#"{tag: "UnionComplexType2", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
-            r#"[["foo", 42], ["foo", 42], ["foo", 42]]"#,
+            r#"{"foo" => 42, "foo" => 42, "foo" => 42}"#,
             r#"["foo", 42, {a: "foo", b: 42, c: true}]"#,
             r#"["foo", 42, true]"#,
             r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,

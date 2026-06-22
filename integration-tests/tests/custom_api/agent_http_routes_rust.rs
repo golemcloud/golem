@@ -182,8 +182,8 @@ async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_eq!(
         body,
         json!({
-            "resource-id": "res-42",
-            "request-id": "req-abc"
+            "resource_id": "res-42",
+            "request_id": "req-abc"
         })
     );
 
@@ -906,7 +906,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload-length": 5 }));
+    assert_eq!(body, json!({ "payload_length": 5 }));
 
     http_server.abort();
 
