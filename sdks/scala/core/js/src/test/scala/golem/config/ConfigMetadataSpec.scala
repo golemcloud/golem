@@ -17,18 +17,15 @@
 package golem.config
 
 import golem.BaseAgent
-import golem.data.{DataType, ElementSchema}
-import golem.host.js.{JsAgentConfigDeclaration, JsAgentConfigSource}
 import golem.runtime.annotations.agentDefinition
-import golem.runtime.autowire.WitTypeBuilder
 import golem.runtime.macros.AgentMacros
 import golem.runtime.AgentMetadata
+import golem.schema.IntoSchema
 import zio.test._
 
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
-import scala.scalajs.js
 
 object ConfigMetadataSpec extends ZIOSpecDefault {
 
@@ -95,18 +92,14 @@ object ConfigMetadataSpec extends ZIOSpecDefault {
           configMeta.config.exists(d => d.path == List("secret") && d.source == AgentConfigSource.Secret)
         )
       },
-      test("local field has correct value type") {
+      test("local field has schema-native value type") {
         assertTrue(
-          configMeta.config.exists(d =>
-            d.path == List("host") && d.valueType == ElementSchema.Component(DataType.StringType)
-          )
+          configMeta.config.exists(d => d.path == List("host") && d.valueType == IntoSchema[String].graph)
         )
       },
-      test("secret field has correct value type") {
+      test("secret field has schema-native value type (inner type)") {
         assertTrue(
-          configMeta.config.exists(d =>
-            d.path == List("secret") && d.valueType == ElementSchema.Component(DataType.StringType)
-          )
+          configMeta.config.exists(d => d.path == List("secret") && d.valueType == IntoSchema[String].graph)
         )
       }
     ),
@@ -134,77 +127,6 @@ object ConfigMetadataSpec extends ZIOSpecDefault {
       test("metadata has empty config declarations") {
         assertTrue(noConfigMeta.config.isEmpty)
       }
-    ),
-    suite("JsAgentConfigDeclaration encoding")(
-      test("local declaration encodes to JS correctly") {
-        val decl =
-          AgentConfigDeclaration(AgentConfigSource.Local, List("host"), ElementSchema.Component(DataType.StringType))
-        val jsDecl = encodeDeclaration(decl)
-        assertTrue(
-          jsDecl.source == ("local": JsAgentConfigSource),
-          jsDecl.path.length == 1,
-          jsDecl.path(0) == "host"
-        )
-      },
-      test("secret declaration encodes to JS correctly") {
-        val decl =
-          AgentConfigDeclaration(AgentConfigSource.Secret, List("apiKey"), ElementSchema.Component(DataType.StringType))
-        val jsDecl = encodeDeclaration(decl)
-        assertTrue(
-          jsDecl.source == ("secret": JsAgentConfigSource),
-          jsDecl.path.length == 1,
-          jsDecl.path(0) == "apiKey"
-        )
-      },
-      test("multi-segment path encodes correctly") {
-        val decl = AgentConfigDeclaration(
-          AgentConfigSource.Local,
-          List("db", "host"),
-          ElementSchema.Component(DataType.StringType)
-        )
-        val jsDecl = encodeDeclaration(decl)
-        assertTrue(
-          jsDecl.path.length == 2,
-          jsDecl.path(0) == "db",
-          jsDecl.path(1) == "host"
-        )
-      },
-      test("empty declarations produce empty JS array") {
-        val arr = encodeDeclarations(Nil)
-        assertTrue(arr.length == 0)
-      },
-      test("multiple declarations encode to correct-length JS array") {
-        val decls = List(
-          AgentConfigDeclaration(AgentConfigSource.Local, List("a"), ElementSchema.Component(DataType.StringType)),
-          AgentConfigDeclaration(AgentConfigSource.Secret, List("b"), ElementSchema.Component(DataType.IntType)),
-          AgentConfigDeclaration(AgentConfigSource.Local, List("c", "d"), ElementSchema.Component(DataType.BoolType))
-        )
-        val arr = encodeDeclarations(decls)
-        assertTrue(arr.length == 3)
-      }
     )
   )
-
-  // ---------------------------------------------------------------------------
-  // Helpers — reimplement the encoding logic to test it without AgentDefinition
-  // ---------------------------------------------------------------------------
-
-  private def encodeDeclaration(decl: AgentConfigDeclaration): JsAgentConfigDeclaration = {
-    val source: JsAgentConfigSource = decl.source match {
-      case AgentConfigSource.Local  => "local"
-      case AgentConfigSource.Secret => "secret"
-    }
-    val path    = js.Array(decl.path: _*)
-    val witType = decl.valueType match {
-      case ElementSchema.Component(dataType) => WitTypeBuilder.build(dataType)
-      case _                                 => throw new UnsupportedOperationException("Only component schemas supported")
-    }
-    JsAgentConfigDeclaration(source, path, witType)
-  }
-
-  private def encodeDeclarations(decls: List[AgentConfigDeclaration]): js.Array[JsAgentConfigDeclaration] = {
-    val arr = new js.Array[JsAgentConfigDeclaration]()
-    decls.foreach(d => arr.push(encodeDeclaration(d)))
-    arr
-  }
 }

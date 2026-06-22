@@ -70,103 +70,6 @@ macro_rules! oplog_entry {
             }
         }
 
-        #[cfg(feature = "full")]
-        impl golem_wasm::IntoValue for OplogEntry {
-            fn into_value(self) -> golem_wasm::Value {
-                #[allow(unused_imports)]
-                use golem_wasm::IntoValue as _;
-
-                let _case_names: &[&str] = &[$(stringify!($case)),*];
-                match self {
-                    $(Self::$case { timestamp, $($field),* } => {
-                        let _case_idx = _case_names.iter().position(|e| *e == stringify!($case)).unwrap() as u32;
-                        golem_wasm::Value::Variant {
-                            case_idx: _case_idx,
-                            case_value: Some(Box::new(golem_wasm::Value::Record(vec![
-                                timestamp.into_value(),
-                                $($field.into_value()),*
-                            ])))
-                        }
-                    }),*
-                }
-            }
-
-            fn get_type() -> golem_wasm::analysis::AnalysedType {
-
-                use heck::ToKebabCase as _;
-
-                golem_wasm::analysis::analysed_type::variant(vec![
-                    $(
-                        golem_wasm::analysis::analysed_type::case(
-                            &stringify!($case).to_kebab_case(),
-                            golem_wasm::analysis::analysed_type::record(vec![
-                                golem_wasm::analysis::analysed_type::field(
-                                    "timestamp",
-                                    <Timestamp as golem_wasm::IntoValue>::get_type()
-                                ),
-                                $(golem_wasm::analysis::analysed_type::field(
-                                    &stringify!($field).replace('_', "-"),
-                                    <$typ as golem_wasm::IntoValue>::get_type()
-                                )),*
-                            ])
-                            .named($wit_raw_type)
-                            .owned("golem:api@1.5.0/oplog")
-                        )
-                    ),*
-                ])
-                .named("oplog-entry")
-                .owned("golem:api@1.5.0/oplog")
-            }
-        }
-
-        #[cfg(feature = "full")]
-        impl golem_wasm::FromValue for OplogEntry {
-            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-                match value {
-                    golem_wasm::Value::Variant { case_idx, case_value } => {
-                        let mut _expected_idx = 0u32;
-                        $(
-                            if case_idx == _expected_idx {
-                                let _record = case_value.ok_or_else(|| format!(
-                                    "Expected case_value for {}",
-                                    stringify!($case)
-                                ))?;
-                                match *_record {
-                                    golem_wasm::Value::Record(fields) => {
-                                        // Count expected fields: 1 (timestamp) + raw fields
-                                        let _expected_len = 1usize $(+ { let _ = stringify!($field); 1usize })*;
-                                        if fields.len() != _expected_len {
-                                            return Err(format!(
-                                                "Expected {} fields for {}, got {}",
-                                                _expected_len, stringify!($case), fields.len()
-                                            ));
-                                        }
-                                        let mut _iter = fields.into_iter();
-                                        let timestamp = <Timestamp as golem_wasm::FromValue>::from_value(
-                                            _iter.next().unwrap()
-                                        )?;
-                                        $(
-                                            let $field = <$typ as golem_wasm::FromValue>::from_value(
-                                                _iter.next().unwrap()
-                                            )?;
-                                        )*
-                                        return Ok(Self::$case { timestamp, $($field),* });
-                                    }
-                                    other => return Err(format!(
-                                        "Expected Record for {}, got {:?}",
-                                        stringify!($case), other
-                                    )),
-                                }
-                            }
-                            _expected_idx += 1;
-                        )*
-                        Err(format!("Invalid case_idx for OplogEntry: {}", case_idx))
-                    }
-                    other => Err(format!("Expected Variant for OplogEntry, got {:?}", other)),
-                }
-            }
-        }
-
         pub mod public_oplog_entry {
             pub use super::*;
 
@@ -174,9 +77,8 @@ macro_rules! oplog_entry {
                 params_name = $case + Params =>
 
                 #[derive(Clone, Debug, serde::Serialize, PartialEq, serde::Deserialize)]
-                #[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm::derive::IntoValue))]
+                #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
                 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-                #[cfg_attr(feature = "full", wit(name = $wit_public_type, owner = "golem:api@1.5.0/oplog"))]
                 #[serde(rename_all = "camelCase")]
                 pub struct $params_name {
                     pub timestamp: Timestamp,
@@ -186,10 +88,10 @@ macro_rules! oplog_entry {
         }
 
         #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-        #[cfg_attr(feature = "full", derive(poem_openapi::Union, golem_wasm::derive::IntoValue))]
+        #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
         #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-        #[cfg_attr(feature = "full", wit(name = "public-oplog-entry", owner = "golem:api@1.5.0/oplog"))]
         #[serde(tag = "type")]
+        #[allow(clippy::large_enum_variant)]
         pub enum PublicOplogEntry {
             $($case(
                 ident_mash::mash! {
@@ -213,7 +115,7 @@ macro_rules! oplog_payload {
         #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
         #[allow(clippy::large_enum_variant)]
         pub enum $typename {
-            Custom(golem_wasm::ValueAndType),
+            Custom($crate::schema::TypedSchemaValue),
             $($(#[$casemeta])* $case(
                 ident_mash::mash! {
                     inner_name = $typename + $case => $inner_name
@@ -221,22 +123,28 @@ macro_rules! oplog_payload {
             )),*,
         }
 
-        impl IntoValueAndType for $typename {
-            fn into_value_and_type(self) -> ValueAndType {
+        impl $typename {
+            /// Schema-native counterpart of the legacy `into_value_and_type`:
+            /// renders the payload to a self-contained `TypedSchemaValue`.
+            pub fn into_typed_schema_value(
+                self,
+            ) -> Result<$crate::schema::TypedSchemaValue, $crate::schema::validation::SchemaError> {
+                #[allow(unused_imports)]
+                use $crate::schema::IntoTypedSchemaValue as _;
                 match self {
-                    $(Self::$case(value) => value.into_value_and_type()),*,
-                    Self::Custom(value_and_type) => value_and_type,
+                    $(Self::$case(value) => value.into_typed_schema_value()),*,
+                    Self::Custom(typed) => Ok(typed),
                 }
             }
         }
 
-        impl From<ValueAndType> for $typename {
-            fn from(value_and_type: ValueAndType) -> Self {
-                Self::Custom(value_and_type)
+        impl From<$crate::schema::TypedSchemaValue> for $typename {
+            fn from(typed: $crate::schema::TypedSchemaValue) -> Self {
+                Self::Custom(typed)
             }
         }
 
-        impl TryFrom<$typename> for ValueAndType {
+        impl TryFrom<$typename> for $crate::schema::TypedSchemaValue {
             type Error = String;
 
             fn try_from(value: $typename) -> Result<Self, Self::Error> {
@@ -250,7 +158,7 @@ macro_rules! oplog_payload {
         $(ident_mash::mash! {
             inner_name = $typename + $case =>
 
-            #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec, IntoValue, FromValue)]
+            #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec, golem_schema_derive::IntoSchema, golem_schema_derive::FromSchema)]
             pub struct $inner_name {
                 $( $(#[$meta])* pub $field: $typ ),*
             }
@@ -297,29 +205,29 @@ macro_rules! host_payload_pairs {
             }
         )*
 
-        pub fn host_request_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<$crate::model::oplog::payload::HostRequest, String> {
+        pub fn host_request_from_typed_schema_value(fqfn: &str, typed_schema_value: $crate::schema::TypedSchemaValue) -> Result<$crate::model::oplog::payload::HostRequest, String> {
             match fqfn {
                 $(
                     concat!($iface, "::", $func) =>
                         ident_mash::mash! {
                             inner_req = "HostRequest" + $reqtype =>
-                            Ok($crate::model::oplog::payload::HostRequest::$reqtype(<$crate::model::oplog::payload::$inner_req as golem_wasm::FromValue>::from_value(value_and_type.value)?))
+                            Ok($crate::model::oplog::payload::HostRequest::$reqtype(<$crate::model::oplog::payload::$inner_req as $crate::schema::FromSchema>::from_value(typed_schema_value.value()).map_err(|e| e.to_string())?))
                         }
                 ),*,
-                _ => Ok($crate::model::oplog::payload::HostRequest::Custom(value_and_type))
+                _ => Ok($crate::model::oplog::payload::HostRequest::Custom(typed_schema_value))
             }
         }
 
-        pub fn host_response_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<$crate::model::oplog::payload::HostResponse, String> {
+        pub fn host_response_from_typed_schema_value(fqfn: &str, typed_schema_value: $crate::schema::TypedSchemaValue) -> Result<$crate::model::oplog::payload::HostResponse, String> {
             match fqfn {
                 $(
                     concat!($iface, "::", $func) =>
                         ident_mash::mash! {
                             inner_resp = "HostResponse" + $resptype =>
-                            Ok($crate::model::oplog::payload::HostResponse::$resptype(<$crate::model::oplog::payload::$inner_resp as golem_wasm::FromValue>::from_value(value_and_type.value)?))
+                            Ok($crate::model::oplog::payload::HostResponse::$resptype(<$crate::model::oplog::payload::$inner_resp as $crate::schema::FromSchema>::from_value(typed_schema_value.value()).map_err(|e| e.to_string())?))
                         }
                 ),*,
-                _ => Ok($crate::model::oplog::payload::HostResponse::Custom(value_and_type))
+                _ => Ok($crate::model::oplog::payload::HostResponse::Custom(typed_schema_value))
             }
         }
 

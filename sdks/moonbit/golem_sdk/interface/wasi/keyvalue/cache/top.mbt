@@ -6,7 +6,7 @@
 /// of the `get` method, the outer `option` returns `none` when the pollable
 /// is not yet ready and the inner `option` returns `none` when the
 /// requested key wasn't present.
-pub(all) struct FutureGetResult(Int) derive(Debug, Eq)
+pub(all) struct FutureGetResult(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -18,7 +18,7 @@ pub fn FutureGetResult::drop(self : FutureGetResult) -> Unit {
 ///|
 /// This block defines a special resource type used by `exists` to emulate
 /// `future<result<bool,error>>`.
-pub(all) struct FutureExistsResult(Int) derive(Debug, Eq)
+pub(all) struct FutureExistsResult(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -30,7 +30,7 @@ pub fn FutureExistsResult::drop(self : FutureExistsResult) -> Unit {
 ///|
 /// This block defines a special resource type used by `set` and `delete` to
 /// emulate `future<result<_,error>>`.
-pub(all) struct FutureResult(Int) derive(Debug, Eq)
+pub(all) struct FutureResult(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -42,7 +42,7 @@ pub fn FutureResult::drop(self : FutureResult) -> Unit {
 ///|
 /// This block defines a special resource type used by `get-or-set` to
 /// emulate `future<result<get-or-set-entry,error>>`.
-pub(all) struct FutureGetOrSetResult(Int) derive(Debug, Eq)
+pub(all) struct FutureGetOrSetResult(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -59,7 +59,7 @@ pub fn FutureGetOrSetResult::drop(self : FutureGetOrSetResult) -> Unit {
 /// indicate an error that prevents calling `fill`. An implementation MAY
 /// have a timeout that drops a vacancy that hasn't been filled in order
 /// to unblock other waiting `get-or-set` callers.
-pub(all) struct Vacancy(Int) derive(Debug, Eq)
+pub(all) struct Vacancy(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -82,7 +82,7 @@ pub fn Vacancy::drop(self : Vacancy) -> Unit {
 pub(all) enum GetOrSetEntry {
   Occupied(@types.IncomingValue)
   Vacant(Vacancy)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// The `get` operation returns the value passed by a previous `set` for the

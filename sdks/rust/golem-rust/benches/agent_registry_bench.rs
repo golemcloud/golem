@@ -25,33 +25,26 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod bench {
     use golem_rust::agentic::{
-        AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor,
-        ExtendedAgentType, ExtendedDataSchema, get_constructor_parameter_type,
-        get_enriched_agent_type_by_name, get_method_parameter_type,
-        get_method_parameter_types_by_index, register_agent_type,
+        AgentTypeName, EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor,
+        ExtendedAgentType, get_constructor_parameter_type, get_enriched_agent_type_by_name,
+        get_method_parameter_type, get_method_parameter_types_by_index, register_agent_type,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, ElementSchema, Snapshotting};
-    use golem_wasm::golem_core_1_5_x::types::{NamedWitTypeNode, WitType, WitTypeNode};
+    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, Snapshotting};
     use std::hint::black_box;
     use std::time::Instant;
     use test_r::test;
 
-    fn make_element_schema() -> ElementSchema {
-        ElementSchema::ComponentModel(WitType {
-            nodes: vec![NamedWitTypeNode {
-                name: None,
-                owner: None,
-                type_: WitTypeNode::PrimStringType,
-            }],
-        })
+    fn make_schema_graph() -> golem_rust::schema::SchemaGraph {
+        golem_rust::schema::try_into_schema_graph::<String>()
+            .expect("failed to build string schema graph")
     }
 
     fn make_method(name: &str, param_count: usize) -> EnrichedAgentMethod {
-        let params: Vec<(String, EnrichedElementSchema)> = (0..param_count)
+        let params: Vec<(String, EnrichedParameterSchema)> = (0..param_count)
             .map(|i| {
                 (
                     format!("param_{}", i),
-                    EnrichedElementSchema::ElementSchema(make_element_schema()),
+                    EnrichedParameterSchema::Value(make_schema_graph()),
                 )
             })
             .collect();
@@ -61,11 +54,8 @@ mod bench {
             description: format!("Method {}", name),
             http_endpoint: vec![],
             prompt_hint: Some("hint".to_string()),
-            input_schema: ExtendedDataSchema::Tuple(params),
-            output_schema: ExtendedDataSchema::Tuple(vec![(
-                "result".to_string(),
-                EnrichedElementSchema::ElementSchema(make_element_schema()),
-            )]),
+            input_schema: params,
+            output_schema: vec![("result".to_string(), make_schema_graph())],
             read_only: None,
         }
     }
@@ -75,11 +65,11 @@ mod bench {
             .map(|i| make_method(&format!("method_{}", i), params_per_method))
             .collect();
 
-        let constructor_params: Vec<(String, EnrichedElementSchema)> = (0..params_per_method)
+        let constructor_params: Vec<(String, EnrichedParameterSchema)> = (0..params_per_method)
             .map(|i| {
                 (
                     format!("ctor_param_{}", i),
-                    EnrichedElementSchema::ElementSchema(make_element_schema()),
+                    EnrichedParameterSchema::Value(make_schema_graph()),
                 )
             })
             .collect();
@@ -92,7 +82,7 @@ mod bench {
                 name: Some("new".to_string()),
                 description: "Constructor".to_string(),
                 prompt_hint: None,
-                input_schema: ExtendedDataSchema::Tuple(constructor_params),
+                input_schema: constructor_params,
             },
             methods,
             dependencies: vec![],

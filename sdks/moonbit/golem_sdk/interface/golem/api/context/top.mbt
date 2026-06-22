@@ -2,7 +2,7 @@
 
 ///|
 /// Represents a unit of work or operation
-pub(all) struct Span(Int) derive(Debug, Eq)
+pub(all) struct Span(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -14,7 +14,7 @@ pub fn Span::drop(self : Span) -> Unit {
 ///|
 /// Represents an invocation context wich allows querying the stack of attributes
 /// created by automatic and user-defined spans.
-pub(all) struct InvocationContext(Int) derive(Debug, Eq)
+pub(all) struct InvocationContext(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -27,21 +27,21 @@ pub fn InvocationContext::drop(self : InvocationContext) -> Unit {
 /// Possible span attribute value types
 pub(all) enum AttributeValue {
   String(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// An attribute of a span
 pub(all) struct Attribute {
   key : String
   value : AttributeValue
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A chain of attribute values, the first element representing the most recent value
 pub(all) struct AttributeChain {
   key : String
   values : Array[AttributeValue]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Starts a new `span` with the given name, as a child of the current invocation context

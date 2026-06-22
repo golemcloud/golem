@@ -112,160 +112,85 @@ pub fn Reservation::drop(self : Reservation) -> Unit {
 }
 
 ///|
-pub impl @schema.HasElementSchema for QuotaToken with element_schema() {
-  let prim_u64 : @types.WitType = {
-    nodes: [{ name: None, owner: None, type_: @types.WitTypeNode::PrimU64Type }],
-  }
-  let prim_s64 : @types.WitType = {
-    nodes: [{ name: None, owner: None, type_: @types.WitTypeNode::PrimS64Type }],
-  }
-  let prim_u32 : @types.WitType = {
-    nodes: [{ name: None, owner: None, type_: @types.WitTypeNode::PrimU32Type }],
-  }
-  let prim_string : @types.WitType = {
-    nodes: [
-      { name: None, owner: None, type_: @types.WitTypeNode::PrimStringType },
-    ],
-  }
-  let uuid_type = @builder.TypeBuilder::new().record_type([
-    ("high-bits", prim_u64),
-    ("low-bits", prim_u64),
-  ])
-  let env_id_type = @builder.TypeBuilder::new().record_type([
-    ("uuid", uuid_type),
-  ])
-  let last_credit_at_type = @builder.TypeBuilder::new().record_type([
-    ("seconds", prim_u64),
-    ("nanoseconds", prim_u32),
-  ])
-  @schema.make_record_schema([
-    ("environment-id", @types.ElementSchema::ComponentModel(env_id_type)),
-    ("resource-name", @types.ElementSchema::ComponentModel(prim_string)),
-    ("expected-use", @types.ElementSchema::ComponentModel(prim_u64)),
-    ("last-credit", @types.ElementSchema::ComponentModel(prim_s64)),
-    (
-      "last-credit-at",
-      @types.ElementSchema::ComponentModel(last_credit_at_type),
-    ),
-  ])
+/// A `QuotaToken` is a first-class capability node in the schema model
+/// (`SchemaType::quota-token` / `SchemaValue::quota-token`), so its schema is a
+/// single capability node rather than a structural record. Mirrors the Rust SDK
+/// `impl IntoSchema for QuotaToken`.
+pub impl @schema.IntoSchema for QuotaToken with type_id() {
+  "golem.core.QuotaToken"
 }
 
 ///|
-pub impl @schema.ToElementValue for QuotaToken with to_element_value(self) {
-  let r = self.to_record()
-  let uuid_value = @builder.Builder::new().record(item => {
-    item.u64(r.environment_id.uuid.high_bits)
-    item.u64(r.environment_id.uuid.low_bits)
-  }) catch {
-    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
-  }
-  let env_id_value = @builder.Builder::new().record(item => {
-    item.wit_value(uuid_value)
-  }) catch {
-    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
-  }
-  let last_credit_at_value = @builder.Builder::new().record(item => {
-    item.u64(r.last_credit_at.seconds)
-    item.u32(r.last_credit_at.nanoseconds)
-  }) catch {
-    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
-  }
-  let wit_value = @builder.Builder::new().record(item => {
-    item.wit_value(env_id_value)
-    item.string(r.resource_name)
-    item.u64(r.expected_use)
-    item.s64(r.last_credit)
-    item.wit_value(last_credit_at_value)
-  }) catch {
-    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
-  }
-  @types.ElementValue::ComponentModel(wit_value)
+pub impl @schema.IntoSchema for QuotaToken with register_in(_b) {
+  @model.schema_type(QuotaToken({ resource_name: None }))
 }
 
 ///|
-pub impl @schema.FromExtractor for QuotaToken with from_extractor(e) {
-  guard e.field(0) is Some(env_id_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field environment-id at index 0",
-    )
+pub impl @schema.IntoSchema for QuotaToken with to_value(self) {
+  QuotaToken(quota_token_payload_from_record(self.to_record()))
+}
+
+///|
+/// Mirrors the Rust SDK `impl FromSchema for QuotaToken`: only a
+/// `SchemaValue::quota-token` payload reconstructs a token; the timestamp must
+/// be non-negative.
+pub impl @schema.FromSchema for QuotaToken with from_value(v) {
+  match v {
+    QuotaToken(payload) =>
+      QuotaToken::from_record(quota_token_record_from_payload(payload))
+    other =>
+      raise @schema.FromSchemaError::shape_mismatch(
+        "quota-token",
+        @schema.value_kind(other),
+        "QuotaToken",
+      )
   }
-  guard env_id_e.field(0) is Some(uuid_e) else {
-    raise @common.AgentError::InvalidInput("Expected field uuid at index 0")
-  }
-  guard uuid_e.field(0) is Some(hb_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field high-bits at index 0",
-    )
-  }
-  guard hb_e.u64() is Some(high_bits) else {
-    raise @common.AgentError::InvalidInput("Expected U64 for high-bits")
-  }
-  guard uuid_e.field(1) is Some(lb_e) else {
-    raise @common.AgentError::InvalidInput("Expected field low-bits at index 1")
-  }
-  guard lb_e.u64() is Some(low_bits) else {
-    raise @common.AgentError::InvalidInput("Expected U64 for low-bits")
-  }
-  guard e.field(1) is Some(rn_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field resource-name at index 1",
-    )
-  }
-  guard rn_e.string() is Some(resource_name) else {
-    raise @common.AgentError::InvalidInput("Expected String for resource-name")
-  }
-  guard e.field(2) is Some(eu_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field expected-use at index 2",
-    )
-  }
-  guard eu_e.u64() is Some(expected_use) else {
-    raise @common.AgentError::InvalidInput("Expected U64 for expected-use")
-  }
-  guard e.field(3) is Some(lc_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field last-credit at index 3",
-    )
-  }
-  guard lc_e.s64() is Some(last_credit) else {
-    raise @common.AgentError::InvalidInput("Expected S64 for last-credit")
-  }
-  guard e.field(4) is Some(lca_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field last-credit-at at index 4",
-    )
-  }
-  guard lca_e.field(0) is Some(sec_e) else {
-    raise @common.AgentError::InvalidInput("Expected field seconds at index 0")
-  }
-  guard sec_e.u64() is Some(seconds) else {
-    raise @common.AgentError::InvalidInput("Expected U64 for seconds")
-  }
-  guard lca_e.field(1) is Some(ns_e) else {
-    raise @common.AgentError::InvalidInput(
-      "Expected field nanoseconds at index 1",
-    )
-  }
-  guard ns_e.u32() is Some(nanoseconds) else {
-    raise @common.AgentError::InvalidInput("Expected U32 for nanoseconds")
-  }
-  let record : @raw.QuotaTokenRecord = {
-    environment_id: @host.EnvironmentId::{
-      uuid: @types.Uuid::{ high_bits, low_bits },
+}
+
+///|
+/// Pure mapping from the host `QuotaTokenRecord` to the schema value carrier.
+/// The `uuid` is the same `@types.Uuid`; only `Datetime.seconds` differs in
+/// signedness (`UInt64` → `Int64`), bridged by bit-pattern reinterpret (matches
+/// the Rust `seconds as i64`). Factored out so it can be tested without the
+/// `to_record` host import.
+fn quota_token_payload_from_record(
+  r : @raw.QuotaTokenRecord,
+) -> @types.QuotaTokenValuePayload {
+  {
+    environment_id: { uuid: r.environment_id.uuid },
+    resource_name: r.resource_name,
+    expected_use: r.expected_use,
+    last_credit: r.last_credit,
+    last_credit_at: {
+      seconds: r.last_credit_at.seconds.reinterpret_as_int64(),
+      nanoseconds: r.last_credit_at.nanoseconds,
     },
-    resource_name,
-    expected_use,
-    last_credit,
-    last_credit_at: @wallClock.Datetime::{ seconds, nanoseconds },
   }
-  QuotaToken::from_record(record)
 }
 
 ///|
-pub impl @schema.FromElementValue for QuotaToken with from_element_value(v) {
-  @schema.FromExtractor::from_extractor(
-    @extractor.extract_component_model_value(v),
-  )
+/// Pure mapping from the schema value carrier back to the host
+/// `QuotaTokenRecord`. Mirrors the Rust non-negative-timestamp guard before the
+/// `Int64` → `UInt64` reinterpret. Factored out so it can be tested without the
+/// `from_record` host import.
+fn quota_token_record_from_payload(
+  payload : @types.QuotaTokenValuePayload,
+) -> @raw.QuotaTokenRecord raise @schema.FromSchemaError {
+  guard payload.last_credit_at.seconds >= 0L else {
+    raise @schema.FromSchemaError::custom(
+      "quota token timestamp must be non-negative",
+    )
+  }
+  {
+    environment_id: @host.EnvironmentId::{ uuid: payload.environment_id.uuid },
+    resource_name: payload.resource_name,
+    expected_use: payload.expected_use,
+    last_credit: payload.last_credit,
+    last_credit_at: @wallClock.Datetime::{
+      seconds: payload.last_credit_at.seconds.reinterpret_as_uint64(),
+      nanoseconds: payload.last_credit_at.nanoseconds,
+    },
+  }
 }
 
 ///|

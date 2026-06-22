@@ -18,9 +18,9 @@ use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -164,25 +164,31 @@ async fn agent_env_inheritance(
     let mut child_env_vars = BTreeMap::new();
 
     if let Ok(data_value) = result
-        && let Some(Value::Record(fields)) = data_value.into_return_value().as_ref()
+        && let Some(SchemaValue::Record { fields }) = data_value.into_return_value().as_ref()
     {
         let parent = &fields[0];
         let child = &fields[1];
 
-        if let Value::List(parent_env_vars_list) = parent {
+        if let SchemaValue::List {
+            elements: parent_env_vars_list,
+        } = parent
+        {
             for env_var in parent_env_vars_list {
-                if let Value::Record(env_var_kv) = env_var
-                    && let Value::String(key) = &env_var_kv[0]
+                if let SchemaValue::Record { fields: env_var_kv } = env_var
+                    && let SchemaValue::String(key) = &env_var_kv[0]
                 {
                     parent_env_vars.insert(key.clone(), env_var_kv[1].clone());
                 }
             }
         }
 
-        if let Value::List(child_env_vars_list) = child {
+        if let SchemaValue::List {
+            elements: child_env_vars_list,
+        } = child
+        {
             for env_var in child_env_vars_list {
-                if let Value::Record(env_var_kv) = env_var
-                    && let Value::String(key) = &env_var_kv[0]
+                if let SchemaValue::Record { fields: env_var_kv } = env_var
+                    && let SchemaValue::String(key) = &env_var_kv[0]
                 {
                     child_env_vars.insert(key.clone(), env_var_kv[1].clone());
                 }
@@ -193,56 +199,56 @@ async fn agent_env_inheritance(
     assert_eq!(
         parent_env_vars.into_iter().collect::<Vec<_>>(),
         vec![
-            ("ENV1".to_string(), Value::String("1".to_string())),
-            ("ENV2".to_string(), Value::String("22".to_string())),
-            ("ENV3".to_string(), Value::String("33".to_string())),
+            ("ENV1".to_string(), SchemaValue::String("1".to_string())),
+            ("ENV2".to_string(), SchemaValue::String("22".to_string())),
+            ("ENV3".to_string(), SchemaValue::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
-                Value::String(worker_id.agent_id.to_string())
+                SchemaValue::String(worker_id.agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
-                Value::String("TestAgent".to_string())
+                SchemaValue::String("TestAgent".to_string())
             ),
             (
                 "GOLEM_COMPONENT_ID".to_string(),
-                Value::String(worker_id.component_id.to_string())
+                SchemaValue::String(worker_id.component_id.to_string())
             ),
             (
                 "GOLEM_COMPONENT_REVISION".to_string(),
-                Value::String("0".to_string())
+                SchemaValue::String("0".to_string())
             ),
             (
                 "GOLEM_WORKER_NAME".to_string(),
-                Value::String(worker_id.agent_id.to_string())
+                SchemaValue::String(worker_id.agent_id.to_string())
             ),
         ]
     );
     assert_eq!(
         child_env_vars.into_iter().collect::<Vec<_>>(),
         vec![
-            ("ENV1".to_string(), Value::String("1".to_string())),
-            ("ENV2".to_string(), Value::String("22".to_string())),
-            ("ENV3".to_string(), Value::String("33".to_string())),
+            ("ENV1".to_string(), SchemaValue::String("1".to_string())),
+            ("ENV2".to_string(), SchemaValue::String("22".to_string())),
+            ("ENV3".to_string(), SchemaValue::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
-                Value::String(child_worker_id.agent_id.to_string())
+                SchemaValue::String(child_worker_id.agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
-                Value::String("ChildAgent".to_string())
+                SchemaValue::String("ChildAgent".to_string())
             ),
             (
                 "GOLEM_COMPONENT_ID".to_string(),
-                Value::String(child_worker_id.component_id.to_string())
+                SchemaValue::String(child_worker_id.component_id.to_string())
             ),
             (
                 "GOLEM_COMPONENT_REVISION".to_string(),
-                Value::String("0".to_string())
+                SchemaValue::String("0".to_string())
             ),
             (
                 "GOLEM_WORKER_NAME".to_string(),
-                Value::String(child_worker_id.agent_id.to_string())
+                SchemaValue::String(child_worker_id.agent_id.to_string())
             ),
         ]
     );
@@ -294,32 +300,28 @@ async fn ephemeral_agent_works(
     let result1 = executor
         .invoke_and_await_agent(&component, &agent_id1, "changeAndGet", data_value!())
         .await?
-        .into_return_value()
-        .expect("Expected a return value");
+        .into_typed::<String>()?;
 
     let result2 = executor
         .invoke_and_await_agent(&component, &agent_id1, "changeAndGet", data_value!())
         .await?
-        .into_return_value()
-        .expect("Expected a return value");
+        .into_typed::<String>()?;
 
     let result3 = executor
         .invoke_and_await_agent(&component, &agent_id2, "changeAndGet", data_value!())
         .await?
-        .into_return_value()
-        .expect("Expected a return value");
+        .into_typed::<String>()?;
 
     let result4 = executor
         .invoke_and_await_agent(&component, &agent_id2, "changeAndGet", data_value!())
         .await?
-        .into_return_value()
-        .expect("Expected a return value");
+        .into_typed::<String>()?;
 
     // As the agent is ephemeral, no matter how many times we call changeAndGet it always starts from scratch (no additional '!' suffix)
-    assert_eq!(result1, Value::String("param1!".to_string()));
-    assert_eq!(result2, Value::String("param1!".to_string()));
-    assert_eq!(result3, Value::String("param2!".to_string()));
-    assert_eq!(result4, Value::String("param2!".to_string()));
+    assert_eq!(result1, "param1!");
+    assert_eq!(result2, "param1!");
+    assert_eq!(result3, "param2!");
+    assert_eq!(result4, "param2!");
     Ok(())
 }
 

@@ -27,13 +27,14 @@
 //! });
 //! ```
 
-use crate::bindings::golem::api::host::EnvironmentId;
 use crate::bindings::golem::quota::types;
-use crate::value_and_type::type_builder::TypeNodeBuilder;
-use crate::value_and_type::wasi::Datetime;
-use crate::value_and_type::{FromValueAndType, IntoValue};
-use golem_wasm::{NodeBuilder, WitValueExtractor};
 use std::time::Duration;
+
+#[cfg(feature = "export_golem_agentic")]
+use crate::schema::{
+    FromSchema, FromSchemaError, IntoSchema, QuotaTokenSpec, QuotaTokenValuePayload, SchemaBuilder,
+    SchemaType, SchemaValue, TypeId,
+};
 
 /// Error returned when a reservation cannot be granted because the resource's
 /// enforcement policy is `reject`.
@@ -72,6 +73,52 @@ impl std::error::Error for FailedReservation {}
 #[must_use]
 pub struct Reservation {
     raw: types::Reservation,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaTokenRecord {
+    pub environment_id: crate::EnvironmentId,
+    pub resource_name: String,
+    pub expected_use: u64,
+    pub last_credit: i64,
+    pub last_credit_at: crate::golem_schema::model::Datetime,
+}
+
+impl From<types::QuotaTokenRecord> for QuotaTokenRecord {
+    fn from(raw: types::QuotaTokenRecord) -> Self {
+        Self {
+            environment_id: crate::EnvironmentId {
+                uuid: crate::wire_uuid_to_schema(raw.environment_id.uuid),
+            },
+            resource_name: raw.resource_name,
+            expected_use: raw.expected_use,
+            last_credit: raw.last_credit,
+            last_credit_at: crate::golem_schema::model::Datetime::from_timestamp(
+                raw.last_credit_at.seconds as i64,
+                raw.last_credit_at.nanoseconds,
+            )
+            .expect("quota token timestamp must be representable as a schema datetime"),
+        }
+    }
+}
+
+impl From<QuotaTokenRecord> for types::QuotaTokenRecord {
+    fn from(value: QuotaTokenRecord) -> Self {
+        let seconds = value.last_credit_at.timestamp();
+        assert!(seconds >= 0, "quota token timestamp must be non-negative");
+        Self {
+            environment_id: types::EnvironmentId {
+                uuid: crate::schema_uuid_to_wire(value.environment_id.uuid),
+            },
+            resource_name: value.resource_name,
+            expected_use: value.expected_use,
+            last_credit: value.last_credit,
+            last_credit_at: types::Datetime {
+                seconds: seconds as u64,
+                nanoseconds: value.last_credit_at.timestamp_subsec_nanos(),
+            },
+        }
+    }
 }
 
 impl Reservation {
@@ -159,13 +206,64 @@ impl QuotaToken {
         self.raw.merge(other.raw);
     }
 
-    fn to_record(&self) -> types::QuotaTokenRecord {
-        self.raw.to_record()
+    pub fn to_record(&self) -> QuotaTokenRecord {
+        self.raw.to_record().into()
     }
 
-    fn from_record(record: &types::QuotaTokenRecord) -> QuotaToken {
+    pub fn from_record(record: &QuotaTokenRecord) -> QuotaToken {
         QuotaToken {
-            raw: types::QuotaToken::from_record(record),
+            raw: types::QuotaToken::from_record(&record.clone().into()),
+        }
+    }
+}
+
+#[cfg(feature = "export_golem_agentic")]
+impl IntoSchema for QuotaToken {
+    fn type_id() -> TypeId {
+        TypeId::new("golem.core.QuotaToken")
+    }
+
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::quota_token(QuotaTokenSpec::default())
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        let record = self.to_record();
+        SchemaValue::QuotaToken(QuotaTokenValuePayload {
+            environment_id: record.environment_id,
+            resource_name: record.resource_name,
+            expected_use: record.expected_use,
+            last_credit: record.last_credit,
+            last_credit_at: record.last_credit_at,
+        })
+    }
+}
+
+#[cfg(feature = "export_golem_agentic")]
+impl FromSchema for QuotaToken {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match value {
+            SchemaValue::QuotaToken(payload) => {
+                let seconds = payload.last_credit_at.timestamp();
+                if seconds < 0 {
+                    return Err(FromSchemaError::custom(
+                        "quota token timestamp must be non-negative",
+                    ));
+                }
+
+                Ok(QuotaToken::from_record(&QuotaTokenRecord {
+                    environment_id: payload.environment_id.clone(),
+                    resource_name: payload.resource_name.clone(),
+                    expected_use: payload.expected_use,
+                    last_credit: payload.last_credit,
+                    last_credit_at: payload.last_credit_at,
+                }))
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "quota-token",
+                format!("{other:?}"),
+                "QuotaToken",
+            )),
         }
     }
 }
@@ -193,70 +291,4 @@ where
     let (used, value) = f(&reservation);
     reservation.commit(used);
     Ok(value)
-}
-
-impl IntoValue for QuotaToken {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        let record = self.to_record();
-        let builder = builder.record();
-        let builder = record.environment_id.add_to_builder(builder.item());
-        let builder = record.resource_name.add_to_builder(builder.item());
-        let builder = record.expected_use.add_to_builder(builder.item());
-        let builder = record.last_credit.add_to_builder(builder.item());
-        let builder = record.last_credit_at.add_to_builder(builder.item());
-        builder.finish()
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let builder = builder.record(
-            Some("QuotaTokenRecord".to_string()),
-            Some("golem:quota".to_string()),
-        );
-        let builder = <EnvironmentId>::add_to_type_builder(builder.field("environment-id"));
-        let builder = <String>::add_to_type_builder(builder.field("resource-name"));
-        let builder = <u64>::add_to_type_builder(builder.field("expected-use"));
-        let builder = <i64>::add_to_type_builder(builder.field("last-credit"));
-        let builder = <Datetime>::add_to_type_builder(builder.field("last-credit-at"));
-        builder.finish()
-    }
-}
-
-impl FromValueAndType for QuotaToken {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        let environment_id = <EnvironmentId>::from_extractor(
-            &extractor
-                .field(0)
-                .ok_or_else(|| "Missing environment-id".to_string())?,
-        )?;
-        let resource_name = <String>::from_extractor(
-            &extractor
-                .field(1)
-                .ok_or_else(|| "Missing resource-name".to_string())?,
-        )?;
-        let expected_use = <u64>::from_extractor(
-            &extractor
-                .field(2)
-                .ok_or_else(|| "Missing expected-use".to_string())?,
-        )?;
-        let last_credit = <i64>::from_extractor(
-            &extractor
-                .field(3)
-                .ok_or_else(|| "Missing last-credit".to_string())?,
-        )?;
-        let last_credit_at = <Datetime>::from_extractor(
-            &extractor
-                .field(4)
-                .ok_or_else(|| "Missing last-credit-at".to_string())?,
-        )?;
-        let record = types::QuotaTokenRecord {
-            environment_id,
-            resource_name,
-            expected_use,
-            last_credit,
-            last_credit_at,
-        };
-        Ok(QuotaToken::from_record(&record))
-    }
 }

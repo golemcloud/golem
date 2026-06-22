@@ -495,7 +495,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
@@ -1068,11 +1068,18 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
 
+    crate::metrics::runtime::install_runtime_metrics(
+        runtime.clone(),
+        golem_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
+
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         golem_config.http_addr()?,
         prometheus_registry,
+        golem_config.runtime_metrics_sampling_interval,
         "Worker executor is running",
         join_set,
     )

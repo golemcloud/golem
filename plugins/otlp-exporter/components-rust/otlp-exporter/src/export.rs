@@ -5,7 +5,7 @@ use crate::otlp_json::{
     OtlpSpan, OtlpValue, SpanStatus,
 };
 use crate::state::PendingSpan;
-use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use wstd::http::{Body, Client, Request};
 use wstd::runtime::block_on;
 
@@ -88,7 +88,7 @@ pub(crate) fn build_resource_attributes(
     config: &ExporterConfig,
     component_id: &ComponentId,
     worker_id: &AgentId,
-    metadata: &golem_rust::bindings::golem::api::host::AgentMetadata,
+    metadata: &golem_rust::oplog_processor::host::AgentMetadata,
 ) -> Vec<KeyValue> {
     let component_id_str =
         format_uuid(component_id.uuid.high_bits, component_id.uuid.low_bits);

@@ -36,7 +36,7 @@ use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
@@ -991,7 +991,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                match LegacyParsedAgentId::new(
+                match ParsedAgentId::try_new(
                     agent_id.agent_type.clone(),
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),
@@ -1123,8 +1123,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
         let agent_type =
-            LegacyParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id)
-                .ok();
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1346,8 +1345,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
         let agent_type =
-            LegacyParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id)
-                .ok();
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1490,7 +1488,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             Uuid::from_u64_pair(environment_id.uuid.high_bits, environment_id.uuid.low_bits),
         );
         let agent_id: AgentId = agent_id.into();
-        let agent_type = LegacyParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
         let mut current_revision = match ComponentRevision::try_from(component_revision) {

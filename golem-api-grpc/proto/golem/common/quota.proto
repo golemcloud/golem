@@ -3,12 +3,9 @@ syntax = "proto3";
 package golem.common;
 
 import "golem/common/uuid.proto";
-import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/common/environment.proto";
 import "golem/shardmanager/pod.proto";
-import "wasm/rpc/type.proto";
-import "wasm/rpc/val.proto";
 import "google/protobuf/timestamp.proto";
 
 message ResourceDefinitionId {

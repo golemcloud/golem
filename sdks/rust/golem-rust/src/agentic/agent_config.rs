@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::AgentConfigDeclaration;
+use crate::agentic::ExtendedAgentConfigDeclaration;
 use crate::golem_agentic::golem::agent::host::get_config_value;
-use crate::value_and_type::{FromValueAndType, IntoValue};
-use golem_wasm::golem_core_1_5_x::types::ValueAndType;
+use crate::schema::{FromSchema, IntoSchema};
 use std::marker::PhantomData;
 
 pub struct Config<T>(PhantomData<T>);
@@ -45,7 +44,7 @@ impl<T> Config<T> {
         T::load(&[])
     }
 
-    pub fn config_entries() -> Vec<AgentConfigDeclaration>
+    pub fn config_entries() -> Vec<ExtendedAgentConfigDeclaration>
     where
         T: ConfigSchema,
     {
@@ -58,7 +57,7 @@ pub trait ConfigSchema: Sized {
     /// agent instance using rpc.
     type RpcType: IntoRpcConfigParam;
 
-    fn describe_config(path: &[String]) -> Vec<AgentConfigDeclaration>;
+    fn describe_config(path: &[String]) -> Vec<ExtendedAgentConfigDeclaration>;
     fn load(path: &[String]) -> Self;
 }
 
@@ -85,12 +84,17 @@ impl<T> Secret<T> {
 
     pub fn get(&self) -> T
     where
-        T: FromValueAndType + IntoValue,
+        T: FromSchema + IntoSchema,
     {
-        let typ = T::get_type();
-        let value = get_config_value(&self.path, &typ);
-        T::from_value_and_type(ValueAndType { value, typ })
-            .expect("failed deserializing secret value")
+        let graph = crate::schema::try_into_schema_graph::<T>()
+            .expect("failed to build config schema graph");
+        let value = get_config_value(
+            &self.path,
+            &crate::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
+        );
+        let value =
+            crate::decode_schema_value(&value).expect("failed to decode config schema value");
+        T::from_value(&value).expect("failed deserializing secret value")
     }
 }
 

@@ -29,7 +29,7 @@ use crate::model::template::Template;
 use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::deployment::DeploymentRetryPolicyDefault;
@@ -37,6 +37,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
+use golem_common::schema::AgentTypeSchema;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -274,7 +275,7 @@ pub enum AppBuildStep {
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub target_language: GuestLanguage,
     pub output_dir: PathBuf,
 }
@@ -355,7 +356,83 @@ pub struct Application {
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
+/// Resolves the cargo target directory for the cargo project rooted at `manifest_dir`.
+///
+/// The result is the value used for the `cargoTarget` template variable. Instead of
+/// assuming `<manifest_dir>/target`, this asks cargo itself via `cargo metadata`, so it
+/// honors `CARGO_TARGET_DIR`, `build.target-dir` in cargo config, and cargo wrapper
+/// scripts that redirect the target directory. If cargo cannot be queried (no manifest,
+/// cargo not installed, etc.) it falls back to the legacy `<manifest_dir>/target` location.
+///
+/// Results are memoized per `manifest_dir` for the lifetime of the process, since the
+/// resolved target directory is stable for a given manifest.
+fn resolve_cargo_target_dir(manifest_dir: &str) -> String {
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(cached) = cache.lock().unwrap().get(manifest_dir) {
+        return cached.clone();
+    }
+
+    let resolved = resolve_cargo_target_dir_uncached(manifest_dir);
+    cache
+        .lock()
+        .unwrap()
+        .insert(manifest_dir.to_string(), resolved.clone());
+    resolved
+}
+
+fn resolve_cargo_target_dir_uncached(manifest_dir: &str) -> String {
+    let fallback = || format!("{manifest_dir}/target");
+
+    let manifest_path = Path::new(manifest_dir).join("Cargo.toml");
+    if !manifest_path.exists() {
+        return fallback();
+    }
+
+    // Run cargo through whatever `cargo` is on PATH (including wrapper scripts) with the
+    // manifest's directory as the working directory, so wrappers that derive the target
+    // directory from the current directory resolve it correctly.
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .current_dir(manifest_dir)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            match serde_json::from_slice::<JsonValue>(&output.stdout) {
+                Ok(metadata) => metadata
+                    .get("target_directory")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(fallback),
+                Err(_) => fallback(),
+            }
+        }
+        _ => fallback(),
+    }
+}
+
 impl Application {
+    /// Returns the cargo manifest directory used to resolve the `cargoTarget` template
+    /// variable for a component located at `component_dir`.
+    ///
+    /// In a cargo workspace the target directory is shared at the application root; otherwise
+    /// it is resolved relative to the component directory. The directory is only used to query
+    /// cargo (see [`resolve_cargo_target_dir`]) lazily, when a template actually references
+    /// `cargoTarget`.
+    fn cargo_manifest_dir_for(&self, component_dir: &str) -> String {
+        if self.cargo_workspace_mode {
+            self.app_root_dir_str.clone()
+        } else {
+            component_dir.to_string()
+        }
+    }
+
     pub fn environments_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
     ) -> ValidatedResult<ApplicationNameAndEnvironments> {
@@ -509,13 +586,7 @@ impl Application {
                         .map(|s| s.to_string()),
                     fs::path_to_str(component.component_dir())
                         .ok()
-                        .map(|component_dir| {
-                            if self.cargo_workspace_mode {
-                                format!("{}/target", self.app_root_dir_str)
-                            } else {
-                                format!("{}/target", component_dir)
-                            }
-                        }),
+                        .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
                 );
 
                 let mut latest_parent_id = base_component_id.clone();
@@ -1012,7 +1083,7 @@ pub struct ComponentLayerApplyContext {
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
     component_dir_rel: Option<String>,
-    cargo_target: Option<String>,
+    cargo_manifest_dir: Option<String>,
     moonbit_build_package_path: Option<String>,
 }
 
@@ -1022,7 +1093,7 @@ impl ComponentLayerApplyContext {
         app_root_dir: Option<String>,
         golem_temp_dir: Option<String>,
         component_dir: Option<String>,
-        cargo_target: Option<String>,
+        cargo_manifest_dir: Option<String>,
     ) -> Self {
         // Compute the component directory path relative to the app root, normalized
         // for portability (uses unix-style separators on Windows, avoids
@@ -1069,7 +1140,7 @@ impl ComponentLayerApplyContext {
             golem_temp_dir,
             component_dir,
             component_dir_rel,
-            cargo_target,
+            cargo_manifest_dir,
             moonbit_build_package_path,
         }
     }
@@ -1100,18 +1171,73 @@ impl ComponentLayerApplyContext {
         &self.env
     }
 
-    fn template_context(&self) -> impl Serialize {
-        let component_name = self.component_name.as_ref().map(|name| name.0.as_str());
-        Some(minijinja::context! {
-            componentName => component_name,
-            component_name => component_name,
-            appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
-            golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
-            componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
-            componentDirRel => self.component_dir_rel.as_deref().unwrap_or(EMPTY_STR),
-            cargoTarget => self.cargo_target.as_deref().unwrap_or(EMPTY_STR),
-            moonbitBuildPackagePath => self.moonbit_build_package_path.as_deref().unwrap_or(EMPTY_STR),
+    fn template_context(&self) -> minijinja::Value {
+        minijinja::Value::from_object(ComponentLayerTemplateContext {
+            component_name: self.component_name.as_ref().map(|name| name.0.clone()),
+            app_root_dir: self.app_root_dir.clone().unwrap_or_default(),
+            golem_temp_dir: self.golem_temp_dir.clone().unwrap_or_default(),
+            component_dir: self.component_dir.clone().unwrap_or_default(),
+            component_dir_rel: self.component_dir_rel.clone().unwrap_or_default(),
+            cargo_manifest_dir: self.cargo_manifest_dir.clone(),
+            moonbit_build_package_path: self.moonbit_build_package_path.clone().unwrap_or_default(),
         })
+    }
+}
+
+/// Lazy template context for [`ComponentLayerApplyContext`].
+///
+/// All values are resolved up-front except `cargoTarget`, which is only resolved
+/// (by querying cargo, see [`resolve_cargo_target_dir`]) when a template actually
+/// references it. This keeps cargo-free projects (e.g. TypeScript components whose
+/// manifests never use `cargoTarget`) from requiring cargo to be installed.
+#[derive(Debug)]
+struct ComponentLayerTemplateContext {
+    component_name: Option<String>,
+    app_root_dir: String,
+    golem_temp_dir: String,
+    component_dir: String,
+    component_dir_rel: String,
+    cargo_manifest_dir: Option<String>,
+    moonbit_build_package_path: String,
+}
+
+impl minijinja::value::Object for ComponentLayerTemplateContext {
+    fn get_value(self: &std::sync::Arc<Self>, key: &minijinja::Value) -> Option<minijinja::Value> {
+        match key.as_str()? {
+            "componentName" | "component_name" => Some(
+                self.component_name
+                    .as_deref()
+                    .map(minijinja::Value::from)
+                    .unwrap_or_else(|| minijinja::Value::from(())),
+            ),
+            "appRootDir" => Some(minijinja::Value::from(self.app_root_dir.as_str())),
+            "golemTempDir" => Some(minijinja::Value::from(self.golem_temp_dir.as_str())),
+            "componentDir" => Some(minijinja::Value::from(self.component_dir.as_str())),
+            "componentDirRel" => Some(minijinja::Value::from(self.component_dir_rel.as_str())),
+            "cargoTarget" => Some(minijinja::Value::from(
+                self.cargo_manifest_dir
+                    .as_deref()
+                    .map(resolve_cargo_target_dir)
+                    .unwrap_or_default(),
+            )),
+            "moonbitBuildPackagePath" => Some(minijinja::Value::from(
+                self.moonbit_build_package_path.as_str(),
+            )),
+            _ => None,
+        }
+    }
+
+    fn enumerate(self: &std::sync::Arc<Self>) -> minijinja::value::Enumerator {
+        minijinja::value::Enumerator::Str(&[
+            "componentName",
+            "component_name",
+            "appRootDir",
+            "golemTempDir",
+            "componentDir",
+            "componentDirRel",
+            "cargoTarget",
+            "moonbitBuildPackagePath",
+        ])
     }
 }
 
@@ -2955,9 +3081,9 @@ mod app_builder {
                 Some(self.golem_temp_dir_str.clone()),
                 Some(component_dir_str.clone()),
                 Some(if self.cargo_workspace_mode {
-                    format!("{}/target", self.app_root_dir_str)
+                    self.app_root_dir_str.clone()
                 } else {
-                    format!("{}/target", component_dir_str)
+                    component_dir_str.clone()
                 }),
             );
 

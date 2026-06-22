@@ -33,7 +33,7 @@ fn hex_code_to_uint64(c : Int) -> UInt64 raise JsonCodecError {
 }
 
 ///|
-pub fn uuid_to_standard_string(uuid : @rpcTypes.Uuid) -> String {
+pub fn uuid_to_standard_string(uuid : @types.Uuid) -> String {
   let hi = uuid.high_bits
   let lo = uuid.low_bits
   let p1 = uint64_hex((hi >> 32) & 0xFFFFFFFFUL, 8)
@@ -47,7 +47,7 @@ pub fn uuid_to_standard_string(uuid : @rpcTypes.Uuid) -> String {
 ///|
 pub fn uuid_from_standard_string(
   s : String,
-) -> @rpcTypes.Uuid raise JsonCodecError {
+) -> @types.Uuid raise JsonCodecError {
   let mut hi : UInt64 = 0UL
   let mut lo : UInt64 = 0UL
   let mut hex_count = 0
@@ -226,7 +226,7 @@ pub fn principal_from_json(
 }
 
 ///|
-fn agent_id_to_json(id : @rpcTypes.AgentId) -> Json {
+fn agent_id_to_json(id : @types.AgentId) -> Json {
   Json::object({
     "componentId": Json::string(uuid_to_standard_string(id.component_id.uuid)),
     "agentId": Json::string(id.agent_id),
@@ -234,7 +234,7 @@ fn agent_id_to_json(id : @rpcTypes.AgentId) -> Json {
 }
 
 ///|
-fn agent_id_from_json(json : Json) -> @rpcTypes.AgentId raise JsonCodecError {
+fn agent_id_from_json(json : Json) -> @types.AgentId raise JsonCodecError {
   let obj = match json {
     Object(m) => m
     _ => raise JsonCodecError("Expected JSON object for AgentId")
@@ -254,6 +254,6 @@ fn agent_id_from_json(json : Json) -> @rpcTypes.AgentId raise JsonCodecError {
 }
 
 ///|
-fn account_id_to_json(id : @rpcTypes.AccountId) -> Json {
+fn account_id_to_json(id : @types.AccountId) -> Json {
   Json::string(uuid_to_standard_string(id.uuid))
 }

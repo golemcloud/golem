@@ -1,0 +1,241 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/schema_model"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+}
+
+// Values
+pub fn empty_metadata() -> @types.MetadataEnvelope
+
+pub fn encode_merged_agent_graph(MergedAgentGraph) -> EncodedAgentGraph raise SchemaModelError
+
+pub fn field(String, SchemaType, metadata? : @types.MetadataEnvelope) -> NamedFieldType
+
+pub fn merge_agent_graphs(Array[SchemaGraph]) -> MergedAgentGraph raise SchemaModelError
+
+pub fn merge_graph_defs(Array[SchemaGraph]) -> Array[SchemaTypeDef] raise SchemaModelError
+
+pub fn schema_graph_from_wit(@types.SchemaGraph) -> SchemaGraph raise SchemaModelError
+
+pub fn schema_graph_to_wit(SchemaGraph) -> @types.SchemaGraph raise SchemaModelError
+
+pub fn schema_type(SchemaTypeBody, metadata? : @types.MetadataEnvelope) -> SchemaType
+
+pub fn schema_value_from_wit(@types.SchemaValueTree) -> SchemaValue raise SchemaModelError
+
+pub fn schema_value_to_wit(SchemaValue) -> @types.SchemaValueTree raise SchemaModelError
+
+pub fn typed_schema_value_from_wit(@types.TypedSchemaValue) -> TypedSchemaValue raise SchemaModelError
+
+pub fn typed_schema_value_to_wit(TypedSchemaValue) -> @types.TypedSchemaValue raise SchemaModelError
+
+pub fn validate_graph(SchemaGraph) -> Array[SchemaError]
+
+pub fn variant_case(String, payload? : SchemaType, metadata? : @types.MetadataEnvelope) -> VariantCaseType
+
+// Errors
+pub suberror SchemaError {
+  DuplicateTypeId(String)
+  DanglingRef(String)
+  EmptyVariant
+  EmptyEnum
+  EmptyUnion
+  EmptyFlags
+  DuplicateFieldName(String)
+  DuplicateVariantCase(String)
+  DuplicateEnumCase(String)
+  DuplicateFlagName(String)
+  DuplicateUnionTag(String)
+  MapKeyNotPrimitive
+  FixedListZeroLength
+  QuantityMinUnitMismatch(base_unit~ : String, min_unit~ : String)
+  QuantityMaxUnitMismatch(base_unit~ : String, max_unit~ : String)
+  UnionStringRuleOnNonStringBody(tag~ : String)
+  UnionFieldRuleOnNonRecordBody(tag~ : String)
+  UnionFieldEqualsLiteralOnNonStringField(tag~ : String, field_name~ : String)
+  UnionFieldRuleMissingField(tag~ : String, field_name~ : String)
+  UnionUnsatisfiableFieldAbsent(tag~ : String, field_name~ : String)
+  UnionAmbiguousDiscriminators(tag_a~ : String, tag_b~ : String, reason~ : String)
+  InvalidRegex(tag~ : String, regex~ : String, message~ : String)
+  TextLengthRangeInverted
+  BinaryByteRangeInverted
+  NullableNesting(inner~ : String)
+} derive(Eq, Show)
+
+pub suberror SchemaModelError {
+  EncodeError(String)
+  DecodeError(String)
+  MergeConflict(String)
+  BuilderError(String)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct EncodedAgentGraph {
+  graph : @types.SchemaGraph
+  root_indices : Array[Int]
+}
+
+pub struct GraphDecoder {
+  nodes : Array[@types.SchemaTypeNode]
+  wit_defs : Array[@types.SchemaTypeDef]
+  on_path : Array[Bool]
+}
+pub fn GraphDecoder::decode_defs(Self) -> Array[SchemaTypeDef] raise SchemaModelError
+pub fn GraphDecoder::decode_type_at(Self, Int) -> SchemaType raise SchemaModelError
+pub fn GraphDecoder::new(@types.SchemaGraph) -> Self raise SchemaModelError
+
+pub struct GraphEncoder {
+  type_nodes : Array[@types.SchemaTypeNode]
+  def_index_by_id : Map[String, Int]
+  wit_defs : Array[@types.SchemaTypeDef]
+}
+pub fn GraphEncoder::encode_graph_root(Self, SchemaType) -> @types.SchemaGraph raise SchemaModelError
+pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int raise SchemaModelError
+pub fn GraphEncoder::finish(Self) -> @types.SchemaGraph raise SchemaModelError
+pub fn GraphEncoder::new(Array[SchemaTypeDef]) -> Self raise SchemaModelError
+
+pub(all) struct MergedAgentGraph {
+  defs : Array[SchemaTypeDef]
+  roots : Array[SchemaType]
+} derive(Eq, Show)
+
+pub(all) struct NamedFieldType {
+  name : String
+  body : SchemaType
+  metadata : @types.MetadataEnvelope
+} derive(Eq, Show)
+
+pub struct SchemaBuilder {
+  defs : Array[SchemaTypeDef]
+  reserved : Map[String, Unit]
+}
+pub fn SchemaBuilder::build_graph(Self, SchemaType) -> SchemaGraph raise SchemaModelError
+pub fn SchemaBuilder::commit(Self, String, SchemaType, String?) -> Unit
+pub fn SchemaBuilder::contains(Self, String) -> Bool
+pub fn SchemaBuilder::finish(Self) -> Array[SchemaTypeDef] raise SchemaModelError
+pub fn SchemaBuilder::new() -> Self
+pub fn SchemaBuilder::ref_(Self, String) -> SchemaType
+pub fn SchemaBuilder::register(Self, String, () -> SchemaType, String?) -> SchemaType
+pub fn SchemaBuilder::reserve(Self, String) -> Unit
+
+pub(all) struct SchemaGraph {
+  defs : Array[SchemaTypeDef]
+  root : SchemaType
+} derive(Eq, Show)
+
+pub(all) struct SchemaMapEntry {
+  key : SchemaValue
+  value : SchemaValue
+} derive(Eq, Show)
+
+pub(all) struct SchemaType {
+  body : SchemaTypeBody
+  metadata : @types.MetadataEnvelope
+} derive(Eq, Show)
+
+pub(all) enum SchemaTypeBody {
+  Ref(String)
+  Bool
+  S8
+  S16
+  S32
+  S64
+  U8
+  U16
+  U32
+  U64
+  F32
+  F64
+  Char
+  String
+  Record(Array[NamedFieldType])
+  Variant(Array[VariantCaseType])
+  Enum(Array[String])
+  Flags(Array[String])
+  Tuple(Array[SchemaType])
+  List(SchemaType)
+  FixedList(SchemaType, UInt)
+  Map(SchemaType, SchemaType)
+  Option(SchemaType)
+  Result(SchemaType?, SchemaType?)
+  Text(@types.TextRestrictions)
+  Binary(@types.BinaryRestrictions)
+  Path(@types.PathSpec)
+  Url(@types.UrlRestrictions)
+  Datetime
+  Duration
+  Quantity(@types.QuantitySpec)
+  Union(Array[UnionBranch])
+  Secret(@types.SecretSpec)
+  QuotaToken(@types.QuotaTokenSpec)
+  Future(SchemaType?)
+  Stream(SchemaType?)
+} derive(Eq, Show)
+
+pub(all) struct SchemaTypeDef {
+  id : String
+  name : String?
+  body : SchemaType
+} derive(Eq, Show)
+
+pub(all) enum SchemaValue {
+  Bool(Bool)
+  S8(Int)
+  S16(Int)
+  S32(Int)
+  S64(Int64)
+  U8(Byte)
+  U16(UInt)
+  U32(UInt)
+  U64(UInt64)
+  F32(Float)
+  F64(Double)
+  Char(Char)
+  String(String)
+  Record(Array[SchemaValue])
+  Variant(UInt, SchemaValue?)
+  Enum(UInt)
+  Flags(Array[Bool])
+  Tuple(Array[SchemaValue])
+  List(Array[SchemaValue])
+  FixedList(Array[SchemaValue])
+  Map(Array[SchemaMapEntry])
+  Option(SchemaValue?)
+  ResultOk(SchemaValue?)
+  ResultErr(SchemaValue?)
+  Text(String, String?)
+  Binary(FixedArray[Byte], String?)
+  Path(String)
+  Url(String)
+  Datetime(@types.Datetime)
+  Duration(Int64)
+  Quantity(@types.QuantityValue)
+  Union(String, SchemaValue)
+  Secret(String)
+  QuotaToken(@types.QuotaTokenValuePayload)
+} derive(Eq, Show)
+
+pub(all) struct TypedSchemaValue {
+  graph : SchemaGraph
+  value : SchemaValue
+} derive(Eq, Show)
+
+pub(all) struct UnionBranch {
+  tag : String
+  body : SchemaType
+  discriminator : @types.DiscriminatorRule
+  metadata : @types.MetadataEnvelope
+} derive(Eq, Show)
+
+pub(all) struct VariantCaseType {
+  name : String
+  payload : SchemaType?
+  metadata : @types.MetadataEnvelope
+} derive(Eq, Show)
+
+// Type aliases
+pub type TypeId = String
+
+// Traits
+

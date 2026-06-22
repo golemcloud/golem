@@ -24,12 +24,15 @@ use crate::schema::agent::{
     AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
     RegisteredAgentTypeSchema,
 };
-use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
+use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_value::SchemaValue;
 use proptest::prelude::*;
-use strategies::schema_graph_strategy;
+use strategies::{
+    schema_graph_strategy, schema_value_strategy, schema_values_eq, typed_schema_value_strategy,
+};
 use test_r::test;
 use uuid::Uuid;
 
@@ -45,6 +48,33 @@ proptest! {
         let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         prop_assert_eq!(graph, back);
+    }
+
+    /// Converting any schema value to its protobuf mirror and back yields the
+    /// original value (NaN-tolerant). Covers every `SchemaValue` variant,
+    /// including the recursive/boxed ones (variant / option / result / union /
+    /// map) and the rich leaves (text / binary / datetime / duration /
+    /// quantity / secret / quota-token).
+    #[test]
+    fn schema_value_proto_round_trip(value in schema_value_strategy()) {
+        let proto: golem_api_grpc::proto::golem::schema::SchemaValue = value.clone().into();
+        let back: SchemaValue = proto.try_into().expect("decode");
+        prop_assert!(
+            schema_values_eq(&value, &back),
+            "value round-trip mismatch:\n  before: {value:?}\n  after:  {back:?}"
+        );
+    }
+
+    /// The typed pair (graph + value) round-trips through its protobuf mirror.
+    #[test]
+    fn typed_schema_value_proto_round_trip(typed in typed_schema_value_strategy()) {
+        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue = typed.clone().into();
+        let back: TypedSchemaValue = proto.try_into().expect("decode");
+        prop_assert_eq!(typed.graph(), back.graph());
+        prop_assert!(
+            schema_values_eq(typed.value(), back.value()),
+            "typed value round-trip mismatch:\n  before: {typed:?}\n  after:  {back:?}"
+        );
     }
 }
 

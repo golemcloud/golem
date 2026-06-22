@@ -16,13 +16,7 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::get;
-use golem_common::component_introspection::wit_parser::{
-    SharedAnalysedTypeResolve, TypeName, TypeOwner,
-};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    ComponentModelElementValue, DataValue, ElementValue, ElementValues,
-};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentMetadataDto;
@@ -30,13 +24,12 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
     ScanCursor, StringFilterComparator,
 };
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::{IntoValue, Record};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -61,10 +54,6 @@ use tracing::{Instrument, Span, debug, info};
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
-inherit_test_dep!(
-    #[tagged_as("golem_host")]
-    SharedAnalysedTypeResolve
-);
 inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
@@ -353,23 +342,31 @@ async fn shopping_cart_example(
 
     assert_eq!(
         contents_value,
-        Value::List(vec![
-            Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1001".to_string()),
-                Value::String("Golem Cloud Subscription 1y".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::U64(2),
-            ]),
-        ])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1000".to_string()),
+                        SchemaValue::String("Golem T-Shirt M".to_string()),
+                        SchemaValue::U64(1),
+                    ],
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1001".to_string()),
+                        SchemaValue::String("Golem Cloud Subscription 1y".to_string()),
+                        SchemaValue::U64(1),
+                    ],
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1002".to_string()),
+                        SchemaValue::String("Mud Golem".to_string()),
+                        SchemaValue::U64(2),
+                    ],
+                },
+            ],
+        }
     );
     Ok(())
 }
@@ -404,48 +401,68 @@ async fn dynamic_worker_creation(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let worker_name = agent_id.to_string();
-    assert_eq!(args, Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
+    assert_eq!(
+        args,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List { elements: vec![] }))
+        })
+    );
     assert_eq!(
         env,
-        Value::Result(Ok(Some(Box::new(Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String(worker_name.clone())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String(worker_name)
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component.id))
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                Value::String("0".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_TYPE".to_string()),
-                Value::String("Environment".to_string()),
-            ])
-        ])))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(worker_name.clone()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(worker_name),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(format!("{}", component.id)),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string()),
+                        ],
+                    },
+                ],
+            }))
+        })
     );
     Ok(())
 }
 
-fn get_env_result_from_value(env: Value) -> HashMap<String, String> {
+fn get_env_result_from_value(env: SchemaValue) -> HashMap<String, String> {
     match env {
-        Value::Result(Ok(Some(inner))) => match *inner {
-            Value::List(items) => {
+        SchemaValue::Result(ResultValuePayload::Ok { value: Some(inner) }) => match *inner {
+            SchemaValue::List { elements: items } => {
                 let pairs = items
                     .into_iter()
                     .filter_map(|item| match item {
-                        Value::Tuple(values) if values.len() == 2 => {
+                        SchemaValue::Tuple { elements: values } if values.len() == 2 => {
                             let mut iter = values.into_iter();
                             match (iter.next(), iter.next()) {
-                                (Some(Value::String(key)), Some(Value::String(value))) => {
-                                    Some((key, value))
-                                }
+                                (
+                                    Some(SchemaValue::String(key)),
+                                    Some(SchemaValue::String(value)),
+                                ) => Some((key, value)),
                                 _ => None,
                             }
                         }
@@ -487,11 +504,11 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?
-        .into_return_value();
+        .into_typed::<u32>()?;
 
     drop(executor);
 
-    assert_eq!(result, Some(Value::U32(1)));
+    assert_eq!(result, 1);
     Ok(())
 }
 
@@ -523,13 +540,7 @@ async fn promise(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
-
-    let promise_data = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: promise_id_vat,
-        })],
-    });
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
 
     let poll1 = executor
         .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data.clone())
@@ -590,28 +601,37 @@ async fn promise(
     let result_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(result_value, Value::List(vec![Value::U8(42)]));
+    assert_eq!(
+        result_value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
 
     let poll1_value = poll1?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(poll1_value, Value::Option(None));
+    assert_eq!(poll1_value, SchemaValue::Option { inner: None });
 
     let poll2_value = poll2?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
     assert_eq!(
         poll2_value,
-        Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::List {
+                elements: vec![SchemaValue::U8(42)],
+            }))
+        }
     );
     Ok(())
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
-    let Value::Record(fields) = promise_id_value else {
+fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
+    let SchemaValue::Record { fields } = promise_id_value else {
         panic!("Expected a record for PromiseId");
     };
-    let Value::U64(oplog_idx) = fields[1] else {
+    let SchemaValue::U64(oplog_idx) = fields[1] else {
         panic!("Expected u64 oplog-idx field");
     };
     OplogIndex::from_u64(oplog_idx)
@@ -623,7 +643,6 @@ fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
 async fn get_workers_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("golem_host")] type_resolve: &SharedAnalysedTypeResolve,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -646,66 +665,49 @@ async fn get_workers_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
-        mut type_resolve: SharedAnalysedTypeResolve,
     ) -> anyhow::Result<()> {
-        let component_id_val_and_type = {
+        let component_id_value = {
             let (high, low) = component.id.0.as_u64_pair();
-            Record(vec![(
-                "uuid",
-                Record(vec![
-                    ("high-bits", high.into_value_and_type()),
-                    ("low-bits", low.into_value_and_type()),
-                ])
-                .into_value_and_type(),
-            )])
-            .into_value_and_type()
-        };
-
-        let filter_val = name_filter.map(|name| {
-            Value::Record(vec![Value::List(vec![Value::Record(vec![Value::List(
-                vec![Value::Variant {
-                    case_idx: 0,
-                    case_value: Some(Box::new(Value::Record(vec![
-                        Value::Variant {
-                            case_idx: 0,
-                            case_value: None,
-                        },
-                        Value::String(name),
-                    ]))),
+            SchemaValue::Record {
+                fields: vec![SchemaValue::Record {
+                    fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
                 }],
-            )])])])
-        });
-
-        let filter_val_and_type = ValueAndType {
-            value: Value::Option(filter_val.map(Box::new)),
-            typ: analysed_type::option(
-                type_resolve
-                    .analysed_type(&TypeName {
-                        package: Some("golem:api@1.5.0".to_string()),
-                        owner: TypeOwner::Interface("host".to_string()),
-                        name: Some("agent-any-filter".to_string()),
-                    })
-                    .unwrap(),
-            ),
+            }
         };
 
-        let params = DataValue::Tuple(ElementValues {
-            elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: component_id_val_and_type,
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: filter_val_and_type,
-                }),
-                ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: true.into_value_and_type(),
-                }),
-            ],
-        });
+        let filter_value = SchemaValue::Option {
+            inner: name_filter.map(|name| {
+                Box::new(SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::Record {
+                            fields: vec![SchemaValue::List {
+                                elements: vec![SchemaValue::Variant(VariantValuePayload {
+                                    case: 0,
+                                    payload: Some(Box::new(SchemaValue::Record {
+                                        fields: vec![
+                                            // `string-filter-comparator` is a WIT
+                                            // `enum`; `equal` is case 0.
+                                            SchemaValue::Enum { case: 0 },
+                                            SchemaValue::String(name),
+                                        ],
+                                    })),
+                                })],
+                            }],
+                        }],
+                    }],
+                })
+            }),
+        };
+
+        let params = crate::raw_params(vec![
+            component_id_value,
+            filter_value,
+            SchemaValue::Bool(true),
+        ]);
 
         let result = executor
             .invoke_and_await_agent(component, caller_agent_id, "get_workers", params)
@@ -716,7 +718,7 @@ async fn get_workers_from_worker(
             .ok_or_else(|| anyhow!("expected return value"))?;
 
         match result_value {
-            Value::List(list) => {
+            SchemaValue::List { elements: list } => {
                 assert_eq!(list.len(), expected_count);
             }
             _ => {
@@ -725,22 +727,13 @@ async fn get_workers_from_worker(
         }
         Ok(())
     }
-    get_check(
-        &component,
-        &agent_id1,
-        None,
-        2,
-        &executor,
-        type_resolve.clone(),
-    )
-    .await?;
+    get_check(&component, &agent_id1, None, 2, &executor).await?;
     get_check(
         &component,
         &agent_id2,
         Some("GolemHostApi(\"worker-3\")".to_string()),
         1,
         &executor,
-        type_resolve.clone(),
     )
     .await?;
 
@@ -775,25 +768,30 @@ async fn get_metadata_from_worker(
         .start_agent(&component.id, agent_id2.clone())
         .await?;
 
-    fn get_agent_id_val(
+    fn get_agent_id_schema_value(
         component_id: &ComponentId,
-        agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
-    ) -> Value {
-        let component_id_val = {
-            let (high, low) = component_id.0.as_u64_pair();
-            Value::Record(vec![Value::Record(vec![Value::U64(high), Value::U64(low)])])
-        };
-
-        Value::Record(vec![component_id_val, Value::String(agent_id.to_string())])
+        agent_id: &golem_common::model::agent::ParsedAgentId,
+    ) -> SchemaValue {
+        let (high, low) = component_id.0.as_u64_pair();
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::Record {
+                        fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
+                    }],
+                },
+                SchemaValue::String(agent_id.to_string()),
+            ],
+        }
     }
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
-        other_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
+        other_agent_id: &golem_common::model::agent::ParsedAgentId,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
-        let agent_id_val1 = get_agent_id_val(&component.id, caller_agent_id);
+        let agent_id_val1 = get_agent_id_schema_value(&component.id, caller_agent_id);
 
         let result = executor
             .invoke_and_await_agent(component, caller_agent_id, "get_self_uri", data_value!())
@@ -804,7 +802,7 @@ async fn get_metadata_from_worker(
             .ok_or_else(|| anyhow!("expected return value"))?;
 
         match result_value {
-            Value::Record(values) if !values.is_empty() => {
+            SchemaValue::Record { fields: values } if !values.is_empty() => {
                 let id_val = values.first().unwrap();
                 assert_eq!(agent_id_val1, *id_val);
             }
@@ -813,30 +811,9 @@ async fn get_metadata_from_worker(
             }
         }
 
-        let agent_id_val2 = get_agent_id_val(&component.id, other_agent_id);
+        let agent_id_schema_val2 = get_agent_id_schema_value(&component.id, other_agent_id);
 
-        let other_agent_id_val_and_type = ValueAndType {
-            value: agent_id_val2.clone(),
-            typ: analysed_type::record(vec![
-                analysed_type::field(
-                    "component-id",
-                    analysed_type::record(vec![analysed_type::field(
-                        "uuid",
-                        analysed_type::record(vec![
-                            analysed_type::field("high-bits", analysed_type::u64()),
-                            analysed_type::field("low-bits", analysed_type::u64()),
-                        ]),
-                    )]),
-                ),
-                analysed_type::field("agent-id", analysed_type::str()),
-            ]),
-        };
-
-        let params = DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: other_agent_id_val_and_type,
-            })],
-        });
+        let params = crate::raw_params(vec![agent_id_schema_val2.clone()]);
 
         let result = executor
             .invoke_and_await_agent(component, caller_agent_id, "get_worker_metadata", params)
@@ -847,12 +824,12 @@ async fn get_metadata_from_worker(
             .ok_or_else(|| anyhow!("expected return value"))?;
 
         match result_value {
-            Value::Option(value) if value.is_some() => {
+            SchemaValue::Option { inner: value } if value.is_some() => {
                 let result = *value.unwrap();
                 match result {
-                    Value::Record(values) if !values.is_empty() => {
+                    SchemaValue::Record { fields: values } if !values.is_empty() => {
                         let id_val = values.first().unwrap();
-                        assert_eq!(agent_id_val2, *id_val);
+                        assert_eq!(agent_id_schema_val2, *id_val);
                     }
                     _ => {
                         panic!("unexpected");
@@ -927,11 +904,15 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
 
     assert_eq!(
         contents_value,
-        Value::List(vec![Value::Record(vec![
-            Value::String("G1000".to_string()),
-            Value::String("Golem T-Shirt M".to_string()),
-            Value::U64(1),
-        ])])
+        SchemaValue::List {
+            elements: vec![SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("G1000".to_string()),
+                    SchemaValue::String("Golem T-Shirt M".to_string()),
+                    SchemaValue::U64(1),
+                ],
+            }],
+        }
     );
     Ok(())
 }
@@ -992,11 +973,15 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 
     assert_eq!(
         contents_value,
-        Value::List(vec![Value::Record(vec![
-            Value::String("G1000".to_string()),
-            Value::String("Golem T-Shirt M".to_string()),
-            Value::U64(1),
-        ])])
+        SchemaValue::List {
+            elements: vec![SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("G1000".to_string()),
+                    SchemaValue::String("Golem T-Shirt M".to_string()),
+                    SchemaValue::U64(1),
+                ],
+            }],
+        }
     );
     Ok(())
 }
@@ -1029,32 +1014,48 @@ async fn component_env_variables(
 
     assert_eq!(
         env,
-        Value::Result(Ok(Some(Box::new(Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("FOO".to_string()),
-                Value::String("bar".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String(worker_name.clone())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String(worker_name)
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component.id))
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                Value::String("0".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_TYPE".to_string()),
-                Value::String("Environment".to_string())
-            ]),
-        ])))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("FOO".to_string()),
+                            SchemaValue::String("bar".to_string()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(worker_name.clone()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(worker_name),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(format!("{}", component.id)),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string()),
+                        ],
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string()),
+                        ],
+                    },
+                ],
+            }))
+        })
     );
 
     Ok(())
@@ -1528,7 +1529,7 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 1703936);
+    assert_eq!(metadata2.total_linear_memory_size, 2097152);
     Ok(())
 }
 
@@ -1557,12 +1558,12 @@ async fn create_invoke_delete_create_invoke(
     let r1 = executor
         .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
-    assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(r1.into_typed::<u32>()?, 1);
 
     let r2 = executor
         .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
-    assert_eq!(r2.into_return_value(), Some(Value::U32(2)));
+    assert_eq!(r2.into_typed::<u32>()?, 2);
 
     executor.delete_worker(&worker_id).await?;
 
@@ -1573,7 +1574,7 @@ async fn create_invoke_delete_create_invoke(
     let r3 = executor
         .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
-    assert_eq!(r3.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(r3.into_typed::<u32>()?, 1);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1635,9 +1636,9 @@ async fn recovering_an_old_worker_after_updating_a_component(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
-    assert_eq!(r2.into_return_value(), Some(Value::F64(1.0)));
-    assert_eq!(r3.into_return_value(), Some(Value::U32(2)));
+    assert_eq!(r1.into_typed::<u32>()?, 1);
+    assert_eq!(r2.into_typed::<f64>()?, 1.0);
+    assert_eq!(r3.into_typed::<u32>()?, 2);
     Ok(())
 }
 
@@ -1688,11 +1689,8 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
-    assert_eq!(
-        r2.into_return_value(),
-        Some(Value::String("counter-recreate-after-delete".to_string()))
-    );
+    assert_eq!(r1.into_typed::<u32>()?, 1);
+    assert_eq!(r2.into_typed::<String>()?, "counter-recreate-after-delete");
     Ok(())
 }
 
@@ -2693,13 +2691,11 @@ async fn counter_resource_test_1(
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a single return value");
+    let result_value = result.into_typed::<u64>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(result_value, Value::U64(5));
+    assert_eq!(result_value, 5);
     Ok(())
 }
 
@@ -2875,7 +2871,7 @@ async fn invocation_queue_is_persistent(
 
     http_server.abort();
 
-    assert_eq!(result, data_value!(4u64));
+    assert_eq!(result.into_typed::<u64>()?, 4u64);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2913,7 +2909,7 @@ async fn invoke_with_non_existing_function(
         .await?;
 
     assert!(failure.is_err());
-    assert_eq!(success.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(success.into_typed::<u32>()?, 1);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2957,7 +2953,7 @@ async fn invoke_with_wrong_parameters(
         .await?;
 
     assert!(failure.is_err());
-    assert_eq!(success.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(success.into_typed::<u32>()?, 1);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -3093,19 +3089,13 @@ async fn cancelling_pending_invocations(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
-
     // await_promise (fire-and-forget) - worker suspends
     executor
         .invoke_agent(
             &component,
             &agent_id,
             "await_promise",
-            DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: promise_id_vat,
-                })],
-            }),
+            crate::raw_params(vec![promise_id_value.clone()]),
         )
         .await?;
 
@@ -3123,18 +3113,13 @@ async fn cancelling_pending_invocations(
     let cancel4 = executor.cancel_invocation(&worker_id, &ik4).await;
 
     // Extract oplog_idx from promise value to complete it
-    let Value::Record(fields) = &promise_id_value else {
-        panic!("Expected a record for PromiseId")
-    };
-    let Value::U64(oplog_idx) = fields[1] else {
-        panic!("Expected a u64 for oplog_idx")
-    };
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
 
     executor
         .complete_promise(
             &PromiseId {
                 agent_id: worker_id.clone(),
-                oplog_idx: OplogIndex::from_u64(oplog_idx),
+                oplog_idx,
             },
             vec![42],
         )
@@ -3147,14 +3132,12 @@ async fn cancelling_pending_invocations(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let final_value = final_result
-        .into_return_value()
-        .expect("Expected a single return value");
+    let final_value = final_result.into_typed::<u64>()?;
 
     assert!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
     assert!(cancel2.is_ok() && cancel2.unwrap());
     assert!(cancel4.is_err()); // cannot cancel a non-existing invocation
-    assert_eq!(final_value, Value::U64(12));
+    assert_eq!(final_value, 12);
     Ok(())
 }
 
@@ -3210,11 +3193,13 @@ async fn resolve_components_from_name(
 
     assert_eq!(
         result,
-        Value::Record(vec![
-            Value::Bool(true),
-            Value::Bool(true),
-            Value::Bool(false),
-        ])
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(false),
+            ],
+        }
     );
 
     executor.check_oplog_is_queryable(&resolve_worker).await?;
@@ -3273,7 +3258,7 @@ async fn scheduled_invocation(
                 )
                 .await?;
 
-            if result.into_return_value() == Some(Value::U64(1)) {
+            if result.into_typed::<u64>()? == 1 {
                 done = true;
             } else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -3303,7 +3288,7 @@ async fn scheduled_invocation(
             )
             .await?;
 
-        assert_eq!(result.into_return_value(), Some(Value::U64(1)));
+        assert_eq!(result.into_typed::<u64>()?, 1);
     }
 
     // third invocation: schedule increment on self in the future and poll
@@ -3323,7 +3308,7 @@ async fn scheduled_invocation(
                 )
                 .await?;
 
-            if result.into_return_value() == Some(Value::U64(1)) {
+            if result.into_typed::<u64>()? == 1 {
                 done = true;
             } else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -3420,8 +3405,16 @@ async fn delete_worker_during_invocation(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value = result.into_return_value();
-    assert_eq!(result_value, Some(Value::Result(Ok(None))));
+    let result_value = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    // `sleep` returns `Result<(), String>`; in the schema-native model the unit
+    // `()` ok branch carries no payload (`result<_, string>`), so the `Ok`
+    // payload is `None`.
+    assert_eq!(
+        result_value,
+        SchemaValue::Result(ResultValuePayload::Ok { value: None })
+    );
     assert_eq!(metadata.pending_invocation_count, 0);
     Ok(())
 }
@@ -3633,9 +3626,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
                     .await
                 {
                     Ok(result) => {
-                        let value = result.into_return_value();
+                        let value = result.into_typed::<u64>();
                         match value {
-                            Some(Value::U64(v)) => {
+                            Ok(v) => {
                                 if v < expected_counter {
                                     break Ok(());
                                 }

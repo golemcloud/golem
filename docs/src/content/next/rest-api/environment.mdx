@@ -451,30 +451,97 @@ Path|Method|Protected
   "values": [
     {
       "agentType": {
-        "typeName": "string",
+        "type_name": "string",
         "description": "string",
-        "sourceLanguage": "string",
+        "source_language": "string",
+        "schema": {
+          "defs": [
+            {
+              "id": "string",
+              "name": "string",
+              "body": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "root": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        },
         "constructor": {
           "name": "string",
           "description": "string",
-          "promptHint": "string",
-          "inputSchema": {
-            "type": "Multimodal",
-            "elements": [
+          "prompt_hint": "string",
+          "input_schema": {
+            "tag": "parameters",
+            "value": [
               {
                 "name": "string",
+                "source": {
+                  "tag": "user-supplied"
+                },
                 "schema": {
-                  "type": "ComponentModel",
-                  "elementType": {
-                    "type": "Variant",
-                    "name": "string",
-                    "owner": "string",
-                    "cases": [
-                      {
-                        "name": "string",
-                        "typ": {}
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
-                    ]
+                    }
+                  }
+                },
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
                 }
               }
@@ -485,52 +552,54 @@ Path|Method|Protected
           {
             "name": "string",
             "description": "string",
-            "promptHint": "string",
-            "inputSchema": {
-              "type": "Multimodal",
-              "elements": [
+            "prompt_hint": "string",
+            "input_schema": {
+              "tag": "parameters",
+              "value": [
                 {
                   "name": "string",
+                  "source": {
+                    "tag": "user-supplied"
+                  },
                   "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
-                      ]
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
                   }
                 }
               ]
             },
-            "outputSchema": {
-              "type": "Multimodal",
-              "elements": [
-                {
-                  "name": "string",
-                  "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
+            "output_schema": {
+              "tag": "unit"
             },
-            "httpEndpoint": [
+            "http_endpoint": [
               {
                 "httpMethod": {
                   "type": "Patch"
@@ -563,7 +632,7 @@ Path|Method|Protected
                 }
               }
             ],
-            "readOnly": {
+            "read_only": {
               "cachePolicy": {
                 "type": "UntilWrite"
               },
@@ -573,29 +642,96 @@ Path|Method|Protected
         ],
         "dependencies": [
           {
-            "typeName": "string",
+            "type_name": "string",
             "description": "string",
+            "schema": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
             "constructor": {
               "name": "string",
               "description": "string",
-              "promptHint": "string",
-              "inputSchema": {
-                "type": "Multimodal",
-                "elements": [
+              "prompt_hint": "string",
+              "input_schema": {
+                "tag": "parameters",
+                "value": [
                   {
                     "name": "string",
+                    "source": {
+                      "tag": "user-supplied"
+                    },
                     "schema": {
-                      "type": "ComponentModel",
-                      "elementType": {
-                        "type": "Variant",
-                        "name": "string",
-                        "owner": "string",
-                        "cases": [
-                          {
-                            "name": "string",
-                            "typ": {}
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
                           }
-                        ]
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
                     }
                   }
@@ -606,46 +742,52 @@ Path|Method|Protected
               {
                 "name": "string",
                 "description": "string",
-                "promptHint": "string",
-                "inputSchema": {
-                  "type": "Multimodal",
-                  "elements": [
+                "prompt_hint": "string",
+                "input_schema": {
+                  "tag": "parameters",
+                  "value": [
                     {
                       "name": "string",
+                      "source": {
+                        "tag": "user-supplied"
+                      },
                       "schema": {
-                        "type": "ComponentModel",
-                        "elementType": {
-                          "type": "Variant",
-                          "name": "string",
-                          "owner": "string",
-                          "cases": [
-                            {}
-                          ]
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
                       }
                     }
                   ]
                 },
-                "outputSchema": {
-                  "type": "Multimodal",
-                  "elements": [
-                    {
-                      "name": "string",
-                      "schema": {
-                        "type": "ComponentModel",
-                        "elementType": {
-                          "type": "Variant",
-                          "name": "string",
-                          "owner": "string",
-                          "cases": [
-                            {}
-                          ]
-                        }
-                      }
-                    }
-                  ]
+                "output_schema": {
+                  "tag": "unit"
                 },
-                "httpEndpoint": [
+                "http_endpoint": [
                   {
                     "httpMethod": {
                       "type": "Patch"
@@ -678,7 +820,7 @@ Path|Method|Protected
                     }
                   }
                 ],
-                "readOnly": {
+                "read_only": {
                   "cachePolicy": {
                     "type": "UntilWrite"
                   },
@@ -689,7 +831,7 @@ Path|Method|Protected
           }
         ],
         "mode": "Durable",
-        "httpMount": {
+        "http_mount": {
           "pathPrefix": [
             {
               "type": "Literal",
@@ -721,16 +863,24 @@ Path|Method|Protected
             "path": [
               "string"
             ],
-            "valueType": {
-              "type": "Variant",
-              "name": "string",
-              "owner": "string",
-              "cases": [
-                {
-                  "name": "string",
-                  "typ": {}
+            "value_type": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
                 }
-              ]
+              }
             }
           }
         ]
@@ -764,30 +914,97 @@ Path|Method|Protected
 ```json copy
 {
   "agentType": {
-    "typeName": "string",
+    "type_name": "string",
     "description": "string",
-    "sourceLanguage": "string",
+    "source_language": "string",
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    },
     "constructor": {
       "name": "string",
       "description": "string",
-      "promptHint": "string",
-      "inputSchema": {
-        "type": "Multimodal",
-        "elements": [
+      "prompt_hint": "string",
+      "input_schema": {
+        "tag": "parameters",
+        "value": [
           {
             "name": "string",
+            "source": {
+              "tag": "user-supplied"
+            },
             "schema": {
-              "type": "ComponentModel",
-              "elementType": {
-                "type": "Variant",
-                "name": "string",
-                "owner": "string",
-                "cases": [
-                  {
-                    "name": "string",
-                    "typ": {}
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
-                ]
+                }
+              }
+            },
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
               }
             }
           }
@@ -798,52 +1015,54 @@ Path|Method|Protected
       {
         "name": "string",
         "description": "string",
-        "promptHint": "string",
-        "inputSchema": {
-          "type": "Multimodal",
-          "elements": [
+        "prompt_hint": "string",
+        "input_schema": {
+          "tag": "parameters",
+          "value": [
             {
               "name": "string",
+              "source": {
+                "tag": "user-supplied"
+              },
               "schema": {
-                "type": "ComponentModel",
-                "elementType": {
-                  "type": "Variant",
-                  "name": "string",
-                  "owner": "string",
-                  "cases": [
-                    {
-                      "name": "string",
-                      "typ": {}
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
-                  ]
+                  }
+                }
+              },
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
                 }
               }
             }
           ]
         },
-        "outputSchema": {
-          "type": "Multimodal",
-          "elements": [
-            {
-              "name": "string",
-              "schema": {
-                "type": "ComponentModel",
-                "elementType": {
-                  "type": "Variant",
-                  "name": "string",
-                  "owner": "string",
-                  "cases": [
-                    {
-                      "name": "string",
-                      "typ": {}
-                    }
-                  ]
-                }
-              }
-            }
-          ]
+        "output_schema": {
+          "tag": "unit"
         },
-        "httpEndpoint": [
+        "http_endpoint": [
           {
             "httpMethod": {
               "type": "Patch"
@@ -876,7 +1095,7 @@ Path|Method|Protected
             }
           }
         ],
-        "readOnly": {
+        "read_only": {
           "cachePolicy": {
             "type": "UntilWrite"
           },
@@ -886,29 +1105,96 @@ Path|Method|Protected
     ],
     "dependencies": [
       {
-        "typeName": "string",
+        "type_name": "string",
         "description": "string",
+        "schema": {
+          "defs": [
+            {
+              "id": "string",
+              "name": "string",
+              "body": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "root": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        },
         "constructor": {
           "name": "string",
           "description": "string",
-          "promptHint": "string",
-          "inputSchema": {
-            "type": "Multimodal",
-            "elements": [
+          "prompt_hint": "string",
+          "input_schema": {
+            "tag": "parameters",
+            "value": [
               {
                 "name": "string",
+                "source": {
+                  "tag": "user-supplied"
+                },
                 "schema": {
-                  "type": "ComponentModel",
-                  "elementType": {
-                    "type": "Variant",
-                    "name": "string",
-                    "owner": "string",
-                    "cases": [
-                      {
-                        "name": "string",
-                        "typ": {}
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
                       }
-                    ]
+                    }
+                  }
+                },
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
                   }
                 }
               }
@@ -919,52 +1205,54 @@ Path|Method|Protected
           {
             "name": "string",
             "description": "string",
-            "promptHint": "string",
-            "inputSchema": {
-              "type": "Multimodal",
-              "elements": [
+            "prompt_hint": "string",
+            "input_schema": {
+              "tag": "parameters",
+              "value": [
                 {
                   "name": "string",
+                  "source": {
+                    "tag": "user-supplied"
+                  },
                   "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
                         }
-                      ]
+                      }
+                    }
+                  },
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
                     }
                   }
                 }
               ]
             },
-            "outputSchema": {
-              "type": "Multimodal",
-              "elements": [
-                {
-                  "name": "string",
-                  "schema": {
-                    "type": "ComponentModel",
-                    "elementType": {
-                      "type": "Variant",
-                      "name": "string",
-                      "owner": "string",
-                      "cases": [
-                        {
-                          "name": "string",
-                          "typ": {}
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
+            "output_schema": {
+              "tag": "unit"
             },
-            "httpEndpoint": [
+            "http_endpoint": [
               {
                 "httpMethod": {
                   "type": "Patch"
@@ -997,7 +1285,7 @@ Path|Method|Protected
                 }
               }
             ],
-            "readOnly": {
+            "read_only": {
               "cachePolicy": {
                 "type": "UntilWrite"
               },
@@ -1008,7 +1296,7 @@ Path|Method|Protected
       }
     ],
     "mode": "Durable",
-    "httpMount": {
+    "http_mount": {
       "pathPrefix": [
         {
           "type": "Literal",
@@ -1040,16 +1328,24 @@ Path|Method|Protected
         "path": [
           "string"
         ],
-        "valueType": {
-          "type": "Variant",
-          "name": "string",
-          "owner": "string",
-          "cases": [
-            {
-              "name": "string",
-              "typ": {}
+        "value_type": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
             }
-          ]
+          }
         }
       }
     ]

@@ -241,7 +241,7 @@ object HttpValidation {
    */
   def validateHttpMountFromMetadata(metadata: AgentMetadata): Unit =
     metadata.httpMount.foreach { mount =>
-      val constructorParamNames = extractConstructorParamNames(metadata.constructor)
+      val constructorParamNames = extractConstructorParamNames(metadata.constructor.input)
       validateHttpMount(metadata.name, mount, constructorParamNames) match {
         case Left(err) => throw new IllegalArgumentException(err)
         case Right(()) => ()
@@ -263,10 +263,6 @@ object HttpValidation {
    *   - '''No id''': produces no parameters. Mount paths must not contain
    *     variables.
    */
-  private def extractConstructorParamNames(schema: golem.data.StructuredSchema): Set[String] =
-    schema match {
-      case golem.data.StructuredSchema.Tuple(elements) =>
-        elements.map(_.name).toSet
-      case _ => Set.empty
-    }
+  private def extractConstructorParamNames(input: golem.runtime.InputMetadata): Set[String] =
+    input.userSupplied.map(_.name).toSet
 }

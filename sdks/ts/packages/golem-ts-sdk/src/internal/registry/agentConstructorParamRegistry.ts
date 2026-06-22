@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TypeInfoInternal } from '../typeInfoInternal';
+import { RuntimeTypeInfo } from '../typeInfoInternal';
 
 interface AgentConstructorParamMetadata {
-  typeInfo?: TypeInfoInternal;
+  typeInfo?: RuntimeTypeInfo;
 }
 
 /**
@@ -56,12 +56,12 @@ class AgentConstructorParamRegistryImpl {
     return principalParams;
   }
 
-  getParamType(agentClassName: string, paramName: string): TypeInfoInternal | undefined {
+  getParamType(agentClassName: string, paramName: string): RuntimeTypeInfo | undefined {
     const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(paramName)?.typeInfo;
   }
 
-  setType(agentClassName: string, paramName: string, typeInfo: TypeInfoInternal): void {
+  setType(agentClassName: string, paramName: string, typeInfo: RuntimeTypeInfo): void {
     this.ensureMeta(agentClassName, paramName);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(paramName)!.typeInfo = typeInfo;

@@ -34,15 +34,10 @@ use golem_common::model::card::{
 };
 use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
-use golem_common::schema::adapters::analysed_type::{
-    analysed_type_to_schema_graph, schema_graph_to_analysed_type,
-};
-use golem_common::schema::adapters::value::value_to_schema_value;
+use golem_common::schema::validation::{validate_graph, validate_value};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -180,34 +175,24 @@ impl AgentSecretService {
             EnvironmentAgentSecretVerb::Create,
         )?;
 
-        // The REST DTO carries an `AnalysedType` + legacy-shaped JSON, so
-        // parse the JSON against the `AnalysedType` first and then promote
-        // the resulting `Value` into the schema layer for in-memory + repo
-        // use. This preserves the legacy wire shape (numeric `char`,
-        // `{"Case": null}` for unit variants, lenient optional record
-        // fields, etc.).
-        let secret_type_graph = analysed_type_to_schema_graph(&data.secret_type).map_err(|e| {
+        // The REST DTO is schema-native: the secret type arrives as a
+        // `SchemaGraph` and the value (if any) as a `SchemaValue`. Validate
+        // the graph is well-formed and that the value conforms to it before
+        // persisting.
+        let secret_type_graph = data.secret_type;
+        validate_graph(&secret_type_graph).map_err(|errors| {
             AgentSecretError::AgentSecretValueDoesNotMatchType {
-                errors: vec![format!("Invalid secret type: {e}")],
+                errors: errors.iter().map(|e| e.to_string()).collect(),
             }
         })?;
-        let secret_value = data
-            .secret_value
-            .as_ref()
-            .map(|sv| {
-                let vat =
-                    ValueAndType::parse_with_type(sv, &data.secret_type).map_err(|errors| {
-                        AgentSecretError::AgentSecretValueDoesNotMatchType { errors }
-                    })?;
-                value_to_schema_value(&vat.value, &data.secret_type).map_err(|e| {
-                    AgentSecretError::AgentSecretValueDoesNotMatchType {
-                        errors: vec![format!(
-                            "Failed to promote secret value to schema layer: {e}"
-                        )],
-                    }
-                })
-            })
-            .transpose()?;
+        let secret_value = data.secret_value;
+        if let Some(sv) = &secret_value {
+            validate_value(&secret_type_graph, &secret_type_graph.root, sv).map_err(|errors| {
+                AgentSecretError::AgentSecretValueDoesNotMatchType {
+                    errors: errors.iter().map(|e| e.to_string()).collect(),
+                }
+            })?;
+        }
 
         let id = AgentSecretId::new();
 
@@ -260,26 +245,19 @@ impl AgentSecretService {
         match update.secret_value {
             OptionalFieldUpdate::NoChange => {}
             OptionalFieldUpdate::Set(new_secret_value) => {
-                // See `create` above for the JSON-shape rationale. Project
-                // the stored `SchemaGraph` back to `AnalysedType` so the
-                // legacy JSON parser can be used, then promote the resulting
-                // `Value` into the schema layer.
-                let legacy_type = schema_graph_to_analysed_type(&agent_secret.secret_type)
-                    .map_err(|e| AgentSecretError::AgentSecretValueDoesNotMatchType {
-                        errors: vec![format!(
-                            "Failed to project stored secret schema to AnalysedType: {e}"
-                        )],
-                    })?;
-                let vat = ValueAndType::parse_with_type(&new_secret_value, &legacy_type).map_err(
-                    |errors| AgentSecretError::AgentSecretValueDoesNotMatchType { errors },
-                )?;
-                let parsed_new_secret_value = value_to_schema_value(&vat.value, &legacy_type)
-                    .map_err(|e| AgentSecretError::AgentSecretValueDoesNotMatchType {
-                        errors: vec![format!(
-                            "Failed to promote secret value to schema layer: {e}"
-                        )],
-                    })?;
-                agent_secret.secret_value = Some(parsed_new_secret_value);
+                // The new value is schema-native; validate it against the
+                // stored secret's `SchemaGraph` before applying.
+                validate_value(
+                    &agent_secret.secret_type,
+                    &agent_secret.secret_type.root,
+                    &new_secret_value,
+                )
+                .map_err(|errors| {
+                    AgentSecretError::AgentSecretValueDoesNotMatchType {
+                        errors: errors.iter().map(|e| e.to_string()).collect(),
+                    }
+                })?;
+                agent_secret.secret_value = Some(new_secret_value);
             }
             OptionalFieldUpdate::Unset => {
                 agent_secret.secret_value = None;

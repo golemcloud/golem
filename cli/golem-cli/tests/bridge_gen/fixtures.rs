@@ -15,240 +15,171 @@
 use crate::workspace_path;
 use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
-use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
-    ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-    NamedElementSchemas, Snapshotting, TextDescriptor,
-};
-use golem_wasm::analysis::analysed_type::{
-    case, r#enum, field, list, option, record, str, u32, unit_case, variant,
+use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::schema::{
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, MetadataEnvelope,
+    NamedField, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaTypeDef, TypeId,
+    VariantCaseType,
 };
 
-pub fn single_agent_wrapper_types() -> Vec<AgentType> {
-    vec![AgentType {
-        type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
+pub fn field(name: impl Into<String>, schema: SchemaType) -> NamedField {
+    NamedField::user_supplied(name, schema)
+}
+
+pub fn named_field(name: impl Into<String>, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.into(),
+        body,
+        metadata: MetadataEnvelope::default(),
+    }
+}
+
+pub fn variant_case(name: impl Into<String>, payload: Option<SchemaType>) -> VariantCaseType {
+    VariantCaseType {
+        name: name.into(),
+        payload,
+        metadata: MetadataEnvelope::default(),
+    }
+}
+
+pub fn method(
+    name: impl Into<String>,
+    input: Vec<NamedField>,
+    output: Option<SchemaType>,
+) -> AgentMethodSchema {
+    AgentMethodSchema {
+        name: name.into(),
+        description: String::new(),
+        prompt_hint: None,
+        input_schema: InputSchema::parameters(input),
+        output_schema: output
+            .map(|t| OutputSchema::Single(Box::new(t)))
+            .unwrap_or(OutputSchema::Unit),
+        http_endpoint: Vec::new(),
+        read_only: None,
+    }
+}
+
+pub fn agent(
+    type_name: impl Into<String>,
+    source_language: impl Into<String>,
+    constructor: Vec<NamedField>,
+    methods: Vec<AgentMethodSchema>,
+    defs: Vec<SchemaTypeDef>,
+    mode: AgentMode,
+) -> AgentTypeSchema {
+    AgentTypeSchema {
+        type_name: AgentTypeName(type_name.into()),
         description: "An example agent".to_string(),
-        source_language: String::new(),
-        constructor: AgentConstructor {
+        source_language: source_language.into(),
+        schema: SchemaGraph {
+            defs,
+            root: SchemaType::record(vec![]),
+        },
+        constructor: AgentConstructorSchema {
             name: None,
             description: "Creates an example agent instance".into(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![
-                    NamedElementSchema {
-                        name: "a".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: u32(),
-                        }),
-                    },
-                    NamedElementSchema {
-                        name: "b".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: option(str()),
-                        }),
-                    },
-                ],
-            }),
+            input_schema: InputSchema::parameters(constructor),
         },
-        methods: vec![
-            AgentMethod {
-                name: "f1".to_string(),
-                description: "returns a random string".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-                output_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "a".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: str(),
-                        }),
-                    }],
-                }),
-                http_endpoint: Vec::new(),
-                read_only: None,
-            },
-            AgentMethod {
-                name: "f2".to_string(),
-                description: "adds two numbers".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "x".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "y".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        },
-                    ],
-                }),
-                output_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "return".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: u32(),
-                        }),
-                    }],
-                }),
-                http_endpoint: Vec::new(),
-                read_only: None,
-            },
-        ],
+        methods,
         dependencies: vec![],
-        mode: AgentMode::Durable,
+        mode,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
         config: Vec::new(),
-    }]
+    }
 }
 
-pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
-    let color = r#enum(&["red", "green", "blue"]).named("color");
-
-    let person = record(vec![
-        field("first-name", str()),
-        field("last-name", str()),
-        field("age", option(u32())),
-        field("eye-color", color.clone()),
-    ])
-    .named("person");
-
-    let location = variant(vec![
-        case("home", str()),
-        case("work", str()),
-        unit_case("unknown"),
-    ])
-    .named("location");
-
-    let agent_types = vec![
-        AgentType {
-            type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
-            description: "An example agent".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "Creates an example agent instance".into(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "person".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: person.clone(),
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "description".to_string(),
-                            schema: ElementSchema::UnstructuredText(TextDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "photo".to_string(),
-                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![AgentMethod {
-                name: "f1".to_string(),
-                description: "returns a location".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-                output_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "return".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: location.clone(),
-                        }),
-                    }],
-                }),
-                http_endpoint: Vec::new(),
-                read_only: None,
-            }],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-        AgentType {
-            type_name: golem_common::model::agent::AgentTypeName("agent2".to_string()),
-            description: "Another example agent".to_string(),
-            source_language: String::new(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "Creates another example agent instance".into(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![NamedElementSchema {
-                        name: "person-group".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: list(person),
-                        }),
-                    }],
-                }),
-            },
-            methods: vec![AgentMethod {
-                name: "f2".to_string(),
-                description: "takes a location or a color and returns a text or an image"
-                    .to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Multimodal(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "place".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: location,
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "color".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: color,
-                            }),
-                        },
-                    ],
-                }),
-                output_schema: DataSchema::Multimodal(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "text".to_string(),
-                            schema: ElementSchema::UnstructuredText(TextDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "image".to_string(),
-                            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                                restrictions: None,
-                            }),
-                        },
-                    ],
-                }),
-                http_endpoint: Vec::new(),
-                read_only: None,
-            }],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: Vec::new(),
-        },
-    ];
-
-    agent_types
+pub fn def(id: impl Into<String>, body: SchemaType) -> SchemaTypeDef {
+    SchemaTypeDef {
+        id: TypeId::new(id),
+        name: None,
+        body,
+    }
 }
 
-// Use `cargo make cli-integration-tests-update-golden-files` to update the reference extracted types
-pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentType> {
+pub fn ref_to(id: impl Into<String>) -> SchemaType {
+    SchemaType::ref_to(TypeId::new(id))
+}
+
+pub fn single_agent_wrapper_types() -> Vec<AgentTypeSchema> {
+    vec![agent(
+        "agent1",
+        "",
+        vec![
+            field("a", SchemaType::u32()),
+            field("b", SchemaType::option(SchemaType::string())),
+        ],
+        vec![
+            method("f1", vec![], Some(SchemaType::string())),
+            method(
+                "f2",
+                vec![field("x", SchemaType::u32()), field("y", SchemaType::u32())],
+                Some(SchemaType::u32()),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    )]
+}
+
+pub fn multi_agent_wrapper_2_types() -> Vec<AgentTypeSchema> {
+    let color = def(
+        "color",
+        SchemaType::r#enum(vec!["red".into(), "green".into(), "blue".into()]),
+    );
+    let person = def(
+        "person",
+        SchemaType::record(vec![
+            named_field("first-name", SchemaType::string()),
+            named_field("last-name", SchemaType::string()),
+            named_field("age", SchemaType::option(SchemaType::u32())),
+            named_field("eye-color", ref_to("color")),
+        ]),
+    );
+    let location = def(
+        "location",
+        SchemaType::variant(vec![
+            variant_case("home", Some(SchemaType::string())),
+            variant_case("work", Some(SchemaType::string())),
+            variant_case("unknown", None),
+        ]),
+    );
+
+    vec![
+        agent(
+            "agent1",
+            "",
+            vec![
+                field("person", ref_to("person")),
+                field("description", SchemaType::string()),
+                field("photo", SchemaType::list(SchemaType::u8())),
+            ],
+            vec![method("f1", vec![], Some(ref_to("location")))],
+            vec![color.clone(), person.clone(), location.clone()],
+            AgentMode::Durable,
+        ),
+        agent(
+            "agent2",
+            "",
+            vec![field("person-group", SchemaType::list(ref_to("person")))],
+            vec![method(
+                "f2",
+                vec![
+                    field("place", ref_to("location")),
+                    field("color", ref_to("color")),
+                ],
+                Some(SchemaType::string()),
+            )],
+            vec![color, person, location],
+            AgentMode::Durable,
+        ),
+    ]
+}
+
+#[allow(dead_code)]
+pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentTypeSchema> {
     let goldenfile = workspace_path()
         .join("cli/golem-cli/test-data/goldenfiles/extracted-agent-types")
         .join(format!("code_first_snippets_{}.json", language.id()));
@@ -261,14 +192,16 @@ pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentType
     })
 }
 
-pub fn code_first_snippets_agent_type(language: GuestLanguage, agent_name: &str) -> AgentType {
+pub fn code_first_snippets_agent_type(
+    language: GuestLanguage,
+    agent_name: &str,
+) -> AgentTypeSchema {
     code_first_snippets_agent_types(language)
         .into_iter()
         .find(|t| t.type_name.0 == agent_name)
         .unwrap_or_else(|| {
             panic!(
-                "Agent type {} not found in {} extracted code first snippets goldenfile",
-                agent_name, language
+                "Agent type {agent_name} not found in {language} extracted code first snippets goldenfile"
             )
         })
 }

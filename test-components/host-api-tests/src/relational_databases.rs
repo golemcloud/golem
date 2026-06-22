@@ -5,10 +5,10 @@ use golem_rust::bindings::golem::rdbms::postgres::{
     DbColumnType as PostgresDbColumnType, DbConnection as PostgresDbConnection,
     DbRow as PostgresDbRow, DbValue as PostgresDbValue, LazyDbValue as PostgresLazyDbValue,
 };
-use golem_rust::{Schema, agent_definition, agent_implementation};
+use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Schema, Serialize, Deserialize)]
+#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct Statement {
     pub statement: String,
     pub params: Vec<String>,
@@ -16,14 +16,14 @@ pub struct Statement {
     pub sleep: Option<u64>,
 }
 
-#[derive(Clone, Debug, Schema, Serialize, Deserialize)]
+#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub enum StatementAction {
     Execute,
     Query,
     QueryStream,
 }
 
-#[derive(Clone, Debug, Schema, Serialize, Deserialize)]
+#[derive(Clone, Debug, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub enum TransactionEnd {
     Commit,
     Rollback,

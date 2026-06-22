@@ -31,7 +31,7 @@ use golem_common::base_model::component_metadata::{
     AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
-use golem_common::model::agent::{AgentConfigSource, AgentType};
+use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
@@ -51,12 +51,14 @@ use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentNa
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_common::schema::SchemaValue;
+use golem_common::schema::agent::{AgentTypeSchema, typed_schema_value_with_projected_defs};
+use golem_common::schema::render::from_json_value;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -314,9 +316,12 @@ impl ComponentWriteService {
         let agent_types_changed = component_update.agent_types.is_some();
         let allow_incompatible_config = component_update.allow_incompatible_config;
 
-        let agent_types = component_update
-            .agent_types
-            .unwrap_or(component.metadata.agent_types().to_vec());
+        // When no agent type update is supplied, fall back to the schema-native
+        // agent types already stored on the existing component metadata.
+        let agent_types = match component_update.agent_types {
+            Some(agent_types) => agent_types,
+            None => component.metadata.agent_types().to_vec(),
+        };
 
         let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
         if agent_types_changed {
@@ -700,7 +705,7 @@ impl ComponentWriteService {
         existing: AgentTypeProvisionConfig,
         update: AgentTypeProvisionConfigUpdate,
         uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
@@ -836,7 +841,7 @@ fn resolve_plugins_for_creation(
 }
 
 fn validate_and_transform_config_entries(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_entries: Vec<AgentConfigEntryDto>,
 ) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
     validate_agent_config_declarations(agent_type)?;
@@ -863,13 +868,29 @@ fn validate_and_transform_config_entries(
             );
         }
 
-        let value =
-            ValueAndType::parse_with_type(&config_value.value.0, &matching_declaration.value_type)
-                .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+        // The DTO carries the config value as plain user JSON. Decode it
+        // (schema-guided) against the agent graph and the declaration's
+        // schema-native `value_type` (refs resolve through the agent's `defs`),
+        // validate it, then store a self-contained `TypedSchemaValue` whose defs
+        // are projected to exactly those reachable from `value_type`.
+        let declared_type = &matching_declaration.value_type;
+
+        let schema_value: SchemaValue =
+            from_json_value(&agent_type.schema, declared_type, &config_value.value.0).map_err(
+                |err| ComponentError::AgentConfigTypeMismatch {
                     agent: agent_type.type_name.clone(),
                     key: config_value.path.clone(),
-                    errors,
-                })?;
+                    errors: vec![format!("config value is not a valid schema value: {err}")],
+                },
+            )?;
+
+        validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
+            ComponentError::AgentConfigTypeMismatch {
+                agent: agent_type.type_name.clone(),
+                key: config_value.path.clone(),
+                errors: errors.iter().map(|e| e.to_string()).collect(),
+            }
+        })?;
 
         if !seen_keys.insert(config_value.path.clone()) {
             return Err(ComponentError::AgentConfigDuplicateValue {
@@ -877,6 +898,12 @@ fn validate_and_transform_config_entries(
                 path: config_value.path,
             });
         }
+
+        let value = typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            matching_declaration.value_type.clone(),
+            schema_value,
+        );
 
         results.push(TypedAgentConfigEntry {
             path: config_value.path,
@@ -888,7 +915,7 @@ fn validate_and_transform_config_entries(
 }
 
 fn check_config_entries_match(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config: &[TypedAgentConfigEntry],
 ) -> Result<(), ComponentError> {
     validate_agent_config_declarations(agent_type)?;
@@ -912,7 +939,25 @@ fn check_config_entries_match(
             );
         };
 
-        if entry.value.typ != matching_declaration.value_type {
+        // Strict compatibility gate. The stored config value is positional
+        // (records/variants carry no field/case names at runtime), so it may
+        // only be reinterpreted under the updated declaration when the two
+        // types are *structurally identical*. Field/case renames, reorderings
+        // and width changes are rejected because they would silently change
+        // the meaning of the stored value even though it would still
+        // "validate" against the new shape. The comparison is cross-graph so
+        // the stored value's own graph is compared against the updated agent
+        // graph, and coinductive so recursive types terminate.
+        // Compare the stored value's own graph against the updated agent graph
+        // plus the borrowed declared `value_type`; `is_equivalent_cross_graph`
+        // resolves refs through `defs` and never reads `graph.root`, so there is
+        // no need to clone the agent's whole `defs` into a temporary graph.
+        if !is_equivalent_cross_graph(
+            entry.value.graph(),
+            entry.value.root_type(),
+            &agent_type.schema,
+            &matching_declaration.value_type,
+        ) {
             return Err(ComponentError::AgentConfigOldConfigNotValid {
                 agent: agent_type.type_name.clone(),
                 key: entry.path.clone(),
@@ -923,7 +968,7 @@ fn check_config_entries_match(
 }
 
 async fn analyze_and_validate_component_wasm(
-    agent_types: Vec<AgentType>,
+    agent_types: Vec<AgentTypeSchema>,
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> Result<ComponentMetadata, ComponentError> {
@@ -940,7 +985,7 @@ async fn analyze_and_validate_component_wasm(
 }
 
 fn provision_configs_for_agent_types(
-    agent_types: &[AgentType],
+    agent_types: &[AgentTypeSchema],
     provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
     let agent_type_names = agent_types
@@ -955,7 +1000,7 @@ fn provision_configs_for_agent_types(
 }
 
 fn default_initial_permissions(
-    agent_types: &[AgentType],
+    agent_types: &[AgentTypeSchema],
     environment_name: &EnvironmentName,
     component_name: &ComponentName,
 ) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
@@ -1012,7 +1057,7 @@ fn authorize_component_permission(
     }))
 }
 
-fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
+fn validate_agent_config_declarations(agent_type: &AgentTypeSchema) -> Result<(), ComponentError> {
     for declaration in &agent_type.config {
         validate_agent_config_path(&agent_type.type_name, &declaration.path)?;
     }

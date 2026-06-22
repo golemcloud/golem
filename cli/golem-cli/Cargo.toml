@@ -31,7 +31,6 @@ harness = false
 [dependencies]
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-wasm = { workspace = true, default-features = true }
 
 # External deps
 anyhow = { workspace = true }
@@ -132,7 +131,6 @@ windows-sys = { workspace = true }
 axum = { workspace = true }
 expectrl = { workspace = true }
 goldenfile = { workspace = true }
-golem-wasm = { workspace = true, features = ["proptest"] }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }

@@ -18,6 +18,9 @@ package golem.host
 
 import golem.HostApi
 import golem.host.js._
+import golem.host.js.schema.JsTypedSchemaValue
+import golem.schema.{IntoSchema, TypedSchemaValue}
+import golem.schema.wire.SchemaWire
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
@@ -31,14 +34,14 @@ import scala.scalajs.js.annotation.JSImport
  *   record durable-execution-state { is-live: bool, persistence-level: persistence-level }
  *   enum oplog-entry-version { v1, v2 }
  *   record persisted-durable-function-invocation {
- *     timestamp: datetime, function-name: string, response: value-and-type,
+ *     timestamp: datetime, function-name: string, response: typed-schema-value,
  *     function-type: durable-function-type, entry-version: oplog-entry-version
  *   }
  *   observe-function-call: func(iface: string, function: string)
  *   begin-durable-function: func(function-type: durable-function-type) -> oplog-index
  *   end-durable-function: func(function-type: durable-function-type, begin-index: oplog-index, forced-commit: bool)
  *   current-durable-execution-state: func() -> durable-execution-state
- *   persist-durable-function-invocation: func(function-name: string, request: value-and-type, response: value-and-type, function-type: durable-function-type)
+ *   persist-durable-function-invocation: func(function-name: string, request: typed-schema-value, response: typed-schema-value, function-type: durable-function-type)
  *   read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation
  * }}}
  */
@@ -126,7 +129,7 @@ object DurabilityApi {
   final case class PersistedDurableFunctionInvocation(
     timestamp: Datetime,
     functionName: String,
-    response: WitValueTypes.ValueAndType,
+    response: TypedSchemaValue,
     functionType: DurableFunctionType,
     entryVersion: OplogEntryVersion
   )
@@ -173,15 +176,33 @@ object DurabilityApi {
 
   def persistDurableFunctionInvocation(
     functionName: String,
-    request: WitValueTypes.ValueAndType,
-    response: WitValueTypes.ValueAndType,
+    request: TypedSchemaValue,
+    response: TypedSchemaValue,
     functionType: DurableFunctionType
   ): Unit =
     DurabilityModule.persistDurableFunctionInvocation(
       functionName,
-      WitValueTypes.ValueAndType.toJs(request),
-      WitValueTypes.ValueAndType.toJs(response),
+      typedToJs(request),
+      typedToJs(response),
       DurableFunctionType.toJs(functionType)
+    )
+
+  /**
+   * Schema-bounded convenience over [[persistDurableFunctionInvocation]]: the
+   * `request` / `response` values are encoded into self-contained
+   * [[TypedSchemaValue]]s via their [[IntoSchema]] instances.
+   */
+  def persistDurableFunctionInvocation[A, B](
+    functionName: String,
+    request: A,
+    response: B,
+    functionType: DurableFunctionType
+  )(implicit requestSchema: IntoSchema[A], responseSchema: IntoSchema[B]): Unit =
+    persistDurableFunctionInvocation(
+      functionName,
+      requestSchema.toTyped(request),
+      responseSchema.toTyped(response),
+      functionType
     )
 
   def readPersistedDurableFunctionInvocation(): PersistedDurableFunctionInvocation = {
@@ -190,11 +211,17 @@ object DurabilityApi {
     val ts        = raw.timestamp
     val timestamp = Datetime(BigInt(ts.seconds.toString), ts.nanoseconds)
     val funcName  = raw.functionName
-    val response  = WitValueTypes.ValueAndType.fromJs(raw.response)
+    val response  = typedFromJs(raw.response)
     val funcType  = DurableFunctionType.fromJs(raw.functionType)
     val entryVer  = OplogEntryVersion.fromString(raw.entryVersion)
     PersistedDurableFunctionInvocation(timestamp, funcName, response, funcType, entryVer)
   }
+
+  private def typedToJs(tv: TypedSchemaValue): JsTypedSchemaValue =
+    SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(tv))
+
+  private def typedFromJs(value: JsTypedSchemaValue): TypedSchemaValue =
+    SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value))
 
   def raw: Any = DurabilityModule
 }

@@ -18,7 +18,10 @@ package golem.host
 
 import golem.HostApi
 import golem.host.js._
+import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.rpc.host.AgentHostApi
+import golem.schema.TypedSchemaValue
+import golem.schema.wire.SchemaWire
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
@@ -60,8 +63,8 @@ object OplogApi {
   final case class HostCallParameters(
     timestamp: ContextApi.DateTime,
     functionName: String,
-    request: WitValueTypes.ValueAndType,
-    response: WitValueTypes.ValueAndType,
+    request: TypedSchemaValue,
+    response: TypedSchemaValue,
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
 
@@ -69,21 +72,21 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
     functionName: String,
-    request: Option[WitValueTypes.ValueAndType],
+    request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
 
   final case class EndParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
-    response: Option[WitValueTypes.ValueAndType],
+    response: Option[TypedSchemaValue],
     forcedCommit: Boolean
   )
 
   final case class CancelledParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
-    partial: Option[WitValueTypes.ValueAndType]
+    partial: Option[TypedSchemaValue]
   )
 
   final case class LocalSpanData(
@@ -103,20 +106,10 @@ object OplogApi {
     final case class ExternalSpan(data: ExternalSpanData) extends SpanData
   }
 
-  final case class TypedDataValue(value: String, schema: String)
-
-  object TypedDataValue {
-    def fromJs(raw: JsTypedDataValue): TypedDataValue =
-      TypedDataValue(
-        value = js.JSON.stringify(raw.value.asInstanceOf[js.Any]),
-        schema = js.JSON.stringify(raw.schema.asInstanceOf[js.Any])
-      )
-  }
-
   final case class AgentInvocationStartedParameters(
     timestamp: ContextApi.DateTime,
     functionName: String,
-    request: List[TypedDataValue],
+    request: List[TypedSchemaValue],
     idempotencyKey: String,
     traceId: String,
     traceStates: List[String],
@@ -125,7 +118,7 @@ object OplogApi {
 
   final case class AgentInvocationFinishedParameters(
     timestamp: ContextApi.DateTime,
-    response: Option[TypedDataValue],
+    response: Option[TypedSchemaValue],
     consumedFuel: Long
   )
 
@@ -173,7 +166,7 @@ object OplogApi {
   final case class AgentMethodInvocationParameters(
     idempotencyKey: String,
     functionName: String,
-    input: Option[List[TypedDataValue]],
+    input: Option[List[TypedSchemaValue]],
     traceId: String,
     traceStates: List[String],
     invocationContext: List[List[SpanData]]
@@ -589,6 +582,9 @@ object OplogApi {
   // Parsing helpers
   // ---------------------------------------------------------------------------
 
+  private def typedFromJs(value: JsTypedSchemaValue): TypedSchemaValue =
+    SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value))
+
   private def parseDateTime(raw: JsDatetime): ContextApi.DateTime = {
     val secs  = BigInt(raw.seconds.toString)
     val nanos = raw.nanoseconds.toInt
@@ -626,8 +622,8 @@ object OplogApi {
     HostCallParameters(
       timestamp = parseDateTime(raw.timestamp),
       functionName = raw.functionName,
-      request = WitValueTypes.ValueAndType.fromJs(raw.request),
-      response = WitValueTypes.ValueAndType.fromJs(raw.response),
+      request = typedFromJs(raw.request),
+      response = typedFromJs(raw.response),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
@@ -636,7 +632,7 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
       functionName = raw.functionName,
-      request = raw.request.toOption.map(WitValueTypes.ValueAndType.fromJs),
+      request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
@@ -644,7 +640,7 @@ object OplogApi {
     EndParameters(
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
-      response = raw.response.toOption.map(WitValueTypes.ValueAndType.fromJs),
+      response = raw.response.toOption.map(typedFromJs),
       forcedCommit = raw.forcedCommit
     )
 
@@ -652,7 +648,7 @@ object OplogApi {
     CancelledParameters(
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
-      partial = raw.partial.toOption.map(WitValueTypes.ValueAndType.fromJs)
+      partial = raw.partial.toOption.map(typedFromJs)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =
@@ -694,7 +690,7 @@ object OplogApi {
           request = {
             val fi = p.functionInput.asInstanceOf[js.Any]
             if (js.isUndefined(fi) || fi == null) Nil
-            else List(TypedDataValue.fromJs(fi.asInstanceOf[JsTypedDataValue]))
+            else List(typedFromJs(fi.asInstanceOf[JsTypedSchemaValue]))
           },
           idempotencyKey = p.idempotencyKey,
           traceId = p.traceId,
@@ -764,7 +760,7 @@ object OplogApi {
       case "agent-initialization" | "agent-method" =>
         val p =
           result.asInstanceOf[JsAgentInvocationResultWithValue].value.asInstanceOf[JsAgentInvocationOutputParameters]
-        Some(TypedDataValue.fromJs(p.output))
+        Some(typedFromJs(p.output))
       case _ => None
     }
     AgentInvocationFinishedParameters(
@@ -842,7 +838,7 @@ object OplogApi {
           AgentMethodInvocationParameters(
             idempotencyKey = p.idempotencyKey,
             functionName = p.methodName,
-            input = Some(List(TypedDataValue.fromJs(p.functionInput))),
+            input = Some(List(typedFromJs(p.functionInput))),
             traceId = p.traceId,
             traceStates = p.traceStates.toList,
             invocationContext = parseSpanDataLists(p.invocationContext)

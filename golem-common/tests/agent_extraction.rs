@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use assert2::assert;
-use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use std::path::PathBuf;
 use std::str::FromStr;
 use test_r::test;
@@ -21,8 +21,8 @@ use test_r::test;
 test_r::enable!();
 
 #[test]
-async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
-    let result = extract_agent_types(
+async fn can_extract_agent_type_schemas_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
+    let result = extract_agent_type_schemas(
         &PathBuf::from_str("../test-components/golem_it_agent_rpc_rust_release.wasm")?,
         false,
         false,
@@ -33,8 +33,8 @@ async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Re
 }
 
 #[test]
-async fn can_extract_agent_types_2() -> anyhow::Result<()> {
-    let result = extract_agent_types(
+async fn can_extract_agent_type_schemas_2() -> anyhow::Result<()> {
+    let result = extract_agent_type_schemas(
         &PathBuf::from_str("../test-components/golem_it_agent_rpc.wasm")?,
         false,
         false,

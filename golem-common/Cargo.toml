@@ -17,13 +17,21 @@ harness = false
 [features]
 default = ["full"]
 
-client = ["golem-wasm/client"]
+client = []
 # Exposes `schema::proptest_strategies` (proptest generators for SchemaType /
 # SchemaValue / SchemaGraph) to downstream crates' test code.
-proptest = ["dep:proptest"]
+proptest = ["dep:proptest", "golem-schema/proptest"]
 full = [
     "client",
-    "golem-wasm/host",
+    "golem-schema/bigdecimal",
+    "golem-schema/bit_vec",
+    "golem-schema/chrono",
+    "golem-schema/full",
+    "golem-schema/host",
+    "golem-schema/mac_address",
+    "golem-schema/nonempty_collections",
+    "golem-schema/serde_json_types",
+    "golem-schema/url",
     "dep:golem-api-grpc",
     "dep:applying",
     "dep:console-subscriber",
@@ -66,9 +74,8 @@ full = [
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
+golem-schema = { workspace = true }
 golem-schema-derive = { workspace = true }
-golem-wasm = { workspace = true, default-features = false }
-golem-wasm-derive = { workspace = true }
 proptest = { workspace = true, optional = true }
 
 anyhow = { workspace = true }
@@ -159,12 +166,16 @@ harness = false
 name = "structural_format"
 harness = false
 
+[[bench]]
+name = "invocation_hotpath"
+harness = false
+
 [dev-dependencies]
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 criterion = { workspace = true }
 futures = { workspace = true }
-golem-wasm = { workspace = true, features = ["proptest"] }
+golem-schema = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }
 indoc = { workspace = true }
 jsonschema = { workspace = true }

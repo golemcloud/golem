@@ -30,19 +30,15 @@
 //! backs `components/schemas` emission.
 
 use super::call_agent;
-use golem_common::base_model::agent::{
-    BinaryDescriptor, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchemas,
-    TextDescriptor,
-};
-use golem_common::schema::adapters::{
-    SchemaAdapterError, SchemaGraphBuilder, analysed_type_to_schema_type_inline,
-};
+use golem_common::schema::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType, TextRestrictions};
+use golem_common::schema::merge_agent_graphs;
+use golem_common::schema::multimodal::is_multimodal_schema_type;
+use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, PathSegment, QueryOrHeaderType, RequestBodySchema,
+    CallAgentBehaviour, CompiledOutputSchema, PathSegment, QueryOrHeaderType, RequestBodySchema,
 };
-use golem_wasm::analysis::AnalysedType;
 
 /// Schema-model view of an entire set of compiled routes, ready for the
 /// OpenAPI emitter.
@@ -118,15 +114,18 @@ pub enum ResponseModel {
 /// Lower every schema-bearing field of every route into the new schema model.
 pub fn build_document_schema(
     routes: &[super::super::RichCompiledRoute],
-) -> Result<DocumentSchema, SchemaAdapterError> {
-    let mut builder = SchemaGraphBuilder::new();
+) -> Result<DocumentSchema, String> {
     let mut per_route = Vec::with_capacity(routes.len());
+    // Every per-route compiled schema already carries the full per-agent
+    // `SchemaGraph` defs; merging them deduplicates by `TypeId` into one
+    // document-wide graph that backs `components/schemas`.
+    let mut graphs: Vec<SchemaGraph> = Vec::new();
 
     for route in routes {
-        let request_body = lower_request_body(&mut builder, &route.body)?;
+        let request_body = lower_request_body(&route.body, &mut graphs)?;
         let call_agent = match &route.behavior {
             super::super::RichRouteBehaviour::CallAgent(inner) => {
-                Some(lower_call_agent(&mut builder, &route.path, inner)?)
+                Some(lower_call_agent(&route.path, inner, &mut graphs)?)
             }
             _ => None,
         };
@@ -136,42 +135,70 @@ pub fn build_document_schema(
         });
     }
 
-    // The graph carries a registry of named defs reachable from every route;
-    // its `root` is unused (the emitter renders each route's individual roots
-    // against this graph), so a placeholder is used here.
-    let graph = builder.into_graph_with_root(SchemaType::bool());
+    // The merged graph carries the union of every route's named defs; its
+    // `root` is a sentinel (the emitter resolves each route's own roots —
+    // stored in the per-route models — against this graph's `defs`).
+    let graph = merge_agent_graphs(graphs).map_err(|err| match err {
+        golem_common::schema::MergeError::ConflictingDefinitions { id, .. } => {
+            format!("two distinct types registered under the same TypeId: {id}")
+        }
+    })?;
     Ok(DocumentSchema { graph, per_route })
 }
 
+/// Lower a request body schema, contributing any named composites it
+/// references to `graphs` for the document-wide merge.
 fn lower_request_body(
-    builder: &mut SchemaGraphBuilder,
     body: &RequestBodySchema,
-) -> Result<RequestBodyModel, SchemaAdapterError> {
+    graphs: &mut Vec<SchemaGraph>,
+) -> Result<RequestBodyModel, String> {
     Ok(match body {
         RequestBodySchema::Unused => RequestBodyModel::Unused,
-        RequestBodySchema::JsonBody { expected_type } => {
-            RequestBodyModel::Json(Box::new(builder.lower(expected_type)?))
+        RequestBodySchema::JsonBody { expected } => {
+            // The JSON body root may be (or reference) named composites; keep
+            // its graph so those refs resolve against the merged document graph.
+            graphs.push(expected.graph.clone());
+            RequestBodyModel::Json(Box::new(expected.graph.root.clone()))
         }
-        RequestBodySchema::UnrestrictedBinary => RequestBodyModel::UnrestrictedBinary,
-        RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
-            RequestBodyModel::RestrictedBinary {
-                mime_types: allowed_mime_types.clone(),
+        RequestBodySchema::BinaryBody { expected } => {
+            // The body root is either a canonical unstructured-binary
+            // `variant { inline, url }` wrapper or a bare `Binary` rich scalar;
+            // both carry the MIME restrictions on their (inline) binary type. An
+            // empty allow-list is treated as unrestricted (matching the runtime
+            // request decoder).
+            let restrictions = binary_body_restrictions(&expected.graph, &expected.graph.root)
+                .map_err(|e| e.to_string())?;
+            match &restrictions.mime_types {
+                Some(mime_types) if !mime_types.is_empty() => RequestBodyModel::RestrictedBinary {
+                    mime_types: mime_types.clone(),
+                },
+                _ => RequestBodyModel::UnrestrictedBinary,
             }
         }
-        RequestBodySchema::UnrestrictedText => RequestBodyModel::UnrestrictedText,
-        RequestBodySchema::RestrictedText {
-            allowed_language_codes,
-        } => RequestBodyModel::RestrictedText {
-            language_codes: allowed_language_codes.clone(),
-        },
+        RequestBodySchema::TextBody { expected } => {
+            // The body root is either a canonical unstructured-text
+            // `variant { inline, url }` wrapper or a bare `Text` rich scalar;
+            // both carry the language restrictions on their (inline) text type.
+            // An empty allow-list is treated as unrestricted.
+            let restrictions = text_body_restrictions(&expected.graph, &expected.graph.root)
+                .map_err(|e| e.to_string())?;
+            match &restrictions.languages {
+                Some(language_codes) if !language_codes.is_empty() => {
+                    RequestBodyModel::RestrictedText {
+                        language_codes: language_codes.clone(),
+                    }
+                }
+                _ => RequestBodyModel::UnrestrictedText,
+            }
+        }
     })
 }
 
 fn lower_call_agent(
-    builder: &mut SchemaGraphBuilder,
     path: &[PathSegment],
     inner: &CallAgentBehaviour,
-) -> Result<CallAgentRouteSchema, SchemaAdapterError> {
+    graphs: &mut Vec<SchemaGraph>,
+) -> Result<CallAgentRouteSchema, String> {
     let path_params = call_agent::get_path_variables_and_types(
         path,
         &inner.constructor_parameters,
@@ -182,22 +209,22 @@ fn lower_call_agent(
         Ok(PathParamSchema {
             name: name.to_string(),
             is_catchall,
-            schema: analysed_type_to_schema_type_inline(&AnalysedType::from(pst))?,
+            schema: SchemaType::from(pst),
         })
     })
-    .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+    .collect::<Result<Vec<_>, String>>()?;
 
     let query_params = call_agent::get_query_variable_and_types(&inner.method_parameters)
         .into_iter()
         .map(|(name, qoht)| lower_named_param(name, qoht))
-        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+        .collect::<Result<Vec<_>, String>>()?;
 
     let header_params = call_agent::get_header_variable_and_types(&inner.method_parameters)
         .into_iter()
         .map(|(name, qoht)| lower_named_param(name, qoht))
-        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+        .collect::<Result<Vec<_>, String>>()?;
 
-    let response = lower_response(builder, &inner.expected_agent_response)?;
+    let response = lower_response(&inner.expected_agent_response, graphs)?;
 
     Ok(CallAgentRouteSchema {
         path_params,
@@ -210,12 +237,11 @@ fn lower_call_agent(
 fn lower_named_param(
     name: &str,
     query_or_header_type: &QueryOrHeaderType,
-) -> Result<NamedParamSchema, SchemaAdapterError> {
+) -> Result<NamedParamSchema, String> {
     // `option<…>` query/header parameters are optional; everything else is
     // required. This matches the legacy "required = !nullable" rule.
     let required = !matches!(query_or_header_type, QueryOrHeaderType::Option { .. });
-    let schema =
-        analysed_type_to_schema_type_inline(&AnalysedType::from(query_or_header_type.clone()))?;
+    let schema = SchemaType::from(query_or_header_type.clone());
     Ok(NamedParamSchema {
         name: name.to_string(),
         schema,
@@ -223,49 +249,23 @@ fn lower_named_param(
     })
 }
 
+/// Lower a method's compiled output schema into the emitter response model,
+/// contributing its named composites to `graphs`.
 fn lower_response(
-    builder: &mut SchemaGraphBuilder,
-    expected: &DataSchema,
-) -> Result<ResponseModel, SchemaAdapterError> {
-    match expected {
-        DataSchema::Tuple(NamedElementSchemas { elements }) => match elements.as_slice() {
-            [] => Ok(ResponseModel::Unit),
-            [single] => lower_response_element(builder, &single.schema),
-            // Agent methods only ever return 0 or 1 element at runtime; a
-            // multi-element tuple is treated as opaque, as in the legacy
-            // emitter.
-            _ => Ok(ResponseModel::Unknown),
-        },
-        // Multimodal responses are rendered as opaque by the legacy emitter.
-        DataSchema::Multimodal(_) => Ok(ResponseModel::Unknown),
+    expected: &CompiledOutputSchema,
+    graphs: &mut Vec<SchemaGraph>,
+) -> Result<ResponseModel, String> {
+    match &expected.output_schema {
+        OutputSchema::Unit => Ok(ResponseModel::Unit),
+        OutputSchema::Single(ty) => {
+            // Multimodal responses are rendered opaque by the emitter, matching
+            // legacy behaviour.
+            if is_multimodal_schema_type(&expected.graph, ty).map_err(|e| e.to_string())? {
+                Ok(ResponseModel::Unknown)
+            } else {
+                graphs.push(expected.graph.clone());
+                Ok(ResponseModel::Single(Box::new((**ty).clone())))
+            }
+        }
     }
-}
-
-fn lower_response_element(
-    builder: &mut SchemaGraphBuilder,
-    element: &ElementSchema,
-) -> Result<ResponseModel, SchemaAdapterError> {
-    Ok(match element {
-        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-            ResponseModel::Single(Box::new(builder.lower(element_type)?))
-        }
-        ElementSchema::UnstructuredText(TextDescriptor { restrictions }) => {
-            let languages = restrictions
-                .as_ref()
-                .map(|r| r.iter().map(|t| t.language_code.clone()).collect());
-            ResponseModel::Single(Box::new(SchemaType::text(TextRestrictions {
-                languages,
-                ..Default::default()
-            })))
-        }
-        ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions }) => {
-            let mime_types = restrictions
-                .as_ref()
-                .map(|r| r.iter().map(|t| t.mime_type.clone()).collect());
-            ResponseModel::Single(Box::new(SchemaType::binary(BinaryRestrictions {
-                mime_types,
-                ..Default::default()
-            })))
-        }
-    })
 }

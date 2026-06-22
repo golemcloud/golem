@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package golem.worker;
 
-import "wasm/rpc/value_and_type.proto";
+import "golem/schema/schema.proto";
 
 message AgentConfigEntryDto {
   repeated string path = 1;
@@ -12,5 +12,5 @@ message AgentConfigEntryDto {
 
 message TypedAgentConfigEntry {
   repeated string path = 1;
-  wasm.rpc.ValueAndType value = 2;
+  golem.schema.TypedSchemaValue value = 2;
 }

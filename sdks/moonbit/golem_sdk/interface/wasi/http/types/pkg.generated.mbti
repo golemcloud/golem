@@ -5,7 +5,6 @@ import {
   "golemcloud/golem_sdk/interface/wasi/io/error",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
   "golemcloud/golem_sdk/interface/wasi/io/streams",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -52,26 +51,26 @@ pub(all) suberror ErrorCode {
   LoopDetected
   ConfigurationError
   InternalError(String?)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) suberror HeaderError {
   InvalidSyntax
   Forbidden
   Immutable
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Types and methods
 pub(all) struct DnsErrorPayload {
   rcode : String?
   info_code : UInt?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct FieldSizePayload {
   field_name : String?
   field_size : UInt?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct Fields(Int) derive(Eq, @debug.Debug)
+pub(all) struct Fields(Int) derive(Eq, Show)
 pub fn Fields::append(Self, String, FixedArray[Byte]) -> Result[Unit, HeaderError]
 pub fn Fields::clone(Self) -> Self
 pub fn Fields::delete(Self, String) -> Result[Unit, HeaderError]
@@ -83,22 +82,22 @@ pub fn Fields::get(Self, String) -> Array[FixedArray[Byte]]
 pub fn Fields::has(Self, String) -> Bool
 pub fn Fields::set(Self, String, Array[FixedArray[Byte]]) -> Result[Unit, HeaderError]
 
-pub(all) struct FutureIncomingResponse(Int) derive(Eq, @debug.Debug)
+pub(all) struct FutureIncomingResponse(Int) derive(Eq, Show)
 pub fn FutureIncomingResponse::drop(Self) -> Unit
 pub fn FutureIncomingResponse::get(Self) -> Result[Result[IncomingResponse, ErrorCode], Unit]?
 pub fn FutureIncomingResponse::subscribe(Self) -> @poll.Pollable
 
-pub(all) struct FutureTrailers(Int) derive(Eq, @debug.Debug)
+pub(all) struct FutureTrailers(Int) derive(Eq, Show)
 pub fn FutureTrailers::drop(Self) -> Unit
 pub fn FutureTrailers::get(Self) -> Result[Result[Fields?, ErrorCode], Unit]?
 pub fn FutureTrailers::subscribe(Self) -> @poll.Pollable
 
-pub(all) struct IncomingBody(Int) derive(Eq, @debug.Debug)
+pub(all) struct IncomingBody(Int) derive(Eq, Show)
 pub fn IncomingBody::drop(Self) -> Unit
 pub fn IncomingBody::finish(Self) -> FutureTrailers
 pub fn IncomingBody::stream(Self) -> Result[@streams.InputStream, Unit]
 
-pub(all) struct IncomingRequest(Int) derive(Eq, @debug.Debug)
+pub(all) struct IncomingRequest(Int) derive(Eq, Show)
 pub fn IncomingRequest::authority(Self) -> String?
 pub fn IncomingRequest::consume(Self) -> Result[IncomingBody, Unit]
 pub fn IncomingRequest::drop(Self) -> Unit
@@ -107,7 +106,7 @@ pub fn IncomingRequest::method_(Self) -> Method
 pub fn IncomingRequest::path_with_query(Self) -> String?
 pub fn IncomingRequest::scheme(Self) -> Scheme?
 
-pub(all) struct IncomingResponse(Int) derive(Eq, @debug.Debug)
+pub(all) struct IncomingResponse(Int) derive(Eq, Show)
 pub fn IncomingResponse::consume(Self) -> Result[IncomingBody, Unit]
 pub fn IncomingResponse::drop(Self) -> Unit
 pub fn IncomingResponse::headers(Self) -> Fields
@@ -124,14 +123,14 @@ pub(all) enum Method {
   Trace
   Patch
   Other(String)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct OutgoingBody(Int) derive(Eq, @debug.Debug)
+pub(all) struct OutgoingBody(Int) derive(Eq, Show)
 pub fn OutgoingBody::drop(Self) -> Unit
 pub fn OutgoingBody::finish(Self, Fields?) -> Result[Unit, ErrorCode]
 pub fn OutgoingBody::write(Self) -> Result[@streams.OutputStream, Unit]
 
-pub(all) struct OutgoingRequest(Int) derive(Eq, @debug.Debug)
+pub(all) struct OutgoingRequest(Int) derive(Eq, Show)
 pub fn OutgoingRequest::authority(Self) -> String?
 pub fn OutgoingRequest::body(Self) -> Result[OutgoingBody, Unit]
 pub fn OutgoingRequest::drop(Self) -> Unit
@@ -145,7 +144,7 @@ pub fn OutgoingRequest::set_method(Self, Method) -> Result[Unit, Unit]
 pub fn OutgoingRequest::set_path_with_query(Self, String?) -> Result[Unit, Unit]
 pub fn OutgoingRequest::set_scheme(Self, Scheme?) -> Result[Unit, Unit]
 
-pub(all) struct OutgoingResponse(Int) derive(Eq, @debug.Debug)
+pub(all) struct OutgoingResponse(Int) derive(Eq, Show)
 pub fn OutgoingResponse::body(Self) -> Result[OutgoingBody, Unit]
 pub fn OutgoingResponse::drop(Self) -> Unit
 pub fn OutgoingResponse::headers(Self) -> Fields
@@ -153,7 +152,7 @@ pub fn OutgoingResponse::outgoing_response(Fields) -> Self
 pub fn OutgoingResponse::set_status_code(Self, UInt) -> Result[Unit, Unit]
 pub fn OutgoingResponse::status_code(Self) -> UInt
 
-pub(all) struct RequestOptions(Int) derive(Eq, @debug.Debug)
+pub(all) struct RequestOptions(Int) derive(Eq, Show)
 pub fn RequestOptions::between_bytes_timeout(Self) -> UInt64?
 pub fn RequestOptions::connect_timeout(Self) -> UInt64?
 pub fn RequestOptions::drop(Self) -> Unit
@@ -163,7 +162,7 @@ pub fn RequestOptions::set_between_bytes_timeout(Self, UInt64?) -> Result[Unit, 
 pub fn RequestOptions::set_connect_timeout(Self, UInt64?) -> Result[Unit, Unit]
 pub fn RequestOptions::set_first_byte_timeout(Self, UInt64?) -> Result[Unit, Unit]
 
-pub(all) struct ResponseOutparam(Int) derive(Eq, @debug.Debug)
+pub(all) struct ResponseOutparam(Int) derive(Eq, Show)
 pub fn ResponseOutparam::drop(Self) -> Unit
 pub fn ResponseOutparam::set(Self, Result[OutgoingResponse, ErrorCode]) -> Unit
 
@@ -171,12 +170,12 @@ pub(all) enum Scheme {
   Http
   Https
   Other(String)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct TlsAlertReceivedPayload {
   alert_id : Byte?
   alert_message : String?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Type aliases
 

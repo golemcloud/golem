@@ -455,17 +455,23 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     // Phase 1: wait for the worker oplog to show all 4 completed invocations
     // (1 agent-initialization + 3 add calls).
+    //
+    // This is the first oplog-processor test to run in the group, so it pays the
+    // cold compilation cost of both the agent component and the oplog-processor
+    // plugin component. Plugin components embed the large wit-bindgen generated
+    // `oplog-entry` lifting code, whose cold compile time is high enough to
+    // exceed the default 120s waits; the budgets here are raised accordingly.
     wait_for_oplog_completions(
         &user,
         &worker_id,
         4,
-        Duration::from_secs(120),
+        Duration::from_secs(300),
         &received_batches,
     )
     .await;
 
     // E1: Wait for callbacks and verify function names + unique oplog indices
-    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
+    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(300)).await;
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 

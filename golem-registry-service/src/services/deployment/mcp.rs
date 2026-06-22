@@ -5,7 +5,6 @@ use crate::repo::security_scheme::SecuritySchemeRepo;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::schema::RegisteredAgentTypeSchema;
-use golem_common::schema::adapters::agent_type_to_schema;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -114,19 +113,10 @@ impl DeployedMcpService {
                             ))
                         })?;
 
-                    let legacy = RegisteredAgentType::from(deployed);
-                    let agent_type = agent_type_to_schema(&legacy.agent_type).map_err(|e| {
-                        DeployedMcpError::InternalError(anyhow::anyhow!(
-                            "Failed to convert agent type {} to schema model for domain {}: {}",
-                            agent_type_name.0,
-                            domain.0,
-                            e
-                        ))
-                    })?;
-
+                    let registered = RegisteredAgentType::from(deployed);
                     registered_agent_types.push(RegisteredAgentTypeSchema {
-                        agent_type,
-                        implemented_by: legacy.implemented_by,
+                        agent_type: registered.agent_type,
+                        implemented_by: registered.implemented_by,
                     });
                 }
                 compiled_mcp.registered_agent_types = registered_agent_types;

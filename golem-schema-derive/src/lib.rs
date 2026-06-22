@@ -65,3 +65,41 @@ pub fn derive_from_schema(input: TokenStream) -> TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
+
+/// Emits a schema-only `poem_openapi::types::Type` implementation whose
+/// registered `MetaSchema` mirrors the type's **serde** wire representation,
+/// while `ToJSON`/`ParseFromJSON` keep delegating to `serde_json` (so the wire
+/// format is unchanged). Unsupported serde attributes are rejected at compile
+/// time as a drift guard.
+///
+/// This derive only emits `poem_openapi::*` token paths and is meant to be
+/// gated behind the consuming crate's `full` feature, e.g.
+/// `#[cfg_attr(feature = "full", derive(PoemSchema))]`.
+#[proc_macro_derive(PoemSchema, attributes(serde))]
+pub fn derive_poem_schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    codegen::poem::expand_poem_schema(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro_derive(Schema, attributes(schema))]
+pub fn derive_schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let into_schema = expand::expand_into_schema(input.clone());
+    let from_schema = expand::expand_from_schema(input);
+
+    match (into_schema, from_schema) {
+        (Ok(into_schema), Ok(from_schema)) => quote::quote! {
+            #into_schema
+            #from_schema
+        }
+        .into(),
+        (Err(err), Ok(_)) | (Ok(_), Err(err)) => err.into_compile_error().into(),
+        (Err(mut first), Err(second)) => {
+            first.combine(second);
+            first.into_compile_error().into()
+        }
+    }
+}

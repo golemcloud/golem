@@ -34,7 +34,7 @@ use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::{AgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
@@ -48,6 +48,7 @@ use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionI
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
+use golem_common::schema::AgentTypeSchema;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -379,7 +380,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub owner_account_id: Uuid,
     pub owner_account_email: String,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
 }
 
 impl DeploymentRegisteredAgentTypeRecord {
@@ -444,7 +445,7 @@ pub struct DeploymentRegisteredAgentTypeScopedRecord {
     pub component_name: String,
     pub component_revision_id: i64,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
 }
 
 impl DeploymentRegisteredAgentTypeScopedRecord {
@@ -478,7 +479,7 @@ pub struct ResolvedAgentTypeRecord {
     pub component_name: String,
     pub component_revision_id: i64,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
     pub owner_account_id: Uuid,
     pub owner_account_email: String,
 }

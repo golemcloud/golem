@@ -10174,7 +10174,7 @@ components:
         idempotencyKey:
           type: string
         constructorParameters:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
         traceId:
           type: string
         traceStates:
@@ -10203,7 +10203,7 @@ components:
       type: object
       properties:
         output:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
       required:
       - output
     AgentInvocationRequest:
@@ -10216,15 +10216,13 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+        parameters: {}
         phantomId:
           type: string
           format: uuid
         methodName:
           type: string
-        methodParameters:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+        methodParameters: {}
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -10252,7 +10250,7 @@ components:
         agentId:
           $ref: '#/components/schemas/AgentId'
         result:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
         componentRevision:
           type: integer
           format: uint64
@@ -10370,7 +10368,7 @@ components:
         methodName:
           type: string
         functionInput:
-          $ref: '#/components/schemas/DataValue'
+          $ref: '#/components/schemas/TypedSchemaValue'
         traceId:
           type: string
         traceStates:
@@ -10493,325 +10491,6 @@ components:
       enum:
       - automatic
       - manual
-    AnalysedResourceMode:
-      type: string
-      enum:
-      - Owned
-      - Borrowed
-    AnalysedType:
-      discriminator:
-        propertyName: type
-        mapping:
-          Variant: '#/components/schemas/AnalysedType_TypeVariant'
-          Result: '#/components/schemas/AnalysedType_TypeResult'
-          Option: '#/components/schemas/AnalysedType_TypeOption'
-          Enum: '#/components/schemas/AnalysedType_TypeEnum'
-          Flags: '#/components/schemas/AnalysedType_TypeFlags'
-          Record: '#/components/schemas/AnalysedType_TypeRecord'
-          Tuple: '#/components/schemas/AnalysedType_TypeTuple'
-          List: '#/components/schemas/AnalysedType_TypeList'
-          Str: '#/components/schemas/AnalysedType_TypeStr'
-          Chr: '#/components/schemas/AnalysedType_TypeChr'
-          F64: '#/components/schemas/AnalysedType_TypeF64'
-          F32: '#/components/schemas/AnalysedType_TypeF32'
-          U64: '#/components/schemas/AnalysedType_TypeU64'
-          S64: '#/components/schemas/AnalysedType_TypeS64'
-          U32: '#/components/schemas/AnalysedType_TypeU32'
-          S32: '#/components/schemas/AnalysedType_TypeS32'
-          U16: '#/components/schemas/AnalysedType_TypeU16'
-          S16: '#/components/schemas/AnalysedType_TypeS16'
-          U8: '#/components/schemas/AnalysedType_TypeU8'
-          S8: '#/components/schemas/AnalysedType_TypeS8'
-          Bool: '#/components/schemas/AnalysedType_TypeBool'
-          Handle: '#/components/schemas/AnalysedType_TypeHandle'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/AnalysedType_TypeVariant'
-      - $ref: '#/components/schemas/AnalysedType_TypeResult'
-      - $ref: '#/components/schemas/AnalysedType_TypeOption'
-      - $ref: '#/components/schemas/AnalysedType_TypeEnum'
-      - $ref: '#/components/schemas/AnalysedType_TypeFlags'
-      - $ref: '#/components/schemas/AnalysedType_TypeRecord'
-      - $ref: '#/components/schemas/AnalysedType_TypeTuple'
-      - $ref: '#/components/schemas/AnalysedType_TypeList'
-      - $ref: '#/components/schemas/AnalysedType_TypeStr'
-      - $ref: '#/components/schemas/AnalysedType_TypeChr'
-      - $ref: '#/components/schemas/AnalysedType_TypeF64'
-      - $ref: '#/components/schemas/AnalysedType_TypeF32'
-      - $ref: '#/components/schemas/AnalysedType_TypeU64'
-      - $ref: '#/components/schemas/AnalysedType_TypeS64'
-      - $ref: '#/components/schemas/AnalysedType_TypeU32'
-      - $ref: '#/components/schemas/AnalysedType_TypeS32'
-      - $ref: '#/components/schemas/AnalysedType_TypeU16'
-      - $ref: '#/components/schemas/AnalysedType_TypeS16'
-      - $ref: '#/components/schemas/AnalysedType_TypeU8'
-      - $ref: '#/components/schemas/AnalysedType_TypeS8'
-      - $ref: '#/components/schemas/AnalysedType_TypeBool'
-      - $ref: '#/components/schemas/AnalysedType_TypeHandle'
-    AnalysedType_TypeBool:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Bool
-            type: string
-            enum:
-            - Bool
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeBool'
-    AnalysedType_TypeChr:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Chr
-            type: string
-            enum:
-            - Chr
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeChr'
-    AnalysedType_TypeEnum:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Enum
-            type: string
-            enum:
-            - Enum
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeEnum'
-    AnalysedType_TypeF32:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: F32
-            type: string
-            enum:
-            - F32
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeF32'
-    AnalysedType_TypeF64:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: F64
-            type: string
-            enum:
-            - F64
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeF64'
-    AnalysedType_TypeFlags:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Flags
-            type: string
-            enum:
-            - Flags
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeFlags'
-    AnalysedType_TypeHandle:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Handle
-            type: string
-            enum:
-            - Handle
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeHandle'
-    AnalysedType_TypeList:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: List
-            type: string
-            enum:
-            - List
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeList'
-    AnalysedType_TypeOption:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Option
-            type: string
-            enum:
-            - Option
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeOption'
-    AnalysedType_TypeRecord:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Record
-            type: string
-            enum:
-            - Record
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeRecord'
-    AnalysedType_TypeResult:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Result
-            type: string
-            enum:
-            - Result
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeResult'
-    AnalysedType_TypeS16:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S16
-            type: string
-            enum:
-            - S16
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS16'
-    AnalysedType_TypeS32:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S32
-            type: string
-            enum:
-            - S32
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS32'
-    AnalysedType_TypeS64:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S64
-            type: string
-            enum:
-            - S64
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS64'
-    AnalysedType_TypeS8:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: S8
-            type: string
-            enum:
-            - S8
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeS8'
-    AnalysedType_TypeStr:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Str
-            type: string
-            enum:
-            - Str
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeStr'
-    AnalysedType_TypeTuple:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Tuple
-            type: string
-            enum:
-            - Tuple
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeTuple'
-    AnalysedType_TypeU16:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U16
-            type: string
-            enum:
-            - U16
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU16'
-    AnalysedType_TypeU32:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U32
-            type: string
-            enum:
-            - U32
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU32'
-    AnalysedType_TypeU64:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U64
-            type: string
-            enum:
-            - U64
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU64'
-    AnalysedType_TypeU8:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: U8
-            type: string
-            enum:
-            - U8
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeU8'
-    AnalysedType_TypeVariant:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Variant
-            type: string
-            enum:
-            - Variant
-        required:
-        - type
-      - $ref: '#/components/schemas/TypeVariant'
     ApiAddDelayPolicy:
       title: ApiAddDelayPolicy
       type: object
@@ -11438,78 +11117,22 @@ components:
       required:
       - limitMs
       - inner
-    BinaryDescriptor:
-      title: BinaryDescriptor
+    BinaryRestrictions:
       type: object
       properties:
-        restrictions:
+        mime_types:
+          nullable: true
           type: array
           items:
-            $ref: '#/components/schemas/BinaryType'
-    BinaryReference:
-      discriminator:
-        propertyName: type
-        mapping:
-          Url: '#/components/schemas/BinaryReference_Url'
-          Inline: '#/components/schemas/BinaryReference_BinarySource'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/BinaryReference_Url'
-      - $ref: '#/components/schemas/BinaryReference_BinarySource'
-    BinaryReferenceValue:
-      title: BinaryReferenceValue
-      type: object
-      properties:
-        value:
-          $ref: '#/components/schemas/BinaryReference'
-      required:
-      - value
-    BinaryReference_BinarySource:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Inline
             type: string
-            enum:
-            - Inline
-        required:
-        - type
-      - $ref: '#/components/schemas/BinarySource'
-    BinaryReference_Url:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Url
-            type: string
-            enum:
-            - Url
-        required:
-        - type
-      - $ref: '#/components/schemas/Url'
-    BinarySource:
-      title: BinarySource
-      type: object
-      properties:
-        data:
-          type: array
-          items:
-            type: integer
-            format: uint8
-        binaryType:
-          $ref: '#/components/schemas/BinaryType'
-      required:
-      - data
-      - binaryType
-    BinaryType:
-      title: BinaryType
-      type: object
-      properties:
-        mimeType:
-          type: string
-      required:
-      - mimeType
+        min_bytes:
+          nullable: true
+          type: integer
+          format: uint32
+        max_bytes:
+          nullable: true
+          type: integer
+          format: uint32
     CancelInvocationResponse:
       title: CancelInvocationResponse
       type: object
@@ -11533,14 +11156,6 @@ components:
       required:
       - oplogIdx
       - data
-    ComponentModelElementValue:
-      title: ComponentModelElementValue
-      type: object
-      properties:
-        value:
-          $ref: '#/components/schemas/ValueAndType'
-      required:
-      - value
     CreateAgentRequest:
       title: CreateAgentRequest
       type: object
@@ -11551,8 +11166,7 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters:
-          $ref: '#/components/schemas/UntypedJsonDataValue'
+        parameters: {}
         phantomId:
           type: string
           format: uuid
@@ -11578,104 +11192,106 @@ components:
       required:
       - agentId
       - componentRevision
-    DataValue:
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/DataValue_ElementValues'
-          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DataValue_ElementValues'
-      - $ref: '#/components/schemas/DataValue_NamedElementValues'
-    DataValue_ElementValues:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Tuple
-            type: string
-            enum:
-            - Tuple
-        required:
-        - type
-      - $ref: '#/components/schemas/ElementValues'
-    DataValue_NamedElementValues:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Multimodal
-            type: string
-            enum:
-            - Multimodal
-        required:
-        - type
-      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginResponse:
       title: DeactivatePluginResponse
       type: object
     DeleteWorkerResponse:
       title: DeleteWorkerResponse
       type: object
-    ElementValue:
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/ElementValue_ComponentModelElementValue'
-          UnstructuredText: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
-          UnstructuredBinary: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
+    DiscriminatorRule:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/ElementValue_ComponentModelElementValue'
-      - $ref: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
-      - $ref: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
-    ElementValue_ComponentModelElementValue:
-      allOf:
       - type: object
         properties:
-          type:
-            example: ComponentModel
+          rule:
             type: string
             enum:
-            - ComponentModel
+            - prefix
+          value:
+            type: object
+            properties:
+              prefix:
+                type: string
+            required:
+            - prefix
         required:
-        - type
-      - $ref: '#/components/schemas/ComponentModelElementValue'
-    ElementValue_UnstructuredBinaryElementValue:
-      allOf:
+        - rule
+        - value
       - type: object
         properties:
-          type:
-            example: UnstructuredBinary
+          rule:
             type: string
             enum:
-            - UnstructuredBinary
+            - suffix
+          value:
+            type: object
+            properties:
+              suffix:
+                type: string
+            required:
+            - suffix
         required:
-        - type
-      - $ref: '#/components/schemas/UnstructuredBinaryElementValue'
-    ElementValue_UnstructuredTextElementValue:
-      allOf:
+        - rule
+        - value
       - type: object
         properties:
-          type:
-            example: UnstructuredText
+          rule:
             type: string
             enum:
-            - UnstructuredText
+            - contains
+          value:
+            type: object
+            properties:
+              substring:
+                type: string
+            required:
+            - substring
         required:
-        - type
-      - $ref: '#/components/schemas/UnstructuredTextElementValue'
-    ElementValues:
-      title: ElementValues
-      type: object
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/ElementValue'
-      required:
-      - elements
+        - rule
+        - value
+      - type: object
+        properties:
+          rule:
+            type: string
+            enum:
+            - regex
+          value:
+            type: object
+            properties:
+              regex:
+                type: string
+            required:
+            - regex
+        required:
+        - rule
+        - value
+      - type: object
+        properties:
+          rule:
+            type: string
+            enum:
+            - field-equals
+          value:
+            $ref: '#/components/schemas/FieldDiscriminator'
+        required:
+        - rule
+        - value
+      - type: object
+        properties:
+          rule:
+            type: string
+            enum:
+            - field-absent
+          value:
+            type: object
+            properties:
+              field_name:
+                type: string
+            required:
+            - field_name
+        required:
+        - rule
+        - value
     Empty:
       title: Empty
       type: object
@@ -11749,6 +11365,16 @@ components:
       properties:
         error:
           type: string
+    FieldDiscriminator:
+      type: object
+      properties:
+        field_name:
+          type: string
+        literal:
+          nullable: true
+          type: string
+      required:
+      - field_name
     FilterComparator:
       type: string
       enum:
@@ -11806,13 +11432,6 @@ components:
     InterruptResponse:
       title: InterruptResponse
       type: object
-    JsonComponentModelValue:
-      title: JsonComponentModelValue
-      type: object
-      properties:
-        value: {}
-      required:
-      - value
     JsonSnapshotData:
       title: JsonSnapshotData
       type: object
@@ -11849,6 +11468,28 @@ components:
           format: uint64
       required:
       - targetRevision
+    MetadataEnvelope:
+      type: object
+      properties:
+        doc:
+          nullable: true
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        examples:
+          type: array
+          items:
+            type: string
+        deprecated:
+          nullable: true
+          type: string
+        role:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/Role'
+          - nullable: true
     MultipartPartData:
       discriminator:
         propertyName: type
@@ -11910,52 +11551,18 @@ components:
       - name
       - contentType
       - data
-    NameOptionTypePair:
-      title: NameOptionTypePair
+    NamedFieldType:
       type: object
       properties:
         name:
           type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
+        body:
+          $ref: '#/components/schemas/SchemaType'
+        metadata:
+          $ref: '#/components/schemas/MetadataEnvelope'
       required:
       - name
-    NameTypePair:
-      title: NameTypePair
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-      - typ
-    NamedElementValue:
-      title: NamedElementValue
-      type: object
-      properties:
-        name:
-          type: string
-        value:
-          $ref: '#/components/schemas/ElementValue'
-        schemaIndex:
-          type: integer
-          format: uint32
-      required:
-      - name
-      - value
-      - schemaIndex
-    NamedElementValues:
-      title: NamedElementValues
-      type: object
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/NamedElementValue'
-      required:
-      - elements
+      - body
     NormalizedJsonValue:
       type: object
     OplogCursor:
@@ -11984,6 +11591,38 @@ components:
       required:
       - start
       - end
+    PathDirection:
+      type: string
+      enum:
+      - input
+      - output
+      - in-out
+    PathKind:
+      type: string
+      enum:
+      - file
+      - directory
+      - any
+    PathSpec:
+      type: object
+      properties:
+        direction:
+          $ref: '#/components/schemas/PathDirection'
+        kind:
+          $ref: '#/components/schemas/PathKind'
+        allowed_mime_types:
+          nullable: true
+          type: array
+          items:
+            type: string
+        allowed_extensions:
+          nullable: true
+          type: array
+          items:
+            type: string
+      required:
+      - direction
+      - kind
     PendingUpdate:
       title: PendingUpdate
       type: object
@@ -13222,6 +12861,23 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicTypedAgentConfigEntry:
+      title: PublicTypedAgentConfigEntry
+      description: |-
+        Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
+        schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
+        (poem/serde shape) and is produced at the public-oplog render edge.
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - path
+      - value
     PublicUpdateDescription:
       discriminator:
         propertyName: type
@@ -13256,6 +12912,48 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    QuantitySpec:
+      type: object
+      properties:
+        base_unit:
+          type: string
+        allowed_suffixes:
+          type: array
+          items:
+            type: string
+        min:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/QuantityValue'
+          - nullable: true
+        max:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/QuantityValue'
+          - nullable: true
+      required:
+      - base_unit
+    QuantityValue:
+      type: object
+      properties:
+        mantissa:
+          type: integer
+          format: int64
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
+      required:
+      - mantissa
+      - scale
+      - unit
+    QuotaTokenSpec:
+      type: object
+      properties:
+        resource_name:
+          nullable: true
+          type: string
     RawSnapshotData:
       title: RawSnapshotData
       type: object
@@ -13270,6 +12968,19 @@ components:
       required:
       - data
       - mimeType
+    ResultSpec:
+      type: object
+      properties:
+        ok:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
+        err:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
     ResumeResponse:
       title: ResumeResponse
       type: object
@@ -13328,6 +13039,44 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RevertToOplogIndex'
+    Role:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - multimodal
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - unstructured-text
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - unstructured-binary
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - other
+          value:
+            type: string
+        required:
+        - tag
+        - value
     SaveSnapshotResultParameters:
       title: SaveSnapshotResultParameters
       type: object
@@ -13349,6 +13098,648 @@ components:
       required:
       - cursor
       - layer
+    SchemaGraph:
+      type: object
+      properties:
+        defs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchemaTypeDef'
+        root:
+          $ref: '#/components/schemas/SchemaType'
+      required:
+      - root
+    SchemaType:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - ref
+          value:
+            type: object
+            properties:
+              id:
+                type: string
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - id
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s8
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s16
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s32
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s64
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u8
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u16
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u32
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u64
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - f32
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - f64
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - char
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - string
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - record
+          value:
+            type: object
+            properties:
+              fields:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NamedFieldType'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - fields
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - variant
+          value:
+            type: object
+            properties:
+              cases:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VariantCaseType'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - cases
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - enum
+          value:
+            type: object
+            properties:
+              cases:
+                type: array
+                items:
+                  type: string
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - cases
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - flags
+          value:
+            type: object
+            properties:
+              flags:
+                type: array
+                items:
+                  type: string
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - flags
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - tuple
+          value:
+            type: object
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchemaType'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - elements
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - list
+          value:
+            type: object
+            properties:
+              element:
+                $ref: '#/components/schemas/SchemaType'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - element
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - fixed-list
+          value:
+            type: object
+            properties:
+              element:
+                $ref: '#/components/schemas/SchemaType'
+              length:
+                type: integer
+                format: uint32
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - element
+            - length
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - map
+          value:
+            type: object
+            properties:
+              key:
+                $ref: '#/components/schemas/SchemaType'
+              value:
+                $ref: '#/components/schemas/SchemaType'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - key
+            - value
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - option
+          value:
+            type: object
+            properties:
+              inner:
+                $ref: '#/components/schemas/SchemaType'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - inner
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - result
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/ResultSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - text
+          value:
+            type: object
+            properties:
+              restrictions:
+                $ref: '#/components/schemas/TextRestrictions'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - restrictions
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - binary
+          value:
+            type: object
+            properties:
+              restrictions:
+                $ref: '#/components/schemas/BinaryRestrictions'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - restrictions
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - path
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/PathSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - url
+          value:
+            type: object
+            properties:
+              restrictions:
+                $ref: '#/components/schemas/UrlRestrictions'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - restrictions
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - datetime
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - duration
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - quantity
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/QuantitySpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - union
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/UnionSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - secret
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/SecretSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - quota-token
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/QuotaTokenSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - future
+          value:
+            type: object
+            properties:
+              inner:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/SchemaType'
+                - nullable: true
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - stream
+          value:
+            type: object
+            properties:
+              inner:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/SchemaType'
+                - nullable: true
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+    SchemaTypeDef:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          nullable: true
+          type: string
+        body:
+          $ref: '#/components/schemas/SchemaType'
+      required:
+      - id
+      - body
+    SchemaValue:
+      type: object
+    SecretSpec:
+      type: object
+      properties:
+        category:
+          nullable: true
+          type: string
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -13392,235 +13783,25 @@ components:
       required:
       - timestamp
       - targetRevision
-    TextDescriptor:
-      title: TextDescriptor
+    TextRestrictions:
       type: object
       properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/TextType'
-    TextReference:
-      discriminator:
-        propertyName: type
-        mapping:
-          Url: '#/components/schemas/TextReference_Url'
-          Inline: '#/components/schemas/TextReference_TextSource'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/TextReference_Url'
-      - $ref: '#/components/schemas/TextReference_TextSource'
-    TextReferenceValue:
-      title: TextReferenceValue
-      type: object
-      properties:
-        value:
-          $ref: '#/components/schemas/TextReference'
-      required:
-      - value
-    TextReference_TextSource:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Inline
-            type: string
-            enum:
-            - Inline
-        required:
-        - type
-      - $ref: '#/components/schemas/TextSource'
-    TextReference_Url:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Url
-            type: string
-            enum:
-            - Url
-        required:
-        - type
-      - $ref: '#/components/schemas/Url'
-    TextSource:
-      title: TextSource
-      type: object
-      properties:
-        data:
-          type: string
-        textType:
-          $ref: '#/components/schemas/TextType'
-      required:
-      - data
-    TextType:
-      title: TextType
-      type: object
-      properties:
-        languageCode:
-          type: string
-      required:
-      - languageCode
-    TypeBool:
-      title: TypeBool
-      type: object
-    TypeChr:
-      title: TypeChr
-      type: object
-    TypeEnum:
-      title: TypeEnum
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        cases:
+        languages:
+          nullable: true
           type: array
           items:
             type: string
-      required:
-      - cases
-    TypeF32:
-      title: TypeF32
-      type: object
-    TypeF64:
-      title: TypeF64
-      type: object
-    TypeFlags:
-      title: TypeFlags
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        names:
-          type: array
-          items:
-            type: string
-      required:
-      - names
-    TypeHandle:
-      title: TypeHandle
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        resource_id:
+        min_length:
+          nullable: true
           type: integer
-          format: uint64
-        mode:
-          $ref: '#/components/schemas/AnalysedResourceMode'
-      required:
-      - resource_id
-      - mode
-    TypeList:
-      title: TypeList
-      type: object
-      properties:
-        name:
+          format: uint32
+        max_length:
+          nullable: true
+          type: integer
+          format: uint32
+        regex:
+          nullable: true
           type: string
-        owner:
-          type: string
-        inner:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - inner
-    TypeOption:
-      title: TypeOption
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        inner:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - inner
-    TypeRecord:
-      title: TypeRecord
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        fields:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameTypePair'
-      required:
-      - fields
-    TypeResult:
-      title: TypeResult
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        ok:
-          $ref: '#/components/schemas/AnalysedType'
-        err:
-          $ref: '#/components/schemas/AnalysedType'
-    TypeS16:
-      title: TypeS16
-      type: object
-    TypeS32:
-      title: TypeS32
-      type: object
-    TypeS64:
-      title: TypeS64
-      type: object
-    TypeS8:
-      title: TypeS8
-      type: object
-    TypeStr:
-      title: TypeStr
-      type: object
-    TypeTuple:
-      title: TypeTuple
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedType'
-      required:
-      - items
-    TypeU16:
-      title: TypeU16
-      type: object
-    TypeU32:
-      title: TypeU32
-      type: object
-    TypeU64:
-      title: TypeU64
-      type: object
-    TypeU8:
-      title: TypeU8
-      type: object
-    TypeVariant:
-      title: TypeVariant
-      type: object
-      properties:
-        name:
-          type: string
-        owner:
-          type: string
-        cases:
-          type: array
-          items:
-            $ref: '#/components/schemas/NameOptionTypePair'
-      required:
-      - cases
     TypedAgentConfigEntry:
       title: TypedAgentConfigEntry
       type: object
@@ -13630,145 +13811,44 @@ components:
           items:
             type: string
         value:
-          $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/TypedSchemaValue'
       required:
       - path
       - value
-    UnstructuredBinaryElementValue:
-      title: UnstructuredBinaryElementValue
+    TypedSchemaValue:
       type: object
       properties:
+        graph:
+          $ref: '#/components/schemas/SchemaGraph'
         value:
-          $ref: '#/components/schemas/BinaryReference'
-        descriptor:
-          $ref: '#/components/schemas/BinaryDescriptor'
+          $ref: '#/components/schemas/SchemaValue'
       required:
+      - graph
       - value
-      - descriptor
-    UnstructuredTextElementValue:
-      title: UnstructuredTextElementValue
+    UnionBranch:
       type: object
       properties:
-        value:
-          $ref: '#/components/schemas/TextReference'
-        descriptor:
-          $ref: '#/components/schemas/TextDescriptor'
-      required:
-      - value
-      - descriptor
-    UntypedJsonDataValue:
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
-          Multimodal: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
-      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
-    UntypedJsonDataValue_UntypedJsonElementValues:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Tuple
-            type: string
-            enum:
-            - Tuple
-        required:
-        - type
-      - $ref: '#/components/schemas/UntypedJsonElementValues'
-    UntypedJsonDataValue_UntypedJsonNamedElementValues:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Multimodal
-            type: string
-            enum:
-            - Multimodal
-        required:
-        - type
-      - $ref: '#/components/schemas/UntypedJsonNamedElementValues'
-    UntypedJsonElementValue:
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
-          UnstructuredText: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
-          UnstructuredBinary: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
-      - $ref: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
-      - $ref: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
-    UntypedJsonElementValue_BinaryReferenceValue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: UnstructuredBinary
-            type: string
-            enum:
-            - UnstructuredBinary
-        required:
-        - type
-      - $ref: '#/components/schemas/BinaryReferenceValue'
-    UntypedJsonElementValue_JsonComponentModelValue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentModel
-            type: string
-            enum:
-            - ComponentModel
-        required:
-        - type
-      - $ref: '#/components/schemas/JsonComponentModelValue'
-    UntypedJsonElementValue_TextReferenceValue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: UnstructuredText
-            type: string
-            enum:
-            - UnstructuredText
-        required:
-        - type
-      - $ref: '#/components/schemas/TextReferenceValue'
-    UntypedJsonElementValues:
-      title: UntypedJsonElementValues
-      type: object
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/UntypedJsonElementValue'
-      required:
-      - elements
-    UntypedJsonNamedElementValue:
-      title: UntypedJsonNamedElementValue
-      type: object
-      properties:
-        name:
+        tag:
           type: string
-        value:
-          $ref: '#/components/schemas/UntypedJsonElementValue'
+        body:
+          $ref: '#/components/schemas/SchemaType'
+        discriminator:
+          $ref: '#/components/schemas/DiscriminatorRule'
+        metadata:
+          $ref: '#/components/schemas/MetadataEnvelope'
       required:
-      - name
-      - value
-    UntypedJsonNamedElementValues:
-      title: UntypedJsonNamedElementValues
+      - tag
+      - body
+      - discriminator
+    UnionSpec:
       type: object
       properties:
-        elements:
+        branches:
           type: array
           items:
-            $ref: '#/components/schemas/UntypedJsonNamedElementValue'
+            $ref: '#/components/schemas/UnionBranch'
       required:
-      - elements
+      - branches
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -13835,23 +13915,33 @@ components:
     UpdateWorkerResponse:
       title: UpdateWorkerResponse
       type: object
-    Url:
-      title: Url
+    UrlRestrictions:
       type: object
       properties:
-        value:
+        allowed_schemes:
+          nullable: true
+          type: array
+          items:
+            type: string
+        allowed_hosts:
+          nullable: true
+          type: array
+          items:
+            type: string
+    VariantCaseType:
+      type: object
+      properties:
+        name:
           type: string
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
+        metadata:
+          $ref: '#/components/schemas/MetadataEnvelope'
       required:
-      - value
-    ValueAndType:
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
-      required:
-      - typ
-      - value
+      - name
     VersionInfo:
       title: VersionInfo
       type: object
@@ -13946,6 +14036,8 @@ components:
           format: date-time
         result:
           $ref: '#/components/schemas/PublicAgentInvocationResult'
+        methodName:
+          type: string
         consumedFuel:
           type: integer
           format: int64
@@ -14013,7 +14105,7 @@ components:
           type: integer
           format: uint64
         partial:
-          $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/TypedSchemaValue'
       required:
       - timestamp
       - startIndex
@@ -14081,7 +14173,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+            $ref: '#/components/schemas/PublicTypedAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -14175,7 +14267,7 @@ components:
           type: integer
           format: uint64
         response:
-          $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/TypedSchemaValue'
         forcedCommit:
           type: boolean
       required:
@@ -14495,7 +14587,7 @@ components:
         functionName:
           type: string
         request:
-          $ref: '#/components/schemas/ValueAndType'
+          $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
@@ -14691,8 +14783,7 @@ components:
           type: string
       required:
       - currentRevision
-    AgentConfigDeclaration:
-      title: AgentConfigDeclaration
+    AgentConfigDeclarationSchema:
       type: object
       properties:
         source:
@@ -14701,48 +14792,51 @@ components:
           type: array
           items:
             type: string
-        valueType:
-          $ref: '#/components/schemas/AnalysedType'
+        value_type:
+          $ref: '#/components/schemas/SchemaType'
       required:
       - source
       - path
-      - valueType
+      - value_type
     AgentConfigSource:
       type: string
       enum:
       - Local
       - Secret
-    AgentConstructor:
-      title: AgentConstructor
+    AgentConstructorSchema:
       type: object
       properties:
         name:
+          nullable: true
           type: string
         description:
           type: string
-        promptHint:
+        prompt_hint:
+          nullable: true
           type: string
-        inputSchema:
-          $ref: '#/components/schemas/DataSchema'
+        input_schema:
+          $ref: '#/components/schemas/InputSchema'
       required:
       - description
-      - inputSchema
-    AgentDependency:
-      title: AgentDependency
+      - input_schema
+    AgentDependencySchema:
       type: object
       properties:
-        typeName:
+        type_name:
           type: string
         description:
+          nullable: true
           type: string
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
         constructor:
-          $ref: '#/components/schemas/AgentConstructor'
+          $ref: '#/components/schemas/AgentConstructorSchema'
         methods:
           type: array
           items:
-            $ref: '#/components/schemas/AgentMethod'
+            $ref: '#/components/schemas/AgentMethodSchema'
       required:
-      - typeName
+      - type_name
       - constructor
       - methods
     AgentFileOptions:
@@ -14765,32 +14859,34 @@ components:
           type: boolean
       required:
       - required
-    AgentMethod:
-      title: AgentMethod
+    AgentMethodSchema:
       type: object
       properties:
         name:
           type: string
         description:
           type: string
-        promptHint:
+        prompt_hint:
+          nullable: true
           type: string
-        inputSchema:
-          $ref: '#/components/schemas/DataSchema'
-        outputSchema:
-          $ref: '#/components/schemas/DataSchema'
-        httpEndpoint:
+        input_schema:
+          $ref: '#/components/schemas/InputSchema'
+        output_schema:
+          $ref: '#/components/schemas/OutputSchema'
+        http_endpoint:
           type: array
           items:
             $ref: '#/components/schemas/HttpEndpointDetails'
-        readOnly:
-          $ref: '#/components/schemas/ReadOnlyConfig'
+        read_only:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ReadOnlyConfig'
+          - nullable: true
       required:
       - name
       - description
-      - inputSchema
-      - outputSchema
-      - httpEndpoint
+      - input_schema
+      - output_schema
     AgentSecretCreation:
       title: AgentSecretCreation
       type: object
@@ -14803,8 +14899,9 @@ components:
           items:
             type: string
         secretType:
-          $ref: '#/components/schemas/AnalysedType'
-        secretValue: {}
+          $ref: '#/components/schemas/SchemaGraph'
+        secretValue:
+          $ref: '#/components/schemas/SchemaValue'
       required:
       - path
       - secretType
@@ -14827,8 +14924,9 @@ components:
           type: integer
           format: uint64
         secretType:
-          $ref: '#/components/schemas/AnalysedType'
-        secretValue: {}
+          $ref: '#/components/schemas/SchemaGraph'
+        secretValue:
+          $ref: '#/components/schemas/SchemaValue'
       required:
       - id
       - environmentId
@@ -14843,49 +14941,9 @@ components:
           type: integer
           format: uint64
         secretValue:
-          $ref: '#/components/schemas/OptionalFieldUpdate_any'
+          $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
       required:
       - currentRevision
-    AgentType:
-      title: AgentType
-      type: object
-      properties:
-        typeName:
-          type: string
-        description:
-          type: string
-        sourceLanguage:
-          type: string
-        constructor:
-          $ref: '#/components/schemas/AgentConstructor'
-        methods:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentMethod'
-        dependencies:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentDependency'
-        mode:
-          $ref: '#/components/schemas/AgentMode'
-        httpMount:
-          $ref: '#/components/schemas/HttpMountDetails'
-        snapshotting:
-          $ref: '#/components/schemas/Snapshotting'
-        config:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigDeclaration'
-      required:
-      - typeName
-      - description
-      - sourceLanguage
-      - constructor
-      - methods
-      - dependencies
-      - mode
-      - snapshotting
-      - config
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -14971,6 +15029,48 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
+    AgentTypeSchema:
+      type: object
+      properties:
+        type_name:
+          type: string
+        description:
+          type: string
+        source_language:
+          type: string
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+        constructor:
+          $ref: '#/components/schemas/AgentConstructorSchema'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethodSchema'
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentDependencySchema'
+        mode:
+          $ref: '#/components/schemas/AgentMode'
+        http_mount:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/HttpMountDetails'
+          - nullable: true
+        snapshotting:
+          $ref: '#/components/schemas/Snapshotting'
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigDeclarationSchema'
+      required:
+      - type_name
+      - description
+      - constructor
+      - methods
+      - dependencies
+      - mode
+      - snapshotting
     Application:
       title: Application
       type: object
@@ -15025,6 +15125,10 @@ components:
           type: string
       required:
       - currentRevision
+    AutoInjectedKind:
+      type: string
+      enum:
+      - principal
     CachePolicy:
       discriminator:
         propertyName: type
@@ -15080,7 +15184,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentType'
+            $ref: '#/components/schemas/AgentTypeSchema'
         agentTypeProvisionConfigs:
           default: {}
           type: object
@@ -15157,7 +15261,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentType'
+            $ref: '#/components/schemas/AgentTypeSchema'
         agentTypeProvisionConfigs:
           description: |-
             Per-agent-type provisioning configuration: env, config, plugins, files.
@@ -15170,14 +15274,6 @@ components:
       - knownExports
       - producers
       - memories
-    ComponentModelElementSchema:
-      title: ComponentModelElementSchema
-      type: object
-      properties:
-        elementType:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - elementType
     ComponentUpdate:
       title: ComponentUpdate
       type: object
@@ -15188,7 +15284,7 @@ components:
         agentTypes:
           type: array
           items:
-            $ref: '#/components/schemas/AgentType'
+            $ref: '#/components/schemas/AgentTypeSchema'
         agentTypeProvisionConfigUpdates:
           type: object
           additionalProperties:
@@ -15260,28 +15356,6 @@ components:
       required:
       - name
       - issuerUrl
-    DataSchema:
-      discriminator:
-        propertyName: type
-        mapping:
-          Tuple: '#/components/schemas/DataSchema_NamedElementSchemas'
-          Multimodal: '#/components/schemas/DataSchema_NamedElementSchemas'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
-      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
-    DataSchema_NamedElementSchemas:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Multimodal
-            type: string
-            enum:
-            - Multimodal
-        required:
-        - type
-      - $ref: '#/components/schemas/NamedElementSchemas'
     DeployValidationWarning:
       discriminator:
         propertyName: type
@@ -15324,7 +15398,7 @@ components:
       type: object
       properties:
         agentType:
-          $ref: '#/components/schemas/AgentType'
+          $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
           $ref: '#/components/schemas/RegisteredAgentTypeImplementer'
         webhookPrefixAuthorityAndPath:
@@ -15574,54 +15648,6 @@ components:
           type: string
       required:
       - domain
-    ElementSchema:
-      discriminator:
-        propertyName: type
-        mapping:
-          ComponentModel: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
-          UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
-          UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
-      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
-      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
-    ElementSchema_BinaryDescriptor:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: UnstructuredBinary
-            type: string
-            enum:
-            - UnstructuredBinary
-        required:
-        - type
-      - $ref: '#/components/schemas/BinaryDescriptor'
-    ElementSchema_ComponentModelElementSchema:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentModel
-            type: string
-            enum:
-            - ComponentModel
-        required:
-        - type
-      - $ref: '#/components/schemas/ComponentModelElementSchema'
-    ElementSchema_TextDescriptor:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: UnstructuredText
-            type: string
-            enum:
-            - UnstructuredText
-        required:
-        - type
-      - $ref: '#/components/schemas/TextDescriptor'
     EnforcementAction:
       type: string
       enum:
@@ -15841,6 +15867,28 @@ components:
       - environment
       - application
       - account
+    FieldSource:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - user-supplied
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - auto-injected
+          value:
+            $ref: '#/components/schemas/AutoInjectedKind'
+        required:
+        - tag
+        - value
     HeaderVariable:
       title: HeaderVariable
       type: object
@@ -16135,6 +16183,22 @@ components:
       - path
       - permissions
       - size
+    InputSchema:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - parameters
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/NamedField'
+        required:
+        - tag
+        - value
     InstalledPlugin:
       title: InstalledPlugin
       type: object
@@ -16279,27 +16343,20 @@ components:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
       required:
       - currentRevision
-    NamedElementSchema:
-      title: NamedElementSchema
+    NamedField:
       type: object
       properties:
         name:
           type: string
+        source:
+          $ref: '#/components/schemas/FieldSource'
         schema:
-          $ref: '#/components/schemas/ElementSchema'
+          $ref: '#/components/schemas/SchemaType'
+        metadata:
+          $ref: '#/components/schemas/MetadataEnvelope'
       required:
       - name
       - schema
-    NamedElementSchemas:
-      title: NamedElementSchemas
-      type: object
-      properties:
-        elements:
-          type: array
-          items:
-            $ref: '#/components/schemas/NamedElementSchema'
-      required:
-      - elements
     OAuth2Provider:
       type: string
       enum:
@@ -16390,28 +16447,29 @@ components:
       required:
       - componentId
       - componentRevision
-    OptionalFieldUpdate_any:
+    OptionalFieldUpdate_SchemaValue:
       discriminator:
         propertyName: op
         mapping:
-          set: '#/components/schemas/OptionalFieldUpdate_any_Set'
-          unset: '#/components/schemas/OptionalFieldUpdate_any_Unset'
+          set: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Set'
+          unset: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Unset'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/OptionalFieldUpdate_any_Set'
-      - $ref: '#/components/schemas/OptionalFieldUpdate_any_Unset'
-    OptionalFieldUpdate_any_Set:
+      - $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Set'
+      - $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Unset'
+    OptionalFieldUpdate_SchemaValue_Set:
       type: object
       properties:
         op:
           type: string
           enum:
           - set
-        value: {}
+        value:
+          $ref: '#/components/schemas/SchemaValue'
       required:
       - op
       - value
-    OptionalFieldUpdate_any_Unset:
+    OptionalFieldUpdate_SchemaValue_Unset:
       type: object
       properties:
         op:
@@ -16420,6 +16478,28 @@ components:
           - unset
       required:
       - op
+    OutputSchema:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - unit
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - single
+          value:
+            $ref: '#/components/schemas/SchemaType'
+        required:
+        - tag
+        - value
     Page_AccountSummaryReport:
       title: Page_AccountSummaryReport
       type: object

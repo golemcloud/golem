@@ -16,34 +16,24 @@
 
 package golem.config
 
-import golem.data.{DataValue, ElementSchema}
+import golem.schema.{IntoSchema, TypedSchemaValue}
 
 /**
  * Internal — used by generated RPC client code to build config overrides. Not
  * intended for direct use.
+ *
+ * Carries a self-contained [[TypedSchemaValue]] (graph + value) so it maps
+ * directly to a `golem:agent@2.0.0` `typed-agent-config-value`.
  */
 final case class ConfigOverride(
   path: List[String],
-  value: DataValue,
-  valueType: ElementSchema
+  value: TypedSchemaValue
 )
 
 /**
  * Internal — used by generated RPC client code. Not intended for direct use.
  */
 object ConfigOverride {
-  def apply[A](path: List[String], value: A)(implicit gs: golem.data.GolemSchema[A]): ConfigOverride = {
-    val encoded = gs.encodeElement(value) match {
-      case Right(golem.data.ElementValue.Component(dv)) => dv
-      case Right(_)                                     =>
-        throw new IllegalArgumentException(
-          s"Expected component value for config override at ${path.mkString(".")}"
-        )
-      case Left(err) =>
-        throw new IllegalArgumentException(
-          s"Failed to encode config override at ${path.mkString(".")}: $err"
-        )
-    }
-    new ConfigOverride(path, encoded, gs.elementSchema)
-  }
+  def apply[A](path: List[String], value: A)(implicit into: IntoSchema[A]): ConfigOverride =
+    new ConfigOverride(path, into.toTyped(value))
 }

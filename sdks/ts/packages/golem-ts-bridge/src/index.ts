@@ -41,87 +41,69 @@ export type EnvironmentName = string;
 export type AgentTypeName = string;
 export type IdempotencyKey = string;
 
-export type UntypedDataValue =
-  | { type: 'Tuple'; elements: UntypedElementValue[] }
-  | { type: 'Multimodal'; elements: UntypedNamedElementValue[] };
+// ===========================================================================
+// Schema-native wire values
+//
+// These mirror the Rust `SchemaValue` / `TypedSchemaValue` serde shapes
+// (`#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]`).
+// Request `parameters` / `methodParameters` and agent `config` values travel
+// as a bare `SchemaValue`; invocation results come back as a `TypedSchemaValue`.
+// ===========================================================================
 
-export type UntypedElementValue =
-  | { type: 'ComponentModel'; value: unknown }
-  | { type: 'UnstructuredText'; value: TextReference }
-  | { type: 'UnstructuredBinary'; value: BinaryReference };
-
-export interface UntypedNamedElementValue {
-  name: string;
-  value: UntypedElementValue;
+export interface TextValuePayload {
+  text: string;
+  language?: string;
 }
 
-export type Url = {
-  value: string;
-};
-
-export type TextSource = {
-  data: string;
-  textType?: TextType;
-};
-
-export type TextReference =
-  | { type: 'Url'; value: string }
-  | { type: 'Inline'; data: string; textType?: TextType };
-
-export const TextReference = {
-  fromUnstructuredText<LC extends LanguageCode[]>(input: UnstructuredText<LC>): TextReference {
-    if (input.tag === 'url') {
-      return {
-        type: 'Url',
-        value: input.val,
-      };
-    } else {
-      return {
-        type: 'Inline',
-        data: input.val,
-        textType: input.languageCode ? { languageCode: input.languageCode as string } : undefined,
-      };
-    }
-  },
-};
-
-export interface TextType {
-  languageCode: string;
+export interface BinaryValuePayload {
+  bytes: number[];
+  mime_type?: string;
 }
 
-export type BinarySource = {
-  data: Uint8Array;
-  binaryType: BinaryType;
-};
+/**
+ * Schema-native value, mirroring the server's Rust `SchemaValue`. The wire
+ * form is the serde derive of `enum SchemaValue` with `tag = "kind"` /
+ * `content = "value"` and kebab-cased discriminants. Composite payloads are
+ * positional and driven by the schema (records carry no field names, variants
+ * carry a `case` index, etc.).
+ */
+export type SchemaValue =
+  | { kind: 'bool'; value: boolean }
+  | { kind: 's8'; value: number }
+  | { kind: 's16'; value: number }
+  | { kind: 's32'; value: number }
+  | { kind: 's64'; value: number }
+  | { kind: 'u8'; value: number }
+  | { kind: 'u16'; value: number }
+  | { kind: 'u32'; value: number }
+  | { kind: 'u64'; value: number }
+  | { kind: 'f32'; value: number }
+  | { kind: 'f64'; value: number }
+  | { kind: 'char'; value: string }
+  | { kind: 'string'; value: string }
+  | { kind: 'record'; value: { fields: SchemaValue[] } }
+  | { kind: 'variant'; value: { case: number; payload?: SchemaValue } }
+  | { kind: 'enum'; value: { case: number } }
+  | { kind: 'flags'; value: { bits: boolean[] } }
+  | { kind: 'tuple'; value: { elements: SchemaValue[] } }
+  | { kind: 'list'; value: { elements: SchemaValue[] } }
+  | { kind: 'fixed-list'; value: { elements: SchemaValue[] } }
+  | { kind: 'map'; value: { entries: [SchemaValue, SchemaValue][] } }
+  | { kind: 'option'; value: { inner?: SchemaValue } }
+  | { kind: 'result'; value: { tag: 'ok' | 'err'; value?: SchemaValue } }
+  | { kind: 'text'; value: TextValuePayload }
+  | { kind: 'binary'; value: BinaryValuePayload }
+  | { kind: 'url'; value: { url: string } };
 
-export type BinaryReference =
-  | { type: 'Url'; value: string }
-  | { type: 'Inline'; data: Uint8Array; binaryType: BinaryType };
-
-export const BinaryReference = {
-  fromUnstructuredBinary<MT extends MimeType[] | MimeType>(
-    input: UnstructuredBinary<MT>,
-  ): BinaryReference {
-    if (input.tag === 'url') {
-      return {
-        type: 'Url',
-        value: input.val,
-      };
-    } else {
-      return {
-        type: 'Inline',
-        data: input.val,
-        binaryType: { mimeType: input.mimeType as string },
-      };
-    }
-  },
-};
-
-export interface BinaryType {
-  mimeType: string;
+/**
+ * A self-contained schema graph paired with a value (the server's Rust
+ * `TypedSchemaValue`). Generated clients decode `value` guided by their static
+ * schema and do not need to interpret `graph`.
+ */
+export interface TypedSchemaValue {
+  graph: unknown;
+  value: SchemaValue;
 }
-
-export type DataValue = UntypedDataValue;
 
 export type AgentInvocationMode = 'await' | 'schedule';
 
@@ -129,29 +111,31 @@ export interface AgentInvocationRequest {
   appName: ApplicationName;
   envName: EnvironmentName;
   agentTypeName: AgentTypeName;
-  parameters: DataValue;
+  parameters: SchemaValue;
   phantomId?: PhantomId;
   methodName: string;
-  methodParameters: DataValue;
+  methodParameters: SchemaValue;
   mode: AgentInvocationMode;
   scheduleAt?: string; // ISO 8601 datetime
   idempotencyKey?: IdempotencyKey;
 }
 
 export interface AgentInvocationResult {
-  result?: DataValue;
+  agentId: AgentId;
+  result?: TypedSchemaValue;
+  componentRevision?: number;
 }
 
 export interface AgentConfigEntry {
   path: string[];
-  value: unknown;
+  value: SchemaValue;
 }
 
 export interface CreateAgentRequest {
   appName: ApplicationName;
   envName: EnvironmentName;
   agentTypeName: AgentTypeName;
-  parameters: DataValue;
+  parameters: SchemaValue;
   phantomId?: PhantomId;
   config?: AgentConfigEntry[];
 }
@@ -504,7 +488,7 @@ export function createRemoteMethod<Args extends any[], R>(
   getServer: () => GolemServer,
   aroundInvokeHook: () => AroundInvokeHook | undefined,
   getRequest: () => AgentInvocationRequest,
-  encode: (args: Args) => DataValue,
+  encode: (args: Args) => SchemaValue,
   decode: (result: AgentInvocationResult) => R,
 ): RemoteMethod<Args, R> {
   const result = async function (...args: Args): Promise<R> {
@@ -571,7 +555,6 @@ type LanguageCode = string;
  *
  *
  * foo(UnstructuredText.fromInline("hello"));
- * foo(UnstructuredText.fromUrl("http://.."'));
  *
  * bar(UnstructuredText.fromInline("hello", 'en')); // with language code
  *
@@ -588,55 +571,88 @@ export type UnstructuredText<LC extends LanguageCode[] = []> =
       languageCode?: LC[number];
     };
 
+// Variant case indices of the canonical role-marked unstructured wrapper:
+// `variant { inline: text/binary, url: url }`.
+const UNSTRUCTURED_INLINE_CASE = 0;
+const UNSTRUCTURED_URL_CASE = 1;
+
 export const UnstructuredText = {
-  fromUntypedElementValue<LC extends string[] = []>(
+  /**
+   * Decodes a schema-native unstructured-text `variant { inline, url }` value
+   * into an `UnstructuredText`, validating the language tag against
+   * `allowedCodes` when the agent declares a fixed set.
+   */
+  fromSchemaValue<LC extends string[] = []>(
     parameterName: string,
-    elementValue: UntypedElementValue,
+    value: SchemaValue,
     allowedCodes: string[],
   ): UnstructuredText<LC> {
-    if (elementValue.type === 'UnstructuredText') {
-      return UnstructuredText.fromDataValue<LC>(parameterName, elementValue.value, allowedCodes);
-    } else {
+    if (value.kind !== 'variant') {
       throw new Error(
-        `Invalid element value type for parameter ${parameterName}. Expected 'unstructuredText', got '${elementValue.type}'`,
+        `Invalid value for parameter ${parameterName}. Expected an unstructured-text 'variant' value, got '${value.kind}'`,
       );
     }
+    const { case: caseIndex, payload } = value.value;
+    if (caseIndex === UNSTRUCTURED_URL_CASE) {
+      if (!payload || payload.kind !== 'url') {
+        throw new Error(
+          `Invalid value for parameter ${parameterName}. Expected a 'url' payload for the unstructured-text url case`,
+        );
+      }
+      return { tag: 'url', val: payload.value.url } as UnstructuredText<LC>;
+    }
+    if (caseIndex !== UNSTRUCTURED_INLINE_CASE) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Unknown unstructured-text variant case ${caseIndex}`,
+      );
+    }
+    if (!payload || payload.kind !== 'text') {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Expected a 'text' payload for the unstructured-text inline case`,
+      );
+    }
+    const language = payload.value.language;
+    // Lenient decode (matches Rust/schema `check_text`): a missing language is
+    // always allowed; only a present language outside the allow-list is rejected.
+    if (allowedCodes.length > 0 && language !== undefined && !allowedCodes.includes(language)) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Language code \`${language}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
+      );
+    }
+    return {
+      tag: 'inline',
+      val: payload.value.text,
+      languageCode: language,
+    } as UnstructuredText<LC>;
   },
 
-  fromDataValue<LC extends string[] = []>(
-    parameterName: string,
-    dataValue: TextReference,
-    allowedCodes: string[],
-  ): UnstructuredText<LC> {
-    if (dataValue.type === 'Url') {
+  /**
+   * Encodes an `UnstructuredText` into a schema-native unstructured-text
+   * `variant { inline, url }` value.
+   */
+  toSchemaValue<LC extends LanguageCode[]>(input: UnstructuredText<LC>): SchemaValue {
+    if (input.tag === 'url') {
       return {
-        tag: 'url',
-        val: dataValue.value,
+        kind: 'variant',
+        value: {
+          case: UNSTRUCTURED_URL_CASE,
+          payload: { kind: 'url', value: { url: input.val } },
+        },
       };
-    } else {
-      if (allowedCodes.length > 0) {
-        if (!dataValue.textType) {
-          throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
-        }
-
-        if (!allowedCodes.includes(dataValue.textType.languageCode)) {
-          throw new Error(
-            `Invalid value for parameter ${parameterName}. Language code \`${dataValue.textType.languageCode}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
-          );
-        }
-
-        return {
-          tag: 'inline',
-          val: dataValue.data,
-          languageCode: dataValue.textType.languageCode,
-        };
-      } else {
-        return {
-          tag: 'inline',
-          val: dataValue.data,
-        };
-      }
     }
+    return {
+      kind: 'variant',
+      value: {
+        case: UNSTRUCTURED_INLINE_CASE,
+        payload: {
+          kind: 'text',
+          value: {
+            text: input.val,
+            language: input.languageCode as string | undefined,
+          },
+        },
+      },
+    };
   },
 
   /**
@@ -645,11 +661,10 @@ export const UnstructuredText = {
    * ```ts
    * function foo(input: UnstructuredText) {..}
    *
-   * foo(UnstructuredText.fromUrl("hello"));
+   * foo(UnstructuredText.fromUrl("https://example.com/doc.txt"));
    * ```
    *
    * @param urlValue A URL string
-   *
    */
   fromUrl(urlValue: string): UnstructuredText {
     return {
@@ -694,16 +709,13 @@ export const UnstructuredText = {
 };
 
 /**
- * Represents unstructured binary input, which can be either a URL or inline binary data.
+ * Represents inline unstructured binary input.
  *
  * Example usage:
  *
  * ```ts
  * const inlineBinary: UnstructuredBinary<'application/json'> =
  *   UnstructuredBinary.fromInline(Uint8Array([0x00, 0x01, 0x02]), "application/octet-stream");
- *
- * const urlBinary: UnstructuredBinary =
- *   UnstructuredBinary.fromUrl("https://example.com/file.bin");
  *```
  *
  * If no mime types are specified, any mime type is allowed. Note that
@@ -746,54 +758,92 @@ export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
     };
 
 export const UnstructuredBinary = {
-  fromUntypedElementValue<MT extends string[] | MimeType = MimeType>(
+  /**
+   * Decodes a schema-native unstructured-binary `variant { inline, url }` value
+   * into an `UnstructuredBinary`, validating the mime type against
+   * `allowedMimeTypes` when the agent declares a fixed set.
+   */
+  fromSchemaValue<MT extends string[] | MimeType = MimeType>(
     parameterName: string,
-    elementValue: UntypedElementValue,
+    value: SchemaValue,
     allowedMimeTypes: string[],
   ): UnstructuredBinary<MT> {
-    if (elementValue.type === 'UnstructuredBinary') {
-      return UnstructuredBinary.fromDataValue<MT>(
-        parameterName,
-        elementValue.value,
-        allowedMimeTypes,
-      );
-    } else {
+    if (value.kind !== 'variant') {
       throw new Error(
-        `Invalid element value type for parameter ${parameterName}. Expected 'unstructuredBinary', got '${elementValue.type}'`,
+        `Invalid value for parameter ${parameterName}. Expected an unstructured-binary 'variant' value, got '${value.kind}'`,
       );
     }
-  },
-
-  fromDataValue<MT extends string[] | MimeType = MimeType>(
-    parameterName: string,
-    dataValue: BinaryReference,
-    allowedMimeTypes: string[],
-  ): UnstructuredBinary<MT> {
-    if (dataValue.type === 'Url') {
-      return {
-        tag: 'url',
-        val: dataValue.value,
-      } as UnstructuredBinary<MT>;
-    } else {
-      if (
-        allowedMimeTypes.length > 0 &&
-        !allowedMimeTypes.includes(dataValue.binaryType.mimeType)
-      ) {
+    const { case: caseIndex, payload } = value.value;
+    if (caseIndex === UNSTRUCTURED_URL_CASE) {
+      if (!payload || payload.kind !== 'url') {
         throw new Error(
-          `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
+          `Invalid value for parameter ${parameterName}. Expected a 'url' payload for the unstructured-binary url case`,
         );
-      } else {
-        return {
-          tag: 'inline',
-          val: dataValue.data,
-          mimeType: dataValue.binaryType.mimeType,
-        } as UnstructuredBinary<MT>;
       }
+      return { tag: 'url', val: payload.value.url } as UnstructuredBinary<MT>;
     }
+    if (caseIndex !== UNSTRUCTURED_INLINE_CASE) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Unknown unstructured-binary variant case ${caseIndex}`,
+      );
+    }
+    if (!payload || payload.kind !== 'binary') {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Expected a 'binary' payload for the unstructured-binary inline case`,
+      );
+    }
+    const mimeType = payload.value.mime_type;
+    // Lenient decode (matches Rust/schema `check_binary`): a missing mime type
+    // is always allowed; only a present mime type outside the allow-list is
+    // rejected.
+    if (
+      allowedMimeTypes.length > 0 &&
+      mimeType !== undefined &&
+      !allowedMimeTypes.includes(mimeType)
+    ) {
+      throw new Error(
+        `Invalid value for parameter ${parameterName}. Mime type \`${mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
+      );
+    }
+    return {
+      tag: 'inline',
+      val: new Uint8Array(payload.value.bytes),
+      mimeType: mimeType ?? '',
+    } as UnstructuredBinary<MT>;
   },
 
   /**
-   *
+   * Encodes an `UnstructuredBinary` into a schema-native unstructured-binary
+   * `variant { inline, url }` value.
+   */
+  toSchemaValue<MT extends MimeType[] | MimeType = MimeType>(
+    input: UnstructuredBinary<MT>,
+  ): SchemaValue {
+    if (input.tag === 'url') {
+      return {
+        kind: 'variant',
+        value: {
+          case: UNSTRUCTURED_URL_CASE,
+          payload: { kind: 'url', value: { url: input.val } },
+        },
+      };
+    }
+    return {
+      kind: 'variant',
+      value: {
+        case: UNSTRUCTURED_INLINE_CASE,
+        payload: {
+          kind: 'binary',
+          value: {
+            bytes: Array.from(input.val),
+            mime_type: input.mimeType as string | undefined,
+          },
+        },
+      },
+    };
+  },
+
+  /**
    * Creates a `UnstructuredBinary` from a URL.
    *
    * Example usage:
@@ -841,53 +891,64 @@ export const UnstructuredBinary = {
   },
 };
 
-export function encodeOption<T>(value: T | undefined, encode: (v: T) => unknown): unknown {
+/** Encodes an optional value into a schema-native `option` value. */
+export function encodeOption<T>(value: T | undefined, encode: (v: T) => SchemaValue): SchemaValue {
   if (value === undefined || value === null) {
-    return null;
+    return { kind: 'option', value: {} };
   } else {
-    return encode(value);
+    return { kind: 'option', value: { inner: encode(value) } };
   }
 }
 
-export function decodeOption<T>(
-  value: unknown | undefined | null,
-  decode: (v: unknown) => T,
-): T | undefined {
-  if (value === undefined || value === null) {
+/** Decodes a schema-native `option` value into an optional value. */
+export function decodeOption<T>(value: SchemaValue, decode: (v: SchemaValue) => T): T | undefined {
+  if (value.kind !== 'option') {
+    throw new Error(`Expected option value, got '${value.kind}'`);
+  }
+  const inner = value.value.inner;
+  if (inner === undefined || inner === null) {
     return undefined;
   } else {
-    return decode(value);
+    return decode(inner);
   }
 }
 
 /**
- * Decodes a flags value (an array of the set flags' wire names) into a record
- * of booleans keyed by the JS-cased field names.
+ * Encodes a record of booleans keyed by JS-cased field names into a
+ * schema-native `flags` value. `flagPairs` lists `[wireName, jsName]` in the
+ * schema's declaration order; the resulting `bits` array is positional.
+ */
+export function encodeFlags(
+  value: Record<string, boolean>,
+  flagPairs: [string, string][],
+): SchemaValue {
+  const bits = flagPairs.map(([, jsName]) => value[jsName] === true);
+  return { kind: 'flags', value: { bits } };
+}
+
+/**
+ * Decodes a schema-native `flags` value (a positional boolean `bits` array)
+ * into a record of booleans keyed by the JS-cased field names.
  *
  * `initial` provides the exact result shape (every field initialised to
- * `false`) so the inferred return type stays precise. `flagPairs` maps each
- * wire name to its JS-cased field name; flags present in `value` are set to
- * `true`.
+ * `false`) so the inferred return type stays precise. `flagPairs` lists
+ * `[wireName, jsName]` in the schema's declaration order, aligned with `bits`.
  */
 export function decodeFlags<T extends Record<string, boolean>>(
-  value: unknown,
+  value: SchemaValue,
   initial: T,
   flagPairs: [string, string][],
 ): T {
-  if (!Array.isArray(value)) {
-    throw new Error(`Expected array of flag names, got ${value}`);
+  if (value.kind !== 'flags') {
+    throw new Error(`Expected flags value, got '${value.kind}'`);
+  }
+  const bits = value.value.bits;
+  if (!Array.isArray(bits)) {
+    throw new Error(`Expected boolean array for flags, got ${bits}`);
   }
   const result = { ...initial } as T;
-  const flagMap: Record<string, string> = Object.fromEntries(flagPairs);
-  for (const flag of value) {
-    if (typeof flag !== 'string') {
-      throw new Error(`Expected string flag name, got ${flag}`);
-    }
-    const jsName = flagMap[flag];
-    if (jsName === undefined) {
-      throw new Error(`Unknown flag name ${flag}`);
-    }
-    (result as Record<string, boolean>)[jsName] = true;
-  }
+  flagPairs.forEach(([, jsName], idx) => {
+    (result as Record<string, boolean>)[jsName] = bits[idx] === true;
+  });
   return result;
 }

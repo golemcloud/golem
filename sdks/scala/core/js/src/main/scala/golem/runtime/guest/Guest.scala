@@ -16,8 +16,10 @@
 
 package golem.runtime.guest
 
-import golem.host.js._
-import golem.runtime.autowire.{AgentRegistry, WitValueBuilder}
+import golem.host.js.{JsSnapshot, PrincipalConverter}
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
+import golem.runtime.autowire.AgentRegistry
+import golem.runtime.rpc.SchemaRpcCodec
 import golem.FutureInterop
 import zio.blocks.schema.json.Json
 
@@ -46,23 +48,8 @@ object Guest {
   private def invalidAgentId(message: String): JsAgentError =
     JsAgentError.invalidAgentId(message)
 
-  private def customError(message: String): JsAgentError = {
-    val witValue: JsWitValue = WitValueBuilder.build(
-      golem.data.DataType.StringType,
-      golem.data.DataValue.StringValue(message)
-    ) match {
-      case Left(_)  => JsWitValue(js.Array(JsWitNode.primString(message)))
-      case Right(v) => v
-    }
-
-    val witType: JsWitType = JsWitType(
-      js.Array(
-        JsNamedWitTypeNode(JsWitTypeNode.primStringType)
-      )
-    )
-
-    JsAgentError.customError(JsValueAndType(witValue, witType))
-  }
+  private def customError(message: String): JsAgentError =
+    JsAgentError.customError(SchemaRpcCodec.encodeTyped[String](message))
 
   private def asAgentError(err: Any, fallbackTag: String): JsAgentError =
     if (err == null) customError("null")
@@ -110,7 +97,7 @@ object Guest {
           val scalaPrincipal = PrincipalConverter.fromJs(principal)
           initializationPrincipal = Some(scalaPrincipal)
           // Avoid calling `.then` directly (Scala 3 scaladoc / TASTy reader can error on it during `doc`).
-          val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsDataValue], scalaPrincipal)
+          val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsSchemaValueTree], scalaPrincipal)
           val initFuture: Future[Unit] =
             FutureInterop
               .fromPromise(initPromise)
@@ -128,29 +115,38 @@ object Guest {
       }
     }
 
-  private def invoke(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Dynamic] =
+  private def invoke(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
-      js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Dynamic]]
+      js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Any]]
     } else {
-      val r                                                      = resolved.asInstanceOf[Resolved]
-      val mn                                                     = normalizeMethodName(methodName)
-      val scalaPrincipal                                         = PrincipalConverter.fromJs(principal)
-      val onRejected: js.Function1[Any, js.Thenable[js.Dynamic]] =
+      val r                                                  = resolved.asInstanceOf[Resolved]
+      val mn                                                 = normalizeMethodName(methodName)
+      val scalaPrincipal                                     = PrincipalConverter.fromJs(principal)
+      val onRejected: js.Function1[Any, js.Thenable[js.Any]] =
         js.Any.fromFunction1 { (err: Any) =>
           // Only catch SDK-level errors (JsAgentError). User code errors must propagate
           // as unhandled rejections so they become WASM traps, enabling atomic block retries.
           if (isJsAgentError(err))
-            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Dynamic]]
+            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Any]]
           else
             throw (err match {
               case t: Throwable => t
               case other        => js.JavaScriptException(other)
             })
         }
-      r.defn
-        .invokeAny(r.instance, mn, input.asInstanceOf[JsDataValue], scalaPrincipal)
-        .asInstanceOf[js.Promise[js.Dynamic]]
-        .`catch`[js.Dynamic](onRejected)
+      // The host expects `option<schema-value-tree>`: `Some(tree)` -> the tree,
+      // `None` (unit output) -> `js.undefined`. We bridge the Scala `Option`
+      // result to that union here, at the export boundary.
+      val resultPromise: js.Promise[js.Any] =
+        FutureInterop.toPromise(
+          FutureInterop
+            .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], scalaPrincipal))
+            .map {
+              case Some(tree) => tree.asInstanceOf[js.Any]
+              case None       => js.undefined.asInstanceOf[js.Any]
+            }
+        )
+      resultPromise.`catch`[js.Any](onRejected)
     }
 
   private def getDefinition(): js.Promise[js.Any] =

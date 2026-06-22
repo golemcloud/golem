@@ -17,18 +17,19 @@
 package golem.runtime.rpc
 
 import golem.config.ConfigOverride
-import golem.data.GolemSchema
-import golem.host.js._
-import golem.runtime.{AgentMethod, AgentType}
+import golem.host.js.schema.JsSchemaValueTree
+import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
 import golem.FutureInterop
 import golem.Uuid
 import golem.Datetime
 
 import scala.concurrent.Future
 import scala.scalajs.js
+import scala.util.control.NonFatal
 
 object AgentClientRuntime {
-  @volatile private var remoteResolverOverride: Option[(String, JsDataValue) => Either[String, RemoteAgentClient]] =
+  @volatile private var remoteResolverOverride
+    : Option[(String, JsSchemaValueTree) => Either[String, RemoteAgentClient]] =
     None
 
   def resolve[Trait, Constructor](
@@ -56,25 +57,36 @@ object AgentClientRuntime {
     constructorArgs: Constructor,
     phantom: Option[Uuid],
     configOverrides: List[ConfigOverride]
-  ): Either[String, ResolvedAgent[Trait]] = {
-    implicit val ctorSchema: GolemSchema[Constructor] = agentType.constructor.schema
-
+  ): Either[String, ResolvedAgent[Trait]] =
     for {
-      payload <- {
-        val any = constructorArgs.asInstanceOf[Any]
-        if (any == ((): Unit)) {
-          Right(JsDataValue.tuple(new js.Array[JsElementValue]()))
-        } else {
-          RpcValueCodec.encodeArgs[Constructor](constructorArgs)
-        }
-      }
-      remote <- resolveRemote(agentType.typeName, payload, phantom, configOverrides)
+      payload <- encodeInput[Constructor](agentType.constructor.inputCodec, constructorArgs)
+      remote  <- resolveRemote(agentType.typeName, payload, phantom, configOverrides)
     } yield ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote)
-  }
+
+  private def encodeInput[In](
+    inputCodec: golem.runtime.InputRecordCodec[In],
+    input: In
+  ): Either[String, JsSchemaValueTree] =
+    // `SchemaRpcCodec.encodeArgs` throws on a malformed positional record; keep
+    // local encode errors as `Left` rather than throwing synchronously.
+    try Right(SchemaRpcCodec.encodeArgs(input)(inputCodec))
+    catch {
+      case js.JavaScriptException(err) => Left(err.toString)
+      case NonFatal(err)               => Left(err.getMessage)
+    }
+
+  private def decodeOutput[Out](
+    outputCodec: OutputCodec[Out],
+    result: Option[JsSchemaValueTree]
+  ): Either[String, Out] =
+    outputCodec.metadata match {
+      case OutputMetadata.Unit      => SchemaRpcCodec.decodeUnitResult(result).map(_.asInstanceOf[Out])
+      case OutputMetadata.Single(_) => SchemaRpcCodec.decodeSingleResult[Out](result)(outputCodec.from.get)
+    }
 
   private def resolveRemote(
     agentTypeName: String,
-    payload: JsDataValue,
+    payload: JsSchemaValueTree,
     phantom: Option[Uuid],
     configOverrides: List[ConfigOverride]
   ): Either[String, RemoteAgentClient] =
@@ -112,55 +124,49 @@ object AgentClientRuntime {
     def schedule[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[Unit] =
       runScheduled(method, datetime, input)
 
-    def scheduleCancelable[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[CancellationToken] =
+    def scheduleCancelable[In](
+      method: AgentMethod[Trait, In, _],
+      datetime: Datetime,
+      input: In
+    ): Future[CancellationToken] =
       runScheduledCancelable(method, datetime, input)
 
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
-      implicit val inSchema: GolemSchema[In] = method.inputSchema
-
-      val functionName = method.functionName
-      RpcValueCodec.encodeArgs(input) match {
-        case Left(err) => FutureInterop.failed(err)
-        case Right(params) =>
-          client.rpc.asyncInvokeAndAwait(functionName, params).map { raw =>
-            implicit val outSchema: GolemSchema[Out] = method.outputSchema
-            RpcValueCodec.decodeResult[Out](raw) match {
-              case Left(err)    => throw scala.scalajs.js.JavaScriptException(err)
-              case Right(value) => value
-            }
-          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
-      }
+      // The default await path uses the synchronous host `invoke-and-await`
+      // import (fully wrapped in `Either`), matching the documented "always
+      // invoke via invoke-and-await" intent. The async `future-invoke-result`
+      // path is reserved for `cancelableAwait`, where cancellation is needed.
+      val result: Either[String, Out] = for {
+        params <- encodeInput(method.inputCodec, input)
+        raw    <- client.rpc.invokeAndAwait(method.functionName, params)
+        value  <- decodeOutput(method.outputCodec, raw)
+      } yield value
+      FutureInterop.fromEither(result)
     }
 
-    private def runCancelableAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): (Future[Out], CancellationToken) = {
-      implicit val inSchema: GolemSchema[In] = method.inputSchema
-
-      val functionName = method.functionName
-      RpcValueCodec.encodeArgs(input) match {
+    private def runCancelableAwaitable[In, Out](
+      method: AgentMethod[Trait, In, Out],
+      input: In
+    ): (Future[Out], CancellationToken) =
+      encodeInput(method.inputCodec, input) match {
         case Left(err) =>
           (FutureInterop.failed(err), CancellationToken.fromFunction(() => ()))
         case Right(params) =>
-          val (rawFuture, token) = client.rpc.cancelableAsyncInvokeAndAwait(functionName, params)
-          val mappedFuture = rawFuture.map { raw =>
-            implicit val outSchema: GolemSchema[Out] = method.outputSchema
-            RpcValueCodec.decodeResult[Out](raw) match {
+          val (rawFuture, token) = client.rpc.cancelableAsyncInvokeAndAwait(method.functionName, params)
+          val mappedFuture       = rawFuture.map { raw =>
+            decodeOutput(method.outputCodec, raw) match {
               case Left(err)    => throw scala.scalajs.js.JavaScriptException(err)
               case Right(value) => value
             }
           }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
           (mappedFuture, token)
       }
-    }
 
     private def runFireAndForget[In, Out0](method: AgentMethod[Trait, In, Out0], input: In): Future[Unit] = {
-      implicit val inSchema: GolemSchema[In] = method.inputSchema
-
-      val functionName                 = method.functionName
       val result: Either[String, Unit] = for {
-        params <- RpcValueCodec.encodeArgs(input)
-        _      <- client.rpc.invoke(functionName, params)
+        params <- encodeInput(method.inputCodec, input)
+        _      <- client.rpc.invoke(method.functionName, params)
       } yield ()
-
       FutureInterop.fromEither(result)
     }
 
@@ -169,14 +175,10 @@ object AgentClientRuntime {
       datetime: Datetime,
       input: In
     ): Future[Unit] = {
-      implicit val inSchema: GolemSchema[In] = method.inputSchema
-
-      val functionName                 = method.functionName
       val result: Either[String, Unit] = for {
-        params <- RpcValueCodec.encodeArgs(input)
-        _      <- client.rpc.scheduleInvocation(datetime, functionName, params)
+        params <- encodeInput(method.inputCodec, input)
+        _      <- client.rpc.scheduleInvocation(datetime, method.functionName, params)
       } yield ()
-
       FutureInterop.fromEither(result)
     }
 
@@ -185,25 +187,22 @@ object AgentClientRuntime {
       datetime: Datetime,
       input: In
     ): Future[CancellationToken] = {
-      implicit val inSchema: GolemSchema[In] = method.inputSchema
-
-      val functionName                               = method.functionName
       val result: Either[String, CancellationToken] = for {
-        params <- RpcValueCodec.encodeArgs(input)
-        token  <- client.rpc.scheduleCancelableInvocation(datetime, functionName, params)
+        params <- encodeInput(method.inputCodec, input)
+        token  <- client.rpc.scheduleCancelableInvocation(datetime, method.functionName, params)
       } yield token
-
       FutureInterop.fromEither(result)
     }
   }
 
   private[rpc] object TestHooks {
-    def withRemoteResolver[T](resolver: (String, JsDataValue) => Either[String, RemoteAgentClient])(thunk: => T): T = {
+    def withRemoteResolver[T](
+      resolver: (String, JsSchemaValueTree) => Either[String, RemoteAgentClient]
+    )(thunk: => T): T = {
       val previous = remoteResolverOverride
       remoteResolverOverride = Some(resolver)
       try thunk
       finally remoteResolverOverride = previous
     }
-
   }
 }

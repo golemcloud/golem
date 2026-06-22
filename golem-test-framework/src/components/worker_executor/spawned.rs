@@ -42,6 +42,7 @@ pub struct SpawnedWorkerExecutor {
     registry_service: Arc<dyn RegistryService>,
     environment_state_cache_capacity: Option<usize>,
     oplog_archive_interval: Option<Duration>,
+    enable_fs_cache: bool,
     otlp: bool,
 }
 
@@ -60,6 +61,7 @@ impl SpawnedWorkerExecutor {
         registry_service: Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
         oplog_archive_interval: Option<Duration>,
+        enable_fs_cache: bool,
         otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-executor process");
@@ -82,6 +84,7 @@ impl SpawnedWorkerExecutor {
             &registry_service,
             environment_state_cache_capacity,
             oplog_archive_interval,
+            enable_fs_cache,
             otlp,
             &[],
         )
@@ -103,6 +106,7 @@ impl SpawnedWorkerExecutor {
             registry_service,
             environment_state_cache_capacity,
             oplog_archive_interval,
+            enable_fs_cache,
             otlp,
         }
     }
@@ -122,6 +126,7 @@ impl SpawnedWorkerExecutor {
         registry_service: &Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
         oplog_archive_interval: Option<Duration>,
+        enable_fs_cache: bool,
         otlp: bool,
         extra_env_vars: &[(String, String)],
     ) -> (Child, ChildProcessLogger) {
@@ -135,6 +140,7 @@ impl SpawnedWorkerExecutor {
             environment_state_cache_capacity,
             oplog_archive_interval,
             verbosity,
+            enable_fs_cache,
             otlp,
         )
         .await;
@@ -223,6 +229,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             &self.registry_service,
             self.environment_state_cache_capacity,
             self.oplog_archive_interval,
+            self.enable_fs_cache,
             self.otlp,
             &extra_env_vars,
         )
