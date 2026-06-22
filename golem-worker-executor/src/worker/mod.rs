@@ -31,6 +31,7 @@ use crate::services::active_workers::{
     FilesystemStoragePermit, HeldComponentCharge, MemoryGrant, RegisteredConcurrentAccount,
     WorkerComponentCharge,
 };
+use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -262,6 +263,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
     worker_estimate_coefficient: f64,
+    card_interest_index: Arc<CardInterestIndex>,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
@@ -323,7 +325,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
-        T: HasAll<Ctx> + HasCardService + Clone + Send + Sync + 'static,
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         deps.active_workers()
             .get_or_add(
@@ -351,7 +353,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
-        T: HasAll<Ctx> + HasCardService + Send + Sync + Clone + 'static,
+        T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_or_create_suspended(
             deps,
@@ -398,8 +400,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn new<T: HasAll<Ctx> + HasCardService>(
+    pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
+        card_interest_index: Arc<CardInterestIndex>,
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
@@ -533,6 +536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             metrics_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
+            card_interest_index,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             update_state_lock: Mutex::new(()),
@@ -3745,6 +3749,7 @@ impl RunningWorker {
             parent.rpc(),
             parent.worker_proxy(),
             parent.card_service(),
+            parent.card_interest_index.clone(),
             parent.component_service(),
             parent.extra_deps(),
             parent.config(),

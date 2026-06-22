@@ -93,6 +93,7 @@ use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::card::{CardService, NoopCardService};
+use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, NoOpDirectInvocationAuthService,
@@ -1485,6 +1486,7 @@ impl WorkerCtx for TestWorkerCtx {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -1538,6 +1540,7 @@ impl WorkerCtx for TestWorkerCtx {
             rpc,
             worker_proxy,
             card_service,
+            card_interest_index,
             component_service,
             account_resource_limits,
             config,
@@ -1852,7 +1855,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
-        card_service: Arc<dyn CardService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         // The in-process test harness shares its process (and RSS) with the test
@@ -1869,14 +1871,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
-                card_service,
                 shutdown_token,
             )),
             None => Arc::new(ActiveWorkers::new(
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
-                card_service,
                 shutdown_token,
             )),
         }

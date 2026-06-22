@@ -14,7 +14,6 @@
 
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use golem_common::model::OwnedAgentId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -24,10 +23,7 @@ use tokio::sync::RwLock;
 
 #[async_trait]
 pub trait CardService: Send + Sync {
-    async fn set_card_interest(&self, agent_id: OwnedAgentId, card_ids: &[CardId]);
-
-    async fn record_revoked_cards(&self, card_ids: &[CardId])
-    -> HashMap<OwnedAgentId, Vec<CardId>>;
+    async fn record_revoked_cards(&self, card_ids: &[CardId]);
 
     async fn check_cards(
         &self,
@@ -47,7 +43,6 @@ struct CardServiceState {
 
 #[derive(Default)]
 struct CardData {
-    interested_agents: HashSet<OwnedAgentId>,
     state: CardState,
 }
 
@@ -63,14 +58,7 @@ pub struct NoopCardService;
 
 #[async_trait]
 impl CardService for NoopCardService {
-    async fn set_card_interest(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
-
-    async fn record_revoked_cards(
-        &self,
-        _card_ids: &[CardId],
-    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
-        HashMap::new()
-    }
+    async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
     async fn check_cards(
         &self,
@@ -101,19 +89,6 @@ impl CardServiceDefault {
                 data.state = CardState::Live(Box::new(card));
             }
         }
-    }
-
-    fn remove_agent_from_all_cards(state: &mut CardServiceState, agent_id: &OwnedAgentId) {
-        for data in state.cards.values_mut() {
-            data.interested_agents.remove(agent_id);
-        }
-        Self::prune_empty_unknown_cards(state);
-    }
-
-    fn prune_empty_unknown_cards(state: &mut CardServiceState) {
-        state.cards.retain(|_, data| {
-            data.state != CardState::Unknown || !data.interested_agents.is_empty()
-        });
     }
 
     fn cached_card_states(
@@ -171,40 +146,9 @@ impl CardServiceDefault {
 
 #[async_trait]
 impl CardService for CardServiceDefault {
-    async fn set_card_interest(&self, agent_id: OwnedAgentId, card_ids: &[CardId]) {
-        let mut state = self.state.write().await;
-        Self::remove_agent_from_all_cards(&mut state, &agent_id);
-
-        for card_id in card_ids {
-            state
-                .cards
-                .entry(*card_id)
-                .or_default()
-                .interested_agents
-                .insert(agent_id.clone());
-        }
-        Self::prune_empty_unknown_cards(&mut state);
-    }
-
-    async fn record_revoked_cards(
-        &self,
-        card_ids: &[CardId],
-    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
+    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
         let mut state = self.state.write().await;
         Self::record_revoked_cards_in_state(&mut state, card_ids);
-
-        let mut affected_agent_cards = HashMap::<OwnedAgentId, Vec<CardId>>::new();
-        for card_id in card_ids {
-            if let Some(data) = state.cards.get(card_id) {
-                for agent_id in &data.interested_agents {
-                    affected_agent_cards
-                        .entry(agent_id.clone())
-                        .or_default()
-                        .push(*card_id);
-                }
-            }
-        }
-        affected_agent_cards
     }
 
     async fn check_cards(
@@ -491,14 +435,6 @@ mod tests {
         CardServiceDefault::new(Arc::new(TestRegistryService::all_existing()))
     }
 
-    fn agent(name: &str) -> OwnedAgentId {
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: name.to_string(),
-        };
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id)
-    }
-
     fn stored_card(card_id: CardId) -> StoredCard {
         StoredCard::Concrete(Card {
             card_id,
@@ -540,69 +476,6 @@ mod tests {
     }
 
     #[test]
-    async fn revoked_card_finds_registered_agent() {
-        let service = service();
-        let agent = agent("agent-1");
-        let card_id = CardId::new();
-
-        service.set_card_interest(agent.clone(), &[card_id]).await;
-        let affected_agents = service.record_revoked_cards(&[card_id]).await;
-
-        assert_eq!(affected_agents.get(&agent), Some(&vec![card_id]));
-    }
-
-    #[test]
-    async fn unrelated_revoked_card_does_not_affect_agent() {
-        let service = service();
-        let agent = agent("agent-1");
-        let live_card_id = CardId::new();
-        let revoked_card_id = CardId::new();
-
-        service
-            .set_card_interest(agent.clone(), &[live_card_id])
-            .await;
-        let affected_agents = service.record_revoked_cards(&[revoked_card_id]).await;
-
-        assert!(affected_agents.is_empty());
-    }
-
-    #[test]
-    async fn setting_card_interest_replaces_previous_cards() {
-        let service = service();
-        let agent = agent("agent-1");
-        let old_card_id = CardId::new();
-        let new_card_id = CardId::new();
-
-        service
-            .set_card_interest(agent.clone(), &[old_card_id])
-            .await;
-        service
-            .set_card_interest(agent.clone(), &[new_card_id])
-            .await;
-
-        assert!(
-            service
-                .record_revoked_cards(&[old_card_id])
-                .await
-                .is_empty()
-        );
-        let affected_agents = service.record_revoked_cards(&[new_card_id]).await;
-        assert_eq!(affected_agents.get(&agent), Some(&vec![new_card_id]));
-    }
-
-    #[test]
-    async fn empty_card_interest_removes_reverse_index() {
-        let service = service();
-        let agent = agent("agent-1");
-        let card_id = CardId::new();
-
-        service.set_card_interest(agent.clone(), &[card_id]).await;
-        service.set_card_interest(agent.clone(), &[]).await;
-
-        assert!(service.record_revoked_cards(&[card_id]).await.is_empty());
-    }
-
-    #[test]
     async fn record_revoked_cards_caches_revocation() {
         let service = service();
         let card_id = CardId::new();
@@ -615,13 +488,11 @@ mod tests {
     #[test]
     async fn known_live_card_skips_repeated_registry_lookup() {
         let lookup_count = Arc::new(AtomicUsize::new(0));
-        let agent = agent("agent-1");
         let card_id = CardId::new();
         let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
             HashSet::from([card_id]),
             lookup_count.clone(),
         )));
-        service.set_card_interest(agent, &[card_id]).await;
 
         assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
         assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
@@ -691,44 +562,16 @@ mod tests {
     #[test]
     async fn revocation_invalidates_known_live_card() {
         let lookup_count = Arc::new(AtomicUsize::new(0));
-        let agent = agent("agent-1");
         let card_id = CardId::new();
         let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
             HashSet::from([card_id]),
             lookup_count.clone(),
         )));
-        service.set_card_interest(agent, &[card_id]).await;
 
         assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
         service.record_revoked_cards(&[card_id]).await;
 
         assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
         assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    async fn card_is_removed_from_reverse_index_only_after_wallet_removal() {
-        let service = service();
-        let first_agent = agent("agent-1");
-        let second_agent = agent("agent-2");
-        let card_id = CardId::new();
-
-        service
-            .set_card_interest(first_agent.clone(), &[card_id])
-            .await;
-        service
-            .set_card_interest(second_agent.clone(), &[card_id])
-            .await;
-
-        let affected_agents = service.record_revoked_cards(&[card_id]).await;
-        assert_eq!(affected_agents.len(), 2);
-        assert_eq!(affected_agents.get(&first_agent), Some(&vec![card_id]));
-        assert_eq!(affected_agents.get(&second_agent), Some(&vec![card_id]));
-
-        service.set_card_interest(first_agent.clone(), &[]).await;
-
-        let affected_agents = service.record_revoked_cards(&[card_id]).await;
-        assert_eq!(affected_agents.len(), 1);
-        assert_eq!(affected_agents.get(&second_agent), Some(&vec![card_id]));
     }
 }

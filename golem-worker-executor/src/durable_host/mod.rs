@@ -52,6 +52,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::card::{CardService, CardState};
+use crate::services::card_interest::CardInterestIndex;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -388,6 +389,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
@@ -554,6 +556,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rdbms_service,
                 quota_service,
                 card_service,
+                card_interest_index,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -772,7 +775,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             candidate_wallet_card_ids.push(card_id);
         }
         self.state
-            .card_service
+            .card_interest_index
             .set_card_interest(self.owned_agent_id.clone(), &candidate_wallet_card_ids)
             .await;
 
@@ -791,7 +794,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .copied()
                 .collect::<Vec<_>>();
             self.state
-                .card_service
+                .card_interest_index
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
@@ -821,7 +824,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .copied()
                 .collect::<Vec<_>>();
             self.state
-                .card_service
+                .card_interest_index
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
@@ -853,7 +856,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .copied()
                 .collect::<Vec<_>>();
             self.state
-                .card_service
+                .card_interest_index
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
@@ -2674,7 +2677,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .copied()
             .collect::<Vec<_>>();
         self.state
-            .card_service
+            .card_interest_index
             .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
             .await;
 
@@ -4657,6 +4660,7 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     quota_service: Arc<dyn QuotaService>,
     card_service: Arc<dyn CardService>,
+    card_interest_index: Arc<CardInterestIndex>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -4840,6 +4844,7 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -4936,6 +4941,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             quota_service,
             card_service,
+            card_interest_index,
             component_service,
             agent_types_service,
             environment_state_service,
