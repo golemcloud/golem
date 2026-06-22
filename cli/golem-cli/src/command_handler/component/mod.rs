@@ -138,7 +138,7 @@ impl ComponentCommandHandler {
                         .await?
                         .values
                         .into_iter()
-                        .map(|component| ComponentView::new(component))
+                        .map(ComponentView::new)
                         .collect::<Vec<_>>())
                 },
             )

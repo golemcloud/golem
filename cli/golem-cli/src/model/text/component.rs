@@ -99,7 +99,7 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
                 &format!("{}Environment", prefix),
                 &provision_config.env,
                 !provision_config.env.is_empty(),
-                |env| format_env(env),
+                format_env,
             )
             .fmt_field_optional(
                 &format!("{}Agent config", prefix),
