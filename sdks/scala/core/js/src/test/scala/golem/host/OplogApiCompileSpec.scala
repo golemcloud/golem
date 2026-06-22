@@ -18,6 +18,7 @@ package golem.host
 
 import golem.HostApi
 import golem.runtime.rpc.host.AgentHostApi
+import golem.schema.{IntoSchema, TypedSchemaValue}
 import zio.test._
 
 import scala.scalajs.js
@@ -25,13 +26,9 @@ import scala.scalajs.js
 object OplogApiCompileSpec extends ZIOSpecDefault {
   import OplogApi._
 
-  private val ts        = ContextApi.DateTime(BigInt(1700000000L), 500000000)
-  private val attr      = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
-  private val sampleVat = WitValueTypes.ValueAndType(
-    WitValueTypes.WitValue(List(WitValueTypes.WitNode.PrimString("test"))),
-    WitValueTypes.WitType(List(WitValueTypes.NamedWitTypeNode(None, None, WitValueTypes.WitTypeNode.PrimStringType)))
-  )
-  private val sampleTdv = TypedDataValue("""{"tag":"tuple","val":[]}""", """{"tag":"tuple","val":[]}""")
+  private val ts                            = ContextApi.DateTime(BigInt(1700000000L), 500000000)
+  private val attr                          = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
+  private val sampleTyped: TypedSchemaValue = IntoSchema[String].toTyped("test")
 
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
@@ -45,7 +42,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       AgentMethodInvocationParameters(
         "idem-1",
         "func",
-        Some(List(sampleTdv)),
+        Some(List(sampleTyped)),
         "trace1",
         List("state1"),
         List(spanDatas)
@@ -174,14 +171,14 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
       OplogEntry.CommittedRemoteTransaction(RemoteTransactionParameters(ts, BigInt(12))),
       OplogEntry.RolledBackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(13))),
-      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTdv), 1000L)),
+      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
       OplogEntry.HostCall(
         HostCallParameters(
           ts,
           "wasi:io/read",
-          sampleVat,
-          sampleVat,
+          sampleTyped,
+          sampleTyped,
           DurabilityApi.DurableFunctionType.ReadRemote
         )
       ),
@@ -190,17 +187,17 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           None,
           "wasi:io/read",
-          Some(sampleVat),
+          Some(sampleTyped),
           DurabilityApi.DurableFunctionType.ReadRemote
         )
       ),
-      OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleVat), forcedCommit = true)),
+      OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleTyped), forcedCommit = true)),
       OplogEntry.Cancelled(CancelledParameters(ts, BigInt(5), None)),
       OplogEntry.AgentInvocationStarted(
         AgentInvocationStartedParameters(
           ts,
           "increment",
-          List(sampleTdv),
+          List(sampleTyped),
           "idem-1",
           "trace-1",
           List("state"),

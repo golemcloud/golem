@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::{
-    exports::golem::agent::guest::DataValue, golem::agent::common::AgentError,
-    golem::agent::common::Principal,
-};
+use crate::golem_agentic::golem::agent::common::{AgentError, Principal};
+use crate::schema::SchemaValue;
 use async_trait::async_trait;
 
 #[async_trait(?Send)]
 pub trait AgentInitiator {
-    async fn initiate(&self, params: DataValue, principal: Principal) -> Result<(), AgentError>;
+    async fn initiate(&self, params: SchemaValue, principal: Principal) -> Result<(), AgentError>;
 }

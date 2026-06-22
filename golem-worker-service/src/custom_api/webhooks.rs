@@ -18,7 +18,11 @@ use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::custom_api::ResponseBody;
 use crate::service::worker::WorkerService;
-use golem_service_base::custom_api::{AgentWebhookId, RequestBodySchema, WebhookCallbackBehaviour};
+use golem_common::schema::SchemaGraph;
+use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType};
+use golem_service_base::custom_api::{
+    AgentWebhookId, CompiledSchema, RequestBodySchema, WebhookCallbackBehaviour,
+};
 use golem_service_base::model::auth::AuthCtx;
 use http::StatusCode;
 use std::collections::HashMap;
@@ -70,12 +74,18 @@ impl WebhookCallbackHandler {
         let promise_id = webhook_id.into_promise_id(behaviour.component_id);
 
         let body = request
-            .parse_request_body(&RequestBodySchema::UnrestrictedBinary)
+            .parse_request_body(&RequestBodySchema::BinaryBody {
+                expected: CompiledSchema {
+                    graph: SchemaGraph::anonymous(
+                        SchemaType::binary(BinaryRestrictions::default()),
+                    ),
+                },
+            })
             .await?;
 
         let ParsedRequestBody::UnstructuredBinary(mut body_data) = body else {
             return Err(RequestHandlerError::invariant_violated(
-                "UnrestrictedBinary body parsing yielded wrong type",
+                "Binary body parsing yielded wrong type",
             ));
         };
 

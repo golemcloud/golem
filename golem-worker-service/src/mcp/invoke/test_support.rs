@@ -25,8 +25,7 @@ use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, AgentType, AgentTypeName};
-use golem_common::model::agent::{NamedElementSchemas, Snapshotting};
+use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
@@ -37,6 +36,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
@@ -292,8 +292,7 @@ impl LimitService for NoopLimitService {
 
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params:
-        Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
     invocation_output: AgentInvocationOutput,
 }
 
@@ -490,7 +489,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         agent_id: &AgentId,
         _: Option<String>,
-        method_params: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_params: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         _: Option<IdempotencyKey>,
@@ -529,8 +528,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) account_id: AccountId,
     pub(crate) account_email: AccountEmail,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params:
-        Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
 }
 
 impl InvocationHarness {
@@ -556,17 +554,16 @@ impl InvocationHarness {
                 vec![],
                 None,
                 None,
-                vec![AgentType {
+                vec![AgentTypeSchema {
                     type_name: AgentTypeName("mcp-agent".to_string()),
                     description: String::new(),
                     source_language: String::new(),
-                    constructor: golem_common::model::agent::AgentConstructor {
+                    schema: SchemaGraph::empty(),
+                    constructor: AgentConstructorSchema {
                         name: None,
                         description: String::new(),
                         prompt_hint: None,
-                        input_schema: golem_common::model::agent::DataSchema::Tuple(
-                            NamedElementSchemas::empty(),
-                        ),
+                        input_schema: InputSchema::Parameters(vec![]),
                     },
                     methods: vec![],
                     dependencies: vec![],
@@ -616,13 +613,13 @@ impl InvocationHarness {
     }
 
     /// The method parameters recorded for the first invocation, decoded back
-    /// from the gRPC carrier into the runtime `UntypedDataValue`.
-    pub(crate) fn recorded_method_params(&self) -> golem_common::model::agent::UntypedDataValue {
+    /// from the gRPC carrier into the runtime `SchemaValue`.
+    pub(crate) fn recorded_method_params(&self) -> golem_common::schema::SchemaValue {
         self.method_params.lock().unwrap()[0]
             .clone()
             .expect("method params were recorded")
             .try_into()
-            .expect("method params decode back into UntypedDataValue")
+            .expect("method params decode back into SchemaValue")
     }
 }
 

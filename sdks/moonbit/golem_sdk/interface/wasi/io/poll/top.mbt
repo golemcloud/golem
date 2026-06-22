@@ -2,7 +2,7 @@
 
 ///|
 /// `pollable` represents a single I/O event which may be ready, or not.
-pub(all) struct Pollable(Int) derive(Debug, Eq)
+pub(all) struct Pollable(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.

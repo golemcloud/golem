@@ -21,7 +21,6 @@ use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDep
 use crate::model::masking::MaskingConfig;
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
-use golem_common::model::agent::AgentType;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
@@ -32,6 +31,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
+use golem_common::schema::agent::AgentTypeSchema;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
 
@@ -87,10 +87,10 @@ pub struct DeployDiff {
     pub current_deployment: Option<DeploymentSummary>,
     pub diffable_current_deployment: diff::Deployment,
     pub current_deployment_hash: diff::Hash,
-    pub current_agent_types: HashMap<String, Vec<AgentType>>,
+    pub current_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
     pub staged_deployment: DeploymentPlan,
     pub staged_deployment_hash: diff::Hash,
-    pub staged_agent_types: HashMap<String, Vec<AgentType>>,
+    pub staged_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
     pub diffable_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
@@ -545,8 +545,8 @@ pub struct RollbackDiff {
     pub current_deployment: DeploymentSummary,
     pub diffable_target_deployment: diff::Deployment,
     pub diffable_current_deployment: diff::Deployment,
-    pub current_agent_types: HashMap<String, Vec<AgentType>>,
-    pub target_agent_types: HashMap<String, Vec<AgentType>>,
+    pub current_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
+    pub target_agent_types: HashMap<String, Vec<AgentTypeSchema>>,
     pub diff: diff::DeploymentDiff,
 }
 

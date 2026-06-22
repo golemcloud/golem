@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
+    use golem:core/types@2.0.0.{account-id, schema-value-tree, typed-schema-value};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
@@ -95,12 +95,12 @@ interface oplog {
 
     record raw-local-agent-config-entry {
         path: list<string>,
-        value: wit-value
+        value: schema-value-tree
     }
 
     record local-agent-config-entry {
         path: list<string>,
-        value: value-and-type
+        value: typed-schema-value
     }
 
     record create-parameters {
@@ -124,21 +124,21 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
-        request: option<value-and-type>,
+        request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
     }
 
     record end-parameters {
         timestamp: datetime,
         start-index: oplog-index,
-        response: option<value-and-type>,
+        response: option<typed-schema-value>,
         forced-commit: bool,
     }
 
     record cancelled-parameters {
         timestamp: datetime,
         start-index: oplog-index,
-        partial: option<value-and-type>,
+        partial: option<typed-schema-value>,
     }
 
     record local-span-data {
@@ -168,6 +168,7 @@ interface oplog {
     record agent-invocation-finished-parameters {
         timestamp: datetime,
         %result: agent-invocation-result,
+        method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
     }
@@ -208,14 +209,9 @@ interface oplog {
         begin-index: oplog-index
     }
 
-    record typed-data-value {
-        value: data-value,
-        schema: data-schema,
-    }
-
     record agent-initialization-parameters {
         idempotency-key: string,
-        constructor-parameters: typed-data-value,
+        constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
@@ -224,7 +220,7 @@ interface oplog {
     record agent-method-invocation-parameters {
         idempotency-key: string,
         method-name: string,
-        function-input: typed-data-value,
+        function-input: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
@@ -261,7 +257,7 @@ interface oplog {
     }
 
     record agent-invocation-output-parameters {
-        output: typed-data-value,
+        output: typed-schema-value,
     }
 
     record fallible-result-parameters {
@@ -532,6 +528,7 @@ interface oplog {
     record raw-agent-invocation-finished-parameters {
         timestamp: datetime,
         %result: oplog-payload,
+        method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
     }

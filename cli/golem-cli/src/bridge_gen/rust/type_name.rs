@@ -95,7 +95,9 @@ impl TypeName for RustTypeName {
             SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
             | SchemaType::Flags { .. }
-            | SchemaType::Record { .. } => true,
+            | SchemaType::Record { .. }
+            // A discriminated union becomes a generated Rust enum.
+            | SchemaType::Union { .. } => true,
             SchemaType::Result { .. }
             | SchemaType::Option { .. }
             | SchemaType::Tuple { .. }
@@ -122,7 +124,6 @@ impl TypeName for RustTypeName {
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }
-            | SchemaType::Union { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::Future { .. }

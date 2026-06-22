@@ -18,13 +18,13 @@ use crate::app::context::BuildContext;
 use crate::fs;
 use crate::log::{LogColorize, log_action, log_skipping_up_to_date};
 use anyhow::Context;
-use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::AgentTypeSchema;
 
 pub async fn extract_and_store_agent_types(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
-) -> anyhow::Result<Vec<AgentType>> {
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
     let component = ctx.application().component(component_name);
     let wasm = component.agent_type_extraction_source_wasm();
     let extracted_agent_types = component.extracted_agent_types(&wasm);

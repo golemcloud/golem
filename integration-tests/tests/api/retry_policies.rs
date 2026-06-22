@@ -21,10 +21,10 @@ use golem_common::model::retry_policy::{
     RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
 };
 use golem_common::model::{Predicate, RetryPolicy, UntypedJsonBody};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
@@ -241,7 +241,7 @@ async fn environment_policy_visible_to_agent(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(has, Value::Bool(true));
+    assert_eq!(has, SchemaValue::Bool(true));
 
     let names = user
         .invoke_and_await_agent(
@@ -254,8 +254,8 @@ async fn environment_policy_visible_to_agent(
         .into_return_value()
         .unwrap();
     match &names {
-        Value::List(items) => {
-            assert!(items.contains(&Value::String("env-visible".to_string())));
+        SchemaValue::List { elements: items } => {
+            assert!(items.contains(&SchemaValue::String("env-visible".to_string())));
         }
         other => panic!("expected List, got {other:?}"),
     }
@@ -301,7 +301,7 @@ async fn multiple_environment_policies_visible_to_agent(
         .into_return_value()
         .unwrap();
     match &count {
-        Value::U64(n) => assert!(*n >= 3, "expected at least 3 policies, got {n}"),
+        SchemaValue::U64(n) => assert!(*n >= 3, "expected at least 3 policies, got {n}"),
         other => panic!("expected U64, got {other:?}"),
     }
 
@@ -316,10 +316,10 @@ async fn multiple_environment_policies_visible_to_agent(
         .into_return_value()
         .unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             for expected in ["alpha", "beta", "gamma"] {
                 assert!(
-                    items.contains(&Value::String(expected.to_string())),
+                    items.contains(&SchemaValue::String(expected.to_string())),
                     "expected {expected} in list"
                 );
             }
@@ -374,13 +374,13 @@ async fn runtime_overlay_coexists_with_environment_policy(
         .into_return_value()
         .unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             assert!(
-                items.contains(&Value::String("env-pol".to_string())),
+                items.contains(&SchemaValue::String("env-pol".to_string())),
                 "expected env-pol in list"
             );
             assert!(
-                items.contains(&Value::String("rt-pol".to_string())),
+                items.contains(&SchemaValue::String("rt-pol".to_string())),
                 "expected rt-pol in list"
             );
         }
@@ -434,10 +434,10 @@ async fn runtime_overlay_overrides_environment_policy_same_name(
         .into_return_value()
         .unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             let occurrences = items
                 .iter()
-                .filter(|v| *v == &Value::String("shared-name".to_string()))
+                .filter(|v| *v == &SchemaValue::String("shared-name".to_string()))
                 .count();
             assert_eq!(occurrences, 1, "shared-name should appear exactly once");
         }
@@ -454,7 +454,7 @@ async fn runtime_overlay_overrides_environment_policy_same_name(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(2));
+    assert_eq!(count, SchemaValue::U64(2));
 
     Ok(())
 }
@@ -486,7 +486,7 @@ async fn environment_policy_created_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(1));
+    assert_eq!(count, SchemaValue::U64(1));
 
     let creation = RetryPolicyCreation {
         name: "late-arrival".to_string(),
@@ -506,7 +506,7 @@ async fn environment_policy_created_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(has, Value::Bool(true));
+    assert_eq!(has, SchemaValue::Bool(true));
 
     Ok(())
 }
@@ -546,7 +546,7 @@ async fn environment_policy_deleted_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(has, Value::Bool(true));
+    assert_eq!(has, SchemaValue::Bool(true));
 
     client
         .delete_retry_policy(&created.id.0, created.revision.into())
@@ -562,7 +562,7 @@ async fn environment_policy_deleted_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(has, Value::Bool(false));
+    assert_eq!(has, SchemaValue::Bool(false));
 
     Ok(())
 }
@@ -602,7 +602,7 @@ async fn environment_policy_updated_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(has, Value::Bool(true));
+    assert_eq!(has, SchemaValue::Bool(true));
 
     let update = RetryPolicyUpdate {
         current_revision: created.revision,
@@ -622,7 +622,7 @@ async fn environment_policy_updated_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(has, Value::Bool(true));
+    assert_eq!(has, SchemaValue::Bool(true));
 
     let count = user
         .invoke_and_await_agent(
@@ -634,7 +634,7 @@ async fn environment_policy_updated_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(2));
+    assert_eq!(count, SchemaValue::U64(2));
 
     Ok(())
 }

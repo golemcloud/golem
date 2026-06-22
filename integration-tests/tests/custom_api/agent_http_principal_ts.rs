@@ -65,7 +65,7 @@ async fn principal_auto_injection(agent: &HttpTestContext) -> anyhow::Result<()>
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "value": {"anonymous": null} }));
+    assert_eq!(body, json!({ "value": "anonymous" }));
 
     Ok(())
 }
@@ -88,7 +88,7 @@ async fn principal_auto_injection_middle_segment(agent: &HttpTestContext) -> any
 
     assert_eq!(
         body,
-        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": 1.0 })
+        json!({ "value": "anonymous", "foo": "foo-value", "bar": 1.0 })
     );
 
     Ok(())
@@ -112,7 +112,7 @@ async fn principal_auto_injection_last_segment(agent: &HttpTestContext) -> anyho
 
     assert_eq!(
         body,
-        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": 2.0 })
+        json!({ "value": "anonymous", "foo": "foo-value", "bar": 2.0 })
     );
 
     Ok(())

@@ -1,284 +1,332 @@
+// `IntoSchema` / `FromSchema` impls for MoonBit primitive types, mirroring the
+// Rust SDK's `impl_primitive!` macro expansions in `conversion.rs`.
+//
+// Primitives are structural (inline): `register_in` returns the leaf
+// `SchemaType` directly, never reserving a named definition. `type_id` is kept
+// aligned with the Rust SDK's identifiers so a generic nominal type that closes
+// over a primitive produces the same cross-SDK definition id.
+
+// ============================================================
+// String
+// ============================================================
+
 ///|
-/// Creates a `ComponentModel` element schema containing a single primitive type node.
-fn make_prim_schema(type_node : @types.WitTypeNode) -> @types.ElementSchema {
-  @types.ElementSchema::ComponentModel({
-    nodes: [{ name: None, owner: None, type_: type_node }],
-  })
+pub impl IntoSchema for String with type_id() {
+  "alloc.string.String"
 }
 
 ///|
-pub impl HasElementSchema for String with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimStringType)
+pub impl IntoSchema for String with register_in(_b) {
+  @model.schema_type(String)
 }
 
 ///|
-pub impl FromExtractor for String with from_extractor(e) {
-  guard e.string() is Some(s) else {
-    raise @common.AgentError::InvalidInput("Expected String")
+pub impl IntoSchema for String with to_value(self) {
+  String(self)
+}
+
+///|
+pub impl FromSchema for String with from_value(v) {
+  match v {
+    String(s) => s
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "string",
+        value_kind(other),
+        "String",
+      )
   }
-  s
+}
+
+// ============================================================
+// Bool
+// ============================================================
+
+///|
+pub impl IntoSchema for Bool with type_id() {
+  "bool"
 }
 
 ///|
-pub impl FromElementValue for String with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Bool with register_in(_b) {
+  @model.schema_type(Bool)
 }
 
 ///|
-pub impl ToElementValue for String with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().string(self))
+pub impl IntoSchema for Bool with to_value(self) {
+  Bool(self)
 }
 
 ///|
-pub impl HasElementSchema for Bool with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimBoolType)
-}
-
-///|
-pub impl FromExtractor for Bool with from_extractor(e) {
-  guard e.bool() is Some(b) else {
-    raise @common.AgentError::InvalidInput("Expected Bool")
+pub impl FromSchema for Bool with from_value(v) {
+  match v {
+    Bool(b) => b
+    other =>
+      raise FromSchemaError::shape_mismatch("bool", value_kind(other), "Bool")
   }
-  b
+}
+
+// ============================================================
+// Int -> s32
+// ============================================================
+
+///|
+pub impl IntoSchema for Int with type_id() {
+  "i32"
 }
 
 ///|
-pub impl FromElementValue for Bool with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Int with register_in(_b) {
+  @model.schema_type(S32)
 }
 
 ///|
-pub impl ToElementValue for Bool with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().bool(self))
+pub impl IntoSchema for Int with to_value(self) {
+  S32(self)
 }
 
 ///|
-pub impl HasElementSchema for Int with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimS32Type)
-}
-
-///|
-pub impl FromExtractor for Int with from_extractor(e) {
-  guard e.s32() is Some(i) else {
-    raise @common.AgentError::InvalidInput("Expected Int (S32)")
+pub impl FromSchema for Int with from_value(v) {
+  match v {
+    S32(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("s32", value_kind(other), "Int")
   }
-  i
+}
+
+// ============================================================
+// UInt -> u32
+// ============================================================
+
+///|
+pub impl IntoSchema for UInt with type_id() {
+  "u32"
 }
 
 ///|
-pub impl FromElementValue for Int with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for UInt with register_in(_b) {
+  @model.schema_type(U32)
 }
 
 ///|
-pub impl ToElementValue for Int with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().s32(self))
+pub impl IntoSchema for UInt with to_value(self) {
+  U32(self)
 }
 
 ///|
-pub impl HasElementSchema for UInt with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimU32Type)
-}
-
-///|
-pub impl FromExtractor for UInt with from_extractor(e) {
-  guard e.u32() is Some(u) else {
-    raise @common.AgentError::InvalidInput("Expected UInt (U32)")
+pub impl FromSchema for UInt with from_value(v) {
+  match v {
+    U32(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("u32", value_kind(other), "UInt")
   }
-  u
+}
+
+// ============================================================
+// Int64 -> s64
+// ============================================================
+
+///|
+pub impl IntoSchema for Int64 with type_id() {
+  "i64"
 }
 
 ///|
-pub impl FromElementValue for UInt with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Int64 with register_in(_b) {
+  @model.schema_type(S64)
 }
 
 ///|
-pub impl ToElementValue for UInt with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().u32(self))
+pub impl IntoSchema for Int64 with to_value(self) {
+  S64(self)
 }
 
 ///|
-pub impl HasElementSchema for Int64 with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimS64Type)
-}
-
-///|
-pub impl FromExtractor for Int64 with from_extractor(e) {
-  guard e.s64() is Some(i) else {
-    raise @common.AgentError::InvalidInput("Expected Int64 (S64)")
+pub impl FromSchema for Int64 with from_value(v) {
+  match v {
+    S64(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("s64", value_kind(other), "Int64")
   }
-  i
+}
+
+// ============================================================
+// UInt64 -> u64
+// ============================================================
+
+///|
+pub impl IntoSchema for UInt64 with type_id() {
+  "u64"
 }
 
 ///|
-pub impl FromElementValue for Int64 with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for UInt64 with register_in(_b) {
+  @model.schema_type(U64)
 }
 
 ///|
-pub impl ToElementValue for Int64 with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().s64(self))
+pub impl IntoSchema for UInt64 with to_value(self) {
+  U64(self)
 }
 
 ///|
-pub impl HasElementSchema for UInt64 with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimU64Type)
-}
-
-///|
-pub impl FromExtractor for UInt64 with from_extractor(e) {
-  guard e.u64() is Some(u) else {
-    raise @common.AgentError::InvalidInput("Expected UInt64 (U64)")
+pub impl FromSchema for UInt64 with from_value(v) {
+  match v {
+    U64(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("u64", value_kind(other), "UInt64")
   }
-  u
+}
+
+// ============================================================
+// Float -> f32
+// ============================================================
+
+///|
+pub impl IntoSchema for Float with type_id() {
+  "f32"
 }
 
 ///|
-pub impl FromElementValue for UInt64 with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Float with register_in(_b) {
+  @model.schema_type(F32)
 }
 
 ///|
-pub impl ToElementValue for UInt64 with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().u64(self))
+pub impl IntoSchema for Float with to_value(self) {
+  F32(self)
 }
 
 ///|
-pub impl HasElementSchema for Float with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimF32Type)
-}
-
-///|
-pub impl FromExtractor for Float with from_extractor(e) {
-  guard e.f32() is Some(f) else {
-    raise @common.AgentError::InvalidInput("Expected Float (F32)")
+pub impl FromSchema for Float with from_value(v) {
+  match v {
+    F32(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("f32", value_kind(other), "Float")
   }
-  f
+}
+
+// ============================================================
+// Double -> f64
+// ============================================================
+
+///|
+pub impl IntoSchema for Double with type_id() {
+  "f64"
 }
 
 ///|
-pub impl FromElementValue for Float with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Double with register_in(_b) {
+  @model.schema_type(F64)
 }
 
 ///|
-pub impl ToElementValue for Float with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().f32(self))
+pub impl IntoSchema for Double with to_value(self) {
+  F64(self)
 }
 
 ///|
-pub impl HasElementSchema for Double with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimF64Type)
-}
-
-///|
-pub impl FromExtractor for Double with from_extractor(e) {
-  guard e.f64() is Some(d) else {
-    raise @common.AgentError::InvalidInput("Expected Double (F64)")
+pub impl FromSchema for Double with from_value(v) {
+  match v {
+    F64(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("f64", value_kind(other), "Double")
   }
-  d
+}
+
+// ============================================================
+// Byte -> u8
+// ============================================================
+
+///|
+pub impl IntoSchema for Byte with type_id() {
+  "u8"
 }
 
 ///|
-pub impl FromElementValue for Double with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Byte with register_in(_b) {
+  @model.schema_type(U8)
 }
 
 ///|
-pub impl ToElementValue for Double with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().f64(self))
+pub impl IntoSchema for Byte with to_value(self) {
+  U8(self)
 }
 
 ///|
-pub impl HasElementSchema for Byte with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimU8Type)
-}
-
-///|
-pub impl FromExtractor for Byte with from_extractor(e) {
-  guard e.u8() is Some(b) else {
-    raise @common.AgentError::InvalidInput("Expected Byte (U8)")
+pub impl FromSchema for Byte with from_value(v) {
+  match v {
+    U8(x) => x
+    other =>
+      raise FromSchemaError::shape_mismatch("u8", value_kind(other), "Byte")
   }
-  b
+}
+
+// ============================================================
+// Char
+// ============================================================
+
+///|
+pub impl IntoSchema for Char with type_id() {
+  "char"
 }
 
 ///|
-pub impl FromElementValue for Byte with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+pub impl IntoSchema for Char with register_in(_b) {
+  @model.schema_type(Char)
 }
 
 ///|
-pub impl ToElementValue for Byte with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().u8(self))
+pub impl IntoSchema for Char with to_value(self) {
+  Char(self)
 }
 
 ///|
-pub impl HasElementSchema for Char with element_schema() {
-  make_prim_schema(@types.WitTypeNode::PrimCharType)
-}
-
-///|
-pub impl FromExtractor for Char with from_extractor(e) {
-  guard e.char() is Some(c) else {
-    raise @common.AgentError::InvalidInput("Expected Char")
+pub impl FromSchema for Char with from_value(v) {
+  match v {
+    Char(c) => c
+    other =>
+      raise FromSchemaError::shape_mismatch("char", value_kind(other), "Char")
   }
-  c
+}
+
+// ============================================================
+// Bytes -> binary (mirrors Rust `bytes::Bytes` -> SchemaType::binary)
+// ============================================================
+
+///|
+pub impl IntoSchema for Bytes with type_id() {
+  "bytes.Bytes"
 }
 
 ///|
-pub impl FromElementValue for Char with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
-}
-
-///|
-pub impl ToElementValue for Char with to_element_value(self) {
-  @types.ElementValue::ComponentModel(@builder.Builder::new().char(self))
-}
-
-///|
-pub impl HasElementSchema for Bytes with element_schema() {
-  @types.ElementSchema::ComponentModel(
-    @builder.TypeBuilder::new().list_type({
-      nodes: [
-        { name: None, owner: None, type_: @types.WitTypeNode::PrimU8Type },
-      ],
-    }),
+pub impl IntoSchema for Bytes with register_in(_b) {
+  @model.schema_type(
+    Binary({ mime_types: None, min_bytes: None, max_bytes: None }),
   )
 }
 
 ///|
-pub impl FromExtractor for Bytes with from_extractor(e) {
-  guard e.list_elements() is Some(items) else {
-    raise @common.AgentError::InvalidInput("Expected Bytes (list<u8>)")
-  }
-  let arr : Array[Byte] = []
-  for item in items {
-    guard item.u8() is Some(b) else {
-      raise @common.AgentError::InvalidInput("Expected u8 element in Bytes")
-    }
-    arr.push(b)
-  }
-  Bytes::from_array(arr)
+pub impl IntoSchema for Bytes with to_value(self) {
+  let bytes : FixedArray[Byte] = FixedArray::makei(self.length(), i => self[i])
+  Binary(bytes, None)
 }
 
 ///|
-pub impl FromElementValue for Bytes with from_element_value(v) {
-  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
-}
-
-///|
-pub impl ToElementValue for Bytes with to_element_value(self) {
-  let inner_values : Array[@types.WitValue] = []
-  for i in 0..<self.length() {
-    inner_values.push(@builder.Builder::new().u8(self[i]))
-  }
-  let wit_value = @builder.Builder::new().list(item => {
-    for v in inner_values {
-      item.wit_value(v)
+pub impl FromSchema for Bytes with from_value(v) {
+  match v {
+    Binary(bytes, _) => {
+      let arr : Array[Byte] = []
+      for i in 0..<bytes.length() {
+        arr.push(bytes[i])
+      }
+      Bytes::from_array(arr)
     }
-  }) catch {
-    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
+    other =>
+      raise FromSchemaError::shape_mismatch(
+        "binary",
+        value_kind(other),
+        "Bytes",
+      )
   }
-  @types.ElementValue::ComponentModel(wit_value)
 }

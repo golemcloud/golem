@@ -49,6 +49,12 @@ interface types {
         low-bits: u64,
     }
 
+    /// Parses a UUID from a string
+    parse-uuid: func(uuid: string) -> result<uuid, string>;
+
+    /// Converts a UUID to a string
+    uuid-to-string: func(uuid: uuid) -> string;
+
     record datetime {
         /// Seconds since the Unix epoch (UTC).
         seconds: s64,
@@ -58,6 +64,42 @@ interface types {
 
     record environment-id {
         uuid: uuid,
+    }
+
+    // ============================================================
+    // Platform identifiers
+    // ============================================================
+    //
+    // Platform identifiers used by the schema-native surfaces. Keeping them
+    // here lets migrated interfaces depend on a single core version.
+
+    /// Represents a Golem component
+    record component-id {
+        uuid: uuid,
+    }
+
+    /// Represents a Golem agent
+    record agent-id {
+        /// Identifies the component the agent belongs to
+        component-id: component-id,
+        /// String representation of the agent ID (agent type and constructor parameters)
+        agent-id: string,
+    }
+
+    /// Represents a Golem account
+    record account-id {
+        uuid: uuid,
+    }
+
+    /// An index into the persistent log storing all performed operations of an agent
+    type oplog-index = u64;
+
+    /// A promise ID is a value that can be passed to an external Golem API to
+    /// complete that promise from an arbitrary external source, while Golem
+    /// agents can await for this completion.
+    record promise-id {
+        agent-id: agent-id,
+        oplog-idx: oplog-index,
     }
 
     // ============================================================
@@ -113,7 +155,13 @@ interface types {
 
     /// Open registry; unknown roles fall back to structural handling.
     variant role {
+        /// `list<variant<…>>` whose elements are interchangeable modalities.
         multimodal,
+        /// `variant { inline: text, url: url }` ergonomic unstructured-text wrapper.
+        unstructured-text,
+        /// `variant { inline: binary, url: url }` ergonomic unstructured-binary wrapper.
+        unstructured-binary,
+        /// Any other producer-defined role, preserved verbatim.
         other(string),
     }
 

@@ -39,8 +39,8 @@ fn union_into_schema_emits_branches_with_discriminators() {
     match &graph.defs[0].body {
         SchemaType::Union { spec, .. } => {
             assert_eq!(spec.branches.len(), 2);
-            assert_eq!(spec.branches[0].tag, "ssh");
-            assert_eq!(spec.branches[1].tag, "web");
+            assert_eq!(spec.branches[0].tag, "Ssh");
+            assert_eq!(spec.branches[1].tag, "Web");
             assert_eq!(
                 spec.branches[0].discriminator,
                 DiscriminatorRule::Prefix {

@@ -5,7 +5,7 @@ declare module 'golem:api/oplog@1.5.0' {
   import * as golemApi150Context from 'golem:api/context@1.5.0';
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemApi150Retry from 'golem:api/retry@1.5.0';
-  import * as golemCore150Types from 'golem:core/types@1.5.0';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
   import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   /**
@@ -23,11 +23,9 @@ declare module 'golem:api/oplog@1.5.0' {
     getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
   }
   export type Datetime = wasiClocks023WallClock.Datetime;
-  export type ValueAndType = golemCore150Types.ValueAndType;
-  export type AccountId = golemCore150Types.AccountId;
-  export type DataValue = golemCore150Types.DataValue;
-  export type DataSchema = golemCore150Types.DataSchema;
-  export type WitValue = golemCore150Types.WitValue;
+  export type AccountId = golemCore200Types.AccountId;
+  export type SchemaValueTree = golemCore200Types.SchemaValueTree;
+  export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type PersistenceLevel = golemApi150Host.PersistenceLevel;
@@ -152,11 +150,11 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawLocalAgentConfigEntry = {
     path: string[];
-    value: WitValue;
+    value: SchemaValueTree;
   };
   export type LocalAgentConfigEntry = {
     path: string[];
-    value: ValueAndType;
+    value: TypedSchemaValue;
   };
   export type CreateParameters = {
     timestamp: Datetime;
@@ -178,19 +176,19 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
-    request?: ValueAndType;
+    request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
   };
   export type EndParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
-    response?: ValueAndType;
+    response?: TypedSchemaValue;
     forcedCommit: boolean;
   };
   export type CancelledParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
-    partial?: ValueAndType;
+    partial?: TypedSchemaValue;
   };
   export type LocalSpanData = {
     spanId: SpanId;
@@ -247,13 +245,9 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
-  export type TypedDataValue = {
-    value: DataValue;
-    schema: DataSchema;
-  };
   export type AgentInitializationParameters = {
     idempotencyKey: string;
-    constructorParameters: TypedDataValue;
+    constructorParameters: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
@@ -261,7 +255,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentMethodInvocationParameters = {
     idempotencyKey: string;
     methodName: string;
-    functionInput: TypedDataValue;
+    functionInput: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
@@ -273,7 +267,7 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
   };
   export type AgentInvocationOutputParameters = {
-    output: TypedDataValue;
+    output: TypedSchemaValue;
   };
   export type FallibleResultParameters = {
     error?: string;
@@ -442,6 +436,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentInvocationFinishedParameters = {
     timestamp: Datetime;
     result: AgentInvocationResult;
+    methodName?: string;
     consumedFuel: bigint;
     componentRevision: bigint;
   };
@@ -615,6 +610,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
     result: OplogPayload;
+    methodName?: string;
     consumedFuel: bigint;
     componentRevision: bigint;
   };

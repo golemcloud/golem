@@ -17,14 +17,12 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
+use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::agent::{
-    AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
-    Snapshotting,
-};
 use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_registry_service::repo::environment::{
     EnvironmentRevisionRecord, EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
 };
@@ -1235,16 +1233,17 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
 
 // resolve_agent_type_by_names tests ---------------------------------------------------------------
 
-fn make_test_agent_type(name: &str) -> AgentType {
-    AgentType {
+fn make_test_agent_type(name: &str) -> AgentTypeSchema {
+    AgentTypeSchema {
         type_name: AgentTypeName(name.to_string()),
         description: format!("Test agent {name}"),
         source_language: String::new(),
-        constructor: AgentConstructor {
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
             name: None,
             description: "constructor".to_string(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            input_schema: InputSchema::Parameters(vec![]),
         },
         methods: vec![],
         dependencies: vec![],

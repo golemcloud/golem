@@ -12,65 +12,68 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataValue, RegisteredAgentType, Uuid, WasmRpc } from 'golem:agent/host@1.5.0';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src';
 
-vi.mock('golem:agent/host@1.5.0', () => ({
-  getAgentType: (agentTypeName: string): RegisteredAgentType | undefined => {
-    if (agentTypeName == 'FooAgent') {
+// The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock it
+// with a schema-native, JSON-round-trippable `make-agent-id` / `parse-agent-id`
+// pair (the constructor params crossing the boundary are `schema-value-tree`s)
+// plus the registry and RPC stubs the SDK touches.
+vi.mock('golem:agent/host@2.0.0', () => ({
+  getAllAgentTypes: () => [],
+  getAgentType: (agentTypeName: string) => {
+    if (agentTypeName === 'FooAgent') {
       const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));
-
       if (!agentType) {
         throw new Error('Missing FooAgent in registry');
       }
-
       return {
-        agentType: agentType,
-        implementedBy: {
-          uuid: {
-            lowBits: BigInt(0),
-            highBits: BigInt(0),
-          },
-        },
+        agentType,
+        implementedBy: { uuid: { lowBits: BigInt(0), highBits: BigInt(0) } },
       };
-    } else {
-      return undefined;
     }
+    return undefined;
   },
-  makeAgentId: (agentTypeName: string, input: DataValue, phantomId: Uuid | undefined): string => {
-    let phantomPostfix;
-    if (phantomId) {
-      phantomPostfix = `[${phantomId.highBits}-${phantomId.lowBits}]`;
-    } else {
-      phantomPostfix = '';
-    }
+  makeAgentId: (
+    agentTypeName: string,
+    input: unknown,
+    phantomId: { highBits: bigint; lowBits: bigint } | undefined,
+  ): string => {
+    const phantomPostfix = phantomId ? `[${phantomId.highBits}-${phantomId.lowBits}]` : '';
     return `${agentTypeName}(${JSON.stringify(input)})${phantomPostfix}`;
   },
-  parseAgentId(agentId: string): [string, DataValue, Uuid | undefined] {
-    const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?/);
+  parseAgentId: (agentId: string) => {
+    const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);
     if (!match) {
       throw new Error(`Invalid agent ID: ${agentId}`);
     }
-    const [, typeName, inputJson, maybePhantomId, hiBits, loBits] = match;
-    const input = JSON.parse(inputJson);
-    let phantomId: Uuid | undefined = undefined;
-    if (maybePhantomId) {
-      phantomId = {
-        highBits: BigInt(hiBits),
-        lowBits: BigInt(loBits),
-      };
+    const [, typeName, inputJson, , hiBits, loBits] = match;
+    // The graph is a structurally-required placeholder; the SDK only reads the
+    // value tree and re-derives types from its own registry.
+    const typed = {
+      graph: { typeNodes: [], defs: [], root: 0 },
+      value: JSON.parse(inputJson),
+    };
+    let phantomId: { highBits: bigint; lowBits: bigint } | undefined = undefined;
+    if (hiBits !== undefined) {
+      phantomId = { highBits: BigInt(hiBits), lowBits: BigInt(loBits) };
     }
-    return [typeName, input, phantomId];
+    return [typeName, typed, phantomId];
   },
-  WasmRpc: vi
-    .fn()
-    .mockImplementation(
-      (_agentTypeName: string, _constructor: DataValue, _phantomId: Uuid | undefined) => ({}),
-    ),
+  getConfigValue: () => {
+    throw new Error('getConfigValue is not mocked in this test setup');
+  },
+  createWebhook: () => 'https://example.com/webhook',
+  WasmRpc: vi.fn().mockImplementation(() => ({
+    invokeAndAwait: vi.fn(),
+    invoke: vi.fn(),
+    asyncInvokeAndAwait: vi.fn(),
+    scheduleInvocation: vi.fn(),
+    scheduleCancelableInvocation: vi.fn(),
+  })),
 }));
 
-vi.mock('golem:core/types@1.5.0', () => ({
+vi.mock('golem:core/types@2.0.0', () => ({
   parseUuid: (uuid: string) => {
     const parts = uuid.replace(/-/g, '');
     return {

@@ -4,7 +4,7 @@
 /// Represents a Golem environment
 pub(all) struct EnvironmentId {
   uuid : @types.Uuid
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Configurable persistence level for agents
@@ -12,14 +12,14 @@ pub(all) enum PersistenceLevel {
   PersistNothing
   PersistRemoteSideEffects
   Smart
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes how to update an agent to a different component version
 pub(all) enum UpdateMode {
   AUTOMATIC
   SNAPSHOT_BASED
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn UpdateMode::ordinal(self : UpdateMode) -> Int {
@@ -47,7 +47,7 @@ pub(all) enum FilterComparator {
   GREATER
   LESS_EQUAL
   LESS
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn FilterComparator::ordinal(self : FilterComparator) -> Int {
@@ -82,7 +82,7 @@ pub(all) enum StringFilterComparator {
   LIKE
   NOT_LIKE
   STARTS_WITH
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn StringFilterComparator::ordinal(self : StringFilterComparator) -> Int {
@@ -117,7 +117,7 @@ pub(all) enum AgentStatus {
   RETRYING
   FAILED
   EXITED
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub fn AgentStatus::ordinal(self : AgentStatus) -> Int {
@@ -151,28 +151,28 @@ pub fn AgentStatus::from(self : Int) -> AgentStatus {
 pub(all) struct AgentNameFilter {
   comparator : StringFilterComparator
   value : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes a filter condition on the agent status when enumerating agents
 pub(all) struct AgentStatusFilter {
   comparator : FilterComparator
   value : AgentStatus
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes a filter condition on the component version when enumerating agents
 pub(all) struct AgentVersionFilter {
   comparator : FilterComparator
   value : UInt64
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes a filter condition on the agent's creation time when enumerating agents
 pub(all) struct AgentCreatedAtFilter {
   comparator : FilterComparator
   value : UInt64
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes a filter condition on the agent's environment variables when enumerating agents
@@ -180,7 +180,7 @@ pub(all) struct AgentEnvFilter {
   name : String
   comparator : StringFilterComparator
   value : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes a filter condition on the agent's configuration variables when enumerating agents
@@ -188,7 +188,7 @@ pub(all) struct AgentConfigVarsFilter {
   name : String
   comparator : StringFilterComparator
   value : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Describes one filter condition for enumerating agents
@@ -198,20 +198,20 @@ pub(all) enum AgentPropertyFilter {
   Version(AgentVersionFilter)
   CreatedAt(AgentCreatedAtFilter)
   Env(AgentEnvFilter)
-  WasiConfigVars(AgentConfigVarsFilter)
-} derive(Debug, Eq)
+  Config(AgentConfigVarsFilter)
+} derive(Show, Eq)
 
 ///|
 /// Combines multiple filter conditions with an `AND` relationship for enumerating agents
 pub(all) struct AgentAllFilter {
   filters : Array[AgentPropertyFilter]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Combines multiple groups of filter conditions with an `OR` relationship for enumerating agents
 pub(all) struct AgentAnyFilter {
   filters : Array[AgentAllFilter]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Metadata about an agent
@@ -219,16 +219,16 @@ pub(all) struct AgentMetadata {
   agent_id : @types.AgentId
   args : Array[String]
   env : Array[(String, String)]
-  config_vars : Array[(String, String)]
+  config : Array[(String, String)]
   status : AgentStatus
   component_revision : UInt64
   retry_count : UInt64
   environment_id : EnvironmentId
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Creates an agent enumeration
-pub(all) struct GetAgents(Int) derive(Debug, Eq)
+pub(all) struct GetAgents(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -242,13 +242,13 @@ pub fn GetAgents::drop(self : GetAgents) -> Unit {
 pub(all) enum RevertAgentTarget {
   RevertToOplogIndex(UInt64)
   RevertLastInvocations(UInt64)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Details about the fork result
 pub(all) struct ForkDetails {
   forked_phantom_id : @types.Uuid
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Indicates which agent the code is running on after `fork`.
@@ -257,10 +257,10 @@ pub(all) struct ForkDetails {
 pub(all) enum ForkResult {
   Original(ForkDetails)
   Forked(ForkDetails)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
-pub(all) struct GetPromiseResult(Int) derive(Debug, Eq)
+pub(all) struct GetPromiseResult(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -274,7 +274,7 @@ pub fn GetPromiseResult::drop(self : GetPromiseResult) -> Unit {
 pub(all) struct Snapshot {
   payload : FixedArray[Byte]
   mime_type : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
@@ -358,7 +358,7 @@ pub fn GetAgents::get_agents(
 
               ()
             }
-            WasiConfigVars(payload8) => {
+            Config(payload8) => {
               mbt_ffi_store8(iter_base + 0, 5)
 
               let ptr9 = mbt_ffi_str2ptr(payload8.name)
@@ -489,7 +489,7 @@ pub fn GetAgents::get_next(self : GetAgents) -> Array[AgentMetadata]? {
           },
           args: array,
           env: array3,
-          config_vars: array7,
+          config: array7,
           status: AgentStatus::from(mbt_ffi_load8_u(iter_base + 48)),
           component_revision: mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
           retry_count: mbt_ffi_load64(iter_base + 64).reinterpret_as_uint64(),
@@ -656,10 +656,10 @@ pub fn mark_end_operation(begin : UInt64) -> Unit {
 ///|
 /// Unconditionally traps the current invocation with the given reason.
 ///
-/// This call never returns: it surfaces as an uncatchable wasm trap on the host
-/// side and the worker enters the standard trap-recovery flow. SDK guard helpers
-/// use this to guarantee that a failed atomic region always leads to a trap,
-/// regardless of whether the guest language could otherwise catch the failure.
+/// This call never returns: it surfaces as an uncatchable wasm trap on the host side
+/// and the worker enters the standard trap-recovery flow. SDK guard helpers use this
+/// to guarantee that a failed atomic region always leads to a trap, regardless of
+/// whether the guest language could otherwise catch the failure.
 pub fn trap(reason : String) -> Unit {
   let ptr = mbt_ffi_str2ptr(reason)
   wasmImportTrap(ptr, reason.length())
@@ -818,7 +818,7 @@ pub fn get_self_metadata() -> AgentMetadata {
     },
     args: array,
     env: array3,
-    config_vars: array7,
+    config: array7,
     status: AgentStatus::from(mbt_ffi_load8_u(return_area + 48)),
     component_revision: mbt_ffi_load64(return_area + 56).reinterpret_as_uint64(),
     retry_count: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
@@ -919,7 +919,7 @@ pub fn get_agent_metadata(agent_id : @types.AgentId) -> AgentMetadata? {
         },
         args: array,
         env: array3,
-        config_vars: array7,
+        config: array7,
         status: AgentStatus::from(mbt_ffi_load8_u(return_area + 56)),
         component_revision: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
         retry_count: mbt_ffi_load64(return_area + 72).reinterpret_as_uint64(),

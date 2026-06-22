@@ -21,7 +21,7 @@ use golem_common::model::oplog::types::{
     SerializableDbValueNode, SerializableDomain, SerializableDomainType, SerializableRange,
     SerializableRangeType, SparseVec, TimeTz, ValuesRange,
 };
-use golem_wasm::NodeIndex;
+use golem_schema::schema::wit::wire::ValueNodeIndex as NodeIndex;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::Bound;

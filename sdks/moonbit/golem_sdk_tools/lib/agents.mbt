@@ -39,13 +39,6 @@ pub fn decode_qualified(name : String) -> (String, String)? {
 }
 
 ///|
-/// Schema restriction options parsed from `#derive.text_languages` and `#derive.mime_types` annotations.
-pub(all) struct SchemaOptions {
-  text_languages : Array[String]
-  binary_mime_types : Array[String]
-} derive(Debug, Eq)
-
-///|
 /// HTTP endpoint information parsed from `#derive.endpoint` annotations on methods.
 pub(all) struct HttpEndpointInfo {
   method : String
@@ -88,7 +81,6 @@ pub(all) struct MethodInfo {
   prompt_hint : String?
   params : Array[(String, ParamType)]
   return_type : ParamType?
-  param_schema_options : Map[String, SchemaOptions]
   http_endpoint : HttpEndpointInfo?
   read_only : ReadOnlyInfo?
 } derive(Debug)
@@ -121,7 +113,6 @@ pub(all) struct AgentInfo {
   constructor_prompt_hint : String?
   methods : Array[MethodInfo]
   has_init : Bool
-  constructor_schema_options : Map[String, SchemaOptions]
   has_snapshottable : Bool
   has_json_derives : Bool
   fields : Array[(String, Bool)]
@@ -191,7 +182,7 @@ pub fn syntax_type_to_param_type(
             Parameterized(name, params)
           }
         Dot(pkg~, id~) =>
-          if pkg == "types" && id == "Multimodal" {
+          if pkg == "multimodal" && id == "Multimodal" {
             match tys {
               More(inner, ..) =>
                 MultimodalType(syntax_type_to_param_type(inner))
@@ -522,7 +513,9 @@ fn extract_read_only(
           (Some(UntilWrite), None) => UntilWrite
           (Some(Ttl(_)), Some(n)) => Ttl(n)
           (Some(Ttl(_)), None) =>
-            abort("cache = \"ttl\" requires a ttl = \"<nanoseconds>\" parameter")
+            abort(
+              "cache = \"ttl\" requires a ttl = \"<nanoseconds>\" parameter",
+            )
           (Some(other), Some(_)) => {
             let _ = other
             abort("ttl parameter is only valid with cache = \"ttl\"")
@@ -589,26 +582,6 @@ pub fn is_multimodal_type(pt : ParamType) -> Bool {
 /// Currently always returns false.
 pub fn is_rpc_incompatible_type(_pt : ParamType) -> Bool {
   false
-}
-
-///|
-/// Returns true if the parameter type is `UnstructuredText`.
-pub fn is_unstructured_text_type(pt : ParamType) -> Bool {
-  match pt {
-    Simple(name) =>
-      name == "UnstructuredText" || name == "@types.UnstructuredText"
-    _ => false
-  }
-}
-
-///|
-/// Returns true if the parameter type is `UnstructuredBinary`.
-pub fn is_unstructured_binary_type(pt : ParamType) -> Bool {
-  match pt {
-    Simple(name) =>
-      name == "UnstructuredBinary" || name == "@types.UnstructuredBinary"
-    _ => false
-  }
 }
 
 ///|
@@ -759,76 +732,6 @@ fn validate_no_multimodal_inside(
         validate_no_multimodal_inside(wrapper, param_name, elem)
       }
   }
-}
-
-///|
-/// Extracts `#derive.text_languages` and `#derive.mime_types` restrictions from attributes, grouped by parameter name.
-fn extract_schema_restrictions(
-  attrs : @list.List[@attribute.Attribute],
-) -> Map[String, SchemaOptions] {
-  let result : Map[String, SchemaOptions] = {}
-  attrs.each(fn(attr) {
-    match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "text_languages" }, props)) => {
-        let strings : Array[String] = []
-        props.each(fn(prop) {
-          match prop {
-            Expr(String(s)) => strings.push(s)
-            _ => ()
-          }
-        })
-        if strings.length() >= 2 {
-          let param_name = strings[0]
-          let codes : Array[String] = []
-          for i in 1..<strings.length() {
-            codes.push(strings[i])
-          }
-          match result.get(param_name) {
-            Some(existing) =>
-              result[param_name] = {
-                text_languages: existing.text_languages + codes,
-                binary_mime_types: existing.binary_mime_types,
-              }
-            None =>
-              result[param_name] = {
-                text_languages: codes,
-                binary_mime_types: [],
-              }
-          }
-        }
-      }
-      Some(Apply({ qual: Some("derive"), name: "mime_types" }, props)) => {
-        let strings : Array[String] = []
-        props.each(fn(prop) {
-          match prop {
-            Expr(String(s)) => strings.push(s)
-            _ => ()
-          }
-        })
-        if strings.length() >= 2 {
-          let param_name = strings[0]
-          let mimes : Array[String] = []
-          for i in 1..<strings.length() {
-            mimes.push(strings[i])
-          }
-          match result.get(param_name) {
-            Some(existing) =>
-              result[param_name] = {
-                text_languages: existing.text_languages,
-                binary_mime_types: existing.binary_mime_types + mimes,
-              }
-            None =>
-              result[param_name] = {
-                text_languages: [],
-                binary_mime_types: mimes,
-              }
-          }
-        }
-      }
-      _ => ()
-    }
-  })
-  result
 }
 
 ///|
@@ -1109,7 +1012,7 @@ pub fn parse_agents(
   let agent_snapshotting : Map[String, AgentSnapshotting] = {}
   let agent_constructors : Map[
     String,
-    (Array[(String, ParamType)], String, String?, Map[String, SchemaOptions]),
+    (Array[(String, ParamType)], String, String?),
   ] = {}
   let agent_methods : Map[String, Array[MethodInfo]] = {}
   let agent_snapshottable : Map[String, Bool] = {}
@@ -1214,8 +1117,7 @@ pub fn parse_agents(
                 let doc = extract_doc_string(fun_decl.doc)
                 let desc = if doc == "" { "Creates a new \{name}" } else { doc }
                 let hint = extract_prompt_hint(fun_decl.attrs)
-                let restrictions = extract_schema_restrictions(fun_decl.attrs)
-                agent_constructors[name] = (params, desc, hint, restrictions)
+                agent_constructors[name] = (params, desc, hint)
               } else if fun_decl.vis is Pub(..) {
                 // Public method — check if first param is Self
                 let mut is_method = false
@@ -1258,7 +1160,6 @@ pub fn parse_agents(
                   let method_name = fun_decl.name.name
                   let desc = if doc == "" { method_name } else { doc }
                   let hint = extract_prompt_hint(fun_decl.attrs)
-                  let restrictions = extract_schema_restrictions(fun_decl.attrs)
                   let endpoint = build_endpoint_info(fun_decl.attrs)
                   let read_only = extract_read_only(fun_decl.attrs)
                   match agent_methods.get(name) {
@@ -1269,7 +1170,6 @@ pub fn parse_agents(
                         prompt_hint: hint,
                         params,
                         return_type,
-                        param_schema_options: restrictions,
                         http_endpoint: endpoint,
                         read_only,
                       })
@@ -1313,7 +1213,7 @@ pub fn parse_agents(
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
     match agent_constructors.get(name) {
-      Some((params, ctor_desc, ctor_hint, ctor_restrictions)) => {
+      Some((params, ctor_desc, ctor_hint)) => {
         let config_type = match find_config_param(params) {
           Some((_, inner_name, _)) => Some(inner_name)
           None => None
@@ -1328,7 +1228,6 @@ pub fn parse_agents(
           constructor_prompt_hint: ctor_hint,
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
-          constructor_schema_options: ctor_restrictions,
           has_snapshottable: agent_snapshottable.get(name).unwrap_or(false),
           has_json_derives: agent_json_derives.get(name).unwrap_or(false),
           fields: agent_fields.get(name).unwrap_or([]),
@@ -1339,32 +1238,13 @@ pub fn parse_agents(
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
     }
   }
-  // Validate multimodal and restriction targets
+  // Validate multimodal nesting
   for agent in agents {
-    // Validate constructor params
+    // Validate constructor params. A multimodal parameter may be mixed with
+    // other parameters (matching the Rust/TS SDKs); only nesting is rejected.
     for param in agent.constructor_params {
       let (pname, pt) = param
       validate_no_nested_multimodal(pname, pt)
-    }
-    // Validate multimodal is sole non-Principal constructor param
-    let ctor_visible = visible_params(agent.constructor_params)
-    let has_multimodal_ctor = ctor_visible
-      .iter()
-      .find_first(fn(p) { is_multimodal_type(p.1) })
-    if has_multimodal_ctor is Some(_) && ctor_visible.length() != 1 {
-      raise AgentParseError(
-        "Multimodal parameter in constructor of agent '\{agent.name}' must be the only non-Principal parameter",
-      )
-    }
-    for rname, _ in agent.constructor_schema_options {
-      let param_type = agent.constructor_params
-        .iter()
-        .find_first(fn(p) { p.0 == rname })
-      if param_type is None {
-        raise AgentParseError(
-          "#derive.text_languages/#derive.mime_types references unknown constructor parameter '\{rname}'",
-        )
-      }
     }
     // Validate methods
     for meth in agent.methods {
@@ -1375,24 +1255,6 @@ pub fn parse_agents(
       match meth.return_type {
         Some(rt) => validate_no_nested_multimodal("return", rt)
         None => ()
-      }
-      // Validate multimodal params (only non-Principal params count)
-      let meth_visible = visible_params(meth.params)
-      let has_multimodal_param = meth_visible
-        .iter()
-        .find_first(fn(p) { is_multimodal_type(p.1) })
-      if has_multimodal_param is Some(_) && meth_visible.length() != 1 {
-        raise AgentParseError(
-          "Multimodal parameter in method '\{meth.name}' must be the only non-Principal parameter",
-        )
-      }
-      for rname, _ in meth.param_schema_options {
-        let param_type = meth.params.iter().find_first(fn(p) { p.0 == rname })
-        if param_type is None {
-          raise AgentParseError(
-            "#derive.text_languages/#derive.mime_types references unknown parameter '\{rname}' of method '\{meth.name}'",
-          )
-        }
       }
       // Validate no Config params in methods
       for p in meth.params {

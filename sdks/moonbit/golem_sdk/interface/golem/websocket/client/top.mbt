@@ -4,7 +4,7 @@
 pub(all) struct CloseInfo {
   code : UInt
   reason : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) suberror Error_ {
@@ -14,18 +14,18 @@ pub(all) suberror Error_ {
   ProtocolError(String)
   Closed(CloseInfo?)
   Other(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A WebSocket message — text or binary
 pub(all) enum Message {
   Text(String)
   Binary(FixedArray[Byte])
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A WebSocket connection resource
-pub(all) struct WebsocketConnection(Int) derive(Debug, Eq)
+pub(all) struct WebsocketConnection(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.

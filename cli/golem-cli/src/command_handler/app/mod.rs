@@ -82,7 +82,7 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -2736,8 +2736,8 @@ fn resolve_secret_defaults(
 
 fn collect_declared_agent_secret_types(
     deploy_diff: &DeployDiff,
-) -> anyhow::Result<BTreeMap<String, AnalysedType>> {
-    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
+) -> anyhow::Result<BTreeMap<String, SchemaType>> {
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (SchemaType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
         for agent_type in &component.agent_types {

@@ -1,6 +1,6 @@
 use super::model::*;
-use golem_rust::{agent_definition, agent_implementation, description, endpoint, AllowedMimeTypes};
-use golem_rust::agentic::{create_webhook, UnstructuredBinary};
+use golem_rust::agentic::{UnstructuredBinary, create_webhook};
+use golem_rust::{AllowedMimeTypes, agent_definition, agent_implementation, description, endpoint};
 use serde::Deserialize;
 use serde::Serialize;
 use wstd::http::{Body, Client, HeaderValue, Request};
@@ -15,11 +15,7 @@ pub trait HttpAgent {
 
     #[endpoint(get = "/multi-path-vars/{first}/{second}")]
     #[description("Combines two path variables with a colon separator")]
-    fn multi_path_vars(
-        &self,
-        first: String,
-        second: String,
-    ) -> MultiPathVarsResponse;
+    fn multi_path_vars(&self, first: String, second: String) -> MultiPathVarsResponse;
 
     #[endpoint(get = "/rest/{*tail}")]
     #[description("Returns the remaining path after the /rest prefix")]
@@ -27,31 +23,18 @@ pub trait HttpAgent {
 
     #[endpoint(get = "/path-and-query/{item_id}?limit={limit}")]
     #[description("Combines a path variable with a query parameter in the response")]
-    fn path_and_query(
-        &self,
-        item_id: String,
-        limit: u64,
-    ) -> PathAndQueryResponse;
+    fn path_and_query(&self, item_id: String, limit: u64) -> PathAndQueryResponse;
 
     #[endpoint(
         get = "/path-and-header/{resource_id}",
         headers("x-request-id" = "request_id")
     )]
     #[description("Combines a path variable with a header value in the response")]
-    fn path_and_header(
-        &self,
-        resource_id: String,
-        request_id: String,
-    ) -> PathAndHeaderResponse;
+    fn path_and_header(&self, resource_id: String, request_id: String) -> PathAndHeaderResponse;
 
     #[endpoint(post = "/json-body/{id}")]
     #[description("Accepts JSON body parameters and returns a success response")]
-    fn json_body(
-        &self,
-        id: String,
-        name: String,
-        count: u64,
-    ) -> JsonBodyResponse;
+    fn json_body(&self, id: String, name: String, count: u64) -> JsonBodyResponse;
 
     #[endpoint(post = "/unrestricted-unstructured-binary/{bucket}")]
     #[description("Accepts unrestricted binary data and returns the payload size")]
@@ -84,10 +67,7 @@ pub trait HttpAgent {
 
     #[endpoint(get = "/resp/result-json-json/{ok}")]
     #[description("Returns either a success or error result based on the ok parameter")]
-    fn result_ok_or_err(
-        &self,
-        ok: bool,
-    ) -> Result<ResultOkResponse, ResultErrResponse>;
+    fn result_ok_or_err(&self, ok: bool) -> Result<ResultOkResponse, ResultErrResponse>;
 
     #[endpoint(post = "/resp/result-void-json")]
     #[description("Returns either unit success or a JSON error result")]
@@ -114,9 +94,8 @@ pub trait HttpAgent {
 #[derive(AllowedMimeTypes, Clone, Debug)]
 pub enum MyMimeTypes {
     #[mime_type("image/gif")]
-    ImageGif
+    ImageGif,
 }
-
 
 struct HttpAgentImpl;
 
@@ -127,16 +106,10 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     fn string_path_var(&self, path_var: String) -> StringPathVarResponse {
-        StringPathVarResponse {
-            value: path_var,
-        }
+        StringPathVarResponse { value: path_var }
     }
 
-    fn multi_path_vars(
-        &self,
-        first: String,
-        second: String,
-    ) -> MultiPathVarsResponse {
+    fn multi_path_vars(&self, first: String, second: String) -> MultiPathVarsResponse {
         MultiPathVarsResponse {
             joined: format!("{}:{}", first, second),
         }
@@ -146,34 +119,18 @@ impl HttpAgent for HttpAgentImpl {
         RemainingPathResponse { tail }
     }
 
-    fn path_and_query(
-        &self,
-        item_id: String,
-        limit: u64,
-    ) -> PathAndQueryResponse {
-        PathAndQueryResponse {
-            id: item_id,
-            limit,
-        }
+    fn path_and_query(&self, item_id: String, limit: u64) -> PathAndQueryResponse {
+        PathAndQueryResponse { id: item_id, limit }
     }
 
-    fn path_and_header(
-        &self,
-        resource_id: String,
-        request_id: String,
-    ) -> PathAndHeaderResponse {
+    fn path_and_header(&self, resource_id: String, request_id: String) -> PathAndHeaderResponse {
         PathAndHeaderResponse {
             resource_id,
             request_id,
         }
     }
 
-    fn json_body(
-        &self,
-        _id: String,
-        _name: String,
-        _count: u64,
-    ) -> JsonBodyResponse {
+    fn json_body(&self, _id: String, _name: String, _count: u64) -> JsonBodyResponse {
         JsonBodyResponse { ok: true }
     }
 
@@ -195,7 +152,7 @@ impl HttpAgent for HttpAgentImpl {
     ) -> i64 {
         match payload {
             UnstructuredBinary::Url(_) => -1,
-            UnstructuredBinary::Inline{ data, .. } => data.len() as i64,
+            UnstructuredBinary::Inline { data, .. } => data.len() as i64,
         }
     }
 
@@ -219,10 +176,7 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 
-    fn result_ok_or_err(
-        &self,
-        ok: bool,
-    ) -> Result<ResultOkResponse, ResultErrResponse> {
+    fn result_ok_or_err(&self, ok: bool) -> Result<ResultOkResponse, ResultErrResponse> {
         if ok {
             Ok(ResultOkResponse {
                 value: "ok".to_string(),
@@ -270,7 +224,6 @@ impl HttpAgent for HttpAgentImpl {
         }
     }
 }
-
 
 #[agent_definition(
     mount = "/cors-agents/{agent_name}",
@@ -341,13 +294,13 @@ pub struct WebhookUrl {
     // Important since we have a common server implementation in integration tests to
     // accept callbacks through webhook
     #[serde(rename = "webhookUrl")]
-    webhook_url: String
+    webhook_url: String,
 }
 
 #[agent_implementation]
 impl WebhookAgent for WebhookAgentImpl {
     fn new(_agent_name: String) -> Self {
-        WebhookAgentImpl{
+        WebhookAgentImpl {
             test_server_url: None,
         }
     }
@@ -363,14 +316,21 @@ impl WebhookAgent for WebhookAgentImpl {
             webhook_url: webhook.url().to_string(),
         };
 
-        let body = Body::from_json(&url).map_err(|err| err.to_string()).unwrap();
+        let body = Body::from_json(&url)
+            .map_err(|err| err.to_string())
+            .unwrap();
         let request = Request::post(self.test_server_url.clone().unwrap())
             .header("Accept", HeaderValue::from_str("application/json").unwrap())
             .header("Content-Type", "application/json")
-            .body(body).map_err(|err| err.to_string()).unwrap();
+            .body(body)
+            .map_err(|err| err.to_string())
+            .unwrap();
 
-        let _ =
-            Client::new().send(request).await.map_err(|err| err.to_string()).unwrap();
+        let _ = Client::new()
+            .send(request)
+            .await
+            .map_err(|err| err.to_string())
+            .unwrap();
 
         let request = webhook.await;
 

@@ -15,13 +15,31 @@
 //! Shared codegen primitives reused across struct / enum / union expansions.
 
 use crate::parse::{DeprecatedMarker, ItemAttrs, PathAttrSpec, RenameAll, RichSpec, TypeAttrs};
-use proc_macro2::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{GenericParam, Generics, Type};
 
 /// Path prefix used for everything the derive references.
 pub fn private() -> TokenStream {
-    quote! { ::golem_common::schema::derive::__private }
+    let schema_crate = schema_crate_path();
+    quote! { #schema_crate::schema::derive::__private }
+}
+
+fn schema_crate_path() -> TokenStream {
+    crate_path("golem-schema")
+        .or_else(|| crate_path("golem-rust"))
+        .unwrap_or_else(|| crate_path("golem-common").unwrap_or_else(|| quote! { ::golem_common }))
+}
+
+fn crate_path(name: &str) -> Option<TokenStream> {
+    match crate_name(name).ok()? {
+        FoundCrate::Itself => Some(quote! { crate }),
+        FoundCrate::Name(name) => {
+            let ident = syn::Ident::new(&name, Span::call_site());
+            Some(quote! { ::#ident })
+        }
+    }
 }
 
 /// Emit the `TypeId` value for a derived type, applying `#[schema(named = ...)]`
@@ -123,6 +141,12 @@ fn metadata_expr_inner(
         Some(role) => match role {
             "multimodal" => {
                 quote! { ::core::option::Option::Some(#private::Role::Multimodal) }
+            }
+            "unstructured-text" => {
+                quote! { ::core::option::Option::Some(#private::Role::UnstructuredText) }
+            }
+            "unstructured-binary" => {
+                quote! { ::core::option::Option::Some(#private::Role::UnstructuredBinary) }
             }
             other => {
                 let lit = syn::LitStr::new(other, proc_macro2::Span::call_site());
@@ -566,6 +590,7 @@ pub fn default_name_for(ident: &syn::Ident, strategy: RenameAll) -> String {
 fn apply_rename_all(input: &str, strategy: RenameAll) -> String {
     use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
     match strategy {
+        RenameAll::Preserve => input.to_owned(),
         RenameAll::Kebab => input.to_kebab_case(),
         RenameAll::Snake => input.to_snake_case(),
         RenameAll::Camel => input.to_lower_camel_case(),

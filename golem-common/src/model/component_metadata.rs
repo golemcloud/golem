@@ -23,8 +23,8 @@ pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
 use crate::component_introspection::wit_parser::WitAnalysisContext;
-use crate::component_introspection::{AnalysedExport, AnalysisFailure, AnalysisResult};
-use crate::model::agent::{AgentType, AgentTypeName};
+use crate::component_introspection::{AnalysisFailure, AnalysisResult, TopLevelExport};
+use crate::model::agent::AgentTypeName;
 use crate::model::card::owner::{
     PolymorphicAgentOwnerPattern, PolymorphicComponentOwnerPattern,
     PolymorphicEnvironmentOwnerPattern,
@@ -36,6 +36,7 @@ use crate::model::card::{
     PolymorphicPermissionPattern,
 };
 use crate::model::component::InstalledPlugin;
+use crate::schema::agent::AgentTypeSchema;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -43,7 +44,7 @@ use std::sync::Arc;
 impl ComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
-        agent_types: Vec<AgentType>,
+        agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Result<Self, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
@@ -57,7 +58,7 @@ impl ComponentMetadata {
         memories: Vec<LinearMemory>,
         root_package_name: Option<String>,
         root_package_version: Option<String>,
-        agent_types: Vec<AgentType>,
+        agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Self {
         Self {
@@ -135,7 +136,7 @@ impl ComponentMetadata {
         &self.data.root_package_version
     }
 
-    pub fn agent_types(&self) -> &[AgentType] {
+    pub fn agent_types(&self) -> &[AgentTypeSchema] {
         &self.data.agent_types
     }
 
@@ -244,12 +245,23 @@ impl ComponentMetadata {
             .map(|iface| format!("{iface}.{{process}}"))
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentTypeSchema> {
+        self.find_agent_type_by_name_ref(agent_type).cloned()
+    }
+
+    /// Borrowing variant of [`find_agent_type_by_name`](Self::find_agent_type_by_name).
+    ///
+    /// Hot paths (invocation lowering, read-only classification) only need to
+    /// read a handful of fields and must not clone the whole [`AgentTypeSchema`]
+    /// (which owns the agent's full [`SchemaGraph`]) on every call.
+    pub fn find_agent_type_by_name_ref(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Option<&AgentTypeSchema> {
         self.data
             .agent_types
             .iter()
             .find(|t| &t.type_name == agent_type)
-            .cloned()
     }
 }
 
@@ -378,14 +390,14 @@ fn record_known_export(
     }
 }
 
-/// Extract a `KnownExports` index from the full analysed export tree.
+/// Extract a `KnownExports` index from the top-level exports.
 /// Only instance exports are considered; each supported interface prefix
 /// is matched at most once (the exact versioned name is stored).
-pub fn extract_known_exports(exports: &[AnalysedExport]) -> AnalysisResult<KnownExports> {
+pub fn extract_known_exports(exports: &[TopLevelExport]) -> AnalysisResult<KnownExports> {
     let mut known = KnownExports::default();
 
     for export in exports {
-        if let AnalysedExport::Instance(instance) = export {
+        if let TopLevelExport::Instance(instance) = export {
             let name = &instance.name;
             if name == AGENT_GUEST_PREFIX || name.starts_with(&format!("{AGENT_GUEST_PREFIX}@")) {
                 record_known_export(&mut known.agent_guest_interface, "agent guest", name)?;
@@ -453,7 +465,7 @@ impl RawComponentMetadata {
 
     pub fn into_metadata(
         self,
-        agent_types: Vec<AgentType>,
+        agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> ComponentMetadataInnerData {
         let producers = self
@@ -580,6 +592,7 @@ impl From<ProducerField> for crate::component_introspection::metadata::Producers
 pub enum ComponentProcessingError {
     Parsing(String),
     Analysis(AnalysisFailure),
+    Metadata(String),
 }
 
 impl SafeDisplay for ComponentProcessingError {
@@ -587,6 +600,7 @@ impl SafeDisplay for ComponentProcessingError {
         match self {
             ComponentProcessingError::Parsing(_) => self.to_string(),
             ComponentProcessingError::Analysis(_) => self.to_string(),
+            ComponentProcessingError::Metadata(_) => self.to_string(),
         }
     }
 }
@@ -599,6 +613,7 @@ impl Display for ComponentProcessingError {
                 let AnalysisFailure { reason } = source;
                 write!(f, "Analysis error: {reason}")
             }
+            ComponentProcessingError::Metadata(e) => write!(f, "Metadata error: {e}"),
         }
     }
 }
@@ -875,11 +890,11 @@ mod protobuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component_introspection::{AnalysedExport, AnalysedInstance};
+    use crate::component_introspection::{ExportedInstance, TopLevelExport};
     use test_r::test;
 
-    fn instance_export(name: &str) -> AnalysedExport {
-        AnalysedExport::Instance(AnalysedInstance {
+    fn instance_export(name: &str) -> TopLevelExport {
+        TopLevelExport::Instance(ExportedInstance {
             name: name.to_string(),
             functions: vec![],
         })

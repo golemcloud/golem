@@ -15,9 +15,8 @@ members = [
     "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
+    "golem-schema",
     "golem-schema-derive",
-    "golem-wasm",
-    "golem-wasm-derive",
     "cli/golem",
     "cli/golem-cli",
     "golem-openapi-client-generator",
@@ -39,13 +38,12 @@ golem-common = { version = "=0.0.0", path = "golem-common", default-features = f
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
+golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = false }
 golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
-golem-wasm = { version = "=0.0.0", path = "golem-wasm", default-features = false }
-golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
@@ -99,7 +97,7 @@ crossterm = "0.29"
 darling = "0.20.11"
 dashmap = "7.0.0-rc2"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
-desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
+desert_rust = { version = "0.1.8", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
@@ -168,8 +166,9 @@ minijinja = "2.7.0"
 nanoid = "0.4.0"
 native-tls = "=0.2.13"
 nondestructive = "0.0.26"
-nonempty-collections = "0.3.0"
+nonempty-collections = "1.2.1"
 nonzero_ext = "0.3.0"
+num-bigint = "0.4"
 num-traits = "0.2.19"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
@@ -192,6 +191,7 @@ postgres = "0.19.10"
 pretty_assertions = "1.4.1"
 pretty_env_logger = "0.5.0"
 prettyplease = "0.2.25"
+proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.92"
 prometheus = { version = "0.14.0", features = ["process"] }
 proptest = "=1.5.0"
@@ -215,6 +215,7 @@ rlimit = "0.10.2"
 rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
+rust_decimal = "1.39.0"
 rustc-hash = "2.1.1"
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
@@ -245,7 +246,7 @@ system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.9", default-features = true }
+test-r = { version = "3.0.10", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
@@ -282,7 +283,7 @@ tower = "0.5.2"
 try_match = "0.4.2"
 trybuild = "1.0"
 tryhard = "0.5.1"
-typed-path = "0.10.0"
+typed-path = { version = "0.10.0", default-features = false }
 unicode-segmentation = "1.12.0"
 url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"

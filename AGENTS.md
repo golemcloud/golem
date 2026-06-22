@@ -33,6 +33,20 @@ Two parts of `docs/` are auto-generated from in-tree sources of truth and have C
 
 If you edit either source, commit the regenerated MDX files in the same PR.
 
+### Makefile.toml script conventions
+
+Inline scripts in `Makefile.toml` must be written in **duckscript** (`script_runner = "@duckscript"`), not POSIX shell/bash, so the build works on all operating systems including Windows. Do not introduce `bash`/`sh` inline scripts for build/asset tasks.
+
+When a task needs the cargo target directory (e.g. to invoke a freshly built binary), do **not** hardcode `target/...` or shell out to `cargo metadata`. Use the `CARGO_MAKE_CRATE_TARGET_DIRECTORY` environment variable, which cargo-make resolves cross-platform and which honors a redirected target dir (`CARGO_TARGET_DIR`, cargo config, or a cargo wrapper). Example:
+
+```toml
+script_runner = "@duckscript"
+script = '''
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+exec --fail-on-error ${golem} build -P release --yes
+'''
+```
+
 ## Testing
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.

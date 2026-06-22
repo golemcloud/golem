@@ -14,6 +14,7 @@
 
 pub mod r#enum;
 pub mod helpers;
+pub mod poem;
 pub mod primitives;
 pub mod r#struct;
 pub mod union;

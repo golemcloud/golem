@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.data.{DataType, DataValue, ElementSchema}
+import golem.schema.{IntoSchema, SchemaValue}
 import zio.test._
 
 object ConfigSchemaSpec extends ZIOSpecDefault {
@@ -30,7 +30,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == List("key"),
-            decls.head.valueType == ElementSchema.Component(DataType.StringType)
+            decls.head.valueType == IntoSchema[String].graph
           )
         },
         test("Int produces local declaration") {
@@ -39,7 +39,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == List("count"),
-            decls.head.valueType == ElementSchema.Component(DataType.IntType)
+            decls.head.valueType == IntoSchema[Int].graph
           )
         },
         test("Long produces local declaration") {
@@ -48,7 +48,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == List("id"),
-            decls.head.valueType == ElementSchema.Component(DataType.LongType)
+            decls.head.valueType == IntoSchema[Long].graph
           )
         },
         test("Double produces local declaration") {
@@ -57,7 +57,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == List("rate"),
-            decls.head.valueType == ElementSchema.Component(DataType.DoubleType)
+            decls.head.valueType == IntoSchema[Double].graph
           )
         },
         test("Boolean produces local declaration") {
@@ -66,7 +66,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == List("enabled"),
-            decls.head.valueType == ElementSchema.Component(DataType.BoolType)
+            decls.head.valueType == IntoSchema[Boolean].graph
           )
         }
       ),
@@ -77,7 +77,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == List("apiKey"),
-            decls.head.valueType == ElementSchema.Component(DataType.StringType)
+            decls.head.valueType == IntoSchema[String].graph
           )
         },
         test("Secret[Int] produces secret declaration with int type") {
@@ -86,7 +86,7 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == List("pin"),
-            decls.head.valueType == ElementSchema.Component(DataType.IntType)
+            decls.head.valueType == IntoSchema[Int].graph
           )
         }
       ),
@@ -105,23 +105,23 @@ object ConfigSchemaSpec extends ZIOSpecDefault {
           val ov = ConfigOverride[String](List("key"), "hello")
           assertTrue(
             ov.path == List("key"),
-            ov.value == DataValue.StringValue("hello"),
-            ov.valueType == ElementSchema.Component(DataType.StringType)
+            ov.value.value == SchemaValue.StringValue("hello"),
+            ov.value.graph == IntoSchema[String].graph
           )
         },
         test("Int override has correct path and value") {
           val ov = ConfigOverride[Int](List("count"), 42)
           assertTrue(
             ov.path == List("count"),
-            ov.value == DataValue.IntValue(42),
-            ov.valueType == ElementSchema.Component(DataType.IntType)
+            ov.value.value == SchemaValue.S32Value(42),
+            ov.value.graph == IntoSchema[Int].graph
           )
         },
         test("Boolean override encodes correctly") {
           val ov = ConfigOverride[Boolean](List("flag"), true)
           assertTrue(
-            ov.value == DataValue.BoolValue(true),
-            ov.valueType == ElementSchema.Component(DataType.BoolType)
+            ov.value.value == SchemaValue.BoolValue(true),
+            ov.value.graph == IntoSchema[Boolean].graph
           )
         }
       )

@@ -16,12 +16,12 @@
 
 package golem.runtime.rpc
 
-import golem.data.GolemSchema
-import golem.host.js._
+import golem.Uuid
+import golem.runtime.autowire.SchemaPayload
+import golem.schema.{FromSchema, IntoSchema}
 import zio.test._
 import zio.blocks.schema.Schema
 
-import java.util.UUID
 import scala.util.Random
 
 private[rpc] object ValueMappingFuzzSpecTypes {
@@ -37,6 +37,11 @@ private[rpc] object ValueMappingFuzzSpecTypes {
   }
 }
 
+/**
+ * Randomised round-trip fuzz over the `golem:core/types@2.0.0` value boundary:
+ * `IntoSchema[A].toValue` -> `SchemaWire` -> JS `Js*` facade ->
+ * `FromSchema[A].fromValue` (the [[SchemaPayload]] hub the host uses).
+ */
 object ValueMappingFuzzSpec extends ZIOSpecDefault {
   import ValueMappingFuzzSpecTypes._
 
@@ -69,17 +74,16 @@ object ValueMappingFuzzSpec extends ZIOSpecDefault {
       case _ => TinySum.C(genTinyProduct())
     }
 
-  private def rpcRoundTripTests[A: Schema](label: String, iterations: Int)(gen: => A): Spec[Any, Nothing] = {
-    implicit val gs: GolemSchema[A] = GolemSchema.fromBlocksSchema[A]
-    test(s"rpc roundtrip fuzz: $label ($iterations cases)") {
+  private def roundTripTests[A: Schema](label: String, iterations: Int)(gen: => A): Spec[Any, Nothing] = {
+    implicit val into: IntoSchema[A] = IntoSchema.derived
+    implicit val from: FromSchema[A] = FromSchema.derived
+    test(s"schema value roundtrip fuzz: $label ($iterations cases)") {
       var i = 0
       while (i < iterations) {
-        val in        = gen
-        val dataValue = RpcValueCodec.encodeArgs(in).fold(err => throw new RuntimeException(err), identity)
-        val witValue  =
-          dataValue.asInstanceOf[JsDataValueTuple].value(0).asInstanceOf[JsElementValueComponentModel].value
-        val out = RpcValueCodec.decodeValue[A](witValue).fold(err => throw new RuntimeException(err), identity)
-        Predef.assert(out == in)
+        val in   = gen
+        val tree = SchemaPayload.encode[A](in)
+        val out  = SchemaPayload.decode[A](tree).fold(err => throw new RuntimeException(err.toString), identity)
+        Predef.assert(out == in, s"roundtrip mismatch: in=$in out=$out")
         i += 1
       }
       assertCompletes
@@ -87,15 +91,20 @@ object ValueMappingFuzzSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("ValueMappingFuzzSpec")(
-    rpcRoundTripTests[Int]("int", 200)(rng.nextInt()),
-    rpcRoundTripTests[String]("string", 200)(genString(64)),
-    rpcRoundTripTests[Option[Int]]("option", 200)(if (rng.nextBoolean()) Some(rng.nextInt(1000)) else None),
-    rpcRoundTripTests[List[String]]("list", 150)(List.fill(rng.nextInt(6))(genString(12))),
-    rpcRoundTripTests[Map[String, Int]]("map", 150)(
+    roundTripTests[Int]("int", 200)(rng.nextInt()),
+    roundTripTests[String]("string", 200)(genString(64)),
+    roundTripTests[Option[Int]]("option", 200)(if (rng.nextBoolean()) Some(rng.nextInt(1000)) else None),
+    roundTripTests[List[String]]("list", 150)(List.fill(rng.nextInt(6))(genString(12))),
+    roundTripTests[Map[String, Int]]("map", 150)(
       (0 until rng.nextInt(6)).map(_ => genString(6) -> rng.nextInt(100)).toMap
     ),
-    rpcRoundTripTests[TinyProduct]("product", 150)(genTinyProduct()),
-    rpcRoundTripTests[TinySum]("sum", 150)(genTinySum()),
-    rpcRoundTripTests[UUID]("uuid", 100)(new UUID(rng.nextLong(), rng.nextLong()))
+    roundTripTests[TinyProduct]("product", 150)(genTinyProduct()),
+    roundTripTests[TinySum]("sum", 150)(genTinySum()),
+    roundTripTests[Uuid]("uuid", 100)(
+      Uuid(
+        BigInt(java.lang.Long.toUnsignedString(rng.nextLong())),
+        BigInt(java.lang.Long.toUnsignedString(rng.nextLong()))
+      )
+    )
   )
 }

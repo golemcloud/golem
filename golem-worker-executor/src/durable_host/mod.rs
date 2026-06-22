@@ -73,7 +73,7 @@ use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::{RetryDecision, Worker};
@@ -92,7 +92,7 @@ use futures::TryStreamExt;
 use futures::future::try_join_all;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -115,6 +115,8 @@ use golem_common::model::{
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -122,8 +124,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -271,6 +271,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    /// Per-instance cache of resolved typed guest export handles, populated
+    /// lazily on first use during invocation dispatch.
+    agent_export_funcs: AgentExportFuncs,
     _store_alive_guard: StoreAliveGuard,
 }
 
@@ -305,10 +308,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
     }
 
+    /// Returns the per-instance cache of resolved typed guest export handles.
+    pub(crate) fn agent_export_funcs(&self) -> &AgentExportFuncs {
+        &self.agent_export_funcs
+    }
+
+    /// Returns a mutable reference to the per-instance cache of resolved typed
+    /// guest export handles.
+    pub(crate) fn agent_export_funcs_mut(&mut self) -> &mut AgentExportFuncs {
+        &mut self.agent_export_funcs
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -434,7 +448,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            )
+            )?
         } else {
             HashMap::new()
         };
@@ -520,6 +534,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
     }
@@ -675,7 +690,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
-    pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -2518,7 +2533,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
                 .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
                         "Agent type {} not found in updated agent metadata",
@@ -2532,9 +2547,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            );
+            )?;
 
-            validate_agent_config(&updated_agent_config, &agent_type)?;
+            validate_agent_config(&updated_agent_config, agent_type)?;
 
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
@@ -2873,11 +2888,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     | AgentInvocationResult::ProcessOplogEntries { .. } => true,
                 };
 
+                // Only `AgentMethod` results need the method name persisted so the
+                // public oplog renderer can resolve the correct output schema.
+                let method_name = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => {
+                        Some(full_function_name.to_string())
+                    }
+                    _ => None,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
                     .add_agent_invocation_finished(
                         &output.result,
+                        method_name,
                         consumed_fuel,
                         component_revision,
                     )
@@ -4397,7 +4422,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<LegacyParsedAgentId>,
+    agent_id: Option<ParsedAgentId>,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
@@ -4466,7 +4491,7 @@ struct PrivateDurableWorkerState {
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
-    agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 
     /// Cached named retry policies derived from `agent_config` only. Lazily populated and
     /// invalidated whenever `agent_config` is reassigned.
@@ -4559,7 +4584,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -4589,7 +4614,7 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
-        agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+        agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,

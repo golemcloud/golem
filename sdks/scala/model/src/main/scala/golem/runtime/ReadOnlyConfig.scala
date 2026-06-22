@@ -21,8 +21,8 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 /** Cache policy for read-only agent methods. */
 sealed trait CachePolicy
 object CachePolicy {
-  case object NoCache                extends CachePolicy
-  case object UntilWrite             extends CachePolicy
+  case object NoCache               extends CachePolicy
+  case object UntilWrite            extends CachePolicy
   final case class Ttl(nanos: Long) extends CachePolicy
 
   /**

@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.data.{DataType, ElementSchema}
+import golem.schema.IntoSchema
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -71,7 +71,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == Nil,
-            decls.head.valueType == ElementSchema.Component(DataType.StringType)
+            decls.head.valueType == IntoSchema[String].graph
           )
         }
       ),
@@ -82,7 +82,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == Nil,
-            decls.head.valueType == ElementSchema.Component(DataType.StringType)
+            decls.head.valueType == IntoSchema[String].graph
           )
         }
       ),
@@ -98,8 +98,8 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
         test("field names become paths") {
           val decls = ConfigIntrospection.declarations[SimpleConfig]()
           assertTrue(
-            decls.exists(d => d.path == List("name") && d.valueType == ElementSchema.Component(DataType.StringType)),
-            decls.exists(d => d.path == List("count") && d.valueType == ElementSchema.Component(DataType.IntType))
+            decls.exists(d => d.path == List("name") && d.valueType == IntoSchema[String].graph),
+            decls.exists(d => d.path == List("count") && d.valueType == IntoSchema[Int].graph)
           )
         }
       ),
@@ -121,7 +121,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.exists(d =>
               d.path == List("password") &&
                 d.source == AgentConfigSource.Secret &&
-                d.valueType == ElementSchema.Component(DataType.StringType)
+                d.valueType == IntoSchema[String].graph
             )
           )
         }
@@ -175,11 +175,11 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
         test("field types are correct") {
           val decls = ConfigIntrospection.declarations[AllLocalConfig]()
           assertTrue(
-            decls.exists(d => d.path == List("a") && d.valueType == ElementSchema.Component(DataType.StringType)),
-            decls.exists(d => d.path == List("b") && d.valueType == ElementSchema.Component(DataType.IntType)),
-            decls.exists(d => d.path == List("c") && d.valueType == ElementSchema.Component(DataType.BoolType)),
-            decls.exists(d => d.path == List("d") && d.valueType == ElementSchema.Component(DataType.LongType)),
-            decls.exists(d => d.path == List("e") && d.valueType == ElementSchema.Component(DataType.DoubleType))
+            decls.exists(d => d.path == List("a") && d.valueType == IntoSchema[String].graph),
+            decls.exists(d => d.path == List("b") && d.valueType == IntoSchema[Int].graph),
+            decls.exists(d => d.path == List("c") && d.valueType == IntoSchema[Boolean].graph),
+            decls.exists(d => d.path == List("d") && d.valueType == IntoSchema[Long].graph),
+            decls.exists(d => d.path == List("e") && d.valueType == IntoSchema[Double].graph)
           )
         }
       ),

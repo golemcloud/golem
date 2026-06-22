@@ -1,9 +1,9 @@
 use golem_rust::bindings::golem::api::oplog::{
-    enrich_oplog_entries, AgentInvocation, AgentInvocationStartedParameters, OplogEntry,
-    OplogIndex, PublicOplogEntry,
+    AgentInvocation, AgentInvocationStartedParameters, OplogEntry, OplogIndex, PublicOplogEntry,
+    enrich_oplog_entries,
 };
-use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
+use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use uuid::Uuid;
 use wstd::http::{Body, Client, Request};
 use wstd::runtime::block_on;
@@ -47,7 +47,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         config: Vec<(String, String)>,
         component_id: ComponentId,
         worker_id: AgentId,
-        metadata: golem_rust::bindings::golem::api::host::AgentMetadata,
+        metadata: golem_rust::oplog_processor::host::AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), String> {
@@ -65,10 +65,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             account_info.account_id.uuid.low_bits,
         );
 
-        let comp_id = Uuid::from_u64_pair(
-            component_id.uuid.high_bits,
-            component_id.uuid.low_bits,
-        );
+        let comp_id = Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits);
 
         let mut invocations: Vec<InvocationRecord> = Vec::new();
 
@@ -84,7 +81,8 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             metadata.component_revision,
         )
         .unwrap();
-        for ((oplog_index, _raw_entry), entry) in indexed_entries.iter().zip(enriched_entries.iter())
+        for ((oplog_index, _raw_entry), entry) in
+            indexed_entries.iter().zip(enriched_entries.iter())
         {
             if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
                 CURRENT_INVOCATIONS.with(|ci| {
@@ -92,8 +90,8 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                         .insert(format!("{worker_id:?}"), params.clone());
                 });
             } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
-                let function_name = if let Some(invocation) =
-                    CURRENT_INVOCATIONS.with(|ci| ci.borrow().get(&format!("{worker_id:?}")).cloned())
+                let function_name = if let Some(invocation) = CURRENT_INVOCATIONS
+                    .with(|ci| ci.borrow().get(&format!("{worker_id:?}")).cloned())
                 {
                     match &invocation.invocation {
                         AgentInvocation::AgentInitialization(_) => {
@@ -155,7 +153,6 @@ impl OplogProcessorGuest for OplogProcessorComponent {
 
         Ok(())
     }
-
 }
 
 golem_rust::oplog_processor::export_oplog_processor!(OplogProcessorComponent with_types_in golem_rust::oplog_processor);

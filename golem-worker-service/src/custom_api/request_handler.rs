@@ -23,9 +23,9 @@ use super::webhooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
+use golem_common::schema::render::json_value::to_json_value;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::OpenApiSpecFormat;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use http::StatusCode;
 use poem::{Request, Response};
 use std::collections::HashMap;
@@ -164,7 +164,7 @@ fn route_execution_result_to_response(
 
         ResponseBody::ComponentModelJsonBody { body } => {
             let body = poem::Body::from_json(
-                body.to_json_value()
+                to_json_value(body.graph(), body.root_type(), body.value())
                     .map_err(|e| anyhow!("ComponentModelJsonBody conversion error: {e}"))?,
             )
             .map_err(anyhow::Error::from)?;

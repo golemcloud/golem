@@ -59,7 +59,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
-    AgentMode, LegacyParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
+    AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
@@ -100,7 +100,7 @@ use wasmtime::{Store, UpdateDeadline};
 #[derive(Clone)]
 struct ReadOnlyContext {
     method_name: String,
-    input: golem_common::model::agent::UntypedDataValue,
+    input: golem_common::schema::SchemaValue,
     principal: Principal,
     cfg: golem_common::base_model::agent::ReadOnlyConfig,
     component_revision: ComponentRevision,
@@ -238,7 +238,7 @@ fn build_read_only_cache_entry(
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
-    parsed_agent_id: Option<LegacyParsedAgentId>,
+    parsed_agent_id: Option<ParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -562,10 +562,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && last_oplog_idx <= OplogIndex::from_u64(2)
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
+            let init_input = agent_id.parameters.value().clone();
             worker
                 .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                     idempotency_key: init_idempotency_key,
-                    input: agent_id.parameters.clone().into(),
+                    input: init_input,
                     invocation_context: invocation_context_stack.clone(),
                     principal,
                 })
@@ -2716,7 +2717,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let current_status = Arc::new(RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = LegacyParsedAgentId::parse(
+                    let agent_id = ParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &initial_component.metadata,
                     )
@@ -2774,7 +2775,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
-                    let agent_id = LegacyParsedAgentId::parse(
+                    let agent_id = ParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &component.metadata,
                     )
@@ -2870,6 +2871,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
                 // both options are equivalent here, this is just cheaper.
 
+                // Strip the schema graph from the typed config entries to get
+                // the raw (untyped) form persisted in the Create oplog entry.
+                let local_agent_config: Vec<golem_common::model::worker::UntypedAgentConfigEntry> =
+                    initial_worker_metadata
+                        .config
+                        .iter()
+                        .cloned()
+                        .map(golem_common::model::worker::UntypedAgentConfigEntry::try_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(|err: String| WorkerExecutorError::runtime(err))?;
+
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.agent_id.clone(),
                     initial_worker_metadata.agent_mode,
@@ -2886,12 +2898,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
-                    initial_worker_metadata
-                        .config
-                        .iter()
-                        .cloned()
-                        .map(Into::into)
-                        .collect(),
+                    local_agent_config,
                     initial_worker_metadata.original_phantom_id,
                     instance_id,
                 );
@@ -4158,17 +4165,15 @@ struct ResolvedAgentProperties {
 
 fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     let resolved_agent_type =
-        agent_id.and_then(|id| metadata.find_agent_type_by_name(&id.agent_type));
+        agent_id.and_then(|id| metadata.find_agent_type_by_name_ref(&id.agent_type));
 
-    let agent_mode = resolved_agent_type
-        .as_ref()
-        .map_or(AgentMode::Durable, |at| at.mode);
+    let agent_mode = resolved_agent_type.map_or(AgentMode::Durable, |at| at.mode);
 
-    let snapshot_policy = if let Some(agent_type) = resolved_agent_type.as_ref() {
+    let snapshot_policy = if let Some(agent_type) = resolved_agent_type {
         // Agent with explicit metadata — use agent-level snapshotting config
         resolve_snapshot_policy(
             &deps.config().oplog.default_snapshotting,
@@ -4292,7 +4297,7 @@ struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
     current_status: Arc<RwLock<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<LegacyParsedAgentId>,
+    agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
     /// Loaded during `get_or_create_worker_metadata` and stored on the

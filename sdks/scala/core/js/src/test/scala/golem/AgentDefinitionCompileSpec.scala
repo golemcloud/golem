@@ -16,10 +16,6 @@
 
 package golem
 
-import golem.data.multimodal.Multimodal
-import golem.data.UnstructuredBinaryValue
-import golem.data.UnstructuredTextValue
-import golem.data.unstructured.{AllowedLanguages, AllowedMimeTypes, BinarySegment, TextSegment}
 import golem.runtime.autowire.AgentImplementation
 import zio.test._
 import zio.blocks.schema.Schema
@@ -270,54 +266,6 @@ object AgentDefinitionCompileSpec extends ZIOSpecDefault {
   }
 
   // ---------------------------------------------------------------------------
-  // Agent with Multimodal, TextSegment, BinarySegment method parameters
-  // ---------------------------------------------------------------------------
-
-  final case class MultimodalPayload(text: String, count: Int)
-  object MultimodalPayload { implicit val schema: Schema[MultimodalPayload] = Schema.derived }
-
-  sealed trait SupportedLang
-  object SupportedLang {
-    implicit val allowed: AllowedLanguages[SupportedLang] = new AllowedLanguages[SupportedLang] {
-      override val codes: Option[List[String]] = Some(List("en", "es"))
-    }
-  }
-
-  sealed trait SupportedMime
-  object SupportedMime {
-    implicit val allowed: AllowedMimeTypes[SupportedMime] = new AllowedMimeTypes[SupportedMime] {
-      override val mimeTypes: Option[List[String]] = Some(List("image/png", "application/json"))
-    }
-  }
-
-  @agentDefinition("multimodal-agent")
-  @description("Agent with multimodal and unstructured type methods.")
-  trait MultimodalAgent extends BaseAgent {
-    class Id()
-    def echoMultimodal(input: Multimodal[MultimodalPayload]): Future[Multimodal[MultimodalPayload]]
-    def echoText(input: TextSegment[SupportedLang]): Future[TextSegment[SupportedLang]]
-    def echoTextAny(input: TextSegment[AllowedLanguages.Any]): Future[TextSegment[AllowedLanguages.Any]]
-    def echoBinary(input: BinarySegment[SupportedMime]): Future[BinarySegment[SupportedMime]]
-    def echoBinaryAny(input: BinarySegment[AllowedMimeTypes.Any]): Future[BinarySegment[AllowedMimeTypes.Any]]
-  }
-
-  @agentImplementation()
-  final class MultimodalAgentImpl() extends MultimodalAgent {
-    override def echoMultimodal(input: Multimodal[MultimodalPayload]): Future[Multimodal[MultimodalPayload]] =
-      Future.successful(input)
-    override def echoText(input: TextSegment[SupportedLang]): Future[TextSegment[SupportedLang]] =
-      Future.successful(input)
-    override def echoTextAny(input: TextSegment[AllowedLanguages.Any]): Future[TextSegment[AllowedLanguages.Any]] =
-      Future.successful(input)
-    override def echoBinary(input: BinarySegment[SupportedMime]): Future[BinarySegment[SupportedMime]] =
-      Future.successful(input)
-    override def echoBinaryAny(
-      input: BinarySegment[AllowedMimeTypes.Any]
-    ): Future[BinarySegment[AllowedMimeTypes.Any]] =
-      Future.successful(input)
-  }
-
-  // ---------------------------------------------------------------------------
   // Shared registrations (each agent type can only be registered once)
   // ---------------------------------------------------------------------------
 
@@ -330,7 +278,6 @@ object AgentDefinitionCompileSpec extends ZIOSpecDefault {
   private lazy val factoryCtorDefn   = AgentImplementation.registerClass[FactoryCtorAgent, FactoryCtorAgentImpl]
   private lazy val noMethodsDefn     = AgentImplementation.registerClass[NoMethodsAgent, NoMethodsAgentImpl]
   private lazy val singleMethodDefn  = AgentImplementation.registerClass[SingleMethodAgent, SingleMethodAgentImpl]
-  private lazy val multimodalDefn    = AgentImplementation.registerClass[MultimodalAgent, MultimodalAgentImpl]
 
   // ---------------------------------------------------------------------------
   // Tests
@@ -428,48 +375,6 @@ object AgentDefinitionCompileSpec extends ZIOSpecDefault {
         singleMethodDefn.methodMetadata.size == 1,
         singleMethodDefn.methodMetadata.head.metadata.name == "only"
       )
-    },
-    test("multimodal agent compiles and registers with 5 methods") {
-      val names = multimodalDefn.methodMetadata.map(_.metadata.name).toSet
-      assertTrue(
-        multimodalDefn.methodMetadata.size == 5,
-        names == Set("echoMultimodal", "echoText", "echoTextAny", "echoBinary", "echoBinaryAny")
-      )
-    },
-    test("Multimodal wraps and unwraps payload") {
-      val payload = MultimodalPayload("hello", 1)
-      val mm      = Multimodal(payload)
-      assertTrue(mm.value == payload)
-    },
-    test("TextSegment.inline sets data and language code") {
-      val seg = TextSegment.inline[SupportedLang]("hello", Some("en"))
-      seg.value match {
-        case UnstructuredTextValue.Inline(data, lang) =>
-          assertTrue(data == "hello", lang.contains("en"))
-        case _ => throw new RuntimeException("expected Inline")
-      }
-    },
-    test("TextSegment.url sets URL") {
-      val seg = TextSegment.url[SupportedLang]("http://example.com/text.txt")
-      seg.value match {
-        case UnstructuredTextValue.Url(u) => assertTrue(u == "http://example.com/text.txt")
-        case _                            => throw new RuntimeException("expected Url")
-      }
-    },
-    test("BinarySegment.inline sets data and MIME type") {
-      val seg = BinarySegment.inline[SupportedMime](Array[Byte](1, 2), "image/png")
-      seg.value match {
-        case UnstructuredBinaryValue.Inline(data, mime) =>
-          assertTrue(data.toList == List[Byte](1, 2), mime == "image/png")
-        case _ => throw new RuntimeException("expected Inline")
-      }
-    },
-    test("BinarySegment.url sets URL") {
-      val seg = BinarySegment.url[SupportedMime]("http://example.com/data.png")
-      seg.value match {
-        case UnstructuredBinaryValue.Url(u) => assertTrue(u == "http://example.com/data.png")
-        case _                              => throw new RuntimeException("expected Url")
-      }
     }
   )
 }

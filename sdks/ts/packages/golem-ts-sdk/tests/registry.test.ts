@@ -15,9 +15,10 @@
 import { describe, expect, it } from 'vitest';
 import { AgentClassName } from '../src';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { Result } from 'golem:agent/host@1.5.0';
+import { Result } from 'golem:agent/host@2.0.0';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common@1.5.0';
+import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
+import { SchemaValue } from '../src/internal/schema-model';
 import { AgentInitiator } from '../src/internal/agentInitiator';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
@@ -27,7 +28,10 @@ describe('AgentType look up', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
 
     const FailingAgentInitiator: AgentInitiator = {
-      initiate: (_constructorParams: DataValue): Result<ResolvedAgent, AgentError> => {
+      initiate: (
+        _constructorParams: SchemaValue,
+        _principal: Principal,
+      ): Result<ResolvedAgent, AgentError> => {
         return {
           tag: 'err',
           val: {
@@ -51,12 +55,13 @@ describe('AgentType look up', () => {
       typeName: agentClassName.value,
       description: 'An assistant agent',
       sourceLanguage: 'typescript',
+      schema: { typeNodes: [], defs: [], root: 0 },
       constructor: {
         name: 'foo',
         description: 'sample desc',
         promptHint: 'bar',
         inputSchema: {
-          tag: 'tuple',
+          tag: 'parameters',
           val: [],
         },
       },

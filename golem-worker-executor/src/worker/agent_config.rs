@@ -12,21 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{AgentConfigSource, AgentType, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
+use golem_common::schema::agent::typed_schema_value_with_projected_defs;
+use golem_common::schema::render::from_json_value;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_common::schema::{
+    AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::HashMap;
+
+/// Resolve a chain of [`SchemaType::Ref`]s into a non-`Ref` type, with a bounded
+/// loop guarding against reference cycles.
+fn resolve_type<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a SchemaType {
+    let mut current = ty;
+    for _ in 0..256 {
+        match current {
+            SchemaType::Ref { id, .. } => match graph.lookup(id) {
+                Some(def) => current = &def.body,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Whether `ty` (resolving refs in `graph`) is an `option<_>` type, i.e. a value
+/// is not required to be present.
+fn is_optional_type(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    matches!(resolve_type(graph, ty), SchemaType::Option { .. })
+}
 
 pub fn ensure_required_agent_secrets_are_configured(
     agent_secrets: &HashMap<CanonicalAgentSecretPath, AgentSecret>,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<(), WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -35,10 +59,10 @@ pub fn ensure_required_agent_secrets_are_configured(
 
     let agent_type = component
         .metadata
-        .find_agent_type_by_name(&agent_id.agent_type)
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
-    for config_entry in agent_type.config {
+    for config_entry in &agent_type.config {
         if config_entry.source != AgentConfigSource::Secret {
             continue;
         }
@@ -46,25 +70,28 @@ pub fn ensure_required_agent_secrets_are_configured(
         let canonical_agent_secret_path =
             CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_entry.path);
 
+        // The declared type's refs resolve against the agent's shared `defs`, so
+        // pass the agent graph plus the borrowed `value_type` directly instead of
+        // materializing a per-entry graph that clones the whole `defs` registry.
+        let declared_graph = &agent_type.schema;
+        let declared_type = &config_entry.value_type;
+
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
-                let secret_type_legacy = schema_graph_to_analysed_type(&agent_secret.secret_type)
-                    .map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Required agent secret {} has a type that is not representable as AnalysedType: {e}",
-                        config_entry.path.join(".")
-                    ))
-                })?;
-                if secret_type_legacy != config_entry.value_type {
+                let secret_graph = &agent_secret.secret_type;
+                if !is_equivalent_cross_graph(
+                    secret_graph,
+                    &secret_graph.root,
+                    declared_graph,
+                    declared_type,
+                ) {
                     return Err(WorkerExecutorError::invalid_request(format!(
-                        "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
-                        config_entry.path.join("."),
-                        secret_type_legacy,
-                        config_entry.value_type
+                        "Required agent secret {} has invalid type",
+                        config_entry.path.join(".")
                     )));
                 }
                 if agent_secret.secret_value.is_none()
-                    && !matches!(secret_type_legacy, AnalysedType::Option(_))
+                    && !is_optional_type(secret_graph, &secret_graph.root)
                 {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has no configured value",
@@ -72,7 +99,7 @@ pub fn ensure_required_agent_secrets_are_configured(
                     )));
                 }
             }
-            None if matches!(config_entry.value_type, AnalysedType::Option(_)) => {}
+            None if is_optional_type(declared_graph, declared_type) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
@@ -87,7 +114,7 @@ pub fn ensure_required_agent_secrets_are_configured(
 
 pub fn parse_worker_creation_agent_config(
     worker_agent_config: Vec<AgentConfigEntryDto>,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<Vec<TypedAgentConfigEntry>, WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -96,7 +123,7 @@ pub fn parse_worker_creation_agent_config(
 
     let agent_type = component
         .metadata
-        .find_agent_type_by_name(&agent_id.agent_type)
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
     let mut initial_agent_config = Vec::new();
@@ -113,20 +140,42 @@ pub fn parse_worker_creation_agent_config(
                 ))
             })?;
 
-        let parsed_value =
-            ValueAndType::parse_with_type(&entry.value.0, &config_declaration.value_type).map_err(
-                |err| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "config value for path {} does not match expected schema: [{}]",
-                        entry.path.join("."),
-                        err.join(", ")
-                    ))
-                },
-            )?;
+        // Decode + validate against the agent's shared graph and the declared
+        // `value_type` (refs resolve through the agent's `defs`).
+        let declared_type = &config_declaration.value_type;
+
+        let schema_value: SchemaValue =
+            from_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "config value for path {} is not a valid schema value: {err}",
+                    entry.path.join(".")
+                ))
+            })?;
+
+        validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
+            WorkerExecutorError::invalid_request(format!(
+                "config value for path {} does not match expected schema: [{}]",
+                entry.path.join("."),
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+
+        // The stored entry is a single-root carrier, so project the agent
+        // graph's defs to exactly those reachable from `value_type` instead of
+        // cloning the whole registry.
+        let value = typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            config_declaration.value_type.clone(),
+            schema_value,
+        );
 
         initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,
-            value: parsed_value,
+            value,
         });
     }
 
@@ -140,9 +189,9 @@ pub fn parse_worker_creation_agent_config(
             .map(|s| s.to_vec())
             .unwrap_or_default();
 
-        let config = effective_agent_config(initial_agent_config.clone(), component_config);
+        let config = effective_agent_config(initial_agent_config.clone(), component_config)?;
 
-        validate_agent_config(&config, &agent_type)?;
+        validate_agent_config(&config, agent_type)?;
     }
 
     Ok(initial_agent_config)
@@ -150,12 +199,16 @@ pub fn parse_worker_creation_agent_config(
 
 /// Merges the component-level typed config (stored in `AgentTypeProvisionConfig`) with
 /// the worker-creation config entries, with worker entries taking precedence.
-/// Returns a map from config path to `ValueAndType`.
+///
+/// The result is the schema-native [`TypedSchemaValue`] carried by
+/// [`TypedAgentConfigEntry`] keyed by config path; it is what the executor's
+/// guest-facing config plumbing (`wasi:config/store`, named retry-policy
+/// parsing) consumes.
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
-) -> HashMap<Vec<String>, ValueAndType> {
-    let mut result = HashMap::new();
+) -> Result<HashMap<Vec<String>, TypedSchemaValue>, WorkerExecutorError> {
+    let mut result: HashMap<Vec<String>, TypedSchemaValue> = HashMap::new();
 
     for entry in default_agent_config {
         result.insert(entry.path, entry.value);
@@ -165,31 +218,41 @@ pub fn effective_agent_config(
         result.insert(entry.path, entry.value);
     }
 
-    result
+    Ok(result)
 }
 
 pub fn validate_agent_config(
-    config: &HashMap<Vec<String>, ValueAndType>,
-    agent_type: &AgentType,
+    config: &HashMap<Vec<String>, TypedSchemaValue>,
+    agent_type: &AgentTypeSchema,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
         if entry.source != AgentConfigSource::Local {
             continue;
         };
 
+        // Refs in the declared `value_type` resolve against the agent's shared
+        // `defs`; pass the agent graph plus the borrowed type directly instead of
+        // cloning the whole `defs` registry into a per-entry graph.
+        let declared_graph = &agent_type.schema;
+        let declared_type = &entry.value_type;
+
         match config.get(&entry.path) {
             Some(config_value) => {
-                if config_value.typ != entry.value_type {
-                    // TODO: better rendering of analysed type.
-                    return Err(WorkerExecutorError::invalid_request(format!(
-                        "Type mismatch for config {}. expected: {:?}; found: {:?}",
-                        entry.path.join("."),
-                        entry.value_type,
-                        config_value.typ
-                    )));
-                }
+                validate_value(declared_graph, declared_type, config_value.value()).map_err(
+                    |errors| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Type mismatch for config {}: [{}]",
+                            entry.path.join("."),
+                            errors
+                                .iter()
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                    },
+                )?;
             }
-            None if matches!(entry.value_type, AnalysedType::Option(_)) => {}
+            None if is_optional_type(declared_graph, declared_type) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Config {} was not provided a value",

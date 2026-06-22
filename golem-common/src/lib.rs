@@ -16,12 +16,17 @@
 // which require an increased recursion limit.
 #![recursion_limit = "256"]
 
+// Allows the `IntoSchema` / `FromSchema` derive macros (which emit
+// `::golem_common::…` paths) to be used on types defined *within* this crate.
+extern crate self as golem_common;
+
 use http::Uri;
 use shadow_rs::shadow;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+pub mod agentic;
 pub mod base_model;
 pub mod schema;
 
@@ -51,6 +56,8 @@ pub mod read_only_lock;
 #[cfg(feature = "full")]
 pub mod redis;
 #[cfg(feature = "full")]
+pub mod resource_runtime;
+#[cfg(feature = "full")]
 pub mod retriable_error;
 #[cfg(feature = "full")]
 pub mod retries;
@@ -58,8 +65,6 @@ pub mod retries;
 pub mod serialization;
 #[cfg(feature = "full")]
 pub mod tracing;
-#[cfg(feature = "full")]
-pub mod virtual_exports;
 
 mod macros;
 

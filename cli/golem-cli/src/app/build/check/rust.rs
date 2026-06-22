@@ -595,6 +595,13 @@ mod test {
         assert!(template_source.contains("{{ cargoTarget }}/wasm32-wasip2/debug"));
         assert!(template_source.contains("{{ cargoTarget }}/wasm32-wasip2/release"));
         assert!(!template_source.contains("CARGO_TARGET_DIR"));
+
+        // The whole cargo target directory must never be a `clean` target: with a
+        // redirected/shared CARGO_TARGET_DIR it can be the directory that holds the
+        // golem-cli binary itself (and every other component's build), so cleaning it
+        // would delete unrelated artifacts. The per-component wasm files are already
+        // cleaned via `componentWasm`, `outputWasm`, and the build `targets`.
+        assert!(!template_source.contains("- \"{{ cargoTarget }}\""));
     }
 
     #[test]

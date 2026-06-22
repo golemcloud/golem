@@ -14,19 +14,31 @@ test "parse_agents finds simple agent struct" {
     #|}
   let agents = parse_agents([("counter.mbt", content)])
   debug_inspect(agents.length(), content="1")
-  debug_inspect(agents[0].name, content=(
-    #|"Counter"
-  ))
-  debug_inspect(agents[0].description, content=(
-    #|"A counter agent"
-  ))
-  debug_inspect(agents[0].constructor_description, content=(
-    #|"Creates a new counter"
-  ))
+  debug_inspect(
+    agents[0].name,
+    content=(
+      #|"Counter"
+    ),
+  )
+  debug_inspect(
+    agents[0].description,
+    content=(
+      #|"A counter agent"
+    ),
+  )
+  debug_inspect(
+    agents[0].constructor_description,
+    content=(
+      #|"Creates a new counter"
+    ),
+  )
   debug_inspect(agents[0].constructor_params.length(), content="1")
-  debug_inspect(agents[0].constructor_params[0].0, content=(
-    #|"name"
-  ))
+  debug_inspect(
+    agents[0].constructor_params[0].0,
+    content=(
+      #|"name"
+    ),
+  )
   debug_inspect(agents[0].constructor_params[0].1, content="Simple(\"String\")")
   debug_inspect(agents[0].methods.length(), content="0")
 }
@@ -47,17 +59,26 @@ test "parse_agents finds agent with multiple params" {
     #|}
   let agents = parse_agents([("greeter.mbt", content)])
   debug_inspect(agents.length(), content="1")
-  debug_inspect(agents[0].name, content=(
-    #|"Greeter"
-  ))
+  debug_inspect(
+    agents[0].name,
+    content=(
+      #|"Greeter"
+    ),
+  )
   debug_inspect(agents[0].constructor_params.length(), content="2")
-  debug_inspect(agents[0].constructor_params[0].0, content=(
-    #|"greeting"
-  ))
+  debug_inspect(
+    agents[0].constructor_params[0].0,
+    content=(
+      #|"greeting"
+    ),
+  )
   debug_inspect(agents[0].constructor_params[0].1, content="Simple(\"String\")")
-  debug_inspect(agents[0].constructor_params[1].0, content=(
-    #|"count"
-  ))
+  debug_inspect(
+    agents[0].constructor_params[1].0,
+    content=(
+      #|"count"
+    ),
+  )
   debug_inspect(agents[0].constructor_params[1].1, content="Simple(\"UInt64\")")
   debug_inspect(agents[0].methods.length(), content="0")
 }
@@ -87,20 +108,32 @@ test "parse_agents detects public methods" {
     #|}
   let agents = parse_agents([("counter.mbt", content)])
   debug_inspect(agents[0].methods.length(), content="2")
-  debug_inspect(agents[0].methods[0].name, content=(
-    #|"increment"
-  ))
-  debug_inspect(agents[0].methods[0].description, content=(
-    #|"Increments the counter"
-  ))
+  debug_inspect(
+    agents[0].methods[0].name,
+    content=(
+      #|"increment"
+    ),
+  )
+  debug_inspect(
+    agents[0].methods[0].description,
+    content=(
+      #|"Increments the counter"
+    ),
+  )
   debug_inspect(agents[0].methods[0].params.length(), content="0")
   debug_inspect(agents[0].methods[0].return_type, content="None")
-  debug_inspect(agents[0].methods[1].name, content=(
-    #|"decrement"
-  ))
-  debug_inspect(agents[0].methods[1].description, content=(
-    #|"Decrements the counter"
-  ))
+  debug_inspect(
+    agents[0].methods[1].name,
+    content=(
+      #|"decrement"
+    ),
+  )
+  debug_inspect(
+    agents[0].methods[1].description,
+    content=(
+      #|"Decrements the counter"
+    ),
+  )
 }
 
 ///|
@@ -123,18 +156,30 @@ test "parse_agents detects method with params and return type" {
     #|}
   let agents = parse_agents([("calc.mbt", content)])
   debug_inspect(agents[0].methods.length(), content="1")
-  debug_inspect(agents[0].methods[0].name, content=(
-    #|"add"
-  ))
-  debug_inspect(agents[0].methods[0].description, content=(
-    #|"Adds a value"
-  ))
+  debug_inspect(
+    agents[0].methods[0].name,
+    content=(
+      #|"add"
+    ),
+  )
+  debug_inspect(
+    agents[0].methods[0].description,
+    content=(
+      #|"Adds a value"
+    ),
+  )
   debug_inspect(agents[0].methods[0].params.length(), content="1")
-  debug_inspect(agents[0].methods[0].params[0].0, content=(
-    #|"value"
-  ))
+  debug_inspect(
+    agents[0].methods[0].params[0].0,
+    content=(
+      #|"value"
+    ),
+  )
   debug_inspect(agents[0].methods[0].params[0].1, content="Simple(\"Int\")")
-  debug_inspect(agents[0].methods[0].return_type, content="Some(Simple(\"Int\"))")
+  debug_inspect(
+    agents[0].methods[0].return_type,
+    content="Some(Simple(\"Int\"))",
+  )
 }
 
 ///|
@@ -160,9 +205,12 @@ test "parse_agents skips private methods" {
     #|}
   let agents = parse_agents([("agent.mbt", content)])
   debug_inspect(agents[0].methods.length(), content="1")
-  debug_inspect(agents[0].methods[0].name, content=(
-    #|"do_thing"
-  ))
+  debug_inspect(
+    agents[0].methods[0].name,
+    content=(
+      #|"do_thing"
+    ),
+  )
 }
 
 ///|
@@ -177,7 +225,6 @@ test "generate_agent_registration for simple agent" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       snapshotting: Disabled,
@@ -191,8 +238,7 @@ test "generate_agent_registration for simple agent" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Counter\",\n    agent_type: {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"name\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let name :String = @schema.from_element_value_as(elements[0])\n        let agent = Counter::new(name)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = @agents.decode_invocation_input(input, 1, \"Counter::new\")\n          let name :String = @agents.decode_param(params, 0, \"Counter::new\")\n          let agent = Counter::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -214,7 +260,6 @@ test "generate_agent_registration with methods" {
           prompt_hint: None,
           params: [],
           return_type: None,
-          param_schema_options: {},
           http_endpoint: None,
           read_only: None,
         },
@@ -224,13 +269,11 @@ test "generate_agent_registration with methods" {
           prompt_hint: None,
           params: [("value", Simple("UInt64"))],
           return_type: Some(Simple("UInt64")),
-          param_schema_options: {},
           http_endpoint: None,
           read_only: None,
         },
       ],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       snapshotting: Disabled,
@@ -244,9 +287,7 @@ test "generate_agent_registration with methods" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Counter\",\n    agent_type: {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"name\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input_schema: @rpcTypes.DataSchema::Tuple([]),\n          output_schema: @rpcTypes.DataSchema::Tuple([]),\n          read_only: None,\n        },\n        {\n          name: \"add\",\n          description: \"Adds a value\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"value\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n              ),\n            ),\n          ]),\n          output_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"result\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n              ),\n            ),\n          ]),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let name :String = @schema.from_element_value_as(elements[0])\n        let agent = Counter::new(name)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"increment\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        self.increment()\n        Ok(@rpcTypes.DataValue::Tuple([]))\n      }\n      \"add\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let value :UInt64 = @schema.from_element_value_as(elements[0])\n        let result = self.add(value)\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: None,\n          read_only: None,\n        },\n        {\n          name: \"add\",\n          description: \"Adds a value\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [\n            {\n              name: \"value\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n                ),\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = @agents.decode_invocation_input(input, 1, \"Counter::new\")\n          let name :String = @agents.decode_param(params, 0, \"Counter::new\")\n          let agent = Counter::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"increment\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Counter.increment\")\n        self.increment()\n        Ok(None)\n      }\n      \"add\" => {\n        let params = @agents.decode_invocation_input(input, 1, \"Counter.add\")\n        let value :UInt64 = @agents.decode_param(params, 0, \"Counter.add\")\n        let result = self.add(value)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -418,14 +459,10 @@ test "generate_agent_registration emits read_only with derived uses_principal" {
   let agents = parse_agents([("counter.mbt", content)])
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  assert_true(
-    output.contains(
-      "read_only: Some({\n            cache_policy: @common.CachePolicy::Ttl(30000000000UL),\n            uses_principal: false,\n          })",
-    ),
-  )
-  assert_true(
-    output.contains(
-      "read_only: Some({\n            cache_policy: @common.CachePolicy::UntilWrite,\n            uses_principal: true,\n          })",
+  debug_inspect(
+    output,
+    content=(
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A read-only agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new Counter\",\n        prompt_hint: None,\n        input: [],\n      },\n      methods: [\n        {\n          name: \"get_value\",\n          description: \"Plain read-only without Principal\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: Some(\n            (\n              {\n                cache_policy: @common.CachePolicy::Ttl(30000000000UL),\n                uses_principal: false,\n              }\n              : @common.ReadOnlyConfig\n            ),\n          ),\n        },\n        {\n          name: \"get_value_for\",\n          description: \"Read-only with Principal parameter\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [\n            {\n              name: \"caller\",\n              source: @agents.InputParamSource::AutoInjected(\n                @common.AutoInjectedKind::PRINCIPAL,\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: Some(\n            (\n              {\n                cache_policy: @common.CachePolicy::UntilWrite,\n                uses_principal: true,\n              }\n              : @common.ReadOnlyConfig\n            ),\n          ),\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let _ = @agents.decode_invocation_input(input, 0, \"Counter::new\")\n          let agent = Counter::new()\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"get_value\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Counter.get_value\")\n        let result = self.get_value()\n        Ok(Some(@agents.encode_output(result)))\n      }\n      \"get_value_for\" => {\n        let _ = \n          @agents.decode_invocation_input(input, 0, \"Counter.get_value_for\")\n        let result = self.get_value_for(principal)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -486,13 +523,11 @@ test "generate_agent_registration with prompt_hints" {
           prompt_hint: Some("Call to increase"),
           params: [],
           return_type: None,
-          param_schema_options: {},
           http_endpoint: None,
           read_only: None,
         },
       ],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       snapshotting: Disabled,
@@ -506,38 +541,21 @@ test "generate_agent_registration with prompt_hints" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Counter\",\n    agent_type: {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: Some(\"Provide a unique name\"),\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"name\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: Some(\"Call to increase\"),\n          input_schema: @rpcTypes.DataSchema::Tuple([]),\n          output_schema: @rpcTypes.DataSchema::Tuple([]),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let name :String = @schema.from_element_value_as(elements[0])\n        let agent = Counter::new(name)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"increment\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        self.increment()\n        Ok(@rpcTypes.DataValue::Tuple([]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: Some(\"Provide a unique name\"),\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: Some(\"Call to increase\"),\n          input: [],\n          output: None,\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = @agents.decode_invocation_input(input, 1, \"Counter::new\")\n          let name :String = @agents.decode_param(params, 0, \"Counter::new\")\n          let agent = Counter::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"increment\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Counter.increment\")\n        self.increment()\n        Ok(None)\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
 
 ///|
-fn format_expr(expr : @syntax.Expr) -> String {
-  let impl_ = @syntax.Impl::TopExpr(
-    expr~,
-    is_main=false,
-    local_types=@list.List::from_array([]),
-    is_async=None,
-    loc=@basic.Location::{
-      start: { fname: "", lnum: 0, bol: 0, cnum: 0 },
-      end: { fname: "", lnum: 0, bol: 0, cnum: 0 },
-    },
-  )
-  let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
-  // Strip the wrapping "{\n" and "}\n\n" from the init block output
-  output
-}
-
-///|
+/// Parses agent sources and renders the full generated `golem_agents.mbt`
+/// (registration `init` + `RawAgent` dispatch) for the new schema model.
 fn parse_and_build_agent_type(files : Array[(String, String)]) -> String raise {
   let agents = parse_agents(files)
   guard agents.length() == 1 else {
     fail("Expected exactly 1 agent, got \{agents.length()}")
   }
-  let expr = build_agent_type_expr(agents[0])
-  format_expr(expr)
+  let impls = generate_agent_registration(agents)
+  @formatter.impls_to_string(impls)
 }
 
 ///|
@@ -558,8 +576,7 @@ test "end-to-end: simple counter agent type" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  {\n    type_name: \"Counter\",\n    description: \"A counter agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new counter\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"name\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = @agents.decode_invocation_input(input, 1, \"Counter::new\")\n          let name :String = @agents.decode_param(params, 0, \"Counter::new\")\n          let agent = Counter::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -593,9 +610,7 @@ test "end-to-end: agent with methods" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  {\n    type_name: \"Counter\",\n    description: \"A counter agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new counter\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"name\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"increment\",\n        description: \"Increments the counter by one\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n        output_schema: @rpcTypes.DataSchema::Tuple([]),\n        read_only: None,\n      },\n      {\n        name: \"add\",\n        description: \"Adds a value to the counter\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"value\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n        ]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n        ]),\n        read_only: None,\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter by one\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: None,\n          read_only: None,\n        },\n        {\n          name: \"add\",\n          description: \"Adds a value to the counter\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [\n            {\n              name: \"value\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n                ),\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = @agents.decode_invocation_input(input, 1, \"Counter::new\")\n          let name :String = @agents.decode_param(params, 0, \"Counter::new\")\n          let agent = Counter::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"increment\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Counter.increment\")\n        self.increment()\n        Ok(None)\n      }\n      \"add\" => {\n        let params = @agents.decode_invocation_input(input, 1, \"Counter.add\")\n        let value :UInt64 = @agents.decode_param(params, 0, \"Counter.add\")\n        let result = self.add(value)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -624,9 +639,7 @@ test "end-to-end: agent with prompt hints" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  {\n    type_name: \"SmartAgent\",\n    description: \"A smart agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a smart agent\",\n      prompt_hint: Some(\"Provide a JSON config string\"),\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"config\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"process\",\n        description: \"Processes input text\",\n        http_endpoint: [],\n        prompt_hint: Some(\"Pass natural language text\"),\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"text\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n        read_only: None,\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let smartAgent_type_def :@agents.AgentTypeDef = {\n      type_name: \"SmartAgent\",\n      description: \"A smart agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a smart agent\",\n        prompt_hint: Some(\"Provide a JSON config string\"),\n        input: [\n          {\n            name: \"config\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"process\",\n          description: \"Processes input text\",\n          http_endpoint: [],\n          prompt_hint: Some(\"Pass natural language text\"),\n          input: [\n            {\n              name: \"text\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n                ),\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"SmartAgent\",\n      agent_type: smartAgent_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = \n            @agents.decode_invocation_input(input, 1, \"SmartAgent::new\")\n          let config :String = \n            @agents.decode_param(params, 0, \"SmartAgent::new\")\n          let agent = SmartAgent::new(config)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for SmartAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"process\" => {\n        let params = \n          @agents.decode_invocation_input(input, 1, \"SmartAgent.process\")\n        let text :String = @agents.decode_param(params, 0, \"SmartAgent.process\")\n        let result = self.process(text)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -652,9 +665,7 @@ test "end-to-end: agent with complex param types" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  {\n    type_name: \"Processor\",\n    description: \"A data processor\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new Processor\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"name\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"batch\",\n        description: \"Processes a batch of items\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"items\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),\n            ),\n          ),\n          (\n            \"count\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),\n            ),\n          ),\n        ]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),\n            ),\n          ),\n        ]),\n        read_only: None,\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let processor_type_def :@agents.AgentTypeDef = {\n      type_name: \"Processor\",\n      description: \"A data processor\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new Processor\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"batch\",\n          description: \"Processes a batch of items\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [\n            {\n              name: \"items\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),\n                ),\n              ),\n            },\n            {\n              name: \"count\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),\n                ),\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Processor\",\n      agent_type: processor_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = \n            @agents.decode_invocation_input(input, 1, \"Processor::new\")\n          let name :String = @agents.decode_param(params, 0, \"Processor::new\")\n          let agent = Processor::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Processor with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"batch\" => {\n        let params = \n          @agents.decode_invocation_input(input, 2, \"Processor.batch\")\n        let items :Array[String] = \n          @agents.decode_param(params, 0, \"Processor.batch\")\n        let count :UInt64? = @agents.decode_param(params, 1, \"Processor.batch\")\n        let result = self.batch(items, count)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -682,9 +693,7 @@ test "end-to-end: agent with no constructor params" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  {\n    type_name: \"Worker\",\n    description: \"A simple worker\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a default worker\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([]),\n    },\n    methods: [\n      {\n        name: \"run\",\n        description: \"Does work\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Int]),\n            ),\n          ),\n        ]),\n        read_only: None,\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let worker_type_def :@agents.AgentTypeDef = {\n      type_name: \"Worker\",\n      description: \"A simple worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a default worker\",\n        prompt_hint: None,\n        input: [],\n      },\n      methods: [\n        {\n          name: \"run\",\n          description: \"Does work\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Int]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Worker\",\n      agent_type: worker_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let _ = @agents.decode_invocation_input(input, 0, \"Worker::new\")\n          let agent = Worker::new()\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"run\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Worker.run\")\n        let result = self.run()\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -713,9 +722,7 @@ test "end-to-end: agent split across multiple files" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  {\n    type_name: \"MultiAgent\",\n    description: \"A multi-file agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new MultiAgent\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"id\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"get_id\",\n        description: \"Gets the ID\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n        ]),\n        read_only: None,\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let multiAgent_type_def :@agents.AgentTypeDef = {\n      type_name: \"MultiAgent\",\n      description: \"A multi-file agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new MultiAgent\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"id\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"get_id\",\n          description: \"Gets the ID\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"MultiAgent\",\n      agent_type: multiAgent_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = \n            @agents.decode_invocation_input(input, 1, \"MultiAgent::new\")\n          let id :UInt64 = @agents.decode_param(params, 0, \"MultiAgent::new\")\n          let agent = MultiAgent::new(id)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for MultiAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"get_id\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"MultiAgent.get_id\")\n        let result = self.get_id()\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -736,9 +743,8 @@ test "build_raw_agent_impl for counter-like agent" {
         prompt_hint: None,
         params: [],
         return_type: None,
-        param_schema_options: {},
         http_endpoint: None,
-          read_only: None,
+        read_only: None,
       },
       {
         name: "get_value",
@@ -746,9 +752,8 @@ test "build_raw_agent_impl for counter-like agent" {
         prompt_hint: None,
         params: [],
         return_type: Some(Simple("UInt64")),
-        param_schema_options: {},
         http_endpoint: None,
-          read_only: None,
+        read_only: None,
       },
       {
         name: "add",
@@ -756,13 +761,11 @@ test "build_raw_agent_impl for counter-like agent" {
         prompt_hint: None,
         params: [("value", Simple("UInt64"))],
         return_type: Some(Simple("UInt64")),
-        param_schema_options: {},
         http_endpoint: None,
-          read_only: None,
+        read_only: None,
       },
     ],
     has_init: false,
-    constructor_schema_options: {},
     has_snapshottable: false,
     has_json_derives: false,
     snapshotting: Disabled,
@@ -770,13 +773,11 @@ test "build_raw_agent_impl for counter-like agent" {
     http_mount: None,
     config_type: None,
   }
-  let impl_ = build_raw_agent_impl(agent)
-  let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
+  let output = @formatter.impls_to_string(generate_agent_registration([agent]))
   debug_inspect(
     output,
     content=(
-      #|"///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"increment\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        self.increment()\n        Ok(@rpcTypes.DataValue::Tuple([]))\n      }\n      \"get_value\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let result = self.get_value()\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      \"add\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let value :UInt64 = @schema.from_element_value_as(elements[0])\n        let result = self.add(value)\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let counter_type_def :@agents.AgentTypeDef = {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"name\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: None,\n          read_only: None,\n        },\n        {\n          name: \"get_value\",\n          description: \"Gets the current value\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: None,\n        },\n        {\n          name: \"add\",\n          description: \"Adds a value\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [\n            {\n              name: \"value\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n                ),\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Counter\",\n      agent_type: counter_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = @agents.decode_invocation_input(input, 1, \"Counter::new\")\n          let name :String = @agents.decode_param(params, 0, \"Counter::new\")\n          let agent = Counter::new(name)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"increment\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Counter.increment\")\n        self.increment()\n        Ok(None)\n      }\n      \"get_value\" => {\n        let _ = @agents.decode_invocation_input(input, 0, \"Counter.get_value\")\n        let result = self.get_value()\n        Ok(Some(@agents.encode_output(result)))\n      }\n      \"add\" => {\n        let params = @agents.decode_invocation_input(input, 1, \"Counter.add\")\n        let value :UInt64 = @agents.decode_param(params, 0, \"Counter.add\")\n        let result = self.add(value)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -819,7 +820,10 @@ test "encode/decode_qualified roundtrips" {
     let encoded = encode_qualified(pkg, id)
     match encoded {
       Simple(name) =>
-        debug_inspect(decode_qualified(name), content="Some((\"\{pkg}\", \"\{id}\"))")
+        debug_inspect(
+          decode_qualified(name),
+          content="Some((\"\{pkg}\", \"\{id}\"))",
+        )
       _ => fail("encode_qualified should return Simple")
     }
   }
@@ -850,7 +854,10 @@ test "parse_agents with cross-package param types" {
     content="Simple(\"@types.Config\")",
   )
   debug_inspect(agents[0].methods.length(), content="1")
-  debug_inspect(agents[0].methods[0].params[0].1, content="Simple(\"@types.Order\")")
+  debug_inspect(
+    agents[0].methods[0].params[0].1,
+    content="Simple(\"@types.Order\")",
+  )
   debug_inspect(
     agents[0].methods[0].return_type,
     content="Some(Simple(\"@types.Result\"))",
@@ -877,8 +884,14 @@ test "parse_agents with type alias in params" {
   let agents = parse_agents([("alias.mbt", content)])
   debug_inspect(agents.length(), content="1")
   debug_inspect(agents[0].constructor_params[0].1, content="Simple(\"UserId\")")
-  debug_inspect(agents[0].methods[0].params[0].1, content="Simple(\"UserName\")")
-  debug_inspect(agents[0].methods[0].return_type, content="Some(Simple(\"UserId\"))")
+  debug_inspect(
+    agents[0].methods[0].params[0].1,
+    content="Simple(\"UserName\")",
+  )
+  debug_inspect(
+    agents[0].methods[0].return_type,
+    content="Some(Simple(\"UserId\"))",
+  )
 }
 
 ///|
@@ -917,21 +930,30 @@ test "parse_agents with cross-package type in compound positions" {
 
 ///|
 test "param_type_to_type_string for various types" {
-  debug_inspect(param_type_to_type_string(Simple("String")), content=(
-    #|"String"
-  ))
-  debug_inspect(param_type_to_type_string(Simple("UInt64")), content=(
-    #|"UInt64"
-  ))
+  debug_inspect(
+    param_type_to_type_string(Simple("String")),
+    content=(
+      #|"String"
+    ),
+  )
+  debug_inspect(
+    param_type_to_type_string(Simple("UInt64")),
+    content=(
+      #|"UInt64"
+    ),
+  )
   debug_inspect(
     param_type_to_type_string(Optional(Simple("String"))),
     content=(
       #|"String?"
     ),
   )
-  debug_inspect(param_type_to_type_string(List(Simple("Int"))), content=(
-    #|"Array[Int]"
-  ))
+  debug_inspect(
+    param_type_to_type_string(List(Simple("Int"))),
+    content=(
+      #|"Array[Int]"
+    ),
+  )
   debug_inspect(
     param_type_to_type_string(ResultType(Simple("String"), Simple("Int"))),
     content=(
@@ -963,13 +985,11 @@ test "generate_agent_registration with cross-package types" {
           prompt_hint: None,
           params: [("order", Simple("@types.Order"))],
           return_type: Some(Simple("@types.Result")),
-          param_schema_options: {},
           http_endpoint: None,
           read_only: None,
         },
       ],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       snapshotting: Disabled,
@@ -983,9 +1003,7 @@ test "generate_agent_registration with cross-package types" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"OrderAgent\",\n    agent_type: {\n      type_name: \"OrderAgent\",\n      description: \"An order agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates an order agent\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"config\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),\n            ),\n          ),\n        ]),\n      },\n      methods: [\n        {\n          name: \"process\",\n          description: \"Processes an order\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"order\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),\n              ),\n            ),\n          ]),\n          output_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"result\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),\n              ),\n            ),\n          ]),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let config :@types.Config = @schema.from_element_value_as(elements[0])\n        let agent = OrderAgent::new(config)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for OrderAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"process\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let order :@types.Order = @schema.from_element_value_as(elements[0])\n        let result = self.process(order)\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
-
+      #|"///|\nfn init {\n  try {\n    let orderAgent_type_def :@agents.AgentTypeDef = {\n      type_name: \"OrderAgent\",\n      description: \"An order agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates an order agent\",\n        prompt_hint: None,\n        input: [\n          {\n            name: \"config\",\n            source: @agents.InputParamSource::UserSupplied(\n              @schema.into_schema_graph(\n                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),\n              ),\n            ),\n          },\n        ],\n      },\n      methods: [\n        {\n          name: \"process\",\n          description: \"Processes an order\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input: [\n            {\n              name: \"order\",\n              source: @agents.InputParamSource::UserSupplied(\n                @schema.into_schema_graph(\n                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),\n                ),\n              ),\n            },\n          ],\n          output: Some(\n            @schema.into_schema_graph(\n              (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),\n            ),\n          ),\n          read_only: None,\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"OrderAgent\",\n      agent_type: orderAgent_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let params = \n            @agents.decode_invocation_input(input, 1, \"OrderAgent::new\")\n          let config :@types.Config = \n            @agents.decode_param(params, 0, \"OrderAgent::new\")\n          let agent = OrderAgent::new(config)\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for OrderAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      \"process\" => {\n        let params = \n          @agents.decode_invocation_input(input, 1, \"OrderAgent.process\")\n        let order :@types.Order = \n          @agents.decode_param(params, 0, \"OrderAgent.process\")\n        let result = self.process(order)\n        Ok(Some(@agents.encode_output(result)))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -1057,14 +1075,16 @@ test "parse_agents with tuple return type" {
     #|}
   let agents = parse_agents([("agent.mbt", content)])
   debug_inspect(agents[0].methods.length(), content="1")
-  debug_inspect(agents[0].methods[0].name, content=(
-    #|"get_pair"
-  ))
+  debug_inspect(
+    agents[0].methods[0].name,
+    content=(
+      #|"get_pair"
+    ),
+  )
   debug_inspect(
     agents[0].methods[0].return_type,
     content=(
       #|Some(([Simple("String"), Simple("Int")]))
-
     ),
   )
 }
@@ -1129,7 +1149,6 @@ test "generate_agent_registration with ephemeral mode" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       snapshotting: Disabled,
@@ -1143,8 +1162,7 @@ test "generate_agent_registration with ephemeral mode" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"An ephemeral worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::EPHEMERAL,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let worker_type_def :@agents.AgentTypeDef = {\n      type_name: \"Worker\",\n      description: \"An ephemeral worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input: [],\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::EPHEMERAL,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Worker\",\n      agent_type: worker_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let _ = @agents.decode_invocation_input(input, 0, \"Worker::new\")\n          let agent = Worker::new()\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -1183,97 +1201,87 @@ test "parse_agent_with_multimodal_return" {
 }
 
 ///|
-test "generate_agent_registration with multimodal return uses to_data_value" {
-  let agents : Array[AgentInfo] = [
-    {
-      name: "EchoAgent",
-      description: "Echo agent",
-      mode: Durable,
-      constructor_params: [],
-      constructor_description: "Creates an echo agent",
-      constructor_prompt_hint: None,
-      methods: [
-        {
-          name: "echo",
-          description: "Echo multimodal",
-          prompt_hint: None,
-          params: [("input", MultimodalType(Simple("TextOrBinary")))],
-          return_type: Some(MultimodalType(Simple("TextOrBinary"))),
-          param_schema_options: {},
-          http_endpoint: None,
-          read_only: None,
-        },
-      ],
-      has_init: false,
-      constructor_schema_options: {},
-      has_snapshottable: false,
-      has_json_derives: false,
-      snapshotting: Disabled,
-      fields: [],
-      http_mount: None,
-      config_type: None,
-    },
-  ]
-  let impl_ = build_raw_agent_impl(agents[0])
-  let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
+test "parse_agent recognizes @multimodal.Multimodal as MultimodalType" {
+  let source =
+    #|///| Vision agent
+    #|#derive.agent
+    #|pub(all) struct VisionAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn VisionAgent::new() -> VisionAgent {
+    #|  { value: "" }
+    #|}
+    #|
+    #|///| Analyze
+    #|pub fn VisionAgent::analyze(self : Self, input : @multimodal.Multimodal[TextOrImage]) -> String {
+    #|  ""
+    #|}
+  let result = parse_agents([("test.mbt", source)])
+  let m = result[0].methods[0]
   debug_inspect(
-    output,
+    m.params,
     content=(
-      #|"///|\nimpl @agents.RawAgent for EchoAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"echo\" => {\n        let input :@types.Multimodal[TextOrBinary] = \n          @types.Multimodal::from_data_value(input)\n        let result = self.echo(input)\n        Ok(result.to_data_value())\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|[("input", MultimodalType(Simple("TextOrImage")))]
     ),
   )
 }
 
 ///|
-test "parse_agents with text_languages annotation" {
-  let content =
-    #|///| A text agent
+test "parse_agent allows multimodal mixed with a regular parameter" {
+  // The new model drops the old "multimodal must be the only param" rule
+  // (Rust/TS iterate all params with no such restriction).
+  let source =
+    #|///| Vision agent
     #|#derive.agent
-    #|pub(all) struct TextAgent {
-    #|  name : String
+    #|pub(all) struct VisionAgent {
+    #|  value : String
     #|}
     #|
-    #|pub fn TextAgent::new(name : String) -> TextAgent {
-    #|  { name }
+    #|pub fn VisionAgent::new() -> VisionAgent {
+    #|  { value: "" }
     #|}
     #|
-    #|///| Summarize text
-    #|#derive.text_languages("input", "en", "de")
-    #|pub fn TextAgent::summarize(self : Self, input : UnstructuredText) -> String {
+    #|///| Describe with a prefix
+    #|pub fn VisionAgent::describe(self : Self, prefix : String, input : @multimodal.Multimodal[TextOrImage]) -> String {
     #|  ""
     #|}
-  let agents = parse_agents([("agent.mbt", content)])
+  // parse_agents raises AgentParseError if mixed multimodal params were
+  // rejected; calling it directly makes the test fail in that case.
+  let agents = parse_agents([("test.mbt", source)])
   debug_inspect(
-    agents[0].methods[0].param_schema_options.get("input"),
+    agents[0].methods[0].params,
     content=(
-      #|Some({ text_languages: ["en", "de"], binary_mime_types: [] })
+      #|[
+      #|  ("prefix", Simple("String")),
+      #|  ("input", MultimodalType(Simple("TextOrImage"))),
+      #|]
     ),
   )
 }
 
 ///|
-test "parse_agents rejects restriction on unknown param" {
-  let content =
-    #|///| A bad agent
+test "parse_agent rejects multimodal nested inside a container" {
+  let source =
+    #|///| Vision agent
     #|#derive.agent
-    #|pub(all) struct BadAgent {
-    #|  name : String
+    #|pub(all) struct VisionAgent {
+    #|  value : String
     #|}
     #|
-    #|pub fn BadAgent::new(name : String) -> BadAgent {
-    #|  { name }
+    #|pub fn VisionAgent::new() -> VisionAgent {
+    #|  { value: "" }
     #|}
     #|
-    #|#derive.text_languages("nonexistent", "en")
-    #|pub fn BadAgent::process(self : Self, input : UnstructuredText) -> String {
+    #|///| Bad: multimodal inside Array
+    #|pub fn VisionAgent::analyze(self : Self, input : Array[@multimodal.Multimodal[TextOrImage]]) -> String {
     #|  ""
     #|}
-  let result : Result[_, _] = try? parse_agents([("agent.mbt", content)])
+  let result : Result[_, _] = try? parse_agents([("test.mbt", source)])
   debug_inspect(
     result,
     content=(
-      #|Err(AgentParseError("#derive.text_languages/#derive.mime_types references unknown parameter 'nonexistent' of method 'process'"))
+      #|Err(AgentParseError("Multimodal cannot be nested inside Array for parameter 'input'; it must be a direct parameter or return type"))
     ),
   )
 }
@@ -1465,7 +1473,6 @@ test "generate_agent_registration with snapshotting periodic" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       fields: [],
@@ -1478,8 +1485,7 @@ test "generate_agent_registration with snapshotting periodic" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::Periodic(100UL),\n      ),\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let worker_type_def :@agents.AgentTypeDef = {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input: [],\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::Periodic(100UL),\n      ),\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Worker\",\n      agent_type: worker_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let _ = @agents.decode_invocation_input(input, 0, \"Worker::new\")\n          let agent = Worker::new()\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -1497,7 +1503,6 @@ test "generate_agent_registration with snapshotting default" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       fields: [],
@@ -1510,8 +1515,7 @@ test "generate_agent_registration with snapshotting default" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::Default,\n      ),\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let worker_type_def :@agents.AgentTypeDef = {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input: [],\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::Default,\n      ),\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Worker\",\n      agent_type: worker_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let _ = @agents.decode_invocation_input(input, 0, \"Worker::new\")\n          let agent = Worker::new()\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -1529,7 +1533,6 @@ test "generate_agent_registration with snapshotting every_n" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: false,
       fields: [],
@@ -1542,8 +1545,7 @@ test "generate_agent_registration with snapshotting every_n" {
   debug_inspect(
     output,
     content=(
-      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::EveryNInvocation(5U),\n      ),\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
-
+      #|"///|\nfn init {\n  try {\n    let worker_type_def :@agents.AgentTypeDef = {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input: [],\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::EveryNInvocation(5U),\n      ),\n      config: [],\n    }\n    @agents.register_agent({\n      name: \"Worker\",\n      agent_type: worker_type_def.to_agent_type(),\n      construct: fn(input, principal) {\n        let _ = principal\n        try {\n          let _ = @agents.decode_invocation_input(input, 0, \"Worker::new\")\n          let agent = Worker::new()\n          let constructed = @agents.ConstructedAgent::{\n            raw: agent,\n            snapshottable: None,\n            snapshot_format: None,\n          }\n          Ok(constructed)\n        } catch{\n          e => Err(e)\n        }\n      },\n    })\n  } catch{\n    e => {\n      @agents.panic_with_message(\n        \"init\",\n        \"Failed to register agents: \" + e.to_string(),\n      )\n    }\n  }\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  let _ = principal\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
     ),
   )
 }
@@ -1657,7 +1659,6 @@ test "generate_agent_registration with json derives generates direct Snapshottab
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
-      constructor_schema_options: {},
       has_snapshottable: false,
       has_json_derives: true,
       snapshotting: Disabled,
@@ -1686,4 +1687,181 @@ test "parse_duration_seconds compound" {
     content="95415",
   )
   debug_inspect(parse_duration_seconds("2 hours 0 seconds"), content="7200")
+}
+
+///|
+test "generate_agent_registration emits HTTP endpoint + mount metadata" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "WeatherAgent",
+      description: "A weather agent",
+      mode: Durable,
+      constructor_params: [("city", Simple("String"))],
+      constructor_description: "Creates a weather agent",
+      constructor_prompt_hint: None,
+      methods: [
+        {
+          name: "get_temperature",
+          description: "Get current temperature",
+          prompt_hint: None,
+          params: [("unit", Simple("String"))],
+          return_type: Some(Simple("Double")),
+          http_endpoint: Some({
+            method: "get",
+            path: "/current?unit={unit}",
+            headers: [],
+            auth: None,
+            cors: [],
+          }),
+          read_only: None,
+        },
+        {
+          name: "set_temperature",
+          description: "Set the temperature",
+          prompt_hint: None,
+          params: [
+            ("temperature", Simple("Double")),
+            ("source", Simple("String")),
+          ],
+          return_type: Some(Simple("String")),
+          http_endpoint: Some({
+            method: "post",
+            path: "/set",
+            headers: [("X-Source", "source")],
+            auth: None,
+            cors: [],
+          }),
+          read_only: None,
+        },
+      ],
+      has_init: false,
+      has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
+      http_mount: Some({
+        path: "/api/{city}/weather",
+        auth: Some(false),
+        phantom: false,
+        cors: ["https://app.acme.com"],
+        webhook_suffix: None,
+      }),
+      config_type: None,
+    },
+  ]
+  let output = @formatter.impls_to_string(generate_agent_registration(agents))
+  // GET endpoint with a query variable.
+  assert_true(output.contains("http_method: @common.HttpMethod::Get"))
+  assert_true(
+    output.contains("path_suffix: [@common.PathSegment::Literal(\"current\")]"),
+  )
+  assert_true(
+    output.contains(
+      "query_vars: [{ query_param_name: \"unit\", variable_name: \"unit\" }]",
+    ),
+  )
+  // POST endpoint with a header variable.
+  assert_true(output.contains("http_method: @common.HttpMethod::Post"))
+  assert_true(
+    output.contains("{ header_name: \"X-Source\", variable_name: \"source\" }"),
+  )
+  // Mount metadata: path prefix with a path variable, auth, and cors.
+  // (the formatter appends a trailing comma to single-field record literals,
+  // so match only up to the field value, not the closing brace)
+  assert_true(
+    output.contains(
+      "@common.PathSegment::PathVariable({ variable_name: \"city\"",
+    ),
+  )
+  assert_true(output.contains("auth_details: Some({ required: false"))
+  assert_true(output.contains("phantom_agent: false"))
+  assert_true(output.contains("allowed_patterns: [\"https://app.acme.com\"]"))
+}
+
+///|
+test "generate_agent_registration emits remaining/system path vars, required auth, phantom mount and webhook suffix" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "FileAgent",
+      description: "A file agent",
+      mode: Durable,
+      constructor_params: [],
+      constructor_description: "Creates a file agent",
+      constructor_prompt_hint: None,
+      methods: [
+        {
+          name: "fetch",
+          description: "Fetch a file",
+          prompt_hint: None,
+          params: [],
+          return_type: Some(Simple("String")),
+          http_endpoint: Some({
+            method: "get",
+            path: "/files/{agent-type}/{agent-version}/{*rest}",
+            headers: [],
+            auth: Some(true),
+            cors: [],
+          }),
+          read_only: None,
+        },
+      ],
+      has_init: false,
+      has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
+      http_mount: Some({
+        path: "/files",
+        auth: Some(true),
+        phantom: true,
+        cors: [],
+        webhook_suffix: Some("/events/{id}"),
+      }),
+      config_type: None,
+    },
+  ]
+  // The formatter wraps long array literals across multiple lines, so
+  // normalize whitespace before matching structural fragments.
+  let output = strip_whitespace(
+    @formatter.impls_to_string(generate_agent_registration(agents)),
+  )
+  // System path variables.
+  assert_true(
+    output.contains(
+      "@common.PathSegment::SystemVariable(@common.SystemVariable::AGENT_TYPE",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "@common.PathSegment::SystemVariable(@common.SystemVariable::AGENT_VERSION",
+    ),
+  )
+  // Remaining-path variable ({*rest}).
+  assert_true(
+    output.contains(
+      "@common.PathSegment::RemainingPathVariable({variable_name:\"rest\"",
+    ),
+  )
+  // Required auth on the endpoint.
+  assert_true(output.contains("auth_details:Some({required:true"))
+  // Phantom mount + webhook suffix path segments.
+  assert_true(output.contains("phantom_agent:true"))
+  assert_true(
+    output.contains(
+      "webhook_suffix:[@common.PathSegment::Literal(\"events\"),@common.PathSegment::PathVariable({variable_name:\"id\"",
+    ),
+  )
+}
+
+///|
+/// Removes all ASCII whitespace from a string. Used in tests to match
+/// structural fragments without depending on the formatter's line wrapping.
+fn strip_whitespace(s : String) -> String {
+  let sb = StringBuilder::new()
+  for c in s {
+    if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
+      sb.write_char(c)
+    }
+  }
+  sb.to_string()
 }

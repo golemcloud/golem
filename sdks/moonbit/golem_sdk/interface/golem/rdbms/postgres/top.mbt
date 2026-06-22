@@ -7,113 +7,113 @@ pub(all) suberror Error_ {
   QueryExecutionFailure(String)
   QueryResponseFailure(String)
   Other(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Interval {
   months : Int
   days : Int
   microseconds : Int64
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Int4bound {
   Included(Int)
   Excluded(Int)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Int8bound {
   Included(Int64)
   Excluded(Int64)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Numbound {
   Included(String)
   Excluded(String)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Tsbound {
   Included(@types.Timestamp)
   Excluded(@types.Timestamp)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Tstzbound {
   Included(@types.Timestamptz)
   Excluded(@types.Timestamptz)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum Datebound {
   Included(@types.Date)
   Excluded(@types.Date)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Int4range {
   start : Int4bound
   end : Int4bound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Int8range {
   start : Int8bound
   end : Int8bound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Numrange {
   start : Numbound
   end : Numbound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Tsrange {
   start : Tsbound
   end : Tsbound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Tstzrange {
   start : Tstzbound
   end : Tstzbound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Daterange {
   start : Datebound
   end : Datebound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct EnumerationType {
   name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Enumeration {
   name : String
   value : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct SparseVec {
   dim : Int
   indices : FixedArray[Int]
   values : FixedArray[Float]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
-pub(all) struct LazyDbValue(Int) derive(Debug, Eq)
+pub(all) struct LazyDbValue(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -126,32 +126,32 @@ pub fn LazyDbValue::drop(self : LazyDbValue) -> Unit {
 pub(all) struct Composite {
   name : String
   values : Array[LazyDbValue]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Domain {
   name : String
   value : LazyDbValue
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum ValueBound {
   Included(LazyDbValue)
   Excluded(LazyDbValue)
   Unbounded
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct ValuesRange {
   start : ValueBound
   end : ValueBound
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct Range {
   name : String
   value : ValuesRange
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum DbValue {
@@ -200,10 +200,10 @@ pub(all) enum DbValue {
   Vector(FixedArray[Float])
   Halfvec(FixedArray[Float])
   Sparsevec(SparseVec)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
-pub(all) struct LazyDbColumnType(Int) derive(Debug, Eq)
+pub(all) struct LazyDbColumnType(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -216,19 +216,19 @@ pub fn LazyDbColumnType::drop(self : LazyDbColumnType) -> Unit {
 pub(all) struct CompositeType {
   name : String
   attributes : Array[(String, LazyDbColumnType)]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DomainType {
   name : String
   base_type : LazyDbColumnType
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct RangeType {
   name : String
   base_type : LazyDbColumnType
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) enum DbColumnType {
@@ -276,7 +276,7 @@ pub(all) enum DbColumnType {
   Vector
   Halfvec
   Sparsevec
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DbColumn {
@@ -284,23 +284,23 @@ pub(all) struct DbColumn {
   name : String
   db_type : DbColumnType
   db_type_name : String
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A single row of values
 pub(all) struct DbRow {
   values : Array[DbValue]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct DbResult {
   columns : Array[DbColumn]
   rows : Array[DbRow]
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// A potentially very large and lazy stream of rows:
-pub(all) struct DbResultStream(Int) derive(Debug, Eq)
+pub(all) struct DbResultStream(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -310,7 +310,7 @@ pub fn DbResultStream::drop(self : DbResultStream) -> Unit {
 }
 
 ///|
-pub(all) struct DbConnection(Int) derive(Debug, Eq)
+pub(all) struct DbConnection(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -320,7 +320,7 @@ pub fn DbConnection::drop(self : DbConnection) -> Unit {
 }
 
 ///|
-pub(all) struct DbTransaction(Int) derive(Debug, Eq)
+pub(all) struct DbTransaction(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -1284,8 +1284,8 @@ pub fn LazyDbValue::get(self : LazyDbValue) -> DbValue {
   wasmImportMethodLazyDbValueGet(handle, return_area)
 
   let lifted42 = match mbt_ffi_load8_u(return_area + 0) {
-    0 => DbValue::Character(mbt_ffi_load8(return_area + 8) - 0x100)
-    1 => DbValue::Int2(mbt_ffi_load16(return_area + 8) - 0x10000)
+    0 => DbValue::Character(mbt_ffi_load8(return_area + 8))
+    1 => DbValue::Int2(mbt_ffi_load16(return_area + 8))
     2 => DbValue::Int4(mbt_ffi_load32(return_area + 8))
     3 => DbValue::Int8(mbt_ffi_load64(return_area + 8))
     4 => DbValue::Float4(mbt_ffi_loadf32(return_area + 8))
@@ -2349,8 +2349,8 @@ pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]? {
           let iter_base = mbt_ffi_load32(iter_base + 0) + index44 * 56
 
           let lifted42 = match mbt_ffi_load8_u(iter_base + 0) {
-            0 => DbValue::Character(mbt_ffi_load8(iter_base + 8) - 0x100)
-            1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            0 => DbValue::Character(mbt_ffi_load8(iter_base + 8))
+            1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8))
             2 => DbValue::Int4(mbt_ffi_load32(iter_base + 8))
             3 => DbValue::Int8(mbt_ffi_load64(iter_base + 8))
             4 => DbValue::Float4(mbt_ffi_loadf32(iter_base + 8))
@@ -4224,8 +4224,8 @@ pub fn DbConnection::query(
           let iter_base = mbt_ffi_load32(iter_base + 0) + index184 * 56
 
           let lifted182 = match mbt_ffi_load8_u(iter_base + 0) {
-            0 => DbValue::Character(mbt_ffi_load8(iter_base + 8) - 0x100)
-            1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            0 => DbValue::Character(mbt_ffi_load8(iter_base + 8))
+            1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8))
             2 => DbValue::Int4(mbt_ffi_load32(iter_base + 8))
             3 => DbValue::Int8(mbt_ffi_load64(iter_base + 8))
             4 => DbValue::Float4(mbt_ffi_loadf32(iter_base + 8))
@@ -8208,8 +8208,8 @@ pub fn DbTransaction::query(
           let iter_base = mbt_ffi_load32(iter_base + 0) + index184 * 56
 
           let lifted182 = match mbt_ffi_load8_u(iter_base + 0) {
-            0 => DbValue::Character(mbt_ffi_load8(iter_base + 8) - 0x100)
-            1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8) - 0x10000)
+            0 => DbValue::Character(mbt_ffi_load8(iter_base + 8))
+            1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8))
             2 => DbValue::Int4(mbt_ffi_load32(iter_base + 8))
             3 => DbValue::Int8(mbt_ffi_load64(iter_base + 8))
             4 => DbValue::Float4(mbt_ffi_loadf32(iter_base + 8))
