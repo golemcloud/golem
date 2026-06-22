@@ -325,6 +325,25 @@ wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = 
 [profile.dev]
 panic = "abort"
 
+# Build the Cranelift/regalloc codegen crates (the ones Wasmtime runs to compile
+# wasm -> native) at opt-level 3 even in debug builds. A debug-built Cranelift is
+# ~40x slower at compiling components, which dominates worker-executor and
+# integration test time; optimizing just these dependencies keeps our own crates
+# debuggable while making component compilation fast. `dev-ci` inherits these
+# overrides from `dev`.
+[profile.dev.package]
+cranelift-codegen = { opt-level = 3 }
+cranelift-codegen-shared = { opt-level = 3 }
+cranelift-frontend = { opt-level = 3 }
+cranelift-entity = { opt-level = 3 }
+cranelift-bforest = { opt-level = 3 }
+cranelift-bitset = { opt-level = 3 }
+cranelift-control = { opt-level = 3 }
+cranelift-native = { opt-level = 3 }
+cranelift-assembler-x64 = { opt-level = 3 }
+regalloc2 = { opt-level = 3 }
+gimli = { opt-level = 3 }
+
 [profile.dev-ci]
 inherits = "dev"
 incremental = false
