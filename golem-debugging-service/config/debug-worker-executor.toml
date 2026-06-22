@@ -111,7 +111,6 @@ multiplier = 2.0
 [oplog]
 archive_interval = "1day"
 blob_storage_layers = 1
-compressed_archive_cache_size = 4096
 entry_count_limit = 1024
 indexed_storage_layers = 2
 max_operations_before_commit = 128
@@ -383,7 +382,6 @@ without_time = false
 # [oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
-# compressed_archive_cache_size = 4096
 # entry_count_limit = 1024
 # indexed_storage_layers = 2
 # max_operations_before_commit = 128

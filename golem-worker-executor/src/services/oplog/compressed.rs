@@ -22,6 +22,7 @@ use crate::storage::indexed::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
+use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -31,7 +32,7 @@ use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
@@ -80,12 +81,11 @@ pub struct CompressedOplogArchiveService {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     level: usize,
     retry_config: RetryConfig,
-    cache_size: usize,
 }
 
 impl CompressedOplogArchiveService {
     const MAX_CHUNK_SIZE: usize = 4096;
-    pub const DEFAULT_CACHE_SIZE: usize = 4096;
+    const CACHE_SIZE: usize = 2048;
     const ZSTD_LEVEL: i32 = 0;
 
     pub fn new(
@@ -93,25 +93,10 @@ impl CompressedOplogArchiveService {
         level: usize,
         retry_config: RetryConfig,
     ) -> Self {
-        Self::new_with_cache_size(
-            indexed_storage,
-            level,
-            retry_config,
-            Self::DEFAULT_CACHE_SIZE,
-        )
-    }
-
-    pub fn new_with_cache_size(
-        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
-        level: usize,
-        retry_config: RetryConfig,
-        cache_size: usize,
-    ) -> Self {
         Self {
             indexed_storage,
             level,
             retry_config,
-            cache_size,
         }
     }
 
@@ -133,7 +118,6 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             self.indexed_storage.clone(),
             self.level,
             self.retry_config.clone(),
-            self.cache_size,
         ))
     }
 
@@ -278,57 +262,16 @@ pub struct CompressedOplogArchive {
     key: String,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     retry_config: RetryConfig,
-    cache: RwLock<CompressedOplogCache>,
+    #[allow(clippy::type_complexity)]
+    cache: RwLock<
+        EvictingCacheMap<
+            OplogIndex,
+            OplogEntry,
+            { CompressedOplogArchiveService::CACHE_SIZE },
+            fn(OplogIndex, OplogEntry) -> (),
+        >,
+    >,
     level: usize,
-}
-
-#[derive(Debug)]
-struct CompressedOplogCache {
-    capacity: usize,
-    order: VecDeque<OplogIndex>,
-    entries: BTreeMap<OplogIndex, OplogEntry>,
-}
-
-impl CompressedOplogCache {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            order: VecDeque::new(),
-            entries: BTreeMap::new(),
-        }
-    }
-
-    fn insert(&mut self, idx: OplogIndex, entry: OplogEntry) {
-        if self.capacity == 0 {
-            return;
-        }
-
-        self.refresh(idx);
-        self.entries.insert(idx, entry);
-
-        while self.entries.len() > self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn get(&mut self, idx: &OplogIndex) -> Option<OplogEntry> {
-        let entry = self.entries.get(idx).cloned();
-        if entry.is_some() {
-            self.refresh(*idx);
-        }
-        entry
-    }
-
-    fn refresh(&mut self, idx: OplogIndex) {
-        if let Some(position) = self.order.iter().position(|current| current == &idx) {
-            self.order.remove(position);
-        }
-        self.order.push_back(idx);
-    }
 }
 
 impl CompressedOplogArchive {
@@ -338,7 +281,6 @@ impl CompressedOplogArchive {
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         level: usize,
         retry_config: RetryConfig,
-        cache_size: usize,
     ) -> Self {
         let key = CompressedOplogArchiveService::compressed_oplog_key(&agent_id);
         Self {
@@ -347,7 +289,7 @@ impl CompressedOplogArchive {
             key,
             indexed_storage,
             retry_config,
-            cache: RwLock::new(CompressedOplogCache::new(cache_size)),
+            cache: RwLock::new(EvictingCacheMap::new()),
             level,
         }
     }
@@ -424,13 +366,14 @@ impl OplogArchive for CompressedOplogArchive {
                 let mut cache = self.cache.write().await;
 
                 while let Some(entry) = cache.get(&last_idx) {
-                    result.insert(last_idx, entry);
+                    result.insert(last_idx, entry.clone());
                     if last_idx == idx {
                         break;
                     } else {
                         last_idx = last_idx.previous();
                     }
                 }
+                drop(cache);
             }
 
             if result.len() as u64 == n {
