@@ -309,6 +309,13 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn remove_from_active_workers(&self) {
+        self.deps
+            .active_workers()
+            .remove(&self.owned_agent_id.agent_id())
+            .await;
+    }
+
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,

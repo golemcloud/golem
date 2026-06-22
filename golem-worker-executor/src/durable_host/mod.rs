@@ -2806,6 +2806,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if giving_up {
             // Giving up, associating the stored result with the current and upcoming invocations
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                if self.agent_mode() == AgentMode::Ephemeral && decision == RetryDecision::None {
+                    self.public_state
+                        .worker()
+                        .remove_from_active_workers()
+                        .await;
+                }
+
                 self.public_state
                     .worker()
                     .store_invocation_failure(&idempotency_key, trap_type)
