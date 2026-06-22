@@ -2584,6 +2584,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
 
+                if self.agent_mode() == AgentMode::Ephemeral
+                    && !matches!(output.result, AgentInvocationResult::AgentInitialization)
+                {
+                    self.public_state
+                        .worker()
+                        .remove_from_active_workers()
+                        .await;
+                }
+
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
                         .worker()
