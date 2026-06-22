@@ -15,7 +15,7 @@
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextOutput, format_id, format_main_id,
+    Column, FieldsBuilder, MessageWithFields, NoTextOutput, TextOutput, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
 };
 use golem_common::model::plugin_registration::PluginRegistrationDto;
@@ -163,9 +163,8 @@ pub struct PluginUnregisterResult {
     pub version: String,
 }
 
-impl TextOutput for PluginUnregisterResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for PluginUnregisterResult {}
+impl TextOutput for PluginUnregisterResult {}
 
 impl StructuredOutput for PluginUnregisterResult {
     const KIND: &'static str = "plugin.unregister";

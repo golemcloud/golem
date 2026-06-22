@@ -101,9 +101,8 @@ pub struct ProfileCreateResult {
     pub set_active: bool,
 }
 
-impl TextOutput for ProfileCreateResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for ProfileCreateResult {}
+impl TextOutput for ProfileCreateResult {}
 
 impl StructuredOutput for ProfileCreateResult {
     const KIND: &'static str = "profile.new";
@@ -116,9 +115,8 @@ pub struct ProfileSwitchResult {
     pub profile: ProfileName,
 }
 
-impl TextOutput for ProfileSwitchResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for ProfileSwitchResult {}
+impl TextOutput for ProfileSwitchResult {}
 
 impl StructuredOutput for ProfileSwitchResult {
     const KIND: &'static str = "profile.switch";
@@ -131,9 +129,8 @@ pub struct ProfileDeleteResult {
     pub profile: ProfileName,
 }
 
-impl TextOutput for ProfileDeleteResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for ProfileDeleteResult {}
+impl TextOutput for ProfileDeleteResult {}
 
 impl StructuredOutput for ProfileDeleteResult {
     const KIND: &'static str = "profile.delete";
@@ -147,9 +144,8 @@ pub struct ProfileConfigSetFormatResult {
     pub format: Format,
 }
 
-impl TextOutput for ProfileConfigSetFormatResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for ProfileConfigSetFormatResult {}
+impl TextOutput for ProfileConfigSetFormatResult {}
 
 impl StructuredOutput for ProfileConfigSetFormatResult {
     const KIND: &'static str = "profile.config.set-format";

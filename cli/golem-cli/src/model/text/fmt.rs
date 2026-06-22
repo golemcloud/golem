@@ -37,7 +37,7 @@ use std::fmt::Write;
 use synoptic::TokOpt;
 
 pub trait TextOutput {
-    fn log(&self);
+    fn log(&self) {}
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()>
     where
@@ -51,6 +51,8 @@ pub trait TextOutput {
         Ok(())
     }
 }
+
+pub trait NoTextOutput {}
 
 pub trait TruncatableTextOutput: TextOutput {
     fn render_truncated(&self, max_lines: usize, colorize: bool) -> String;

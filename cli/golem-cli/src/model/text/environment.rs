@@ -17,7 +17,9 @@ use crate::model::cli_output::StructuredOutput;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
-use crate::model::text::fmt::{Column, TextOutput, log_table, new_table_full_condensed};
+use crate::model::text::fmt::{
+    Column, NoTextOutput, TextOutput, log_table, new_table_full_condensed,
+};
 use golem_client::model::EnvironmentWithDetails;
 use serde::{Deserialize, Serialize};
 
@@ -84,9 +86,8 @@ impl StructuredOutput for EnvironmentSyncDeploymentOptionsResult {
     const KIND: &'static str = "environment.sync-deployment-options";
 }
 
-impl TextOutput for EnvironmentSyncDeploymentOptionsResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for EnvironmentSyncDeploymentOptionsResult {}
+impl TextOutput for EnvironmentSyncDeploymentOptionsResult {}
 
 impl TextOutput for EnvironmentListView {
     fn log(&self) {

@@ -101,9 +101,8 @@ pub struct AccountDeleteResult {
     pub account_id: AccountId,
 }
 
-impl TextOutput for AccountDeleteResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for AccountDeleteResult {}
+impl TextOutput for AccountDeleteResult {}
 
 impl StructuredOutput for AccountDeleteResult {
     const KIND: &'static str = "account.delete";
@@ -209,9 +208,8 @@ pub struct PermissionShareDeleteResult {
     pub permission_share_id: PermissionShareId,
 }
 
-impl TextOutput for PermissionShareDeleteResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for PermissionShareDeleteResult {}
+impl TextOutput for PermissionShareDeleteResult {}
 
 impl StructuredOutput for PermissionShareDeleteResult {
     const KIND: &'static str = "account.permission-share.delete";

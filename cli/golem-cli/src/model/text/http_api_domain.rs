@@ -56,9 +56,8 @@ pub struct DomainRegistrationDeleteResult {
     pub id: DomainRegistrationId,
 }
 
-impl TextOutput for DomainRegistrationDeleteResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for DomainRegistrationDeleteResult {}
+impl TextOutput for DomainRegistrationDeleteResult {}
 
 impl StructuredOutput for DomainRegistrationDeleteResult {
     const KIND: &'static str = "api.domain.delete";

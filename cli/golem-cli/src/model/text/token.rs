@@ -91,9 +91,8 @@ pub struct TokenDeleteResult {
     pub token_id: TokenId,
 }
 
-impl TextOutput for TokenDeleteResult {
-    fn log(&self) {}
-}
+impl NoTextOutput for TokenDeleteResult {}
+impl TextOutput for TokenDeleteResult {}
 
 impl StructuredOutput for TokenDeleteResult {
     const KIND: &'static str = "api-token.delete";
