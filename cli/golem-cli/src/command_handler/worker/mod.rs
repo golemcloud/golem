@@ -1120,7 +1120,19 @@ impl WorkerCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let mut agent_view = AgentMetadataView::from(worker).with_defaults(defaults);
+                let secret_config_paths = parsed_agent_type_name
+                    .as_ref()
+                    .map(|agent_type_name| {
+                        secret_config_paths_for_agent_type(
+                            worker_component.metadata.agent_types(),
+                            agent_type_name,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let mut agent_view = AgentMetadataView::from(worker)
+                    .with_defaults(defaults)
+                    .with_secret_config_paths(secret_config_paths);
 
                 if source_language.is_known()
                     && let Ok(parsed) =
@@ -1336,20 +1348,10 @@ impl WorkerCommandHandler {
             .cloned()
             .unwrap_or_default();
 
-        let secret_config_paths = component
-            .metadata
-            .agent_types()
-            .iter()
-            .find(|agent_type| agent_type.type_name == agent_name_match.agent_type_name)
-            .map(|agent_type| {
-                agent_type
-                    .config
-                    .iter()
-                    .filter(|config| config.source == AgentConfigSource::Secret)
-                    .map(|config| config.path.join("."))
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
+        let secret_config_paths = secret_config_paths_for_agent_type(
+            component.metadata.agent_types(),
+            &agent_name_match.agent_type_name,
+        );
 
         let mut metadata_view = AgentMetadataView::from(metadata)
             .with_defaults(defaults)
@@ -3110,6 +3112,24 @@ fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
 }
 
+fn secret_config_paths_for_agent_type(
+    agent_types: &[AgentType],
+    agent_type_name: &AgentTypeName,
+) -> BTreeSet<String> {
+    agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .map(|agent_type| {
+            agent_type
+                .config
+                .iter()
+                .filter(|config| config.source == AgentConfigSource::Secret)
+                .map(|config| config.path.join("."))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Injects a `mode == ...` filter string at the front of `filters` based on
 /// the user-supplied `--mode` flag, unless the user already provided their own
 /// `mode ...` filter via `--filter`.
@@ -3229,16 +3249,18 @@ fn normalize_public_agent_id(
 mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_element, split_agent_name,
+        parse_method_argument_element, secret_config_paths_for_agent_type, split_agent_name,
     };
     use crate::agent_id_display::SourceLanguage;
     use golem_common::model::Empty;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
-        DataSchema, ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId,
-        NamedElementSchemas, Snapshotting, TextDescriptor,
+        AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentMethod, AgentMode,
+        AgentType, AgentTypeName, BinaryDescriptor, DataSchema, ElementSchema, ElementValue,
+        ElementValues, LegacyParsedAgentId, NamedElementSchemas, Snapshotting, TextDescriptor,
     };
+    use golem_wasm::analysis::analysed_type;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeSet;
     use test_r::test;
     use uuid::Uuid;
 
@@ -3286,6 +3308,39 @@ mod tests {
         let input = vec!["MODE == ephemeral".to_string()];
         let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn secret_config_paths_for_agent_type_uses_only_selected_secret_declarations() {
+        let mut target = test_agent_type(AgentMode::Durable);
+        target.config = vec![
+            AgentConfigDeclaration {
+                source: AgentConfigSource::Secret,
+                path: vec!["db".to_string(), "password".to_string()],
+                value_type: analysed_type::str(),
+            },
+            AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                path: vec!["apiToken".to_string()],
+                value_type: analysed_type::str(),
+            },
+        ];
+
+        let mut other = test_agent_type(AgentMode::Durable);
+        other.type_name = AgentTypeName("other-agent".to_string());
+        other.config = vec![AgentConfigDeclaration {
+            source: AgentConfigSource::Secret,
+            path: vec!["other".to_string(), "secret".to_string()],
+            value_type: analysed_type::str(),
+        }];
+
+        assert_eq!(
+            secret_config_paths_for_agent_type(
+                &[target, other],
+                &AgentTypeName("repl-agent".to_string())
+            ),
+            BTreeSet::from_iter(["db.password".to_string()])
+        );
     }
 
     fn test_agent_type(mode: AgentMode) -> AgentType {

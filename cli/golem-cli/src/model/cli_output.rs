@@ -892,6 +892,59 @@ mod tests {
     }
 
     #[test]
+    fn agent_list_structured_output_masks_secret_config_paths() {
+        let output = crate::model::worker::AgentsMetadataResponseView {
+            agents: vec![crate::model::worker::AgentMetadataView {
+                component_name: golem_common::model::component::ComponentName(
+                    "component".to_string(),
+                ),
+                agent_name: crate::model::worker::RawAgentId("agent()".to_string()),
+                created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
+                environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+                env: BTreeMap::new().into_iter().collect(),
+                default_env: BTreeMap::new().into_iter().collect(),
+                config: vec![golem_common::model::worker::AgentConfigEntryDto {
+                    path: vec!["db".to_string(), "password".to_string()],
+                    value: golem_common::base_model::json::NormalizedJsonValue(json!(
+                        "runtime-secret"
+                    )),
+                }],
+                default_config: vec![golem_common::model::worker::AgentConfigEntryDto {
+                    path: vec!["db".to_string(), "password".to_string()],
+                    value: golem_common::base_model::json::NormalizedJsonValue(json!(
+                        "default-secret"
+                    )),
+                }],
+                status: golem_common::model::AgentStatus::Idle,
+                component_revision: golem_common::model::component::ComponentRevision::new(1)
+                    .unwrap(),
+                retry_count: 0,
+                pending_invocation_count: 0,
+                updates: vec![],
+                created_at: "2024-01-01T00:00:00Z".parse().unwrap(),
+                last_error: None,
+                component_size: 0,
+                total_linear_memory_size: 0,
+                exported_resource_instances: BTreeMap::new().into_iter().collect(),
+                source_language: crate::agent_id_display::SourceLanguage::default(),
+                secret_config_paths: BTreeSet::from_iter(["db.password".to_string()]),
+            }],
+            cursors: BTreeMap::new(),
+        };
+
+        let value = to_structured_output_value_masked(output, MaskingConfig::hide_secrets())
+            .expect("agent list should serialize");
+
+        assert_eq!(value["agents"][0]["config"][0]["value"], json!("***"));
+        assert_eq!(
+            value["agents"][0]["defaultConfig"][0]["value"],
+            json!("***")
+        );
+        assert!(!value.to_string().contains("runtime-secret"));
+        assert!(!value.to_string().contains("default-secret"));
+    }
+
+    #[test]
     fn cli_output_schema_validates_discriminated_documents() {
         let schema = load_command_output_schema();
         let validator = jsonschema::options()
