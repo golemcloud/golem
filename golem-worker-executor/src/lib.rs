@@ -811,10 +811,7 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = bootstrap.create_active_workers(
-        &golem_config,
-        shutdown_token.clone(),
-    );
+    let active_workers = bootstrap.create_active_workers(&golem_config, shutdown_token.clone());
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
