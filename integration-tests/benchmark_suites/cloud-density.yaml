@@ -47,10 +47,10 @@ section: agent
 # idle ceiling is around 10000, so this concentrates resolution there and stops
 # shortly after it instead of walking the original 50000 bound.
 #
-# The per-agent-component cells inline a lower `ramp` (capped at 1000): each
+# The per-agent-component cells inline a lower `ramp` (capped at 999): each
 # agent gets its own component, thrashing the executor's compiled-component
 # cache (default 32 entries). The observed per-agent limit is around 1000, which
-# also keeps density-prep to 1000 uploaded components. The ramp is inlined per
+# also keeps density-prep to 999 uploaded components. The ramp is inlined per
 # cell rather than shared via a YAML anchor because the buildspec's yq does not
 # reliably resolve aliases on read.
 defaultRamp: [100, 250, 500, 1000, 2000, 4000, 6000, 8000, 9000, 10000]
@@ -66,7 +66,7 @@ cells:
     scenario: create-only
     agentMode: durable
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
   - name: create-only-ephemeral-shared-component
     scenario: create-only
     agentMode: ephemeral
@@ -75,7 +75,7 @@ cells:
     scenario: create-only
     agentMode: ephemeral
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
 
   # Scenario 2 — create-with-active-fraction: like scenario 1, but a fraction of
   # the agents are kept active (one in-flight busy_for(500ms) call each,
@@ -102,19 +102,19 @@ cells:
     scenario: create-with-active
     agentMode: durable
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
     activeFraction: 25
   - name: create-with-active-durable-per-agent-component-active-50pct
     scenario: create-with-active
     agentMode: durable
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
     activeFraction: 50
   - name: create-with-active-durable-per-agent-component-active-75pct
     scenario: create-with-active
     agentMode: durable
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
     activeFraction: 75
   - name: create-with-active-ephemeral-shared-component-active-25pct
     scenario: create-with-active
@@ -138,19 +138,19 @@ cells:
     scenario: create-with-active
     agentMode: ephemeral
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
     activeFraction: 25
   - name: create-with-active-ephemeral-per-agent-component-active-50pct
     scenario: create-with-active
     agentMode: ephemeral
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
     activeFraction: 50
   - name: create-with-active-ephemeral-per-agent-component-active-75pct
     scenario: create-with-active
     agentMode: ephemeral
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
     activeFraction: 75
 
   # Scenario 3 — concurrent-active: all N agents kept active concurrently.
@@ -164,7 +164,7 @@ cells:
     scenario: concurrent-active
     agentMode: durable
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
   - name: concurrent-active-ephemeral-shared-component
     scenario: concurrent-active
     agentMode: ephemeral
@@ -174,7 +174,7 @@ cells:
     scenario: concurrent-active
     agentMode: ephemeral
     sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 1000]
+    ramp: [50, 100, 250, 500, 750, 900, 999]
 
   # Scenario 4 — resume-under-saturation (durable-only): pre-fill N idle agents
   # to force eviction, then measure resume-vs-create latency under memory
@@ -201,17 +201,17 @@ cells:
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
-    ramp: [100, 250, 500, 750, 900, 1000]
+    ramp: [100, 250, 500, 750, 900, 999]
     prefill: 250
   - name: resume-under-saturation-durable-per-agent-component-prefill-500
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
-    ramp: [100, 250, 500, 750, 900, 1000]
+    ramp: [100, 250, 500, 750, 900, 999]
     prefill: 500
   - name: resume-under-saturation-durable-per-agent-component-prefill-750
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
-    ramp: [100, 250, 500, 750, 900, 1000]
+    ramp: [100, 250, 500, 750, 900, 999]
     prefill: 750
