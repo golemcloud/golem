@@ -59,20 +59,19 @@ pub const AGENT_COUNTERS_WASM: &str = "it_agent_counters_release";
 /// cache defaults to 32 entries, so even a few hundred distinct components
 /// thrash it hard — the per-agent ceiling is reached well below this count.
 ///
-/// The suite currently runs shared-component cells only, which need no distinct
-/// components, so this is kept small to make prep fast (uploading hundreds of
-/// components dominates prep wall-clock). A small non-zero value preserves the
-/// manifest shape so per-agent cells can be re-enabled without a prep change.
-pub const PER_AGENT_COMPONENT_COUNT: u32 = 2;
+/// The observed Variant D ceiling is around 1000 agents; uploading more distinct
+/// components only increases prep wall-clock without adding useful signal.
+pub const PER_AGENT_COMPONENT_COUNT: u32 = 1_000;
 
 /// Registry name of the single shared agent-density component (the
 /// shared-component sharing mode, labelled `U`).
 pub const UNIFORM_COMPONENT_NAME: &str = "density-counter-uniform";
 
 /// Builds the registry name of the `index`-th (1-based) per-agent distinct
-/// component: `density-counter-distinct-001` .. `density-counter-distinct-999`.
+/// component: `density-counter-distinct-0001` ..
+/// `density-counter-distinct-1000`.
 pub fn distinct_component_name(index: u32) -> String {
-    format!("density-counter-distinct-{index:03}")
+    format!("density-counter-distinct-{index:04}")
 }
 
 /// Persisted record of a completed density-prep, written by the prep step and

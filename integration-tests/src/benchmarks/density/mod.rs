@@ -125,12 +125,11 @@ impl Display for ComponentSharing {
 /// measurements, then advances — until a catastrophic ceiling fires or the ramp
 /// is exhausted.
 ///
-/// Resolution is concentrated around the 500–1500 per-pod knee observed in
-/// cloud-perf (halved from the 2-pod cloud-perf numbers since density is
-/// single-pod), then coarsens. This is a stress test: the operator can override
-/// the ramp per cell (or the suite default) with any values.
+/// Resolution is concentrated around the 10000-agent shared idle ceiling
+/// observed on golem-dev, then stops shortly after to avoid spending hours above
+/// the useful signal range.
 pub const DEFAULT_AGENT_RAMP: &[u32] = &[
-    100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 10000,
+    100, 250, 500, 1000, 2000, 4000, 6000, 8000, 9000, 10000, 11000, 12000,
 ];
 
 #[cfg(test)]

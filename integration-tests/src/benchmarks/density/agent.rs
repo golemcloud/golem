@@ -28,18 +28,17 @@
 //!
 //! # The usable-floor load model
 //!
-//! At each ramp step the driver first ensures `N` agents exist, then applies
-//! [`INVOKES_PER_AGENT_PER_STEP`] *load rounds*. A round fires one concurrent
-//! `busy_for` invocation per agent in the step's load set and awaits the whole
-//! round, so it reproduces the realistic worst case — `N` independent users each
-//! invoking their own agent at the same instant. This measures how many agents
-//! the executor can usefully *serve concurrently*, not merely hold resident, and
-//! where it actually breaks under that load.
+//! For active scenarios, each ramp step first ensures `N` durable agents exist,
+//! then applies [`INVOKES_PER_AGENT_PER_STEP`] *load rounds*. A round fires one
+//! concurrent `busy_for` invocation per agent in the step's load set and awaits
+//! the whole round, reproducing `N` independent users each invoking their own
+//! agent at the same instant. Create-only instead measures just the one-shot
+//! create/invoke path.
 //!
 //! # Scenarios
 //!
-//! 1. create-only: create N agents, then load every one of them each round
-//!    (load set = N). Measures the create path plus the usable floor.
+//! 1. create-only: create/invoke N agents once, then leave durable agents idle
+//!    and eviction-eligible. Measures the create path.
 //! 2. create-with-active-fraction: create N agents, load only the configured
 //!    fraction (25/50/75%) each round (load set = fraction of N).
 //! 3. concurrent-active: load all N agents each round (load set = N).
@@ -47,19 +46,18 @@
 //!    idle agents (forcing eviction), then measure the latency of resuming an
 //!    already-evicted agent vs. creating a fresh one.
 //!
-//! Durable and ephemeral modes run the same ramp/round driver
+//! Durable and ephemeral active modes run the same ramp/round driver
 //! ([`run_ramp_cell`]). Durable agents are created once in a step's first phase
 //! and persist across rounds; ephemeral agents have no persistent identity, so a
 //! round's concurrent invocations *are* that round's ephemeral agents (created
-//! and gone within the round). Because both modes apply the identical
-//! one-invoke-per-agent load, their usable floors are directly comparable.
+//! and gone within the round).
 //!
 //! # Operational definitions (from #3523)
 //!
 //! - Load round: one concurrent `busy_for(500ms)` invocation per agent in the
 //!   load set, all in flight at once, awaited together.
-//! - Passive (idle): for durable create-only, an agent between load rounds drifts
-//!   toward `LoadedIdle` and becomes eviction-eligible.
+//! - Passive (idle): for durable create-only, an agent is created/invoked once,
+//!   then left to drift toward `LoadedIdle` and become eviction-eligible.
 //! - Soft / hard / catastrophic ceilings: see [`super::ceiling`].
 
 use crate::benchmarks::density::ceiling::{
@@ -782,13 +780,12 @@ async fn resolve_components(
 /// agents receive one concurrent `busy_for` invocation in each load round.
 ///
 /// The load round models the usable floor — N users each invoking their own
-/// agent at the same instant — so for `CreateOnly` and `ConcurrentActive` every
-/// live agent is invoked (`n`); `CreateWithActiveFraction` loads only the
-/// configured fraction. `ResumeUnderSaturation` runs its own resume/create probe
-/// loop and does not use this.
+/// agent at the same instant — so `ConcurrentActive` invokes every live agent
+/// (`n`) and `CreateWithActiveFraction` loads only the configured fraction.
+/// `CreateOnly` and `ResumeUnderSaturation` do not run load rounds.
 fn load_count(config: &CellConfig, n: u32) -> u32 {
     match config.scenario {
-        Scenario::CreateOnly => n,
+        Scenario::CreateOnly => 0,
         Scenario::ConcurrentActive => n,
         Scenario::CreateWithActiveFraction => {
             let pct = config.active_fraction.unwrap_or(0);
@@ -805,8 +802,9 @@ fn load_count(config: &CellConfig, n: u32) -> u32 {
 ///
 /// 1. **Ensure N agents exist.** For durable cells the new agents in
 ///    `created..target` are created (first-invoked) once, with bounded in-flight
-///    concurrency. Ephemeral agents are not persistent — each invocation is its
-///    own agent — so there is no separate create phase for them.
+///    concurrency. Ephemeral create-only cells also issue one invocation per
+///    target agent so the create path is measured; active ephemeral cells create
+///    their short-lived agents in the load rounds below.
 ///
 /// 2. **Load rounds.** [`INVOKES_PER_AGENT_PER_STEP`] rounds, each firing one
 ///    concurrent `busy_for` invocation per agent in the load set (size
@@ -839,11 +837,11 @@ async fn run_ramp_cell(
             config.cell_name()
         );
 
-        // Phase 1: ensure the durable agents up to `target` exist. Created once,
-        // fanned out with bounded in-flight concurrency (sequential creation made
-        // a 10000-agent step take hours). Ephemeral agents have no persistent
-        // identity, so they are created implicitly by the load rounds below.
-        if !is_ephemeral && target > created {
+        // Phase 1: ensure agents up to `target` have been invoked once. Durable
+        // agents persist after this; ephemeral create-only agents do not, but the
+        // one-shot invocation is still the create-path measurement for that mode.
+        let has_create_phase = !is_ephemeral || config.scenario == Scenario::CreateOnly;
+        if has_create_phase && target > created {
             let batch: Vec<u32> = (created..target).collect();
             let timeout_current = timeout.current;
             let creates: Vec<AttemptOutcome> = futures::stream::iter(batch)
@@ -1223,7 +1221,7 @@ mod tests {
     }
 
     #[test]
-    fn create_only_loads_all() {
+    fn create_only_does_not_run_load_rounds() {
         let cell = CellConfig {
             scenario: Scenario::CreateOnly,
             mode: AgentMode::Durable,
@@ -1232,6 +1230,6 @@ mod tests {
             prefill_n: None,
             ramp: vec![100, 250, 500],
         };
-        assert_eq!(load_count(&cell, 1000), 1000);
+        assert_eq!(load_count(&cell, 1000), 0);
     }
 }
