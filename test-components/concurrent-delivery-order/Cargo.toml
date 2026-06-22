@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.57.0", features = ["default", "async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { version = "0.58.0", features = ["default", "async-spawn", "inter-task-wakeup"] }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 
 [profile.release]

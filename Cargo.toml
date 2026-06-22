@@ -302,9 +302,9 @@ webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = "0.57.0"
+wit-bindgen = "0.58.0"
 wit-bindgen-rt = "=0.44.0"
-wit-bindgen-rust = "0.57.0"
+wit-bindgen-rust = "0.58.0"
 wit-component = "0.248"
 wit-encoder = "0.248"
 wit-parser = "0.248"
