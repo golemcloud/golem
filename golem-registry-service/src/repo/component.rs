@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
+use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{
     ComponentAuthExtRevisionRecord, ComponentExtRevisionRecord, ComponentRepoError,
     ComponentRevisionIdentityRecord, ComponentRevisionRecord,
@@ -21,9 +23,12 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::card::CardManagedBy;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::repo::Blob;
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
@@ -38,11 +43,13 @@ pub trait ComponentRepo: Send + Sync {
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError>;
 
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError>;
 
     async fn delete(
@@ -157,9 +164,10 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.repo
-            .create(environment_id, name, revision)
+            .create(environment_id, name, revision, cards_to_create)
             .instrument(Self::span_name(environment_id, name))
             .await
     }
@@ -167,9 +175,13 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         let span = Self::span_id(revision.component_id);
-        self.repo.update(revision).instrument(span).await
+        self.repo
+            .update(revision, cards_to_create)
+            .instrument(span)
+            .await
     }
 
     async fn delete(
@@ -344,6 +356,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
@@ -359,7 +372,12 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         if let Some(deleted_revision) = opt_deleted_revision {
             let recreated_revision = revision
                 .for_recreation(deleted_revision.component_id, deleted_revision.revision_id)?;
-            return self.update(recreated_revision).await;
+            let cards_to_create = remap_agent_initial_card_records(
+                cards_to_create,
+                ComponentId(recreated_revision.component_id),
+                recreated_revision.revision_id.try_into()?,
+            );
+            return self.update(recreated_revision, cards_to_create).await;
         }
 
         let name = name.to_owned();
@@ -384,6 +402,10 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 .await
                 .to_error_on_unique_violation(ComponentRepoError::ComponentViolatesUniqueness)?;
 
+                for card in cards_to_create {
+                    DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
+                }
+
                 let revision = Self::insert_revision(tx, revision).await?;
 
                 Ok(ComponentExtRevisionRecord {
@@ -400,9 +422,14 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
+                for card in cards_to_create {
+                    DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
+                }
+
                 let revision: ComponentRevisionRecord = Self::insert_revision(
                     tx,
                     revision,
@@ -850,6 +877,31 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             None => Ok(None),
         }
     }
+}
+
+fn remap_agent_initial_card_records(
+    cards: Vec<CardRecord>,
+    component_id: ComponentId,
+    component_revision: ComponentRevision,
+) -> Vec<CardRecord> {
+    cards
+        .into_iter()
+        .map(|mut card| {
+            if let Some(managed_by) = card.managed_by.take() {
+                card.managed_by = match managed_by.into_value() {
+                    CardManagedBy::AgentInitial { agent_type, .. } => {
+                        Some(Blob::new(CardManagedBy::AgentInitial {
+                            component_id,
+                            component_revision,
+                            agent_type,
+                        }))
+                    }
+                    other => Some(Blob::new(other)),
+                };
+            }
+            card
+        })
+        .collect()
 }
 
 #[async_trait]

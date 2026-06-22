@@ -32,6 +32,10 @@ pub struct GrantSurface {
 }
 
 impl GrantSurface {
+    fn is_empty(&self) -> bool {
+        self.positive.is_empty() && self.negative.is_empty()
+    }
+
     pub fn allows(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
         let granted = self.positive.iter().any(|grant| grant.subsumes(request));
         if !granted {
@@ -71,21 +75,17 @@ impl EffectiveSurface {
         for card in cards {
             let lower_positive = filter_by_recipient(&card.lower_positive, holder)?;
             let lower_negative = filter_by_recipient(&card.lower_negative, holder)?;
-            if !lower_positive.is_empty() {
-                lower.push(GrantSurface {
-                    positive: lower_positive,
-                    negative: lower_negative,
-                });
-            }
+            lower.push(GrantSurface {
+                positive: lower_positive,
+                negative: lower_negative,
+            });
 
             let upper_positive = filter_by_recipient(&card.upper_positive, holder)?;
             let upper_negative = filter_by_recipient(&card.upper_negative, holder)?;
-            if !upper_positive.is_empty() || !upper_negative.is_empty() {
-                upper.push(GrantSurface {
-                    positive: upper_positive,
-                    negative: upper_negative,
-                });
-            }
+            upper.push(GrantSurface {
+                positive: upper_positive,
+                negative: upper_negative,
+            });
         }
 
         Ok(Self {
@@ -142,6 +142,63 @@ impl EffectiveSurface {
         child_lower_positive: &[PermissionPattern],
         child_upper_positive: &[PermissionPattern],
     ) -> Result<(), CardAlgebraError> {
+        self.validates_derivation_with_witness(child_lower_positive, child_upper_positive)
+            .map(|_| ())
+    }
+
+    pub fn validates_derivation_with_witness(
+        &self,
+        child_lower_positive: &[PermissionPattern],
+        child_upper_positive: &[PermissionPattern],
+    ) -> Result<Vec<CardId>, CardAlgebraError> {
+        if self.source_card_ids.len() != self.lower.len()
+            || self.source_card_ids.len() != self.upper.len()
+        {
+            self.validates_derivation_legacy(child_lower_positive, child_upper_positive)?;
+            return Ok(self.source_card_ids.clone());
+        }
+
+        let mut witness = Vec::new();
+
+        for grant in child_lower_positive {
+            let target = grant.to_target();
+            let mut parent_index = None;
+            for (index, surface) in self.lower.iter().enumerate() {
+                if surface.allows(&target)? {
+                    parent_index = Some(index);
+                    break;
+                }
+            }
+            let Some(parent_index) = parent_index else {
+                return Err(CardAlgebraError::DerivationNotSubsumed {
+                    grant: Box::new(grant.clone()),
+                });
+            };
+            push_unique(&mut witness, self.source_card_ids[parent_index]);
+        }
+
+        for grant in child_upper_positive {
+            let target = grant.to_target();
+            for (parent_index, surface) in self.upper.iter().enumerate() {
+                if !surface.allows_ceiling(&target)? {
+                    return Err(CardAlgebraError::DerivationNotSubsumed {
+                        grant: Box::new(grant.clone()),
+                    });
+                }
+                if !surface.is_empty() {
+                    push_unique(&mut witness, self.source_card_ids[parent_index]);
+                }
+            }
+        }
+
+        Ok(witness)
+    }
+
+    fn validates_derivation_legacy(
+        &self,
+        child_lower_positive: &[PermissionPattern],
+        child_upper_positive: &[PermissionPattern],
+    ) -> Result<(), CardAlgebraError> {
         for grant in child_lower_positive {
             if !self.allows_lower(&grant.to_target())? {
                 return Err(CardAlgebraError::DerivationNotSubsumed {
@@ -179,6 +236,12 @@ impl EffectiveSurface {
         }
 
         Ok(true)
+    }
+}
+
+fn push_unique(values: &mut Vec<CardId>, value: CardId) {
+    if !values.contains(&value) {
+        values.push(value);
     }
 }
 

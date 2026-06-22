@@ -49,6 +49,7 @@ pub trait CardService: Send + Sync {
 pub struct CardServiceDefault {
     registry_service: Arc<dyn RegistryService>,
     negative_index: RwLock<HashSet<CardId>>,
+    positive_index: RwLock<HashSet<CardId>>,
     active_agents: RwLock<HashSet<OwnedAgentId>>,
     reverse_index: RwLock<HashMap<CardId, HashSet<OwnedAgentId>>>,
 }
@@ -92,6 +93,7 @@ impl CardServiceDefault {
         Self {
             registry_service,
             negative_index: RwLock::new(HashSet::new()),
+            positive_index: RwLock::new(HashSet::new()),
             active_agents: RwLock::new(HashSet::new()),
             reverse_index: RwLock::new(HashMap::new()),
         }
@@ -100,6 +102,24 @@ impl CardServiceDefault {
     async fn cache_revoked_cards(&self, card_ids: &[CardId]) {
         let mut negative_index = self.negative_index.write().await;
         negative_index.extend(card_ids.iter().copied());
+        let mut positive_index = self.positive_index.write().await;
+        for card_id in card_ids {
+            positive_index.remove(card_id);
+        }
+    }
+
+    async fn cache_live_cards(&self, card_ids: &[CardId]) {
+        if card_ids.is_empty() {
+            return;
+        }
+
+        let revoked_cards = self.negative_index.read().await.clone();
+        let mut positive_index = self.positive_index.write().await;
+        for card_id in card_ids {
+            if !revoked_cards.contains(card_id) {
+                positive_index.insert(*card_id);
+            }
+        }
     }
 
     async fn remove_agent_from_reverse_index(&self, agent_id: &OwnedAgentId) {
@@ -196,6 +216,7 @@ impl CardService for CardServiceDefault {
         card_ids: Vec<CardId>,
     ) -> Result<HashSet<CardId>, WorkerExecutorError> {
         let revoked_cards = self.negative_index.read().await.clone();
+        let live_cards = self.positive_index.read().await.clone();
         let mut result = HashSet::with_capacity(card_ids.len());
         let mut needs_registry_lookup = Vec::new();
         let mut seen_lookup = HashSet::new();
@@ -203,6 +224,8 @@ impl CardService for CardServiceDefault {
         for card_id in card_ids {
             if revoked_cards.contains(&card_id) {
                 result.insert(card_id);
+            } else if live_cards.contains(&card_id) {
+                continue;
             } else if seen_lookup.insert(card_id) {
                 needs_registry_lookup.push(card_id);
             }
@@ -229,6 +252,8 @@ impl CardService for CardServiceDefault {
             .filter(|card_id| !existing.contains(card_id))
             .collect::<Vec<_>>();
         self.cache_revoked_cards(&missing).await;
+        let existing = existing.iter().copied().collect::<Vec<_>>();
+        self.cache_live_cards(&existing).await;
 
         result.extend(missing);
 
@@ -239,7 +264,8 @@ impl CardService for CardServiceDefault {
         &self,
         card_ids: Vec<CardId>,
     ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
-        self.registry_service
+        let cards = self
+            .registry_service
             .batch_get_cards(card_ids)
             .await
             .map_err(|err| {
@@ -247,7 +273,10 @@ impl CardService for CardServiceDefault {
                     "Failed loading cards: {}",
                     err.to_safe_string()
                 ))
-            })
+            })?;
+        let live_card_ids = cards.iter().map(StoredCard::card_id).collect::<Vec<_>>();
+        self.cache_live_cards(&live_card_ids).await;
+        Ok(cards)
     }
 }
 
@@ -273,9 +302,29 @@ mod tests {
     use golem_service_base::model::component::Component;
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
-    struct TestRegistryService;
+    struct TestRegistryService {
+        existing_cards: Option<HashSet<CardId>>,
+        lookup_count: Arc<AtomicUsize>,
+    }
+
+    impl TestRegistryService {
+        fn all_existing() -> Self {
+            Self {
+                existing_cards: None,
+                lookup_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn with_existing(existing_cards: HashSet<CardId>, lookup_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                existing_cards: Some(existing_cards),
+                lookup_count,
+            }
+        }
+    }
 
     #[async_trait]
     impl RegistryService for TestRegistryService {
@@ -313,7 +362,14 @@ mod tests {
             &self,
             card_ids: Vec<CardId>,
         ) -> Result<Vec<CardId>, RegistryServiceError> {
-            Ok(card_ids)
+            self.lookup_count.fetch_add(1, Ordering::SeqCst);
+            Ok(match &self.existing_cards {
+                Some(existing_cards) => card_ids
+                    .into_iter()
+                    .filter(|card_id| existing_cards.contains(card_id))
+                    .collect(),
+                None => card_ids,
+            })
         }
 
         async fn download_component(
@@ -453,7 +509,7 @@ mod tests {
     }
 
     fn service() -> CardServiceDefault {
-        CardServiceDefault::new(Arc::new(TestRegistryService))
+        CardServiceDefault::new(Arc::new(TestRegistryService::all_existing()))
     }
 
     fn agent(name: &str) -> OwnedAgentId {
@@ -563,6 +619,43 @@ mod tests {
                 .unwrap()
                 .contains(&card_id)
         );
+    }
+
+    #[test]
+    async fn known_live_card_skips_repeated_registry_lookup() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert!(service.check_cards(vec![card_id]).await.unwrap().is_empty());
+        assert!(service.check_cards(vec![card_id]).await.unwrap().is_empty());
+
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn revocation_invalidates_known_live_card() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_existing(
+            HashSet::from([card_id]),
+            lookup_count.clone(),
+        )));
+
+        assert!(service.check_cards(vec![card_id]).await.unwrap().is_empty());
+        service.record_revoked_cards(&[card_id]).await;
+
+        assert!(
+            service
+                .check_cards(vec![card_id])
+                .await
+                .unwrap()
+                .contains(&card_id)
+        );
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -303,3 +303,62 @@ fn derivation_upper_bound_uses_parent_ceiling_intersection() {
         Err(CardAlgebraError::DerivationNotSubsumed { .. })
     ));
 }
+
+#[test]
+fn derivation_witness_excludes_unrelated_parent() {
+    let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let read_tmp = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("tmp".to_string()),
+                FilesystemPathSegmentPattern::GlobStar,
+            ],
+        }),
+    );
+    let reveal_secret = secret_reveal("acme/shop/prod", holder, SecretResourcePattern::Any);
+
+    let needed_parent = card(vec![read_tmp.clone()], Vec::new());
+    let needed_parent_id = needed_parent.card_id;
+    let unrelated_parent = card(vec![reveal_secret], Vec::new());
+    let surface =
+        EffectiveSurface::from_cards(&[needed_parent, unrelated_parent], &recipient).unwrap();
+
+    let witness = surface
+        .validates_derivation_with_witness(std::slice::from_ref(&read_tmp), &[])
+        .unwrap();
+
+    assert_eq!(witness, vec![needed_parent_id]);
+}
+
+#[test]
+fn derivation_witness_includes_multiple_needed_parents() {
+    let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let read_tmp = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("tmp".to_string()),
+                FilesystemPathSegmentPattern::GlobStar,
+            ],
+        }),
+    );
+    let reveal_secret = secret_reveal("acme/shop/prod", holder, SecretResourcePattern::Any);
+
+    let filesystem_parent = card(vec![read_tmp.clone()], Vec::new());
+    let filesystem_parent_id = filesystem_parent.card_id;
+    let secret_parent = card(vec![reveal_secret.clone()], Vec::new());
+    let secret_parent_id = secret_parent.card_id;
+    let surface =
+        EffectiveSurface::from_cards(&[filesystem_parent, secret_parent], &recipient).unwrap();
+
+    let witness = surface
+        .validates_derivation_with_witness(&[read_tmp, reveal_secret], &[])
+        .unwrap();
+
+    assert_eq!(witness, vec![filesystem_parent_id, secret_parent_id]);
+}

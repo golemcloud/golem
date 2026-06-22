@@ -15,9 +15,9 @@
 use super::{ComponentError, environment_from_component_record};
 use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
+use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
-use crate::services::card::CardService;
 use crate::services::component::utils::prepare_component_files_for_upload;
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
@@ -34,8 +34,9 @@ use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, EffectiveSurface,
-    PermissionTarget, PolymorphicCard, permission_envelopes_for_recipient_patterns,
+    CardManagedBy, ClassPermissionTarget, ComponentResourcePattern, ComponentVerb,
+    EffectiveSurface, PermissionTarget, PolymorphicCard,
+    permission_envelopes_for_recipient_patterns,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -68,7 +69,6 @@ use tracing::info;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
-    card_service: Arc<CardService>,
     object_store: Arc<ComponentObjectStore>,
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_agent_files_service: Arc<InitialAgentFilesService>,
@@ -80,7 +80,6 @@ pub struct ComponentWriteService {
 impl ComponentWriteService {
     pub fn new(
         component_repo: Arc<dyn ComponentRepo>,
-        card_service: Arc<CardService>,
         object_store: Arc<ComponentObjectStore>,
         component_compilation: Arc<dyn ComponentCompilationService>,
         initial_agent_files_service: Arc<InitialAgentFilesService>,
@@ -90,7 +89,6 @@ impl ComponentWriteService {
     ) -> Self {
         Self {
             component_repo,
-            card_service,
             object_store,
             component_compilation,
             initial_agent_files_service,
@@ -100,14 +98,14 @@ impl ComponentWriteService {
         }
     }
 
-    async fn create_initial_permission_card(
+    fn prepare_initial_permission_card_record(
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
         agent_type_name: &AgentTypeName,
         initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
         auth: &AuthCtx,
-    ) -> Result<PolymorphicCard, ComponentError> {
+    ) -> Result<(PolymorphicCard, CardRecord), ComponentError> {
         let effective_surface =
             auth.effective_surface_for_card_derivation("create agent initial permission card")?;
         let card = prepare_agent_initial_card_for_minting(
@@ -115,17 +113,23 @@ impl ComponentWriteService {
             initial_permissions,
             effective_surface,
         )?;
-
-        self.card_service
-            .create_agent_initial_card(
+        let record = CardRecord::polymorphic_creation(
+            card.card_id,
+            card.parent_ids.clone(),
+            card.lower_positive.clone(),
+            card.lower_negative.clone(),
+            card.upper_positive.clone(),
+            card.upper_negative.clone(),
+            card.expires_at,
+            card.system_card,
+            Some(CardManagedBy::AgentInitial {
                 component_id,
                 component_revision,
-                agent_type_name.clone(),
-                &card,
-            )
-            .await?;
+                agent_type: agent_type_name.clone(),
+            }),
+        );
 
-        Ok(card)
+        Ok((card, record))
     }
 
     pub async fn create(
@@ -216,6 +220,7 @@ impl ComponentWriteService {
 
         let mut provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
             BTreeMap::new();
+        let mut cards_to_create = Vec::new();
 
         for (agent_type_name, creation) in &component_creation.agent_type_provision_configs {
             let agent_type = component_creation
@@ -231,15 +236,14 @@ impl ComponentWriteService {
                 resolve_plugins_for_creation(&creation.plugin_installations, &resolved_grants)?;
             let config =
                 validate_and_transform_config_entries(agent_type, creation.config.clone())?;
-            let initial_permission = self
-                .create_initial_permission_card(
-                    component_id,
-                    ComponentRevision::INITIAL,
-                    agent_type_name,
-                    &creation.initial_permissions,
-                    auth,
-                )
-                .await?;
+            let (initial_permission, card_record) = self.prepare_initial_permission_card_record(
+                component_id,
+                ComponentRevision::INITIAL,
+                agent_type_name,
+                &creation.initial_permissions,
+                auth,
+            )?;
+            cards_to_create.push(card_record);
 
             provision_configs.insert(
                 agent_type_name.clone(),
@@ -278,6 +282,7 @@ impl ComponentWriteService {
                 environment_id.0,
                 &component_creation.component_name.0,
                 record,
+                cards_to_create,
             )
             .await
             .map_err(|err| match err {
@@ -359,6 +364,7 @@ impl ComponentWriteService {
         };
 
         let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
+        let mut cards_to_create = Vec::new();
         if agent_types_changed {
             final_provision_configs =
                 provision_configs_for_agent_types(&agent_types, final_provision_configs);
@@ -404,6 +410,7 @@ impl ComponentWriteService {
                         agent_type,
                         &environment,
                         auth,
+                        &mut cards_to_create,
                     )
                     .await?
                 } else {
@@ -416,6 +423,7 @@ impl ComponentWriteService {
                         agent_type,
                         &environment,
                         auth,
+                        &mut cards_to_create,
                     )
                     .await?
                 };
@@ -492,7 +500,7 @@ impl ComponentWriteService {
 
         let stored_component: Component = self
             .component_repo
-            .update(record)
+            .update(record, cards_to_create)
             .await
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
@@ -747,17 +755,19 @@ impl ComponentWriteService {
         agent_type: &AgentTypeSchema,
         environment: &Environment,
         auth: &AuthCtx,
+        cards_to_create: &mut Vec<CardRecord>,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
         let initial_permission = if let Some(initial_permission_update) = update.initial_permissions
         {
-            self.create_initial_permission_card(
+            let (initial_permission, card_record) = self.prepare_initial_permission_card_record(
                 component_id,
                 component_revision,
                 agent_type_name,
                 &initial_permission_update,
                 auth,
-            )
-            .await?
+            )?;
+            cards_to_create.push(card_record);
+            initial_permission
         } else {
             existing.initial_permissions
         };
@@ -831,21 +841,21 @@ impl ComponentWriteService {
         agent_type: &AgentTypeSchema,
         environment: &Environment,
         auth: &AuthCtx,
+        cards_to_create: &mut Vec<CardRecord>,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
         let Some(ref initial_permission_update) = update.initial_permissions else {
             return Err(ComponentError::NewAgentTypeMissingInitialPermissions(
                 agent_type_name.clone(),
             ));
         };
-        let initial_permission = self
-            .create_initial_permission_card(
-                component_id,
-                component_revision,
-                agent_type_name,
-                initial_permission_update,
-                auth,
-            )
-            .await?;
+        let (initial_permission, card_record) = self.prepare_initial_permission_card_record(
+            component_id,
+            component_revision,
+            agent_type_name,
+            initial_permission_update,
+            auth,
+        )?;
+        cards_to_create.push(card_record);
 
         let files = resolve_files_for_update(agent_type_name, &update, uploaded_files)?;
 
@@ -920,12 +930,14 @@ fn prepare_agent_initial_card_for_minting(
             },
         )?;
     effective_surface
-        .validates_derivation(&lower_positive, &upper_positive)
+        .validates_derivation_with_witness(&lower_positive, &upper_positive)
         .map_err(|error| ComponentError::InvalidAgentInitialPermissionCard {
             agent_type: agent_type_name.clone(),
             message: format!("card derivation is not allowed by the creator's cards: {error:?}"),
+        })
+        .map(|parent_ids| {
+            card.parent_ids = parent_ids;
         })?;
-    card.parent_ids = effective_surface.source_card_ids.clone();
     Ok(card)
 }
 
@@ -1239,9 +1251,10 @@ fn validate_agent_config_path(
 mod tests {
     use super::prepare_agent_initial_card_for_minting;
     use crate::services::component::ComponentError;
+    use chrono::Utc;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::card::recipient::RecipientPattern;
-    use golem_common::model::card::{CardId, EffectiveSurface, PermissionPattern};
+    use golem_common::model::card::{Card, CardId, EffectiveSurface, PermissionPattern};
     use golem_common::model::component::AgentTypeInitialPermissions;
     use std::str::FromStr;
     use test_r::test;
@@ -1251,18 +1264,26 @@ mod tests {
     }
 
     fn parent_surface(parent_id: CardId) -> EffectiveSurface {
-        let grants = vec![
-            permission("environment(*/*/*) @ * : view : *"),
-            permission("component(*/*/*/*) @ * : view : *"),
-            permission("agent(*/*/*/*/*) @ * : view : *"),
-            permission("agent(*/*/*/*/*) @ * : invoke : *"),
-            permission("agent(*/*/*/*/*) @ * : resume : *"),
-            permission("agent(*/*/*/*/*) @ * : update-revision : *"),
-        ];
-        let mut surface =
-            EffectiveSurface::from_grants(&grants, &[], &[], &[], &RecipientPattern::Any).unwrap();
-        surface.source_card_ids = vec![parent_id];
-        surface
+        let card = Card {
+            card_id: parent_id,
+            parent_ids: Vec::new(),
+            lower_positive: vec![
+                permission("environment(*/*/*) @ * : view : *"),
+                permission("component(*/*/*/*) @ * : view : *"),
+                permission("agent(*/*/*/*/*) @ * : view : *"),
+                permission("agent(*/*/*/*/*) @ * : invoke : *"),
+                permission("agent(*/*/*/*/*) @ * : resume : *"),
+                permission("agent(*/*/*/*/*) @ * : update-revision : *"),
+            ],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        };
+        EffectiveSurface::from_cards(&[card], &RecipientPattern::Any).unwrap()
     }
 
     #[test]
