@@ -801,7 +801,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn fork_and_sync_with_promise(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

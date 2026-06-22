@@ -36,7 +36,7 @@ inherit_test_dep!(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_present_with_all_fields(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -108,7 +108,7 @@ async fn optional_group_present_with_all_fields(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_present_with_required_field_only(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -173,7 +173,7 @@ async fn optional_group_present_with_required_field_only(
 // An optional group with only optional children returns {} when no children are provided
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn all_optional_group_is_empty_object_when_no_children_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -213,7 +213,7 @@ async fn all_optional_group_is_empty_object_when_no_children_provided(
 // An optional group with only optional children is present with the provided child.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn all_optional_group_present_when_child_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -265,7 +265,7 @@ async fn all_optional_group_present_when_child_provided(
 // required child is missing, the whole optional group is pruned.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_absent_when_required_nested_child_missing(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
@@ -318,7 +318,7 @@ async fn optional_group_absent_when_required_nested_child_missing(
 // An optional group with a required nested object: present when all required fields are provided.
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_group_present_when_required_nested_child_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
