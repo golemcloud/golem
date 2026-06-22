@@ -97,6 +97,7 @@ impl EnvironmentCommandHandler {
                 "No application environments are available. Use '{}' to create one.",
                 "golem deploy".log_color_highlight()
             ));
+            return Ok(());
         }
 
         self.ctx.log_handler().log_output(EnvironmentListView {
