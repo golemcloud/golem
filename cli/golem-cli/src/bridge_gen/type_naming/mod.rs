@@ -629,31 +629,24 @@ pub(crate) fn user_supplied_fields(input: &InputSchema) -> Vec<&NamedField> {
         .collect()
 }
 
-/// Split a dotted `TypeId` into `(owner, name)`. If the legacy display
-/// `name` is recorded on the def, use it as the name component and treat
-/// any preceding dotted segment as the owner; otherwise reconstruct the
-/// pair from the raw id by splitting at the last dot.
+/// Determine the `(owner, name)` pair to use for a named type definition.
 ///
-/// Disambiguation suffixes produced by the schema adapter (see
-/// schema graph builder.
-/// are stripped before splitting so an owner-qualified duplicate generic
-/// (e.g. `std.ops.Bound__g_<hex>` with display name `Bound`) still
-/// recovers `(Some("std.ops"), Some("Bound"))` instead of losing the
-/// owner.
+/// A [`SchemaTypeDef`] carries a fully-qualified [`TypeId`] used only for
+/// structural uniqueness/lookup (e.g. `my_app.model.AllPrimitives`, with
+/// generic args mangled in) plus an optional human-readable display `name`
+/// holding the simple, source-native identifier (e.g. `AllPrimitives`).
 ///
-/// This mirrors the legacy analysed-type name / owner metadata semantics
-/// reattachment performed inside
-/// schema graph conversion.
+/// When a display `name` is present it is the source-native type name and is
+/// used verbatim, with no owner derived from the id — the qualified id prefix
+/// is an internal namespace and must not leak into generated type names.
+/// Disambiguation between distinct types that happen to share a name is handled
+/// later from their usage locations, not from this prefix.
+///
+/// Only when a def has no display name do we fall back to reconstructing a
+/// `(owner, name)` pair from the raw id by splitting at the last dot.
 fn split_type_id(raw: &str, display_name: Option<&str>) -> (Option<String>, Option<String>) {
     let raw = strip_disambiguation_suffix(raw);
     if let Some(name) = display_name {
-        let suffix = format!(".{name}");
-        if let Some(owner) = raw.strip_suffix(&suffix) {
-            return (Some(owner.to_string()), Some(name.to_string()));
-        }
-        if raw == name {
-            return (None, Some(name.to_string()));
-        }
         return (None, Some(name.to_string()));
     }
     match raw.rsplit_once('.') {

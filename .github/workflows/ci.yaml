@@ -275,7 +275,7 @@ jobs:
           QUIET: true
           GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 45
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:

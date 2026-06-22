@@ -38,17 +38,17 @@ fn enum_into_schema_emits_variant() {
         SchemaType::Variant { cases, .. } => {
             let expected = vec![
                 VariantCaseType {
-                    name: "active".to_string(),
+                    name: "Active".to_string(),
                     payload: None,
                     metadata: Default::default(),
                 },
                 VariantCaseType {
-                    name: "pending".to_string(),
+                    name: "Pending".to_string(),
                     payload: Some(SchemaType::u32()),
                     metadata: Default::default(),
                 },
                 VariantCaseType {
-                    name: "failed".to_string(),
+                    name: "Failed".to_string(),
                     payload: Some(SchemaType::record(vec![NamedFieldType {
                         name: "reason".to_string(),
                         body: SchemaType::string(),
@@ -81,7 +81,7 @@ fn all_unit_enum_into_schema_emits_enum() {
         SchemaType::Enum { cases, .. } => {
             assert_eq!(
                 cases.as_slice(),
-                &["red".to_string(), "green".to_string(), "blue".to_string(),]
+                &["Red".to_string(), "Green".to_string(), "Blue".to_string(),]
             );
         }
         other => panic!("expected enum body, got {other:?}"),

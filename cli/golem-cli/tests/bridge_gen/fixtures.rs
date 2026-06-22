@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::workspace_path;
 use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
@@ -179,105 +180,28 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentTypeSchema> {
 
 #[allow(dead_code)]
 pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentTypeSchema> {
-    vec![
-        code_first_snippets_agent_type(language, "FooAgent"),
-        code_first_snippets_agent_type(language, "BarAgent"),
-    ]
+    let goldenfile = workspace_path()
+        .join("cli/golem-cli/test-data/goldenfiles/extracted-agent-types")
+        .join(format!("code_first_snippets_{}.json", language.id()));
+
+    serde_json::from_str(&std::fs::read_to_string(&goldenfile).unwrap()).unwrap_or_else(|err| {
+        panic!(
+            "Failed to deserialize golden file {}: {err}",
+            goldenfile.display()
+        )
+    })
 }
 
 pub fn code_first_snippets_agent_type(
     language: GuestLanguage,
     agent_name: &str,
 ) -> AgentTypeSchema {
-    let all_primitives = def(
-        "all-primitives",
-        SchemaType::record(vec![
-            named_field("bool", SchemaType::bool()),
-            named_field("u32", SchemaType::u32()),
-            named_field("s32", SchemaType::s32()),
-            named_field("f64", SchemaType::f64()),
-            named_field("string", SchemaType::string()),
-        ]),
-    );
-    let point = def(
-        "point",
-        SchemaType::record(vec![
-            named_field("x", SchemaType::f64()),
-            named_field("y", SchemaType::f64()),
-        ]),
-    );
-    let status = def(
-        "status",
-        SchemaType::variant(vec![
-            variant_case("ok", Some(SchemaType::string())),
-            variant_case("err", Some(SchemaType::string())),
-            variant_case("unknown", None),
-        ]),
-    );
-
-    let source_language = language.id().to_string();
-    agent(
-        agent_name,
-        source_language,
-        vec![field(
-            "opt_string",
-            SchemaType::option(SchemaType::string()),
-        )],
-        vec![
-            method(
-                "all-primitives",
-                vec![field("all_primitives", ref_to("all-primitives"))],
-                Some(ref_to("all-primitives")),
-            ),
-            method(
-                "optional",
-                vec![field("value", SchemaType::option(SchemaType::string()))],
-                Some(SchemaType::option(SchemaType::string())),
-            ),
-            method(
-                "number",
-                vec![field("value", SchemaType::f64())],
-                Some(SchemaType::f64()),
-            ),
-            method(
-                "string",
-                vec![field("value", SchemaType::string())],
-                Some(SchemaType::string()),
-            ),
-            method(
-                "boolean",
-                vec![field("value", SchemaType::bool())],
-                Some(SchemaType::bool()),
-            ),
-            method(
-                "list",
-                vec![field("values", SchemaType::list(SchemaType::string()))],
-                Some(SchemaType::list(SchemaType::string())),
-            ),
-            method(
-                "tupletype",
-                vec![field(
-                    "value",
-                    SchemaType::tuple(vec![SchemaType::string(), SchemaType::u32()]),
-                )],
-                Some(SchemaType::tuple(vec![
-                    SchemaType::string(),
-                    SchemaType::u32(),
-                ])),
-            ),
-            method(
-                "point",
-                vec![field("point", ref_to("point"))],
-                Some(ref_to("point")),
-            ),
-            method(
-                "status",
-                vec![field("status", ref_to("status"))],
-                Some(ref_to("status")),
-            ),
-            method("noreturn", vec![], None),
-        ],
-        vec![all_primitives, point, status],
-        AgentMode::Durable,
-    )
+    code_first_snippets_agent_types(language)
+        .into_iter()
+        .find(|t| t.type_name.0 == agent_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "Agent type {agent_name} not found in {language} extracted code first snippets goldenfile"
+            )
+        })
 }

@@ -37,7 +37,7 @@ use golem_common::schema::agent::{
 use golem_common::schema::graph::SchemaTypeDef;
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
+    BinaryRestrictions, SchemaType, TextRestrictions, UnionSpec, VariantCaseType,
 };
 use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
@@ -1609,7 +1609,7 @@ impl TypeScriptBridgeGenerator {
                 let key_decode = self.decode_schema_value("entry[0]", key)?;
                 let val_decode = self.decode_schema_value("entry[1]", val)?;
                 format!(
-                    "new Map({value}.value.entries.map((entry: any) => [{key_decode}, {val_decode}]))"
+                    "((n: any) => new Map(n.value.entries.map((entry: any) => [{key_decode}, {val_decode}])))({value})"
                 )
             }
             SchemaType::Union { spec, .. } => {
@@ -1950,6 +1950,23 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
+    /// Renders a `Union` schema as a TypeScript discriminated union matching
+    /// the `{ tag, val }` shape produced by the encode/decode helpers.
+    fn union_tagged_type(&self, spec: &UnionSpec) -> anyhow::Result<String> {
+        Ok(spec
+            .branches
+            .iter()
+            .map(|branch| {
+                Ok::<String, anyhow::Error>(format!(
+                    "{{ tag: '{}'; val: {} }}",
+                    branch.tag,
+                    self.type_reference(&branch.body)?
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join(" | "))
+    }
+
     /// TS `{ type: 'name'; value: T } | …` union for a multimodal modality list.
     fn multimodal_tagged_union(&self, cases: &[(String, SchemaType)]) -> anyhow::Result<String> {
         Ok(cases
@@ -2098,17 +2115,29 @@ impl TypeScriptBridgeGenerator {
                         "Bare text/binary rich scalars have no TypeScript bridge type; \
                          wrap them in the unstructured text/binary variant ({typ:?})"
                     )),
-                    // Rich schema variants without a legacy AnalysedType
-                    // counterpart have no TS surface in the current SDK
-                    // template.
-                    SchemaType::FixedList { .. }
-                    | SchemaType::Map { .. }
-                    | SchemaType::Path { .. }
-                    | SchemaType::Url { .. }
-                    | SchemaType::Datetime { .. }
-                    | SchemaType::Duration { .. }
-                    | SchemaType::Quantity { .. }
-                    | SchemaType::Union { .. }
+                    // Same wire shape as `list`; `Uint8Array` for
+                    // `fixed-list<u8>`.
+                    SchemaType::FixedList { element, .. } => {
+                        if matches!(**element, SchemaType::U8 { .. }) {
+                            Ok("Uint8Array".to_string())
+                        } else {
+                            let inner_ts_type = self.type_reference(element)?;
+                            Ok(format!("{}[]", inner_ts_type))
+                        }
+                    }
+                    SchemaType::Map { key, value, .. } => {
+                        let key_type = self.type_reference(key)?;
+                        let value_type = self.type_reference(value)?;
+                        Ok(format!("Map<{key_type}, {value_type}>"))
+                    }
+                    SchemaType::Union { spec, .. } => self.union_tagged_type(spec),
+                    SchemaType::Path { .. } => Ok("string".to_string()),
+                    SchemaType::Url { .. } => Ok("string".to_string()),
+                    SchemaType::Datetime { .. } => Ok("string".to_string()),
+                    SchemaType::Duration { .. } => Ok("bigint".to_string()),
+                    // Capability / quantity / WASI-P3 nodes are not part of the
+                    // agent IO surface exercised by the bridge today.
+                    SchemaType::Quantity { .. }
                     | SchemaType::Secret { .. }
                     | SchemaType::QuotaToken { .. }
                     | SchemaType::Future { .. }
@@ -2229,18 +2258,34 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Ref { .. } => {
                 unreachable!("Ref was resolved to its body via resolve_ref")
             }
-            // Rich schema variants without a legacy AnalysedType
-            // counterpart have no TS surface in the current SDK template.
-            SchemaType::FixedList { .. }
-            | SchemaType::Map { .. }
-            | SchemaType::Text { .. }
-            | SchemaType::Binary { .. }
-            | SchemaType::Path { .. }
-            | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. }
-            | SchemaType::Duration { .. }
-            | SchemaType::Quantity { .. }
-            | SchemaType::Union { .. }
+            SchemaType::FixedList { element, .. } => {
+                if matches!(**element, SchemaType::U8 { .. }) {
+                    Ok("Uint8Array".to_string())
+                } else {
+                    let inner_type = self.type_reference(element)?;
+                    Ok(format!("{}[]", inner_type))
+                }
+            }
+            SchemaType::Map { key, value, .. } => {
+                let key_type = self.type_reference(key)?;
+                let value_type = self.type_reference(value)?;
+                Ok(format!("Map<{key_type}, {value_type}>"))
+            }
+            SchemaType::Union { spec, .. } => self.union_tagged_type(spec),
+            SchemaType::Path { .. } => Ok("string".to_string()),
+            SchemaType::Url { .. } => Ok("string".to_string()),
+            SchemaType::Datetime { .. } => Ok("string".to_string()),
+            SchemaType::Duration { .. } => Ok("bigint".to_string()),
+            // Bare text/binary rich scalars have no TS surface; the ergonomic
+            // wrapper types are reached only via the role-marked unstructured
+            // variant intercepted in `type_reference`.
+            SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
+                "Bare text/binary rich scalars have no TypeScript bridge type; \
+                 wrap them in the unstructured text/binary variant ({typ:?})"
+            )),
+            // Capability / quantity / WASI-P3 nodes are not part of the agent
+            // IO surface exercised by the bridge today.
+            SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::Future { .. }

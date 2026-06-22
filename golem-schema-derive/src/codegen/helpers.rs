@@ -590,6 +590,7 @@ pub fn default_name_for(ident: &syn::Ident, strategy: RenameAll) -> String {
 fn apply_rename_all(input: &str, strategy: RenameAll) -> String {
     use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
     match strategy {
+        RenameAll::Preserve => input.to_owned(),
         RenameAll::Kebab => input.to_kebab_case(),
         RenameAll::Snake => input.to_snake_case(),
         RenameAll::Camel => input.to_lower_camel_case(),

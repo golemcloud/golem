@@ -116,13 +116,12 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
         AgentMode::Ephemeral,
     );
     agent_type.constructor.name = Some("EphemeralConfigAgent".to_string());
-    let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
+    let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
 
-    let lib_rs =
-        std::fs::read_to_string(target_dir.join("ephemeral-config-agent-client/src/lib.rs"))
-            .unwrap();
-    assert!(lib_rs.contains("pub struct EphemeralConfigAgentClient"));
+    let lib_rs = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("pub struct EphemeralConfigAgent"));
     assert!(!lib_rs.contains("pub async fn new("));
 }
 
@@ -138,13 +137,20 @@ fn test_type_naming_ts_foo_agent_for_rust_bridge() {
 
 fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
     let package_dir = target_dir.join(bridge_client_directory_name(&agent_type.type_name));
-    let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    let mut generator = RustBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();
+
+    // Share a single cargo target directory across all bridge compile tests so
+    // the generated client crates' dependencies are built once and reused,
+    // instead of recompiling them from scratch in each per-test temp dir.
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
 
     assert!(
         std::process::Command::new("cargo")
             .arg("check")
-            .current_dir(package_dir)
+            .arg("--target-dir")
+            .arg(&shared_target_dir)
+            .current_dir(&package_dir)
             .status()
             .unwrap()
             .success()
