@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
@@ -49,7 +49,7 @@ impl MessageWithFields for AccountGetView {
     }
 }
 
-impl CliOutput for AccountGetView {
+impl StructuredOutput for AccountGetView {
     const KIND: &'static str = "account.get";
 }
 
@@ -71,7 +71,7 @@ impl MessageWithFields for AccountNewView {
     }
 }
 
-impl CliOutput for AccountNewView {
+impl StructuredOutput for AccountNewView {
     const KIND: &'static str = "account.new";
 }
 
@@ -90,7 +90,7 @@ impl MessageWithFields for AccountUpdateView {
     }
 }
 
-impl CliOutput for AccountUpdateView {
+impl StructuredOutput for AccountUpdateView {
     const KIND: &'static str = "account.update";
 }
 
@@ -101,11 +101,11 @@ pub struct AccountDeleteResult {
     pub account_id: AccountId,
 }
 
-impl TextView for AccountDeleteResult {
+impl TextOutput for AccountDeleteResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AccountDeleteResult {
+impl StructuredOutput for AccountDeleteResult {
     const KIND: &'static str = "account.delete";
 }
 
@@ -154,7 +154,7 @@ impl MessageWithFields for PermissionShareGetView {
     }
 }
 
-impl CliOutput for PermissionShareGetView {
+impl StructuredOutput for PermissionShareGetView {
     const KIND: &'static str = "account.permission-share.get";
 }
 
@@ -176,7 +176,7 @@ impl MessageWithFields for PermissionShareNewView {
     }
 }
 
-impl CliOutput for PermissionShareNewView {
+impl StructuredOutput for PermissionShareNewView {
     const KIND: &'static str = "account.permission-share.new";
 }
 
@@ -198,7 +198,7 @@ impl MessageWithFields for PermissionShareUpdateView {
     }
 }
 
-impl CliOutput for PermissionShareUpdateView {
+impl StructuredOutput for PermissionShareUpdateView {
     const KIND: &'static str = "account.permission-share.update";
 }
 
@@ -209,11 +209,11 @@ pub struct PermissionShareDeleteResult {
     pub permission_share_id: PermissionShareId,
 }
 
-impl TextView for PermissionShareDeleteResult {
+impl TextOutput for PermissionShareDeleteResult {
     fn log(&self) {}
 }
 
-impl CliOutput for PermissionShareDeleteResult {
+impl StructuredOutput for PermissionShareDeleteResult {
     const KIND: &'static str = "account.permission-share.delete";
 }
 
@@ -223,7 +223,7 @@ pub struct PermissionShareListView {
     pub permission_shares: Vec<PermissionShare>,
 }
 
-impl TextView for PermissionShareListView {
+impl TextOutput for PermissionShareListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("ID"),
@@ -247,7 +247,7 @@ impl TextView for PermissionShareListView {
     }
 }
 
-impl CliOutput for PermissionShareListView {
+impl StructuredOutput for PermissionShareListView {
     const KIND: &'static str = "account.permission-share.list";
 }
 
@@ -256,7 +256,7 @@ impl CliOutput for PermissionShareListView {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct GrantGetView(pub Vec<Role>);
 
-impl TextView for GrantGetView {
+impl TextRender for GrantGetView {
     fn log(&self) {
         if self.0.is_empty() {
             logln("No roles granted")

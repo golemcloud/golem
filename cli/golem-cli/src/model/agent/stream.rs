@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::format_stderr;
 use crate::model::worker::AgentLogStreamOptions;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
@@ -36,7 +36,7 @@ pub struct AgentStreamEvent {
     pub error: Option<String>,
 }
 
-impl CliOutput for AgentStreamEvent {
+impl StructuredOutput for AgentStreamEvent {
     const KIND: &'static str = "agent.stream";
 }
 

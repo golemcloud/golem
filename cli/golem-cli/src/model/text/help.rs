@@ -17,8 +17,8 @@ use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::component::show_exported_agent_constructors;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
-    log_table, new_table_full,
+    Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextOutput,
+    format_export, log_table, new_table_full,
 };
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
@@ -162,7 +162,7 @@ impl MessageWithFields for ComponentNameHelp {
 
 pub struct AvailableComponentNamesHelp(pub Vec<ComponentName>);
 
-impl TextView for AvailableComponentNamesHelp {
+impl TextOutput for AvailableComponentNamesHelp {
     fn log(&self) {
         if self.0.is_empty() {
             logln(
@@ -206,7 +206,7 @@ impl AvailableFunctionNamesHelp {
     }
 }
 
-impl TextView for AvailableFunctionNamesHelp {
+impl TextOutput for AvailableFunctionNamesHelp {
     fn log(&self) {
         if self.function_names.is_empty() {
             match &self.agent_name {
@@ -318,7 +318,7 @@ impl AvailableAgentConstructorsHelp {
     }
 }
 
-impl TextView for AvailableAgentConstructorsHelp {
+impl TextOutput for AvailableAgentConstructorsHelp {
     fn log(&self) {
         if self.constructors.is_empty() {
             logln(self.empty_message.log_color_warn().to_string());
@@ -343,7 +343,7 @@ pub struct ArgumentError {
 
 pub struct ParameterErrorTableView(pub Vec<ArgumentError>);
 
-impl TextView for ParameterErrorTableView {
+impl TextOutput for ParameterErrorTableView {
     fn log(&self) {
         let mut table = new_table_full(vec![
             Column::new("Arg #").fixed_right(),
@@ -535,7 +535,7 @@ pub struct AppNewNextStepsHint {
     pub binary_name: String,
 }
 
-impl TextView for AppNewNextStepsHint {
+impl TextOutput for AppNewNextStepsHint {
     fn log(&self) {
         logln("");
 

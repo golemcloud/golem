@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::log::{LogColorize, logln};
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::deploy::{EnvironmentSetupDisplay, EnvironmentSetupPlan};
 use crate::model::masking::{Masked, MaskingConfig, mask_secret_with_fingerprint};
-use crate::model::text::fmt::TextView;
+use crate::model::text::fmt::TextOutput;
 use colored::Colorize;
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::diff::{
@@ -31,7 +31,7 @@ const DIFF_COLLAPSE_KEEP_HEAD: usize = 3;
 const DIFF_COLLAPSE_KEEP_TAIL: usize = 3;
 const DIFF_COLLAPSE_DOTS: usize = 3;
 
-impl TextView for DeploymentDiff {
+impl TextOutput for DeploymentDiff {
     fn log(&self) {
         logln("");
         if !self.components.is_empty() {
@@ -266,7 +266,7 @@ impl TextView for DeploymentDiff {
     }
 }
 
-impl CliOutput for DeploymentDiff {
+impl StructuredOutput for DeploymentDiff {
     const KIND: &'static str = "deploy.diff";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -460,7 +460,7 @@ impl Serialize for DeployPlanView<'_> {
     }
 }
 
-impl TextView for DeployPlanView<'_> {
+impl TextOutput for DeployPlanView<'_> {
     fn log(&self) {
         let has_deployment_changes = !self.deployment_diff.components.is_empty()
             || !self.deployment_diff.http_api_deployments.is_empty()
@@ -484,7 +484,7 @@ impl TextView for DeployPlanView<'_> {
     }
 }
 
-impl CliOutput for DeployPlanView<'_> {
+impl StructuredOutput for DeployPlanView<'_> {
     const KIND: &'static str = "deploy.plan";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -505,7 +505,7 @@ impl CliOutput for DeployPlanView<'_> {
     }
 }
 
-impl TextView for EnvironmentSetupPlanView<'_> {
+impl TextOutput for EnvironmentSetupPlanView<'_> {
     fn log(&self) {
         let setup = self.0;
 
@@ -576,7 +576,7 @@ impl TextView for EnvironmentSetupPlanView<'_> {
     }
 }
 
-impl CliOutput for EnvironmentSetupPlanView<'_> {
+impl StructuredOutput for EnvironmentSetupPlanView<'_> {
     const KIND: &'static str = "deploy.environment-setup-plan";
 }
 

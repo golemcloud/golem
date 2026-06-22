@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::app::ComponentLayerProperties;
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::component::ComponentView;
 use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text::fmt::*;
@@ -39,7 +39,7 @@ impl Masked for ComponentListView {
     }
 }
 
-impl CliOutput for ComponentListView {
+impl StructuredOutput for ComponentListView {
     const KIND: &'static str = "component.list";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -52,7 +52,7 @@ impl CliOutput for ComponentListView {
     }
 }
 
-impl TextView for ComponentListView {
+impl TextOutput for ComponentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
@@ -191,7 +191,7 @@ impl MessageWithFields for ComponentGetView {
     }
 }
 
-impl CliOutput for ComponentGetView {
+impl StructuredOutput for ComponentGetView {
     const KIND: &'static str = "component.get";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -211,11 +211,11 @@ pub struct ComponentManifestTraceView {
     pub properties: ComponentLayerProperties,
 }
 
-impl CliOutput for ComponentManifestTraceView {
+impl StructuredOutput for ComponentManifestTraceView {
     const KIND: &'static str = "component.manifest-trace";
 }
 
-impl TextView for ComponentManifestTraceView {
+impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
         let rendered = if SHOULD_COLORIZE.should_colorize() {
             to_colored_json(&self.properties)

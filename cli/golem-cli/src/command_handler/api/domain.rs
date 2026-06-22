@@ -59,7 +59,7 @@ impl ApiDomainCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(HttpApiDomainListView { domains })?;
+            .log_output(HttpApiDomainListView { domains })?;
 
         Ok(())
     }
@@ -98,7 +98,7 @@ impl ApiDomainCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(DomainRegistrationNewView(domain))?;
+            .log_output(DomainRegistrationNewView(domain))?;
 
         Ok(())
     }
@@ -166,7 +166,7 @@ impl ApiDomainCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(DomainRegistrationDeleteResult {
+            .log_output(DomainRegistrationDeleteResult {
                 deleted: true,
                 domain,
                 id: domain_to_delete.id,

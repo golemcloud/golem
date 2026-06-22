@@ -14,7 +14,7 @@
 
 use crate::agent_id_display::{SourceLanguage, render_typed_schema_value};
 use crate::log::log_error;
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
@@ -40,7 +40,7 @@ pub struct InvokeResultView {
     pub is_void_result: bool,
 }
 
-impl CliOutput for InvokeResultView {
+impl StructuredOutput for InvokeResultView {
     const KIND: &'static str = "agent.invoke";
 }
 

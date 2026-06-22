@@ -26,7 +26,7 @@ pub const COMMAND_OUTPUT_SCHEMA_JSON: &str = include_str!(concat!(
     "/command-output-schema/command-output.schema.json"
 ));
 
-pub trait CliOutput: Serialize {
+pub trait StructuredOutput: Serialize {
     const KIND: &'static str;
 
     fn type_name() -> String {
@@ -195,11 +195,13 @@ fn json_ref(definition_name: &str) -> Value {
     Value::Object(reference)
 }
 
-pub fn to_cli_output_value<Output: CliOutput>(output: Output) -> anyhow::Result<Value> {
-    to_cli_output_value_masked(output, MaskingConfig::hide_secrets())
+pub fn to_structured_output_value<Output: StructuredOutput>(
+    output: Output,
+) -> anyhow::Result<Value> {
+    to_structured_output_value_masked(output, MaskingConfig::hide_secrets())
 }
 
-pub fn to_cli_output_value_masked<Output: CliOutput>(
+pub fn to_structured_output_value_masked<Output: StructuredOutput>(
     output: Output,
     config: MaskingConfig,
 ) -> anyhow::Result<Value> {
@@ -207,7 +209,7 @@ pub fn to_cli_output_value_masked<Output: CliOutput>(
     let type_value = Value::String(Output::type_name());
 
     match value {
-        Value::Object(fields) => Ok(Value::Object(with_cli_output_type::<Output>(
+        Value::Object(fields) => Ok(Value::Object(with_structured_output_type::<Output>(
             fields, type_value,
         )?)),
         value => {
@@ -219,7 +221,7 @@ pub fn to_cli_output_value_masked<Output: CliOutput>(
     }
 }
 
-fn with_cli_output_type<Output: CliOutput>(
+fn with_structured_output_type<Output: StructuredOutput>(
     fields: Map<String, Value>,
     type_value: Value,
 ) -> anyhow::Result<Map<String, Value>> {
@@ -242,8 +244,9 @@ fn with_cli_output_type<Output: CliOutput>(
 #[cfg(test)]
 mod tests {
     use crate::model::cli_output::{
-        CLI_OUTPUT_TYPE_FIELD, CliOutput, command_output_type_names, focused_command_output_schema,
-        to_cli_output_value, to_cli_output_value_masked,
+        CLI_OUTPUT_TYPE_FIELD, StructuredOutput, command_output_type_names,
+        focused_command_output_schema, to_structured_output_value,
+        to_structured_output_value_masked,
     };
     use crate::model::masking::MaskingConfig;
     use crate::model::text::diff::DeployPlanView;
@@ -261,7 +264,7 @@ mod tests {
 
     type OutputDocumentStrategy = BoxedStrategy<Value>;
 
-    struct CliOutputTestEntry {
+    struct StructuredOutputTestEntry {
         rust_type: &'static str,
         output_type: &'static str,
         examples: fn() -> Vec<Value>,
@@ -270,7 +273,7 @@ mod tests {
 
     macro_rules! registry_entry {
         ($rust_type:literal, $output_type:literal, $arbitrary:expr) => {
-            CliOutputTestEntry {
+            StructuredOutputTestEntry {
                 rust_type: $rust_type,
                 output_type: $output_type,
                 examples: || {
@@ -287,7 +290,7 @@ mod tests {
         };
     }
 
-    static CLI_OUTPUT_TEST_REGISTRY: &[CliOutputTestEntry] = &[
+    static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         registry_entry!(
             "AccountDeleteResult",
             "account.delete",
@@ -663,7 +666,7 @@ mod tests {
                 && is_known_non_object_type(tuple_field_type)
             {
                 errors.push(format!(
-                        "{} is a CliOutput tuple wrapper around non-object type `{}`; use a named output struct instead",
+                        "{} is a StructuredOutput tuple wrapper around non-object type `{}`; use a named output struct instead",
                         output.rust_type, tuple_field_type,
                     ));
             }
@@ -901,7 +904,7 @@ mod tests {
             .build(&schema)
             .expect("command output schema must be a valid JSON schema");
 
-        for entry in CLI_OUTPUT_TEST_REGISTRY.iter().filter(|entry| {
+        for entry in STRUCTURED_OUTPUT_TEST_REGISTRY.iter().filter(|entry| {
             !definition_allows_additional_properties(
                 definitions
                     .get(entry.output_type)
@@ -930,7 +933,7 @@ mod tests {
             .build(&schema)
             .expect("command output schema must be a valid JSON schema");
 
-        for entry in CLI_OUTPUT_TEST_REGISTRY {
+        for entry in STRUCTURED_OUTPUT_TEST_REGISTRY {
             for example in (entry.examples)() {
                 assert!(
                     validator.is_valid(&example),
@@ -1019,7 +1022,7 @@ mod tests {
     }
 
     fn registry_output_entries() -> BTreeMap<String, String> {
-        CLI_OUTPUT_TEST_REGISTRY
+        STRUCTURED_OUTPUT_TEST_REGISTRY
             .iter()
             .map(|entry| (entry.output_type.to_string(), entry.rust_type.to_string()))
             .collect()
@@ -1125,7 +1128,7 @@ mod tests {
             return;
         };
 
-        if trait_name.as_str() == "CliOutput" {
+        if trait_name.as_str() == "StructuredOutput" {
             let mut kind = None;
 
             for impl_item in &item.items {
@@ -1244,7 +1247,7 @@ mod tests {
     }
 
     fn arb_registered_output_document() -> BoxedStrategy<Value> {
-        let strategies = CLI_OUTPUT_TEST_REGISTRY
+        let strategies = STRUCTURED_OUTPUT_TEST_REGISTRY
             .iter()
             .map(|entry| (entry.arbitrary)())
             .collect::<Vec<_>>();
@@ -1253,10 +1256,12 @@ mod tests {
 
     fn serialized_output<T>(strategy: impl Strategy<Value = T> + 'static) -> OutputDocumentStrategy
     where
-        T: CliOutput + 'static,
+        T: StructuredOutput + 'static,
     {
         strategy
-            .prop_map(|output| to_cli_output_value(output).expect("generated DTO should serialize"))
+            .prop_map(|output| {
+                to_structured_output_value(output).expect("generated DTO should serialize")
+            })
             .boxed()
     }
 
@@ -2337,7 +2342,7 @@ mod tests {
             arb_format_string(),
         )
             .prop_map(|(idempotency_key, shape, first, second, result_format)| {
-                to_cli_output_value(crate::model::invoke_result_view::InvokeResultView {
+                to_structured_output_value(crate::model::invoke_result_view::InvokeResultView {
                     idempotency_key,
                     result_json: (shape == 1).then_some(first.clone()),
                     results_json: (shape == 2).then_some(vec![first, second]),
@@ -2421,7 +2426,9 @@ mod tests {
                     cursors,
                 },
             )
-            .prop_map(|output| to_cli_output_value(output).expect("generated DTO should serialize"))
+            .prop_map(|output| {
+                to_structured_output_value(output).expect("generated DTO should serialize")
+            })
             .boxed()
     }
 
@@ -2441,7 +2448,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, entry)| {
-                to_cli_output_value(crate::model::text::worker::AgentOplogEntryView {
+                to_structured_output_value(crate::model::text::worker::AgentOplogEntryView {
                     index: index as u64,
                     entry,
                 })
@@ -3843,7 +3850,7 @@ mod tests {
                 let deployment_diff = empty_deployment_diff();
                 let environment_setup = include_environment_setup
                     .then(crate::model::deploy::EnvironmentSetupPlan::default);
-                to_cli_output_value_masked(
+                to_structured_output_value_masked(
                     DeployPlanView {
                         deployment_diff: &deployment_diff,
                         environment_setup: environment_setup.as_ref(),
@@ -3858,7 +3865,7 @@ mod tests {
     fn arb_deployment_diff_result() -> OutputDocumentStrategy {
         arb_deployment_diff()
             .prop_map(|diff| {
-                to_cli_output_value_masked(diff, MaskingConfig::hide_secrets())
+                to_structured_output_value_masked(diff, MaskingConfig::hide_secrets())
                     .expect("generated deployment diff should serialize")
             })
             .boxed()
@@ -4013,8 +4020,10 @@ mod tests {
     fn arb_environment_setup_plan_result() -> OutputDocumentStrategy {
         arb_environment_setup_plan()
             .prop_map(|output| {
-                to_cli_output_value(crate::model::text::diff::EnvironmentSetupPlanView(&output))
-                    .expect("generated environment setup plan should serialize")
+                to_structured_output_value(crate::model::text::diff::EnvironmentSetupPlanView(
+                    &output,
+                ))
+                .expect("generated environment setup plan should serialize")
             })
             .boxed()
     }
@@ -4964,7 +4973,7 @@ mod tests {
     fn arb_secret_create_result() -> OutputDocumentStrategy {
         arb_secret()
             .prop_map(|secret| {
-                to_cli_output_value_masked(
+                to_structured_output_value_masked(
                     SecretCreateView(secret.into()),
                     MaskingConfig::hide_secrets(),
                 )
@@ -4976,7 +4985,7 @@ mod tests {
     fn arb_secret_delete_result() -> OutputDocumentStrategy {
         arb_secret()
             .prop_map(|secret| {
-                to_cli_output_value_masked(
+                to_structured_output_value_masked(
                     SecretDeleteView(secret.into()),
                     MaskingConfig::hide_secrets(),
                 )
@@ -4988,7 +4997,7 @@ mod tests {
     fn arb_secret_get_result() -> OutputDocumentStrategy {
         arb_secret()
             .prop_map(|secret| {
-                to_cli_output_value_masked(
+                to_structured_output_value_masked(
                     SecretGetView(secret.into()),
                     MaskingConfig::hide_secrets(),
                 )
@@ -5000,7 +5009,7 @@ mod tests {
     fn arb_secret_update_value_result() -> OutputDocumentStrategy {
         arb_secret()
             .prop_map(|secret| {
-                to_cli_output_value_masked(
+                to_structured_output_value_masked(
                     SecretUpdateView(secret.into()),
                     MaskingConfig::hide_secrets(),
                 )
@@ -5016,7 +5025,7 @@ mod tests {
             any::<bool>(),
         )
             .prop_map(|(secrets, environment_name, show_ids)| {
-                to_cli_output_value_masked(
+                to_structured_output_value_masked(
                     SecretListView {
                         secrets: secrets.into_iter().map(Into::into).collect(),
                         environment_name,

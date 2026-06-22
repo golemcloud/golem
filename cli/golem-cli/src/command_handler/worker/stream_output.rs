@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command_handler::log::print_cli_output_document;
+use crate::command_handler::log::print_command_output_document;
 use crate::log::log_error;
 use crate::model::agent::stream::AgentStreamEvent;
 use crate::model::format::Format;
@@ -310,7 +310,7 @@ impl WorkerStreamOutput {
         // Stream events are flat structures, so rendering them cannot
         // realistically fail; as this is called from the websocket read loop,
         // errors are logged instead of being propagated
-        if let Err(error) = print_cli_output_document(self.format, self.options.colors, event) {
+        if let Err(error) = print_command_output_document(self.format, self.options.colors, event) {
             log_error(format!("Failed to render agent stream event: {error:#}"));
         }
     }

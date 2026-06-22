@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
@@ -44,7 +44,7 @@ impl MessageWithFields for DomainRegistrationNewView {
     }
 }
 
-impl CliOutput for DomainRegistrationNewView {
+impl StructuredOutput for DomainRegistrationNewView {
     const KIND: &'static str = "api.domain.register";
 }
 
@@ -56,11 +56,11 @@ pub struct DomainRegistrationDeleteResult {
     pub id: DomainRegistrationId,
 }
 
-impl TextView for DomainRegistrationDeleteResult {
+impl TextOutput for DomainRegistrationDeleteResult {
     fn log(&self) {}
 }
 
-impl CliOutput for DomainRegistrationDeleteResult {
+impl StructuredOutput for DomainRegistrationDeleteResult {
     const KIND: &'static str = "api.domain.delete";
 }
 
@@ -70,7 +70,7 @@ pub struct HttpApiDomainListView {
     pub domains: Vec<DomainRegistration>,
 }
 
-impl TextView for HttpApiDomainListView {
+impl TextOutput for HttpApiDomainListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),
@@ -88,6 +88,6 @@ impl TextView for HttpApiDomainListView {
     }
 }
 
-impl CliOutput for HttpApiDomainListView {
+impl StructuredOutput for HttpApiDomainListView {
     const KIND: &'static str = "api.domain.list";
 }

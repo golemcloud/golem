@@ -50,7 +50,7 @@ impl BridgeCommandHandler {
             )
             .await?;
 
-        self.ctx.log_handler().log_view(
+        self.ctx.log_handler().log_output(
             crate::model::text::action_result::GenerateBridgeResult { generated: true },
         )?;
 

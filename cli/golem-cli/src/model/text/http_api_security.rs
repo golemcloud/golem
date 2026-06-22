@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
@@ -37,7 +37,7 @@ impl MessageWithFields for HttpSecuritySchemeCreateView {
     }
 }
 
-impl CliOutput for HttpSecuritySchemeCreateView {
+impl StructuredOutput for HttpSecuritySchemeCreateView {
     const KIND: &'static str = "api.security-scheme.create";
 }
 
@@ -59,7 +59,7 @@ impl MessageWithFields for HttpSecuritySchemeGetView {
     }
 }
 
-impl CliOutput for HttpSecuritySchemeGetView {
+impl StructuredOutput for HttpSecuritySchemeGetView {
     const KIND: &'static str = "api.security-scheme.get";
 }
 
@@ -81,7 +81,7 @@ impl MessageWithFields for HttpSecuritySchemeUpdateView {
     }
 }
 
-impl CliOutput for HttpSecuritySchemeUpdateView {
+impl StructuredOutput for HttpSecuritySchemeUpdateView {
     const KIND: &'static str = "api.security-scheme.update";
 }
 
@@ -103,7 +103,7 @@ impl MessageWithFields for HttpSecuritySchemeDeleteView {
     }
 }
 
-impl CliOutput for HttpSecuritySchemeDeleteView {
+impl StructuredOutput for HttpSecuritySchemeDeleteView {
     const KIND: &'static str = "api.security-scheme.delete";
 }
 
@@ -113,7 +113,7 @@ pub struct HttpSecuritySchemeListView {
     pub security_schemes: Vec<SecuritySchemeDto>,
 }
 
-impl CliOutput for HttpSecuritySchemeListView {
+impl StructuredOutput for HttpSecuritySchemeListView {
     const KIND: &'static str = "api.security-scheme.list";
 }
 
@@ -132,7 +132,7 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
     fields.build()
 }
 
-impl TextView for HttpSecuritySchemeListView {
+impl TextOutput for HttpSecuritySchemeListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name").fixed(),

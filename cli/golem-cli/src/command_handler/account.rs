@@ -115,7 +115,7 @@ impl AccountCommandHandler {
 
     async fn cmd_get(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
         let account = self.get(account_id).await?;
-        self.ctx.log_handler().log_view(AccountGetView(account))?;
+        self.ctx.log_handler().log_output(AccountGetView(account))?;
 
         Ok(())
     }
@@ -143,7 +143,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(AccountUpdateView(account))?;
+            .log_output(AccountUpdateView(account))?;
 
         Ok(())
     }
@@ -162,7 +162,7 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(AccountNewView(account))?;
+        self.ctx.log_handler().log_output(AccountNewView(account))?;
 
         Ok(())
     }
@@ -187,7 +187,7 @@ impl AccountCommandHandler {
 
         log_warn_action("Deleted", "account");
 
-        self.ctx.log_handler().log_view(AccountDeleteResult {
+        self.ctx.log_handler().log_output(AccountDeleteResult {
             deleted: true,
             account_id: account.id,
         })?;
@@ -221,7 +221,7 @@ impl AccountCommandHandler {
                 .values
         };
 
-        self.ctx.log_handler().log_view(PermissionShareListView {
+        self.ctx.log_handler().log_output(PermissionShareListView {
             permission_shares: shares,
         })?;
 
@@ -235,7 +235,7 @@ impl AccountCommandHandler {
         let share = self.get_permission_share(permission_share_id).await?;
         self.ctx
             .log_handler()
-            .log_view(PermissionShareGetView(share))?;
+            .log_output(PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -257,7 +257,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(PermissionShareGetView(share))?;
+            .log_output(PermissionShareGetView(share))?;
 
         Ok(())
     }
@@ -288,7 +288,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(PermissionShareNewView(share))?;
+            .log_output(PermissionShareNewView(share))?;
 
         Ok(())
     }
@@ -319,7 +319,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(PermissionShareUpdateView(share))?;
+            .log_output(PermissionShareUpdateView(share))?;
 
         Ok(())
     }
@@ -341,7 +341,7 @@ impl AccountCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(PermissionShareDeleteResult {
+            .log_output(PermissionShareDeleteResult {
                 deleted: true,
                 permission_share_id,
             })?;

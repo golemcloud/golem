@@ -16,7 +16,7 @@ use crate::config::ProfileConfig;
 use crate::config::ProfileName;
 use crate::log::{LogColorize, logln};
 use crate::model::ProfileView;
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::format::Format;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
@@ -29,11 +29,11 @@ pub struct ProfileListView {
     pub profiles: Vec<ProfileView>,
 }
 
-impl CliOutput for ProfileListView {
+impl StructuredOutput for ProfileListView {
     const KIND: &'static str = "profile.list";
 }
 
-impl TextView for ProfileListView {
+impl TextOutput for ProfileListView {
     fn log(&self) {
         logln("Available profiles:".log_color_help_group().to_string());
         for profile in &self.profiles {
@@ -89,7 +89,7 @@ impl MessageWithFields for ProfileView {
 
 impl Masked for ProfileView {}
 
-impl CliOutput for ProfileView {
+impl StructuredOutput for ProfileView {
     const KIND: &'static str = "profile.get";
 }
 
@@ -101,11 +101,11 @@ pub struct ProfileCreateResult {
     pub set_active: bool,
 }
 
-impl TextView for ProfileCreateResult {
+impl TextOutput for ProfileCreateResult {
     fn log(&self) {}
 }
 
-impl CliOutput for ProfileCreateResult {
+impl StructuredOutput for ProfileCreateResult {
     const KIND: &'static str = "profile.new";
 }
 
@@ -116,11 +116,11 @@ pub struct ProfileSwitchResult {
     pub profile: ProfileName,
 }
 
-impl TextView for ProfileSwitchResult {
+impl TextOutput for ProfileSwitchResult {
     fn log(&self) {}
 }
 
-impl CliOutput for ProfileSwitchResult {
+impl StructuredOutput for ProfileSwitchResult {
     const KIND: &'static str = "profile.switch";
 }
 
@@ -131,11 +131,11 @@ pub struct ProfileDeleteResult {
     pub profile: ProfileName,
 }
 
-impl TextView for ProfileDeleteResult {
+impl TextOutput for ProfileDeleteResult {
     fn log(&self) {}
 }
 
-impl CliOutput for ProfileDeleteResult {
+impl StructuredOutput for ProfileDeleteResult {
     const KIND: &'static str = "profile.delete";
 }
 
@@ -147,15 +147,15 @@ pub struct ProfileConfigSetFormatResult {
     pub format: Format,
 }
 
-impl TextView for ProfileConfigSetFormatResult {
+impl TextOutput for ProfileConfigSetFormatResult {
     fn log(&self) {}
 }
 
-impl CliOutput for ProfileConfigSetFormatResult {
+impl StructuredOutput for ProfileConfigSetFormatResult {
     const KIND: &'static str = "profile.config.set-format";
 }
 
-impl TextView for ProfileConfig {
+impl TextOutput for ProfileConfig {
     fn log(&self) {
         logln(format!(
             "Default output format: {}",

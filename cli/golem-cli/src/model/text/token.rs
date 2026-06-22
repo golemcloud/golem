@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
@@ -50,7 +50,7 @@ impl MessageWithFields for TokenNewView {
     }
 }
 
-impl CliOutput for TokenNewView {
+impl StructuredOutput for TokenNewView {
     const KIND: &'static str = "api-token.new";
 }
 
@@ -60,7 +60,7 @@ pub struct TokenListView {
     pub tokens: Vec<Token>,
 }
 
-impl TextView for TokenListView {
+impl TextOutput for TokenListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("ID"),
@@ -80,7 +80,7 @@ impl TextView for TokenListView {
     }
 }
 
-impl CliOutput for TokenListView {
+impl StructuredOutput for TokenListView {
     const KIND: &'static str = "api-token.list";
 }
 
@@ -91,10 +91,10 @@ pub struct TokenDeleteResult {
     pub token_id: TokenId,
 }
 
-impl TextView for TokenDeleteResult {
+impl TextOutput for TokenDeleteResult {
     fn log(&self) {}
 }
 
-impl CliOutput for TokenDeleteResult {
+impl StructuredOutput for TokenDeleteResult {
     const KIND: &'static str = "api-token.delete";
 }

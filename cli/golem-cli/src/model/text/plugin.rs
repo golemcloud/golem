@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
 };
 use golem_common::model::plugin_registration::PluginRegistrationDto;
@@ -58,11 +58,11 @@ pub struct PluginListView {
     pub plugins: Vec<PluginListEntry>,
 }
 
-impl CliOutput for PluginListView {
+impl StructuredOutput for PluginListView {
     const KIND: &'static str = "plugin.list";
 }
 
-impl TextView for PluginListView {
+impl TextOutput for PluginListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
@@ -86,7 +86,7 @@ impl TextView for PluginListView {
     }
 }
 
-impl TextView for Vec<PluginRegistrationDto> {
+impl TextOutput for Vec<PluginRegistrationDto> {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
@@ -127,7 +127,7 @@ impl MessageWithFields for PluginRegistrationRegisterView {
     }
 }
 
-impl CliOutput for PluginRegistrationRegisterView {
+impl StructuredOutput for PluginRegistrationRegisterView {
     const KIND: &'static str = "plugin.register";
 }
 
@@ -150,7 +150,7 @@ impl MessageWithFields for PluginRegistrationGetView {
     }
 }
 
-impl CliOutput for PluginRegistrationGetView {
+impl StructuredOutput for PluginRegistrationGetView {
     const KIND: &'static str = "plugin.get";
 }
 
@@ -163,11 +163,11 @@ pub struct PluginUnregisterResult {
     pub version: String,
 }
 
-impl TextView for PluginUnregisterResult {
+impl TextOutput for PluginUnregisterResult {
     fn log(&self) {}
 }
 
-impl CliOutput for PluginUnregisterResult {
+impl StructuredOutput for PluginUnregisterResult {
     const KIND: &'static str = "plugin.unregister";
 }
 
@@ -249,7 +249,7 @@ impl From<&PluginRegistrationDto> for PluginInstallationTableView {
     }
 }
 
-impl TextView for Vec<PluginRegistrationDto> {
+impl TextRender for Vec<PluginRegistrationDto> {
     fn log(&self) {
         log_table::<_, PluginInstallationTableView>(self.as_slice())
     }

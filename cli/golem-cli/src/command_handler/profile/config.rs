@@ -62,7 +62,7 @@ impl ProfileConfigCommandHandler {
 
                 self.ctx
                     .log_handler()
-                    .log_view(ProfileConfigSetFormatResult {
+                    .log_output(ProfileConfigSetFormatResult {
                         updated: true,
                         profile: profile_name,
                         format,

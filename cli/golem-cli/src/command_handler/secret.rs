@@ -167,7 +167,7 @@ impl SecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(SecretCreateView(result.into()))?;
+            .log_output(SecretCreateView(result.into()))?;
 
         Ok(())
     }
@@ -181,7 +181,7 @@ impl SecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(SecretGetView(result.into()))?;
+            .log_output(SecretGetView(result.into()))?;
 
         Ok(())
     }
@@ -218,7 +218,7 @@ impl SecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(SecretUpdateView(result.into()))?;
+            .log_output(SecretUpdateView(result.into()))?;
 
         Ok(())
     }
@@ -240,7 +240,7 @@ impl SecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(SecretDeleteView(result.into()))?;
+            .log_output(SecretDeleteView(result.into()))?;
 
         Ok(())
     }
@@ -299,7 +299,7 @@ impl SecretCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(SecretListView {
+        self.ctx.log_handler().log_output(SecretListView {
             environment_name: environment.environment_name.0,
             show_ids,
             secrets: results.into_iter().map(Into::into).collect(),

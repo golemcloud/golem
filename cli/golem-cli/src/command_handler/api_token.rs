@@ -50,7 +50,7 @@ impl ApiTokenCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(TokenListView {
+        self.ctx.log_handler().log_output(TokenListView {
             tokens: tokens.values,
         })?;
 
@@ -66,7 +66,7 @@ impl ApiTokenCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(TokenNewView(token))?;
+        self.ctx.log_handler().log_output(TokenNewView(token))?;
 
         Ok(())
     }
@@ -85,7 +85,7 @@ impl ApiTokenCommandHandler {
             format!("token {}", token_id.0.to_string().log_color_highlight()),
         );
 
-        self.ctx.log_handler().log_view(TokenDeleteResult {
+        self.ctx.log_handler().log_output(TokenDeleteResult {
             deleted: true,
             token_id,
         })?;

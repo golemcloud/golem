@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_main_id, format_message_highlight,
     log_table, new_table_full_condensed,
 };
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentSecurity};
@@ -39,7 +39,7 @@ impl MessageWithFields for HttpApiDeploymentGetView {
     }
 }
 
-impl CliOutput for HttpApiDeploymentGetView {
+impl StructuredOutput for HttpApiDeploymentGetView {
     const KIND: &'static str = "api.deployment.get";
 }
 
@@ -49,7 +49,7 @@ pub struct HttpApiDeploymentListView {
     pub deployments: Vec<HttpApiDeployment>,
 }
 
-impl CliOutput for HttpApiDeploymentListView {
+impl StructuredOutput for HttpApiDeploymentListView {
     const KIND: &'static str = "api.deployment.list";
 }
 
@@ -86,7 +86,7 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
     fields.build()
 }
 
-impl TextView for HttpApiDeploymentListView {
+impl TextOutput for HttpApiDeploymentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),

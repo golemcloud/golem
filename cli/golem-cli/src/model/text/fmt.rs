@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
 
-pub trait TextView {
+pub trait TextOutput {
     fn log(&self);
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()>
@@ -52,7 +52,7 @@ pub trait TextView {
     }
 }
 
-pub trait TruncatableTextView: TextView {
+pub trait TruncatableTextOutput: TextOutput {
     fn render_truncated(&self, max_lines: usize, colorize: bool) -> String;
 
     // Truncated rendering returns an already-rendered string, so there is no
@@ -110,7 +110,7 @@ pub trait MessageWithFields: Masked {
     }
 }
 
-impl<T: MessageWithFields> TextView for T {
+impl<T: MessageWithFields> TextOutput for T {
     fn log(&self) {
         log_message_with_fields::<T>(self.message(), self.fields());
     }
@@ -619,7 +619,7 @@ pub fn new_table_full_condensed(headers: Vec<Column>) -> ComfyTable {
     new_table(TablePreset::FullCondensed, headers)
 }
 
-pub fn log_text_view<View: TextView>(view: &View) {
+pub fn log_text_view<View: TextOutput>(view: &View) {
     view.log();
 }
 

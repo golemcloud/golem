@@ -133,7 +133,7 @@ impl ProfileCommandHandler {
             Config::set_active_profile_name(name.clone(), self.ctx.config_dir())?;
         };
 
-        self.ctx.log_handler().log_view(ProfileCreateResult {
+        self.ctx.log_handler().log_output(ProfileCreateResult {
             created: true,
             profile: name,
             set_active,
@@ -157,7 +157,7 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(ProfileListView { profiles })?;
+            .log_output(ProfileListView { profiles })?;
 
         Ok(())
     }
@@ -170,7 +170,7 @@ impl ProfileCommandHandler {
             format!("to profile: {}", profile_name.0.log_color_highlight()),
         );
 
-        self.ctx.log_handler().log_view(ProfileSwitchResult {
+        self.ctx.log_handler().log_output(ProfileSwitchResult {
             switched: true,
             profile: profile_name,
         })?;
@@ -200,7 +200,7 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(ProfileView::from_profile(&default_profile_name, profile))?;
+            .log_output(ProfileView::from_profile(&default_profile_name, profile))?;
 
         Ok(())
     }
@@ -233,7 +233,7 @@ impl ProfileCommandHandler {
             format!("profile {}", profile_name.0.log_color_highlight()),
         );
 
-        self.ctx.log_handler().log_view(ProfileDeleteResult {
+        self.ctx.log_handler().log_output(ProfileDeleteResult {
             deleted: true,
             profile: profile_name,
         })?;

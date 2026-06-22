@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::model::agent::view::AgentTypeView;
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_message_highlight, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_message_highlight, log_table,
     new_table_full_condensed,
 };
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -43,7 +43,7 @@ impl MessageWithFields for AgentTypeView {
 
 impl Masked for AgentTypeView {}
 
-impl CliOutput for AgentTypeView {
+impl StructuredOutput for AgentTypeView {
     const KIND: &'static str = "agent-type.get";
 }
 
@@ -59,11 +59,11 @@ pub struct AgentTypeListView {
     pub agent_types: Vec<DeployedRegisteredAgentType>,
 }
 
-impl CliOutput for AgentTypeListView {
+impl StructuredOutput for AgentTypeListView {
     const KIND: &'static str = "agent-type.list";
 }
 
-impl TextView for AgentTypeListView {
+impl TextOutput for AgentTypeListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Agent Type").fixed(),

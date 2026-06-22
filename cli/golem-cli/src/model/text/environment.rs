@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
-use crate::model::text::fmt::{Column, TextView, log_table, new_table_full_condensed};
+use crate::model::text::fmt::{Column, TextOutput, log_table, new_table_full_condensed};
 use golem_client::model::EnvironmentWithDetails;
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +70,7 @@ pub struct EnvironmentListView {
     pub environments: Vec<EnvironmentWithDetails>,
 }
 
-impl CliOutput for EnvironmentListView {
+impl StructuredOutput for EnvironmentListView {
     const KIND: &'static str = "environment.list";
 }
 
@@ -80,15 +80,15 @@ pub struct EnvironmentSyncDeploymentOptionsResult {
     pub updated: bool,
 }
 
-impl CliOutput for EnvironmentSyncDeploymentOptionsResult {
+impl StructuredOutput for EnvironmentSyncDeploymentOptionsResult {
     const KIND: &'static str = "environment.sync-deployment-options";
 }
 
-impl TextView for EnvironmentSyncDeploymentOptionsResult {
+impl TextOutput for EnvironmentSyncDeploymentOptionsResult {
     fn log(&self) {}
 }
 
-impl TextView for EnvironmentListView {
+impl TextOutput for EnvironmentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Application Name"),

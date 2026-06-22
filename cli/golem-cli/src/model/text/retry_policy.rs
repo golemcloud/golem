@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_common::model::retry_policy::RetryPolicyDto;
@@ -36,7 +36,7 @@ impl MessageWithFields for RetryPolicyCreateView {
     }
 }
 
-impl CliOutput for RetryPolicyCreateView {
+impl StructuredOutput for RetryPolicyCreateView {
     const KIND: &'static str = "retry-policy.create";
 }
 
@@ -55,7 +55,7 @@ impl MessageWithFields for RetryPolicyGetView {
     }
 }
 
-impl CliOutput for RetryPolicyGetView {
+impl StructuredOutput for RetryPolicyGetView {
     const KIND: &'static str = "retry-policy.get";
 }
 
@@ -77,7 +77,7 @@ impl MessageWithFields for RetryPolicyUpdateView {
     }
 }
 
-impl CliOutput for RetryPolicyUpdateView {
+impl StructuredOutput for RetryPolicyUpdateView {
     const KIND: &'static str = "retry-policy.update";
 }
 
@@ -99,7 +99,7 @@ impl MessageWithFields for RetryPolicyDeleteView {
     }
 }
 
-impl CliOutput for RetryPolicyDeleteView {
+impl StructuredOutput for RetryPolicyDeleteView {
     const KIND: &'static str = "retry-policy.delete";
 }
 
@@ -109,7 +109,7 @@ pub struct RetryPolicyListView {
     pub retry_policies: Vec<RetryPolicyDto>,
 }
 
-impl CliOutput for RetryPolicyListView {
+impl StructuredOutput for RetryPolicyListView {
     const KIND: &'static str = "retry-policy.list";
 }
 
@@ -136,7 +136,7 @@ fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
     fields.build()
 }
 
-impl TextView for RetryPolicyListView {
+impl TextOutput for RetryPolicyListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Environment ID").fixed(),

@@ -15,15 +15,15 @@
 //! Lightweight structured result views for commands whose human-readable
 //! output is mostly progress text printed during the run.
 //!
-//! Each view's `TextView::log` is a no-op: when `--format text` is used
+//! Each view's `TextRender::log` is a no-op: when `--format text` is used
 //! (the default), the user has already seen the progress lines on stdout
 //! and adding another rendering of the same information would just be
 //! noise. When `--format json/yaml/toon` is used, the progress text is routed
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
-use crate::model::cli_output::CliOutput;
-use crate::model::text::fmt::TextView;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::text::fmt::TextOutput;
 use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -35,11 +35,11 @@ pub struct AgentDeleteResult {
     pub agent: String,
 }
 
-impl TextView for AgentDeleteResult {
+impl TextOutput for AgentDeleteResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentDeleteResult {
+impl StructuredOutput for AgentDeleteResult {
     const KIND: &'static str = "agent.delete";
 }
 
@@ -53,11 +53,11 @@ pub struct AgentFileContentsResult {
     pub bytes: usize,
 }
 
-impl TextView for AgentFileContentsResult {
+impl TextOutput for AgentFileContentsResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentFileContentsResult {
+impl StructuredOutput for AgentFileContentsResult {
     const KIND: &'static str = "agent.file-contents";
 }
 
@@ -68,11 +68,11 @@ pub struct AgentInterruptResult {
     pub agent: String,
 }
 
-impl TextView for AgentInterruptResult {
+impl TextOutput for AgentInterruptResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentInterruptResult {
+impl StructuredOutput for AgentInterruptResult {
     const KIND: &'static str = "agent.interrupt";
 }
 
@@ -83,11 +83,11 @@ pub struct AgentResumeResult {
     pub agent: String,
 }
 
-impl TextView for AgentResumeResult {
+impl TextOutput for AgentResumeResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentResumeResult {
+impl StructuredOutput for AgentResumeResult {
     const KIND: &'static str = "agent.resume";
 }
 
@@ -98,11 +98,11 @@ pub struct AgentSimulateCrashResult {
     pub agent: String,
 }
 
-impl TextView for AgentSimulateCrashResult {
+impl TextOutput for AgentSimulateCrashResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentSimulateCrashResult {
+impl StructuredOutput for AgentSimulateCrashResult {
     const KIND: &'static str = "agent.simulate-crash";
 }
 
@@ -117,11 +117,11 @@ pub struct AgentRevertResult {
     pub number_of_invocations: Option<u64>,
 }
 
-impl TextView for AgentRevertResult {
+impl TextOutput for AgentRevertResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentRevertResult {
+impl StructuredOutput for AgentRevertResult {
     const KIND: &'static str = "agent.revert";
 }
 
@@ -133,11 +133,11 @@ pub struct AgentCancelInvocationResult {
     pub idempotency_key: String,
 }
 
-impl TextView for AgentCancelInvocationResult {
+impl TextOutput for AgentCancelInvocationResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentCancelInvocationResult {
+impl StructuredOutput for AgentCancelInvocationResult {
     const KIND: &'static str = "agent.cancel-invocation";
 }
 
@@ -148,11 +148,11 @@ pub struct AgentRedeployResult {
     pub components: Vec<ComponentName>,
 }
 
-impl TextView for AgentRedeployResult {
+impl TextOutput for AgentRedeployResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentRedeployResult {
+impl StructuredOutput for AgentRedeployResult {
     const KIND: &'static str = "agent.redeploy";
 }
 
@@ -165,11 +165,11 @@ pub struct AgentPluginToggleResult {
     pub priority: i32,
 }
 
-impl TextView for AgentPluginToggleResult {
+impl TextOutput for AgentPluginToggleResult {
     fn log(&self) {}
 }
 
-impl CliOutput for AgentPluginToggleResult {
+impl StructuredOutput for AgentPluginToggleResult {
     const KIND: &'static str = "agent.plugin-toggle";
 }
 
@@ -179,11 +179,11 @@ pub struct CleanResult {
     pub cleaned: bool,
 }
 
-impl TextView for CleanResult {
+impl TextOutput for CleanResult {
     fn log(&self) {}
 }
 
-impl CliOutput for CleanResult {
+impl StructuredOutput for CleanResult {
     const KIND: &'static str = "clean";
 }
 
@@ -193,11 +193,11 @@ pub struct BuildResult {
     pub built: bool,
 }
 
-impl TextView for BuildResult {
+impl TextOutput for BuildResult {
     fn log(&self) {}
 }
 
-impl CliOutput for BuildResult {
+impl StructuredOutput for BuildResult {
     const KIND: &'static str = "build";
 }
 
@@ -209,11 +209,11 @@ pub struct NewAppResult {
     pub application_dir: PathBuf,
 }
 
-impl TextView for NewAppResult {
+impl TextOutput for NewAppResult {
     fn log(&self) {}
 }
 
-impl CliOutput for NewAppResult {
+impl StructuredOutput for NewAppResult {
     const KIND: &'static str = "new";
 }
 
@@ -223,11 +223,11 @@ pub struct DeployResultView {
     pub deployed: bool,
 }
 
-impl TextView for DeployResultView {
+impl TextOutput for DeployResultView {
     fn log(&self) {}
 }
 
-impl CliOutput for DeployResultView {
+impl StructuredOutput for DeployResultView {
     const KIND: &'static str = "deploy";
 }
 
@@ -237,10 +237,10 @@ pub struct GenerateBridgeResult {
     pub generated: bool,
 }
 
-impl TextView for GenerateBridgeResult {
+impl TextOutput for GenerateBridgeResult {
     fn log(&self) {}
 }
 
-impl CliOutput for GenerateBridgeResult {
+impl StructuredOutput for GenerateBridgeResult {
     const KIND: &'static str = "generate-bridge";
 }

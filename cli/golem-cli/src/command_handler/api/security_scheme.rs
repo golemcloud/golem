@@ -170,7 +170,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(HttpSecuritySchemeCreateView(result))?;
+            .log_output(HttpSecuritySchemeCreateView(result))?;
 
         Ok(())
     }
@@ -212,7 +212,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(HttpSecuritySchemeGetView(result))?;
+            .log_output(HttpSecuritySchemeGetView(result))?;
 
         Ok(())
     }
@@ -248,7 +248,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(HttpSecuritySchemeUpdateView(result))?;
+            .log_output(HttpSecuritySchemeUpdateView(result))?;
 
         Ok(())
     }
@@ -266,7 +266,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(HttpSecuritySchemeDeleteView(result))?;
+            .log_output(HttpSecuritySchemeDeleteView(result))?;
 
         Ok(())
     }
@@ -289,7 +289,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(HttpSecuritySchemeListView {
+            .log_output(HttpSecuritySchemeListView {
                 security_schemes: results,
             })?;
 

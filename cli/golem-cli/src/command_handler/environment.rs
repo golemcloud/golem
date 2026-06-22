@@ -76,7 +76,7 @@ impl EnvironmentCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(EnvironmentSyncDeploymentOptionsResult { updated })?;
+            .log_output(EnvironmentSyncDeploymentOptionsResult { updated })?;
 
         Ok(())
     }
@@ -99,7 +99,7 @@ impl EnvironmentCommandHandler {
             ));
         }
 
-        self.ctx.log_handler().log_view(EnvironmentListView {
+        self.ctx.log_handler().log_output(EnvironmentListView {
             environments: env_summaries,
         })?;
 

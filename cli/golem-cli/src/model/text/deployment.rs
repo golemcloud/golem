@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_id, format_main_id, log_table,
     new_table_full_condensed,
 };
 use golem_client::model::Deployment;
@@ -62,7 +62,7 @@ impl MessageWithFields for DeploymentNewView {
     }
 }
 
-impl CliOutput for DeploymentNewView {
+impl StructuredOutput for DeploymentNewView {
     const KIND: &'static str = "deploy.deployment";
 }
 
@@ -72,11 +72,11 @@ pub struct DeploymentListView {
     pub deployments: Vec<Deployment>,
 }
 
-impl CliOutput for DeploymentListView {
+impl StructuredOutput for DeploymentListView {
     const KIND: &'static str = "deploy.deployments";
 }
 
-impl TextView for DeploymentListView {
+impl TextOutput for DeploymentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Deployment Revision").fixed_right(),

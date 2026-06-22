@@ -146,7 +146,7 @@ impl ComponentCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(ComponentListView { components })?;
+            .log_output(ComponentListView { components })?;
 
         Ok(())
     }
@@ -210,7 +210,7 @@ impl ComponentCommandHandler {
         for component_view in component_views {
             self.ctx
                 .log_handler()
-                .log_view(ComponentGetView(component_view))?;
+                .log_output(ComponentGetView(component_view))?;
             logln("");
         }
 
@@ -331,7 +331,7 @@ impl ComponentCommandHandler {
             let _indent = self.ctx.log_handler().decorated_indent_primary();
             self.ctx
                 .log_handler()
-                .log_view(ComponentManifestTraceView {
+                .log_output(ComponentManifestTraceView {
                     component_name: component_name.clone(),
                     properties: app_ctx
                         .application()
@@ -375,7 +375,7 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_view(update_results.clone())?;
+        self.ctx.log_handler().log_output(update_results.clone())?;
 
         if !update_results.failed.is_empty() {
             bail!(NonSuccessfulExit)
@@ -403,7 +403,7 @@ impl ComponentCommandHandler {
         }
 
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
-        self.ctx.log_handler().log_view(AgentRedeployResult {
+        self.ctx.log_handler().log_output(AgentRedeployResult {
             redeployed: true,
             components: components
                 .iter()

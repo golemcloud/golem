@@ -14,7 +14,7 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::log::{LogColorize, logln};
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
@@ -89,7 +89,7 @@ impl MessageWithFields for WorkerCreateView {
     }
 }
 
-impl CliOutput for WorkerCreateView {
+impl StructuredOutput for WorkerCreateView {
     const KIND: &'static str = "agent.new";
 }
 
@@ -260,7 +260,7 @@ impl MessageWithFields for WorkerGetView {
     }
 }
 
-impl CliOutput for WorkerGetView {
+impl StructuredOutput for WorkerGetView {
     const KIND: &'static str = "agent.get";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -273,7 +273,7 @@ impl CliOutput for WorkerGetView {
     }
 }
 
-impl CliOutput for AgentsMetadataResponseView {
+impl StructuredOutput for AgentsMetadataResponseView {
     const KIND: &'static str = "agent.list";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -286,11 +286,11 @@ impl CliOutput for AgentsMetadataResponseView {
     }
 }
 
-impl CliOutput for TryUpdateAllWorkersResult {
+impl StructuredOutput for TryUpdateAllWorkersResult {
     const KIND: &'static str = "agent.update";
 }
 
-impl TextView for AgentsMetadataResponseView {
+impl TextOutput for AgentsMetadataResponseView {
     fn log(&self) {
         let colorize = colored::control::SHOULD_COLORIZE.should_colorize();
         let term_width = terminal_width();
@@ -396,7 +396,7 @@ impl AgentsMetadataResponseView {
     }
 }
 
-impl TruncatableTextView for AgentsMetadataResponseView {
+impl TruncatableTextOutput for AgentsMetadataResponseView {
     fn render_truncated(&self, max_lines: usize, colorize: bool) -> String {
         let cursor_lines = if self.cursors.is_empty() {
             0
@@ -438,13 +438,13 @@ impl TruncatableTextView for AgentsMetadataResponseView {
     }
 }
 
-impl TextView for TryUpdateAllWorkersResult {
+impl TextOutput for TryUpdateAllWorkersResult {
     fn log(&self) {
         // NOP
     }
 }
 
-impl TextView for InvokeResultView {
+impl TextOutput for InvokeResultView {
     fn log(&self) {
         fn log_result_format(format: Option<&str>, multiple: bool) {
             let result_label = if multiple { "results" } else { "result" };
@@ -499,11 +499,11 @@ pub struct AgentOplogEntryView {
     pub entry: PublicOplogEntry,
 }
 
-impl CliOutput for AgentOplogEntryView {
+impl StructuredOutput for AgentOplogEntryView {
     const KIND: &'static str = "agent.oplog";
 }
 
-impl TextView for AgentOplogEntryView {
+impl TextOutput for AgentOplogEntryView {
     fn log(&self) {
         logln(format!(
             "{}: ",
@@ -513,7 +513,7 @@ impl TextView for AgentOplogEntryView {
     }
 }
 
-impl TextView for PublicOplogEntry {
+impl TextOutput for PublicOplogEntry {
     fn log(&self) {
         let pad = "          ";
         match self {
@@ -1310,7 +1310,7 @@ pub struct WorkerFilesView {
     pub nodes: Vec<FileNodeView>,
 }
 
-impl CliOutput for WorkerFilesView {
+impl StructuredOutput for WorkerFilesView {
     const KIND: &'static str = "agent.files";
 }
 
@@ -1324,7 +1324,7 @@ pub struct FileNodeView {
     pub size: u64,
 }
 
-impl TextView for WorkerFilesView {
+impl TextOutput for WorkerFilesView {
     fn log(&self) {
         if self.nodes.is_empty() {
             logln("No files found.");

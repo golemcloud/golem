@@ -14,7 +14,7 @@
 
 use crate::log::current_indent_width;
 use crate::model::TemplateDescription;
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -25,11 +25,11 @@ pub struct TemplateListView {
     pub templates: Vec<TemplateDescription>,
 }
 
-impl CliOutput for TemplateListView {
+impl StructuredOutput for TemplateListView {
     const KIND: &'static str = "templates";
 }
 
-impl TextView for TemplateListView {
+impl TextOutput for TemplateListView {
     fn log(&self) {
         let raw_name_width = self
             .templates

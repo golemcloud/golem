@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_common::model::quota::ResourceDefinition;
@@ -36,7 +36,7 @@ impl MessageWithFields for ResourceDefinitionCreateView {
     }
 }
 
-impl CliOutput for ResourceDefinitionCreateView {
+impl StructuredOutput for ResourceDefinitionCreateView {
     const KIND: &'static str = "resource.create";
 }
 
@@ -58,7 +58,7 @@ impl MessageWithFields for ResourceDefinitionUpdateView {
     }
 }
 
-impl CliOutput for ResourceDefinitionUpdateView {
+impl StructuredOutput for ResourceDefinitionUpdateView {
     const KIND: &'static str = "resource.update";
 }
 
@@ -80,7 +80,7 @@ impl MessageWithFields for ResourceDefinitionDeleteView {
     }
 }
 
-impl CliOutput for ResourceDefinitionDeleteView {
+impl StructuredOutput for ResourceDefinitionDeleteView {
     const KIND: &'static str = "resource.delete";
 }
 
@@ -102,7 +102,7 @@ impl MessageWithFields for ResourceDefinitionGetView {
     }
 }
 
-impl CliOutput for ResourceDefinitionGetView {
+impl StructuredOutput for ResourceDefinitionGetView {
     const KIND: &'static str = "resource.get";
 }
 
@@ -112,7 +112,7 @@ pub struct ResourceDefinitionListView {
     pub resources: Vec<ResourceDefinition>,
 }
 
-impl CliOutput for ResourceDefinitionListView {
+impl StructuredOutput for ResourceDefinitionListView {
     const KIND: &'static str = "resource.list";
 }
 
@@ -134,7 +134,7 @@ fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
     fields.build()
 }
 
-impl TextView for ResourceDefinitionListView {
+impl TextOutput for ResourceDefinitionListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Name"),

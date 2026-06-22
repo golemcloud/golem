@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::context::Context;
-use crate::model::cli_output::{CliOutput, to_cli_output_value_masked};
+use crate::model::cli_output::{StructuredOutput, to_structured_output_value_masked};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
 use crate::model::text::fmt::{
-    DecoratedIndent, TextView, TruncatableTextView, to_colored_json, to_colored_yaml,
+    DecoratedIndent, TextOutput, TruncatableTextOutput, to_colored_json, to_colored_yaml,
     truncate_rendered,
 };
 use crate::toon;
@@ -31,16 +31,16 @@ pub struct LogHandler {
     ctx: Arc<Context>,
 }
 
-pub trait CliView: TextView + CliOutput {}
+pub trait CommandOutput: TextOutput + StructuredOutput {}
 
-impl<T> CliView for T where T: TextView + CliOutput {}
+impl<T> CommandOutput for T where T: TextOutput + StructuredOutput {}
 
 impl LogHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
 
-    pub fn log_view<View: CliView>(&self, view: View) -> anyhow::Result<()> {
+    pub fn log_output<Output: CommandOutput>(&self, output: Output) -> anyhow::Result<()> {
         let masking = self.ctx.masking_config();
         match self.ctx.format() {
             Format::Json
@@ -50,22 +50,22 @@ impl LogHandler {
             | Format::Toon => {
                 println!(
                     "{}",
-                    render_cli_output_document_masked(
+                    render_command_output_document_masked(
                         self.ctx.format(),
                         self.ctx.should_colorize(),
                         masking,
-                        view,
+                        output,
                     )?
                 );
             }
             Format::Text => {
-                view.log_masked(masking)?;
+                output.log_masked(masking)?;
             }
         }
         Ok(())
     }
 
-    pub fn render_view_truncated<View: TruncatableTextView + CliView>(
+    pub fn render_view_truncated<View: TruncatableTextOutput + CommandOutput>(
         &self,
         view: View,
         max_lines: usize,
@@ -77,7 +77,7 @@ impl LogHandler {
                 self.ctx.masking_config(),
             ),
             _ => {
-                let rendered = render_cli_output_document_masked(
+                let rendered = render_command_output_document_masked(
                     self.ctx.format(),
                     self.ctx.should_colorize(),
                     self.ctx.masking_config(),
@@ -131,39 +131,42 @@ pub fn render_structured_document<S: Serialize>(
     }
 }
 
-pub fn render_cli_output_document<Output: CliOutput>(
+pub fn render_command_output_document<Output: StructuredOutput>(
     format: Format,
     colorize: bool,
     output: Output,
 ) -> anyhow::Result<String> {
-    render_cli_output_document_masked(format, colorize, MaskingConfig::hide_secrets(), output)
+    render_command_output_document_masked(format, colorize, MaskingConfig::hide_secrets(), output)
 }
 
-pub fn render_cli_output_document_masked<Output: CliOutput>(
+pub fn render_command_output_document_masked<Output: StructuredOutput>(
     format: Format,
     colorize: bool,
     config: MaskingConfig,
     output: Output,
 ) -> anyhow::Result<String> {
-    let value = to_cli_output_value_masked(output, config)?;
+    let value = to_structured_output_value_masked(output, config)?;
     render_structured_document(format, colorize, &value)
 }
 
-pub fn print_cli_output_document<Output: CliOutput>(
+pub fn print_command_output_document<Output: StructuredOutput>(
     format: Format,
     colorize: bool,
     output: Output,
 ) -> anyhow::Result<()> {
-    println!("{}", render_cli_output_document(format, colorize, output)?);
+    println!(
+        "{}",
+        render_command_output_document(format, colorize, output)?
+    );
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::command_handler::log::{
-        TOON_FRAME_END, TOON_FRAME_START, render_cli_output_document, render_toon_document,
+        TOON_FRAME_END, TOON_FRAME_START, render_command_output_document, render_toon_document,
     };
-    use crate::model::cli_output::{CLI_OUTPUT_TYPE_FIELD, CliOutput};
+    use crate::model::cli_output::{CLI_OUTPUT_TYPE_FIELD, StructuredOutput};
     use crate::model::format::Format;
     use serde::Serialize;
     use serde_json::json;
@@ -178,17 +181,17 @@ mod tests {
     }
 
     #[test_r::test]
-    fn render_cli_output_document_injects_type() {
+    fn render_command_output_document_injects_type() {
         #[derive(Serialize)]
         struct TestOutput {
             ok: bool,
         }
 
-        impl CliOutput for TestOutput {
+        impl StructuredOutput for TestOutput {
             const KIND: &'static str = "test.output";
         }
 
-        let rendered = render_cli_output_document(Format::Json, false, TestOutput { ok: true })
+        let rendered = render_command_output_document(Format::Json, false, TestOutput { ok: true })
             .expect("render output");
 
         assert_eq!(
@@ -201,18 +204,18 @@ mod tests {
     }
 
     #[test_r::test]
-    fn render_cli_output_document_rejects_reserved_type_field() {
+    fn render_command_output_document_rejects_reserved_type_field() {
         #[derive(Serialize)]
         struct BadOutput {
             #[serde(rename = "$type")]
             output_type: String,
         }
 
-        impl CliOutput for BadOutput {
+        impl StructuredOutput for BadOutput {
             const KIND: &'static str = "test.bad-output";
         }
 
-        let error = render_cli_output_document(
+        let error = render_command_output_document(
             Format::Json,
             false,
             BadOutput {

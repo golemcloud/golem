@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
-use crate::model::cli_output::CliOutput;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::{Masked, MaskingConfig, mask_json_secret_value};
 use crate::model::text::fmt::*;
 
@@ -78,7 +78,7 @@ impl MessageWithFields for SecretCreateView {
     }
 }
 
-impl CliOutput for SecretCreateView {
+impl StructuredOutput for SecretCreateView {
     const KIND: &'static str = "secret.create";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -112,7 +112,7 @@ impl MessageWithFields for SecretGetView {
     }
 }
 
-impl CliOutput for SecretGetView {
+impl StructuredOutput for SecretGetView {
     const KIND: &'static str = "secret.get";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -146,7 +146,7 @@ impl MessageWithFields for SecretUpdateView {
     }
 }
 
-impl CliOutput for SecretUpdateView {
+impl StructuredOutput for SecretUpdateView {
     const KIND: &'static str = "secret.update-value";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -180,7 +180,7 @@ impl MessageWithFields for SecretDeleteView {
     }
 }
 
-impl CliOutput for SecretDeleteView {
+impl StructuredOutput for SecretDeleteView {
     const KIND: &'static str = "secret.delete";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -298,7 +298,7 @@ impl SecretListView {
     }
 }
 
-impl TextView for SecretListView {
+impl TextOutput for SecretListView {
     fn log(&self) {
         let table = self.table();
         log_table(table);
@@ -310,7 +310,7 @@ impl TextView for SecretListView {
     }
 }
 
-impl CliOutput for SecretListView {
+impl StructuredOutput for SecretListView {
     const KIND: &'static str = "secret.list";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
