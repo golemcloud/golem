@@ -16,7 +16,7 @@ use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
+use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -117,7 +117,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
-            let mut remove_from_active_workers = false;
+            let mut archive_ephemeral_oplog = false;
 
             if let Some((kind, decision)) = self.pending_interrupt().await {
                 debug!(
@@ -148,7 +148,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
                 let result = inner_loop.run().await;
                 final_decision = result.retry_decision;
-                remove_from_active_workers = result.remove_from_active_workers;
+                archive_ephemeral_oplog = result.archive_ephemeral_oplog;
             }
 
             self.suspend_worker(&store).await;
@@ -174,13 +174,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             },
                         )
                         .await;
-                    if remove_from_active_workers {
+                    if archive_ephemeral_oplog {
                         self.archive_ephemeral_oplog().await;
-                        self.parent
-                            .deps
-                            .active_workers()
-                            .remove(&self.owned_agent_id.agent_id())
-                            .await;
                     }
                     break;
                 }
@@ -433,7 +428,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!("Invocation queue loop started");
 
         let mut final_decision = None;
-        let mut remove_from_active_workers = false;
+        let mut archive_ephemeral_oplog = false;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
@@ -491,9 +486,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     final_decision = Some(decision);
                     break;
                 }
-                CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(decision) => {
+                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
                     final_decision = Some(decision);
-                    remove_from_active_workers = true;
+                    archive_ephemeral_oplog = true;
                     break;
                 }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
@@ -510,7 +505,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         InnerInvocationLoopResult {
             retry_decision: final_decision,
-            remove_from_active_workers,
+            archive_ephemeral_oplog,
         }
     }
 
@@ -988,21 +983,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .on_agent_invocation_success(&full_function_name, consumed_fuel, &output)
             .await
         {
-            Ok(()) => {
-                if self.parent.agent_mode() == AgentMode::Ephemeral {
-                    if self.store.data().component_metadata().metadata.is_agent()
-                        && kind == AgentInvocationKind::AgentInitialization
-                    {
-                        CommandOutcome::Continue
-                    } else {
-                        CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(
-                            RetryDecision::None,
-                        )
-                    }
-                } else {
-                    CommandOutcome::Continue
-                }
-            }
+            Ok(()) => successful_agent_invocation_outcome(
+                self.parent.agent_mode(),
+                self.store.data().component_metadata().metadata.is_agent(),
+                kind,
+            ),
             Err(error) => {
                 self.store
                     .data_mut()
@@ -1044,7 +1029,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             None => RetryDecision::None,
         };
 
-        CommandOutcome::BreakInnerLoop(decision)
+        failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
@@ -1426,8 +1411,8 @@ enum CommandOutcome {
     BreakOuterLoop,
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
-    /// Break from the inner loop and remove the stopped worker from active workers.
-    BreakInnerLoopAndRemoveFromActiveWorkers(RetryDecision),
+    /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
+    BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision),
     /// Continue processing in the inner loop
     Continue,
     /// Stop draining for now and wait for the next command or idle timer wakeup
@@ -1436,7 +1421,39 @@ enum CommandOutcome {
 
 struct InnerInvocationLoopResult {
     retry_decision: Option<RetryDecision>,
-    remove_from_active_workers: bool,
+    archive_ephemeral_oplog: bool,
+}
+
+fn successful_agent_invocation_outcome(
+    agent_mode: AgentMode,
+    is_agent_component: bool,
+    kind: AgentInvocationKind,
+) -> CommandOutcome {
+    if should_cleanup_terminal_ephemeral_invocation(agent_mode, is_agent_component, kind) {
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+    } else {
+        CommandOutcome::Continue
+    }
+}
+
+fn failed_agent_invocation_outcome(
+    agent_mode: AgentMode,
+    decision: RetryDecision,
+) -> CommandOutcome {
+    if agent_mode == AgentMode::Ephemeral && decision == RetryDecision::None {
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
+    } else {
+        CommandOutcome::BreakInnerLoop(decision)
+    }
+}
+
+fn should_cleanup_terminal_ephemeral_invocation(
+    agent_mode: AgentMode,
+    is_agent_component: bool,
+    kind: AgentInvocationKind,
+) -> bool {
+    agent_mode == AgentMode::Ephemeral
+        && !(is_agent_component && kind == AgentInvocationKind::AgentInitialization)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1487,11 +1504,14 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, PeriodicSnapshotAction, periodic_snapshot_failure_outcome,
-        snapshot_action_at, snapshot_baseline_timestamp,
+        CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
+        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
+        successful_agent_invocation_outcome,
     };
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
+    use golem_common::model::AgentInvocationKind;
+    use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1552,6 +1572,66 @@ mod tests {
         assert_eq!(
             periodic_snapshot_failure_outcome(&result),
             Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        );
+    }
+
+    #[test]
+    fn ephemeral_non_initialization_invocation_requests_archive_drain() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn ephemeral_agent_initialization_does_not_request_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentInitialization
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn durable_invocation_does_not_request_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Durable,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn terminal_ephemeral_failure_requests_archive_drain() {
+        assert_eq!(
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::None),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn retryable_ephemeral_failure_does_not_request_archive_drain() {
+        assert_eq!(
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::Immediate),
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        );
+    }
+
+    #[test]
+    fn terminal_durable_failure_does_not_request_archive_drain() {
+        assert_eq!(
+            failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
     }
 }
