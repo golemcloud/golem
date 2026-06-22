@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_common::model::retry_policy::RetryPolicyDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyCreateView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyCreateView {}
 
 impl MessageWithFields for RetryPolicyCreateView {
     fn message(&self) -> String {
@@ -40,6 +43,8 @@ impl CliOutput for RetryPolicyCreateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyGetView(pub RetryPolicyDto);
 
+impl Masked for RetryPolicyGetView {}
+
 impl MessageWithFields for RetryPolicyGetView {
     fn message(&self) -> String {
         format!("Retry policy {}", format_message_highlight(&self.0.name),)
@@ -56,6 +61,8 @@ impl CliOutput for RetryPolicyGetView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyUpdateView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyUpdateView {}
 
 impl MessageWithFields for RetryPolicyUpdateView {
     fn message(&self) -> String {
@@ -76,6 +83,8 @@ impl CliOutput for RetryPolicyUpdateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyDeleteView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyDeleteView {}
 
 impl MessageWithFields for RetryPolicyDeleteView {
     fn message(&self) -> String {

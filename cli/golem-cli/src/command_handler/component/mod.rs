@@ -117,8 +117,6 @@ impl ComponentCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
-        let show_sensitive = self.ctx.show_sensitive();
-
         let environment = self
             .ctx
             .environment_handler()
@@ -140,7 +138,7 @@ impl ComponentCommandHandler {
                         .await?
                         .values
                         .into_iter()
-                        .map(|component| ComponentView::new(show_sensitive, component))
+                        .map(|component| ComponentView::new(component))
                         .collect::<Vec<_>>())
                 },
             )
@@ -148,7 +146,7 @@ impl ComponentCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ComponentListView { components })?;
+            .log_view(ComponentListView { components })?;
 
         Ok(())
     }
@@ -192,7 +190,7 @@ impl ComponentCommandHandler {
                 )
                 .await?;
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new(component));
             }
         }
 
@@ -212,7 +210,7 @@ impl ComponentCommandHandler {
         for component_view in component_views {
             self.ctx
                 .log_handler()
-                .log_view(&ComponentGetView(component_view))?;
+                .log_view(ComponentGetView(component_view))?;
             logln("");
         }
 
@@ -333,7 +331,7 @@ impl ComponentCommandHandler {
             let _indent = self.ctx.log_handler().decorated_indent_primary();
             self.ctx
                 .log_handler()
-                .log_view(&ComponentManifestTraceView {
+                .log_view(ComponentManifestTraceView {
                     component_name: component_name.clone(),
                     properties: app_ctx
                         .application()
@@ -377,7 +375,7 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_view(&update_results)?;
+        self.ctx.log_handler().log_view(update_results.clone())?;
 
         if !update_results.failed.is_empty() {
             bail!(NonSuccessfulExit)
@@ -405,7 +403,7 @@ impl ComponentCommandHandler {
         }
 
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
-        self.ctx.log_handler().log_view(&AgentRedeployResult {
+        self.ctx.log_handler().log_view(AgentRedeployResult {
             redeployed: true,
             components: components
                 .iter()

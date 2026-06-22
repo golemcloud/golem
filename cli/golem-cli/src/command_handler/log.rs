@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::context::Context;
-use crate::model::cli_output::{CliOutput, to_cli_output_value};
+use crate::model::cli_output::{CliOutput, to_cli_output_value_masked};
 use crate::model::format::Format;
+use crate::model::masking::MaskingConfig;
 use crate::model::text::fmt::{
     DecoratedIndent, TextView, TruncatableTextView, to_colored_json, to_colored_yaml,
     truncate_rendered,
@@ -30,38 +31,56 @@ pub struct LogHandler {
     ctx: Arc<Context>,
 }
 
+pub trait CliView: TextView + CliOutput {}
+
+impl<T> CliView for T where T: TextView + CliOutput {}
+
 impl LogHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
 
-    pub fn log_view<View: TextView + CliOutput>(&self, view: &View) -> anyhow::Result<()> {
+    pub fn log_view<View: CliView>(&self, view: View) -> anyhow::Result<()> {
+        let masking = self.ctx.masking_config();
         match self.ctx.format() {
             Format::Json
             | Format::PrettyJson
             | Format::Yaml
             | Format::PrettyYaml
             | Format::Toon => {
-                print_cli_output_document(self.ctx.format(), self.ctx.should_colorize(), view)?;
+                println!(
+                    "{}",
+                    render_cli_output_document_masked(
+                        self.ctx.format(),
+                        self.ctx.should_colorize(),
+                        masking,
+                        view,
+                    )?
+                );
             }
             Format::Text => {
-                view.log();
+                view.log_masked(masking)?;
             }
         }
         Ok(())
     }
 
-    pub fn render_view_truncated<View: TruncatableTextView + Serialize>(
+    pub fn render_view_truncated<View: TruncatableTextView + CliView>(
         &self,
-        view: &View,
+        view: View,
         max_lines: usize,
     ) -> anyhow::Result<String> {
         match self.ctx.format() {
-            Format::Text => Ok(view.render_truncated(max_lines, self.ctx.should_colorize())),
+            Format::Text => view.render_truncated_masked(
+                max_lines,
+                self.ctx.should_colorize(),
+                self.ctx.masking_config(),
+            ),
             _ => {
-                let rendered = render_structured_document(
+                let rendered = render_cli_output_document_masked(
                     self.ctx.format(),
                     self.ctx.should_colorize(),
+                    self.ctx.masking_config(),
                     view,
                 )?;
                 Ok(truncate_rendered(rendered, max_lines))
@@ -115,16 +134,25 @@ pub fn render_structured_document<S: Serialize>(
 pub fn render_cli_output_document<Output: CliOutput>(
     format: Format,
     colorize: bool,
-    output: &Output,
+    output: Output,
 ) -> anyhow::Result<String> {
-    let value = to_cli_output_value(output)?;
+    render_cli_output_document_masked(format, colorize, MaskingConfig::hide_secrets(), output)
+}
+
+pub fn render_cli_output_document_masked<Output: CliOutput>(
+    format: Format,
+    colorize: bool,
+    config: MaskingConfig,
+    output: Output,
+) -> anyhow::Result<String> {
+    let value = to_cli_output_value_masked(output, config)?;
     render_structured_document(format, colorize, &value)
 }
 
 pub fn print_cli_output_document<Output: CliOutput>(
     format: Format,
     colorize: bool,
-    output: &Output,
+    output: Output,
 ) -> anyhow::Result<()> {
     println!("{}", render_cli_output_document(format, colorize, output)?);
     Ok(())
@@ -160,7 +188,7 @@ mod tests {
             const KIND: &'static str = "test.output";
         }
 
-        let rendered = render_cli_output_document(Format::Json, false, &TestOutput { ok: true })
+        let rendered = render_cli_output_document(Format::Json, false, TestOutput { ok: true })
             .expect("render output");
 
         assert_eq!(
@@ -187,7 +215,7 @@ mod tests {
         let error = render_cli_output_document(
             Format::Json,
             false,
-            &BadOutput {
+            BadOutput {
                 output_type: "custom".to_string(),
             },
         )

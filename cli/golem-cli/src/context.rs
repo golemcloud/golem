@@ -34,6 +34,7 @@ use crate::model::app_raw::{
 };
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::masking::MaskingConfig;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
@@ -73,7 +74,7 @@ pub struct Context {
     auth_token_override: Option<String>,
     client_config: ClientConfig,
     yes: bool,
-    show_sensitive: bool,
+    show_secrets: bool,
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
@@ -326,7 +327,7 @@ impl Context {
             manifest_environment_deployment_options,
             yes,
             dev_mode: global_flags.dev_mode,
-            show_sensitive: global_flags.show_sensitive,
+            show_secrets: global_flags.show_secrets,
             server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
             client_config,
@@ -376,8 +377,8 @@ impl Context {
         self.dev_mode
     }
 
-    pub fn show_sensitive(&self) -> bool {
-        self.show_sensitive
+    pub fn masking_config(&self) -> MaskingConfig {
+        MaskingConfig::new(self.show_secrets)
     }
 
     pub fn deploy_args(&self) -> &PostDeployArgs {

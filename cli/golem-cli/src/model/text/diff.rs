@@ -14,12 +14,16 @@
 
 use crate::log::{LogColorize, logln};
 use crate::model::cli_output::CliOutput;
-use crate::model::deploy::EnvironmentSetupPlan;
+use crate::model::deploy::{EnvironmentSetupDisplay, EnvironmentSetupPlan};
+use crate::model::masking::{Masked, MaskingConfig, mask_secret_with_fingerprint};
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
+use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::diff::{
     AgentTypeProvisionConfigDiff, BTreeMapDiffValue, DeploymentDiff, DiffForHashOf,
 };
+use serde::Serialize;
+use serde::ser::Serializer;
 use std::path::Path;
 
 const DIFF_COLLAPSE_THRESHOLD: usize = 12;
@@ -254,10 +258,100 @@ impl TextView for DeploymentDiff {
             logln("");
         }
     }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        let _ = config;
+        self.log();
+        Ok(())
+    }
 }
 
 impl CliOutput for DeploymentDiff {
     const KIND: &'static str = "deploy.diff";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl Masked for DeploymentDiff {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        if config.show_secrets {
+            return Ok(self);
+        }
+
+        mask_deployment_diff_secrets(&mut self)?;
+        Ok(self)
+    }
+}
+
+fn mask_deployment_diff_secrets(diff: &mut DeploymentDiff) -> anyhow::Result<()> {
+    for component_change in diff.components.values_mut() {
+        let BTreeMapDiffValue::Update(component_diff) = component_change else {
+            continue;
+        };
+        let DiffForHashOf::ValueDiff {
+            diff: component_diff,
+        } = component_diff
+        else {
+            continue;
+        };
+
+        for provision_config_change in component_diff
+            .agent_type_provision_config_changes
+            .values_mut()
+        {
+            let BTreeMapDiffValue::Update(provision_config_diff) = provision_config_change else {
+                continue;
+            };
+            let DiffForHashOf::ValueDiff {
+                diff: provision_config_diff,
+            } = provision_config_diff
+            else {
+                continue;
+            };
+            mask_agent_type_provision_config_diff(provision_config_diff)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn mask_agent_type_provision_config_diff(
+    diff: &mut AgentTypeProvisionConfigDiff,
+) -> anyhow::Result<()> {
+    for env_change in diff.env_changes.values_mut() {
+        mask_string_diff_update(env_change)?;
+    }
+
+    for config_change in diff.config_changes.values_mut() {
+        mask_normalized_json_diff_update(config_change)?;
+    }
+
+    Ok(())
+}
+
+fn mask_string_diff_update(change: &mut BTreeMapDiffValue<String>) -> anyhow::Result<()> {
+    if let BTreeMapDiffValue::Update(update) = change {
+        *update = mask_secret_with_fingerprint(&serde_json::to_string(update)?);
+    }
+    Ok(())
+}
+
+fn mask_normalized_json_diff_update(
+    change: &mut BTreeMapDiffValue<NormalizedJsonValue>,
+) -> anyhow::Result<()> {
+    if let BTreeMapDiffValue::Update(update) = change {
+        *update = NormalizedJsonValue(serde_json::Value::String(mask_secret_with_fingerprint(
+            &serde_json::to_string(update)?,
+        )));
+    }
+    Ok(())
 }
 
 fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
@@ -324,14 +418,91 @@ pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
     }
 }
 
-#[derive(serde::Serialize)]
 pub struct EnvironmentSetupPlanView<'a>(pub &'a EnvironmentSetupPlan);
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+impl Serialize for EnvironmentSetupPlanView<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.display.serialize(serializer)
+    }
+}
+
 pub struct DeployPlanView<'a> {
     pub deployment_diff: &'a DeploymentDiff,
     pub environment_setup: Option<&'a EnvironmentSetupPlan>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeployPlanFields<'a> {
+    deployment_diff: &'a DeploymentDiff,
+    environment_setup: Option<&'a EnvironmentSetupDisplay>,
+}
+
+impl Serialize for DeployPlanView<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let deployment_diff = self
+            .deployment_diff
+            .clone()
+            .masked(MaskingConfig::hide_secrets())
+            .map_err(serde::ser::Error::custom)?;
+
+        DeployPlanFields {
+            deployment_diff: &deployment_diff,
+            environment_setup: self.environment_setup.map(|setup| &setup.display),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl TextView for DeployPlanView<'_> {
+    fn log(&self) {
+        let has_deployment_changes = !self.deployment_diff.components.is_empty()
+            || !self.deployment_diff.http_api_deployments.is_empty()
+            || !self.deployment_diff.mcp_deployments.is_empty();
+
+        if has_deployment_changes {
+            self.deployment_diff.log();
+        }
+
+        if let Some(environment_setup) = self.environment_setup.map(EnvironmentSetupPlanView)
+            && !environment_setup.0.display.is_empty()
+        {
+            environment_setup.log();
+        }
+    }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        let _ = config;
+        self.log();
+        Ok(())
+    }
+}
+
+impl CliOutput for DeployPlanView<'_> {
+    const KIND: &'static str = "deploy.plan";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let deployment_diff = self
+            .deployment_diff
+            .clone()
+            .masked(config)
+            .map_err(serde::ser::Error::custom)?;
+
+        DeployPlanFields {
+            deployment_diff: &deployment_diff,
+            environment_setup: self.environment_setup.map(|setup| &setup.display),
+        }
+        .serialize(serializer)
+    }
 }
 
 impl TextView for EnvironmentSetupPlanView<'_> {
@@ -413,30 +584,6 @@ impl EnvironmentSetupPlanView<'_> {
     pub fn has_entries_to_apply(&self) -> bool {
         !self.0.display.to_be_applied.is_empty()
     }
-}
-
-impl TextView for DeployPlanView<'_> {
-    fn log(&self) {
-        let has_deployment_changes = !self.deployment_diff.components.is_empty()
-            || !self.deployment_diff.http_api_deployments.is_empty()
-            || !self.deployment_diff.mcp_deployments.is_empty();
-
-        let environment_setup_view = self.environment_setup.map(EnvironmentSetupPlanView);
-
-        if has_deployment_changes {
-            self.deployment_diff.log();
-        }
-
-        if let Some(environment_setup) = environment_setup_view
-            && !environment_setup.0.display.is_empty()
-        {
-            environment_setup.log();
-        }
-    }
-}
-
-impl CliOutput for DeployPlanView<'_> {
-    const KIND: &'static str = "deploy.plan";
 }
 
 fn is_compact_diff_path(path: &Path) -> bool {

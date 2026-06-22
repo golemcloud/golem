@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_common::model::quota::ResourceDefinition;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionCreateView(pub ResourceDefinition);
+
+impl Masked for ResourceDefinitionCreateView {}
 
 impl MessageWithFields for ResourceDefinitionCreateView {
     fn message(&self) -> String {
@@ -40,6 +43,8 @@ impl CliOutput for ResourceDefinitionCreateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionUpdateView(pub ResourceDefinition);
 
+impl Masked for ResourceDefinitionUpdateView {}
+
 impl MessageWithFields for ResourceDefinitionUpdateView {
     fn message(&self) -> String {
         format!(
@@ -60,6 +65,8 @@ impl CliOutput for ResourceDefinitionUpdateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionDeleteView(pub ResourceDefinition);
 
+impl Masked for ResourceDefinitionDeleteView {}
+
 impl MessageWithFields for ResourceDefinitionDeleteView {
     fn message(&self) -> String {
         format!(
@@ -79,6 +86,8 @@ impl CliOutput for ResourceDefinitionDeleteView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceDefinitionGetView(pub ResourceDefinition);
+
+impl Masked for ResourceDefinitionGetView {}
 
 impl MessageWithFields for ResourceDefinitionGetView {
     fn message(&self) -> String {

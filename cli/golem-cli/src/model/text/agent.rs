@@ -14,6 +14,7 @@
 
 use crate::model::agent::view::AgentTypeView;
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_message_highlight, log_table,
     new_table_full_condensed,
@@ -39,6 +40,8 @@ impl MessageWithFields for AgentTypeView {
         fields.build()
     }
 }
+
+impl Masked for AgentTypeView {}
 
 impl CliOutput for AgentTypeView {
     const KIND: &'static str = "agent-type.get";

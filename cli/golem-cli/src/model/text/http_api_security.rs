@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
 use golem_client::model::SecuritySchemeDto;
@@ -20,6 +21,8 @@ use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeCreateView(pub SecuritySchemeDto);
+
+impl Masked for HttpSecuritySchemeCreateView {}
 
 impl MessageWithFields for HttpSecuritySchemeCreateView {
     fn message(&self) -> String {
@@ -41,6 +44,8 @@ impl CliOutput for HttpSecuritySchemeCreateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeGetView(pub SecuritySchemeDto);
 
+impl Masked for HttpSecuritySchemeGetView {}
+
 impl MessageWithFields for HttpSecuritySchemeGetView {
     fn message(&self) -> String {
         format!(
@@ -61,6 +66,8 @@ impl CliOutput for HttpSecuritySchemeGetView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeUpdateView(pub SecuritySchemeDto);
 
+impl Masked for HttpSecuritySchemeUpdateView {}
+
 impl MessageWithFields for HttpSecuritySchemeUpdateView {
     fn message(&self) -> String {
         format!(
@@ -80,6 +87,8 @@ impl CliOutput for HttpSecuritySchemeUpdateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSecuritySchemeDeleteView(pub SecuritySchemeDto);
+
+impl Masked for HttpSecuritySchemeDeleteView {}
 
 impl MessageWithFields for HttpSecuritySchemeDeleteView {
     fn message(&self) -> String {

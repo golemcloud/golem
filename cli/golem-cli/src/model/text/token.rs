@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
 use colored::Colorize;
@@ -20,8 +21,10 @@ use golem_client::model::{Token, TokenWithSecret};
 use golem_common::model::auth::TokenId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenNewView(pub TokenWithSecret);
+
+impl Masked for TokenNewView {}
 
 impl MessageWithFields for TokenNewView {
     fn message(&self) -> String {

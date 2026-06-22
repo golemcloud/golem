@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{
-    AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
+    AgentConfigSource, AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
@@ -32,11 +32,12 @@ use golem_common::model::component::{AgentFilePermissions, ComponentName};
 
 use crate::agent_id_display::render_type_for_language;
 use crate::model::app_raw;
+use crate::model::masking::{Masked, MaskingConfig, mask_secret, mask_sensitive_map};
 use golem_common::model::environment::EnvironmentId;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub enum ComponentRevisionSelection<'a> {
@@ -87,9 +88,6 @@ impl ComponentUpsertResult {
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
-    #[serde(skip)]
-    pub show_sensitive: bool,
-
     pub component_name: ComponentName,
     pub component_id: ComponentId,
     pub component_version: Option<String>,
@@ -102,8 +100,50 @@ pub struct ComponentView {
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 }
 
+impl Masked for ComponentView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        if config.show_secrets {
+            return Ok(self);
+        }
+
+        let secret_config_paths_by_agent_type = self
+            .agent_types
+            .iter()
+            .map(|agent_type| {
+                (
+                    agent_type.type_name.0.clone(),
+                    agent_type
+                        .config
+                        .iter()
+                        .filter(|config| config.source == AgentConfigSource::Secret)
+                        .map(|config| config.path.join("."))
+                        .collect::<BTreeSet<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for (agent_type_name, provision_config) in &mut self.agent_type_provision_configs {
+            provision_config.env = mask_sensitive_map(config, &provision_config.env);
+
+            for plugin in &mut provision_config.plugins {
+                plugin.parameters = mask_sensitive_map(config, &plugin.parameters);
+            }
+
+            if let Some(secret_paths) = secret_config_paths_by_agent_type.get(&agent_type_name.0) {
+                for entry in &mut provision_config.config {
+                    if secret_paths.contains(&entry.path.join(".")) {
+                        entry.value.value = golem_wasm::Value::String(mask_secret());
+                    }
+                }
+            }
+        }
+
+        Ok(self)
+    }
+}
+
 impl ComponentView {
-    pub fn new(show_sensitive: bool, value: ComponentDto) -> Self {
+    pub fn new(value: ComponentDto) -> Self {
         let exports = {
             let agent_types = value.metadata.agent_types().to_vec();
 
@@ -111,7 +151,6 @@ impl ComponentView {
         };
 
         ComponentView {
-            show_sensitive,
             component_name: value.component_name,
             component_id: value.id,
             component_version: value.metadata.root_package_version().clone(),

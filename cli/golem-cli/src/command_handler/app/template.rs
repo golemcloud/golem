@@ -185,7 +185,7 @@ impl TemplateHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&crate::model::text::action_result::NewAppResult {
+            .log_view(crate::model::text::action_result::NewAppResult {
                 created: true,
                 application_name: selections.application_name.to_string(),
                 application_dir: context.application_path.clone(),

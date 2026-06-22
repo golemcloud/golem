@@ -69,7 +69,7 @@ impl ApiDeploymentCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&HttpApiDeploymentGetView(result))?;
+            .log_view(HttpApiDeploymentGetView(result))?;
 
         Ok(())
     }
@@ -102,7 +102,7 @@ impl ApiDeploymentCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&HttpApiDeploymentListView { deployments })?;
+            .log_view(HttpApiDeploymentListView { deployments })?;
 
         Ok(())
     }

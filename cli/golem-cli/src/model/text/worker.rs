@@ -18,6 +18,7 @@ use crate::model::cli_output::CliOutput;
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
+use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text::fmt::*;
 use crate::model::worker::{
     AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
@@ -46,6 +47,7 @@ use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
+use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
@@ -56,6 +58,8 @@ pub struct WorkerCreateView {
     pub component_name: ComponentName,
     pub agent_name: Option<RawAgentId>,
 }
+
+impl Masked for WorkerCreateView {}
 
 impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
@@ -99,6 +103,13 @@ pub struct WorkerGetView {
 impl WorkerGetView {
     pub fn from_metadata(metadata: AgentMetadataView, precise: bool) -> Self {
         Self { metadata, precise }
+    }
+}
+
+impl Masked for WorkerGetView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.metadata = self.metadata.masked(config)?;
+        Ok(self)
     }
 }
 
@@ -199,13 +210,13 @@ impl MessageWithFields for WorkerGetView {
                 "Environment variables - defaults",
                 &self.metadata.default_env,
                 !self.metadata.default_env.is_empty(),
-                |env| format_env(true, &to_sorted_btree_map(env)),
+                |env| format_env(&to_sorted_btree_map(env)),
             )
             .fmt_field_optional(
                 "Environment variables - overrides",
                 &self.metadata.env,
                 !self.metadata.env.is_empty(),
-                |env| format_env(true, &to_sorted_btree_map(env)),
+                |env| format_env(&to_sorted_btree_map(env)),
             )
             .fmt_field_optional(
                 "Config - defaults",
@@ -251,10 +262,28 @@ impl MessageWithFields for WorkerGetView {
 
 impl CliOutput for WorkerGetView {
     const KIND: &'static str = "agent.get";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
 }
 
 impl CliOutput for AgentsMetadataResponseView {
     const KIND: &'static str = "agent.list";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
 }
 
 impl CliOutput for TryUpdateAllWorkersResult {
@@ -282,6 +311,11 @@ impl TextView for AgentsMetadataResponseView {
                 cursor.log_color_highlight()
             ));
         }
+    }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        self.masked(config)?.log();
+        Ok(())
     }
 }
 
@@ -389,6 +423,18 @@ impl TruncatableTextView for AgentsMetadataResponseView {
         }
 
         out
+    }
+
+    fn render_truncated_masked(
+        &self,
+        max_lines: usize,
+        colorize: bool,
+        config: MaskingConfig,
+    ) -> anyhow::Result<String> {
+        Ok(self
+            .clone()
+            .masked(config)?
+            .render_truncated(max_lines, colorize))
     }
 }
 

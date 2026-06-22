@@ -15,6 +15,7 @@
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::component::show_exported_agent_constructors;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
     log_table, new_table_full,
@@ -30,6 +31,8 @@ use indoc::indoc;
 use std::path::PathBuf;
 
 pub struct AgentNameHelp;
+
+impl Masked for AgentNameHelp {}
 
 impl MessageWithFields for AgentNameHelp {
     fn message(&self) -> String {
@@ -91,6 +94,8 @@ impl MessageWithFields for AgentNameHelp {
 }
 
 pub struct ComponentNameHelp;
+
+impl Masked for ComponentNameHelp {}
 
 impl MessageWithFields for ComponentNameHelp {
     fn message(&self) -> String {
@@ -421,6 +426,8 @@ fn render_parameter_type_for_language(
 }
 
 pub struct EnvironmentNameHelp;
+
+impl Masked for EnvironmentNameHelp {}
 
 impl MessageWithFields for EnvironmentNameHelp {
     fn message(&self) -> String {

@@ -83,7 +83,7 @@ mod flag {
     pub static LANGUAGE: &str = "--language";
     pub static RESET: &str = "--reset";
     pub static SCRIPT: &str = "--script";
-    pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static SHOW_SECRETS: &str = "--show-secrets";
     pub static STEP: &str = "--step";
     pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";

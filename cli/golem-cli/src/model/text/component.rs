@@ -15,9 +15,11 @@
 use crate::model::app::ComponentLayerProperties;
 use crate::model::cli_output::CliOutput;
 use crate::model::component::ComponentView;
+use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text::fmt::*;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::component::ComponentName;
+use serde::Serializer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,8 +28,28 @@ pub struct ComponentListView {
     pub components: Vec<ComponentView>,
 }
 
+impl Masked for ComponentListView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.components = self
+            .components
+            .into_iter()
+            .map(|component| component.masked(config))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(self)
+    }
+}
+
 impl CliOutput for ComponentListView {
     const KIND: &'static str = "component.list";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
 }
 
 impl TextView for ComponentListView {
@@ -49,6 +71,11 @@ impl TextView for ComponentListView {
             ]);
         }
         log_table(table);
+    }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        self.masked(config)?.log();
+        Ok(())
     }
 }
 
@@ -72,7 +99,7 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
                 &format!("{}Environment", prefix),
                 &provision_config.env,
                 !provision_config.env.is_empty(),
-                |env| format_env(view.show_sensitive, env),
+                |env| format_env(env),
             )
             .fmt_field_optional(
                 &format!("{}Agent config", prefix),
@@ -100,6 +127,12 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentCreateView(pub ComponentView);
 
+impl Masked for ComponentCreateView {
+    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
+        Ok(Self(self.0.masked(config)?))
+    }
+}
+
 impl MessageWithFields for ComponentCreateView {
     fn message(&self) -> String {
         format!(
@@ -115,6 +148,12 @@ impl MessageWithFields for ComponentCreateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentUpdateView(pub ComponentView);
+
+impl Masked for ComponentUpdateView {
+    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
+        Ok(Self(self.0.masked(config)?))
+    }
+}
 
 impl MessageWithFields for ComponentUpdateView {
     fn message(&self) -> String {
@@ -133,6 +172,12 @@ impl MessageWithFields for ComponentUpdateView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentGetView(pub ComponentView);
 
+impl Masked for ComponentGetView {
+    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
+        Ok(Self(self.0.masked(config)?))
+    }
+}
+
 impl MessageWithFields for ComponentGetView {
     fn message(&self) -> String {
         format!(
@@ -148,6 +193,15 @@ impl MessageWithFields for ComponentGetView {
 
 impl CliOutput for ComponentGetView {
     const KIND: &'static str = "component.get";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,27 +231,5 @@ impl TextView for ComponentManifestTraceView {
             }
             Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
         }
-    }
-}
-
-const SENSITIVE_ENV_VAR_NAME_PATTERNS: &[&str] = &[
-    "CREDENTIAL",
-    "CREDENTIALS",
-    "KEY",
-    "PASS",
-    "PASSWORD",
-    "PWD",
-    "SECRET",
-    "TOKEN",
-];
-
-pub fn is_sensitive_env_var_name(show_sensitive: bool, name: &str) -> bool {
-    let name = name.to_uppercase();
-    if show_sensitive {
-        false
-    } else {
-        SENSITIVE_ENV_VAR_NAME_PATTERNS
-            .iter()
-            .any(|pattern| name.contains(pattern))
     }
 }

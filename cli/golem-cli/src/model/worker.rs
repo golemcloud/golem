@@ -18,6 +18,7 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
+use crate::model::masking::{Masked, MaskingConfig, mask_sensitive_map};
 use clap::ValueEnum;
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
@@ -179,6 +180,14 @@ impl AgentMetadataView {
     }
 }
 
+impl Masked for AgentMetadataView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.env = mask_sensitive_map(config, &self.env);
+        self.default_env = mask_sensitive_map(config, &self.default_env);
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
@@ -235,6 +244,17 @@ impl AgentMetadata {
 pub struct AgentsMetadataResponseView {
     pub agents: Vec<AgentMetadataView>,
     pub cursors: BTreeMap<String, String>,
+}
+
+impl Masked for AgentsMetadataResponseView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.agents = self
+            .agents
+            .into_iter()
+            .map(|agent| agent.masked(config))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(self)
+    }
 }
 
 pub trait HasVerbosity {

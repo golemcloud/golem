@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
     new_table_full_condensed,
@@ -23,13 +24,15 @@ use golem_common::model::deployment::CurrentDeployment;
 use golem_common::model::environment::EnvironmentName;
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentNewView {
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
     pub deployment: CurrentDeployment,
 }
+
+impl Masked for DeploymentNewView {}
 
 impl MessageWithFields for DeploymentNewView {
     fn message(&self) -> String {

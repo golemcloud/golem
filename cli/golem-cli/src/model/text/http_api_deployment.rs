@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight,
     log_table, new_table_full_condensed,
@@ -22,6 +23,8 @@ use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpApiDeploymentGetView(pub HttpApiDeployment);
+
+impl Masked for HttpApiDeploymentGetView {}
 
 impl MessageWithFields for HttpApiDeploymentGetView {
     fn message(&self) -> String {

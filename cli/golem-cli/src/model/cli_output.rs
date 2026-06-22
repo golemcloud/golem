@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::masking::MaskingConfig;
 use anyhow::{anyhow, bail};
 use serde::Serialize;
+use serde::Serializer;
 use serde_json::{Map, Value};
 use std::collections::{BTreeSet, VecDeque};
 
@@ -29,6 +31,15 @@ pub trait CliOutput: Serialize {
 
     fn type_name() -> String {
         Self::KIND.to_string()
+    }
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        Self: Sized,
+    {
+        let _ = config;
+        self.serialize(serializer)
     }
 }
 
@@ -184,8 +195,15 @@ fn json_ref(definition_name: &str) -> Value {
     Value::Object(reference)
 }
 
-pub fn to_cli_output_value<Output: CliOutput>(output: &Output) -> anyhow::Result<Value> {
-    let value = serde_json::to_value(output)?;
+pub fn to_cli_output_value<Output: CliOutput>(output: Output) -> anyhow::Result<Value> {
+    to_cli_output_value_masked(output, MaskingConfig::hide_secrets())
+}
+
+pub fn to_cli_output_value_masked<Output: CliOutput>(
+    output: Output,
+    config: MaskingConfig,
+) -> anyhow::Result<Value> {
+    let value = output.serialize_masked(serde_json::value::Serializer, config)?;
     let type_value = Value::String(Output::type_name());
 
     match value {
@@ -225,7 +243,12 @@ fn with_cli_output_type<Output: CliOutput>(
 mod tests {
     use crate::model::cli_output::{
         CLI_OUTPUT_TYPE_FIELD, CliOutput, command_output_type_names, focused_command_output_schema,
-        to_cli_output_value,
+        to_cli_output_value, to_cli_output_value_masked,
+    };
+    use crate::model::masking::MaskingConfig;
+    use crate::model::text::diff::DeployPlanView;
+    use crate::model::text::secret::{
+        SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView,
     };
     use proptest::prelude::*;
     use quote::ToTokens;
@@ -1233,9 +1256,7 @@ mod tests {
         T: CliOutput + 'static,
     {
         strategy
-            .prop_map(|output| {
-                to_cli_output_value(&output).expect("generated DTO should serialize")
-            })
+            .prop_map(|output| to_cli_output_value(output).expect("generated DTO should serialize"))
             .boxed()
     }
 
@@ -2316,7 +2337,7 @@ mod tests {
             arb_format_string(),
         )
             .prop_map(|(idempotency_key, shape, first, second, result_format)| {
-                to_cli_output_value(&crate::model::invoke_result_view::InvokeResultView {
+                to_cli_output_value(crate::model::invoke_result_view::InvokeResultView {
                     idempotency_key,
                     result_json: (shape == 1).then_some(first.clone()),
                     results_json: (shape == 2).then_some(vec![first, second]),
@@ -2400,9 +2421,7 @@ mod tests {
                     cursors,
                 },
             )
-            .prop_map(|output| {
-                to_cli_output_value(&output).expect("generated DTO should serialize")
-            })
+            .prop_map(|output| to_cli_output_value(output).expect("generated DTO should serialize"))
             .boxed()
     }
 
@@ -2422,7 +2441,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, entry)| {
-                to_cli_output_value(&crate::model::text::worker::AgentOplogEntryView {
+                to_cli_output_value(crate::model::text::worker::AgentOplogEntryView {
                     index: index as u64,
                     entry,
                 })
@@ -3685,7 +3704,6 @@ mod tests {
                     agent_type_provision_configs,
                 )| {
                     crate::model::component::ComponentView {
-                        show_sensitive: true,
                         component_name: golem_common::model::component::ComponentName(
                             component_name,
                         ),
@@ -3825,10 +3843,13 @@ mod tests {
                 let deployment_diff = empty_deployment_diff();
                 let environment_setup = include_environment_setup
                     .then(crate::model::deploy::EnvironmentSetupPlan::default);
-                to_cli_output_value(&crate::model::text::diff::DeployPlanView {
-                    deployment_diff: &deployment_diff,
-                    environment_setup: environment_setup.as_ref(),
-                })
+                to_cli_output_value_masked(
+                    DeployPlanView {
+                        deployment_diff: &deployment_diff,
+                        environment_setup: environment_setup.as_ref(),
+                    },
+                    MaskingConfig::hide_secrets(),
+                )
                 .expect("generated deploy plan should serialize")
             })
             .boxed()
@@ -3837,7 +3858,8 @@ mod tests {
     fn arb_deployment_diff_result() -> OutputDocumentStrategy {
         arb_deployment_diff()
             .prop_map(|diff| {
-                to_cli_output_value(&diff).expect("generated deployment diff should serialize")
+                to_cli_output_value_masked(diff, MaskingConfig::hide_secrets())
+                    .expect("generated deployment diff should serialize")
             })
             .boxed()
     }
@@ -3991,7 +4013,7 @@ mod tests {
     fn arb_environment_setup_plan_result() -> OutputDocumentStrategy {
         arb_environment_setup_plan()
             .prop_map(|output| {
-                to_cli_output_value(&crate::model::text::diff::EnvironmentSetupPlanView(&output))
+                to_cli_output_value(crate::model::text::diff::EnvironmentSetupPlanView(&output))
                     .expect("generated environment setup plan should serialize")
             })
             .boxed()
@@ -4940,66 +4962,71 @@ mod tests {
     }
 
     fn arb_secret_create_result() -> OutputDocumentStrategy {
-        serialized_output(
-            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
-                crate::model::text::secret::SecretCreateView {
-                    secret,
-                    show_sensitive,
-                }
-            }),
-        )
+        arb_secret()
+            .prop_map(|secret| {
+                to_cli_output_value_masked(
+                    SecretCreateView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret create should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_delete_result() -> OutputDocumentStrategy {
-        serialized_output(
-            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
-                crate::model::text::secret::SecretDeleteView {
-                    secret,
-                    show_sensitive,
-                }
-            }),
-        )
+        arb_secret()
+            .prop_map(|secret| {
+                to_cli_output_value_masked(
+                    SecretDeleteView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret delete should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_get_result() -> OutputDocumentStrategy {
-        serialized_output(
-            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
-                crate::model::text::secret::SecretGetView {
-                    secret,
-                    show_sensitive,
-                }
-            }),
-        )
+        arb_secret()
+            .prop_map(|secret| {
+                to_cli_output_value_masked(
+                    SecretGetView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret get should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_update_value_result() -> OutputDocumentStrategy {
-        serialized_output(
-            (arb_secret(), any::<bool>()).prop_map(|(secret, show_sensitive)| {
-                crate::model::text::secret::SecretUpdateView {
-                    secret,
-                    show_sensitive,
-                }
-            }),
-        )
+        arb_secret()
+            .prop_map(|secret| {
+                to_cli_output_value_masked(
+                    SecretUpdateView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret update should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_list_result() -> OutputDocumentStrategy {
-        serialized_output(
-            (
-                proptest::collection::vec(arb_secret(), 0..5),
-                any::<bool>(),
-                arb_small_string(),
-                any::<bool>(),
-            )
-                .prop_map(|(secrets, show_sensitive, environment_name, show_ids)| {
-                    crate::model::text::secret::SecretListView {
-                        secrets,
-                        show_sensitive,
+        (
+            proptest::collection::vec(arb_secret(), 0..5),
+            arb_small_string(),
+            any::<bool>(),
+        )
+            .prop_map(|(secrets, environment_name, show_ids)| {
+                to_cli_output_value_masked(
+                    SecretListView {
+                        secrets: secrets.into_iter().map(Into::into).collect(),
                         environment_name,
                         show_ids,
-                    }
-                }),
-        )
+                    },
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret list should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {

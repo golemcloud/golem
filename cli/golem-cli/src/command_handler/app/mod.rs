@@ -160,7 +160,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::BuildResult { built: true })?;
+                .log_view(crate::model::text::action_result::BuildResult { built: true })?;
         }
         outcome
     }
@@ -178,7 +178,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true })?;
+                .log_view(crate::model::text::action_result::CleanResult { cleaned: true })?;
         }
         outcome
     }
@@ -362,9 +362,9 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx.log_handler().log_view(
-                &crate::model::text::action_result::DeployResultView { deployed: true },
-            )?;
+            self.ctx
+                .log_handler()
+                .log_view(crate::model::text::action_result::DeployResultView { deployed: true })?;
         }
         outcome
     }
@@ -482,7 +482,7 @@ impl AppCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&TemplateListView { templates })?;
+            .log_view(TemplateListView { templates })?;
 
         Ok(())
     }
@@ -498,7 +498,7 @@ impl AppCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentTypeListView { agent_types })?;
+            .log_view(AgentTypeListView { agent_types })?;
 
         Ok(())
     }
@@ -523,7 +523,7 @@ impl AppCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentTypeView::new(&agent_type, true))?;
+            .log_view(AgentTypeView::new(&agent_type, true))?;
 
         Ok(())
     }
@@ -921,7 +921,7 @@ impl AppCommandHandler {
             log_action("Diffing", "");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.masking_config(), full_diff)?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -981,7 +981,7 @@ impl AppCommandHandler {
                     Some(diff_stage) => {
                         log_action("Planned", "changes to be applied to the staging area:");
                         let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                        self.ctx.log_handler().log_view(diff_stage)?
+                        self.ctx.log_handler().log_view(diff_stage.clone())?
                     }
                     None => log_skipping_up_to_date("planning changes for staging area"),
                 }
@@ -1006,7 +1006,7 @@ impl AppCommandHandler {
                 }
                 if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                    self.ctx.log_handler().log_view(&DeployPlanView {
+                    self.ctx.log_handler().log_view(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
                     })?;
@@ -1317,6 +1317,7 @@ impl AppCommandHandler {
         );
 
         build_environment_setup_plan(
+            self.ctx.masking_config(),
             resolved_agent_secret_defaults,
             retry_policy_defaults,
             resource_defaults,
@@ -1550,7 +1551,7 @@ impl AppCommandHandler {
             .await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.masking_config(), full_diff)?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1560,7 +1561,9 @@ impl AppCommandHandler {
         {
             log_action("Planned", "changes to be applied to the environment:");
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
-            self.ctx.log_handler().log_view(&rollback_diff.diff)?
+            self.ctx
+                .log_handler()
+                .log_view(rollback_diff.diff.clone())?
         }
 
         Ok(Some(rollback_diff))
@@ -2174,7 +2177,7 @@ impl AppCommandHandler {
             log_warn(warning.to_string());
         }
 
-        self.ctx.log_handler().log_view(&DeploymentNewView {
+        self.ctx.log_handler().log_view(DeploymentNewView {
             application_name: deploy_diff.environment.application_name.clone(),
             environment_name: deploy_diff.environment.environment_name.clone(),
             deployment: result.clone(),
@@ -2220,7 +2223,7 @@ impl AppCommandHandler {
             log_warn(warning.to_string());
         }
 
-        self.ctx.log_handler().log_view(&DeploymentNewView {
+        self.ctx.log_handler().log_view(DeploymentNewView {
             application_name: rollback_diff.environment.application_name.clone(),
             environment_name: rollback_diff.environment.environment_name.clone(),
             deployment: result.clone(),

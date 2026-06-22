@@ -1934,7 +1934,7 @@
         },
         "environmentSetup": {
           "oneOf": [
-            { "$ref": "#/definitions/EnvironmentSetupPlan" },
+            { "$ref": "#/definitions/EnvironmentSetupDisplay" },
             { "type": "null" }
           ]
         }
@@ -4225,34 +4225,14 @@
       "x-golem-output-mode": "multi-document",
       "x-golem-command": "deploy",
       "required": [
-        "$type",
-        "display",
-        "agentSecretDefaults",
-        "skippedExistingAgentSecretDefaults",
-        "retryPolicyDefaults",
-        "resourceDefaults"
+        "$type"
       ],
       "properties": {
         "$type": {
           "const": "deploy.environment-setup-plan"
         },
-        "display": { "$ref": "#/definitions/EnvironmentSetupDisplay" },
-        "agentSecretDefaults": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
-        },
-        "skippedExistingAgentSecretDefaults": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
-        },
-        "retryPolicyDefaults": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/DeploymentRetryPolicyDefault" }
-        },
-        "resourceDefaults": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ResourceDefinitionCreation" }
-        }
+        "toBeApplied": { "$ref": "#/definitions/EnvironmentSetupDetailedSection" },
+        "skippedAlreadyExists": { "$ref": "#/definitions/EnvironmentSetupKeysOnlySection" }
       },
       "additionalProperties": false
     },
@@ -5279,15 +5259,22 @@
       "x-golem-command": "secret create",
       "required": [
         "$type",
-        "secret"
+        "id",
+        "environmentId",
+        "path",
+        "revision",
+        "secretType"
       ],
       "properties": {
         "$type": {
           "const": "secret.create"
         },
-        "secret": {
-          "$ref": "#/definitions/AgentSecret"
-        }
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "revision": { "type": "integer", "minimum": 0 },
+        "secretType": { "$ref": "#/definitions/AnalysedType" },
+        "secretValue": { "$ref": "#/definitions/JsonValue" }
       },
       "additionalProperties": false
     },
@@ -5298,15 +5285,22 @@
       "x-golem-command": "secret delete",
       "required": [
         "$type",
-        "secret"
+        "id",
+        "environmentId",
+        "path",
+        "revision",
+        "secretType"
       ],
       "properties": {
         "$type": {
           "const": "secret.delete"
         },
-        "secret": {
-          "$ref": "#/definitions/AgentSecret"
-        }
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "revision": { "type": "integer", "minimum": 0 },
+        "secretType": { "$ref": "#/definitions/AnalysedType" },
+        "secretValue": { "$ref": "#/definitions/JsonValue" }
       },
       "additionalProperties": false
     },
@@ -5317,15 +5311,22 @@
       "x-golem-command": "secret get",
       "required": [
         "$type",
-        "secret"
+        "id",
+        "environmentId",
+        "path",
+        "revision",
+        "secretType"
       ],
       "properties": {
         "$type": {
           "const": "secret.get"
         },
-        "secret": {
-          "$ref": "#/definitions/AgentSecret"
-        }
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "revision": { "type": "integer", "minimum": 0 },
+        "secretType": { "$ref": "#/definitions/AnalysedType" },
+        "secretValue": { "$ref": "#/definitions/JsonValue" }
       },
       "additionalProperties": false
     },
@@ -5358,15 +5359,22 @@
       "x-golem-command": "secret update-value",
       "required": [
         "$type",
-        "secret"
+        "id",
+        "environmentId",
+        "path",
+        "revision",
+        "secretType"
       ],
       "properties": {
         "$type": {
           "const": "secret.update-value"
         },
-        "secret": {
-          "$ref": "#/definitions/AgentSecret"
-        }
+        "id": { "type": "string" },
+        "environmentId": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "revision": { "type": "integer", "minimum": 0 },
+        "secretType": { "$ref": "#/definitions/AnalysedType" },
+        "secretValue": { "$ref": "#/definitions/JsonValue" }
       },
       "additionalProperties": false
     },

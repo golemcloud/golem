@@ -104,7 +104,7 @@ impl GolemCliCommand {
                     "local",
                     "preset",
                     "profile",
-                    "show_sensitive",
+                    "show_secrets",
                 ],
                 exclude_hidden: true,
             },
@@ -200,9 +200,9 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'Y', global = true, display_order = 110)]
     pub yes: bool,
 
-    /// Disables filtering of potentially sensitive user values in text mode (e.g. component environment variable values)
+    /// Show secret and sensitive values that are masked by default
     #[arg(long, global = true, display_order = 111)]
-    pub show_sensitive: bool,
+    pub show_secrets: bool,
 
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]

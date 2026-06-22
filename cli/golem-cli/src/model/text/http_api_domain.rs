@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
 use golem_common::model::domain_registration::{Domain, DomainRegistration, DomainRegistrationId};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainRegistrationNewView(pub DomainRegistration);
+
+impl Masked for DomainRegistrationNewView {}
 
 impl MessageWithFields for DomainRegistrationNewView {
     fn message(&self) -> String {

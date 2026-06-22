@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
@@ -110,6 +111,8 @@ impl TextView for Vec<PluginRegistrationDto> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistrationRegisterView(pub PluginRegistrationDto);
 
+impl Masked for PluginRegistrationRegisterView {}
+
 impl MessageWithFields for PluginRegistrationRegisterView {
     fn message(&self) -> String {
         format!(
@@ -130,6 +133,8 @@ impl CliOutput for PluginRegistrationRegisterView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRegistrationGetView(pub PluginRegistrationDto);
+
+impl Masked for PluginRegistrationGetView {}
 
 impl MessageWithFields for PluginRegistrationGetView {
     fn message(&self) -> String {

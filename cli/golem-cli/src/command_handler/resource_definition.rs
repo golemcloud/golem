@@ -119,7 +119,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionCreateView(result))?;
+            .log_view(ResourceDefinitionCreateView(result))?;
 
         Ok(())
     }
@@ -206,7 +206,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionUpdateView(result))?;
+            .log_view(ResourceDefinitionUpdateView(result))?;
 
         Ok(())
     }
@@ -227,7 +227,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionDeleteView(resource))?;
+            .log_view(ResourceDefinitionDeleteView(resource))?;
 
         Ok(())
     }
@@ -241,7 +241,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionGetView(result))?;
+            .log_view(ResourceDefinitionGetView(result))?;
 
         Ok(())
     }
@@ -263,7 +263,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionListView { resources: results })?;
+            .log_view(ResourceDefinitionListView { resources: results })?;
 
         Ok(())
     }

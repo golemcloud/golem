@@ -25,6 +25,7 @@ pub mod environment;
 pub mod format;
 pub mod http_api;
 pub mod invoke_result_view;
+pub mod masking;
 pub mod plugin;
 pub mod plugin_manifest;
 pub mod repl;

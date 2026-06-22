@@ -95,7 +95,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyCreateView(result))?;
+            .log_view(RetryPolicyCreateView(result))?;
 
         Ok(())
     }
@@ -116,7 +116,7 @@ impl RetryPolicyCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&RetryPolicyListView {
+        self.ctx.log_handler().log_view(RetryPolicyListView {
             retry_policies: results,
         })?;
 
@@ -171,7 +171,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyGetView(result))?;
+            .log_view(RetryPolicyGetView(result))?;
 
         Ok(())
     }
@@ -210,7 +210,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyUpdateView(result))?;
+            .log_view(RetryPolicyUpdateView(result))?;
 
         Ok(())
     }
@@ -232,7 +232,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyDeleteView(result))?;
+            .log_view(RetryPolicyDeleteView(result))?;
 
         Ok(())
     }

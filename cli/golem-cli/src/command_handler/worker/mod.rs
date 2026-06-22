@@ -330,7 +330,7 @@ impl WorkerCommandHandler {
         };
 
         logln("");
-        self.ctx.log_handler().log_view(&WorkerCreateView {
+        self.ctx.log_handler().log_view(WorkerCreateView {
             component_name: agent_name_match.component_name,
             agent_name: Some(display_agent_name),
         })?;
@@ -546,12 +546,12 @@ impl WorkerCommandHandler {
             log_action("Triggered", "invocation");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_trigger(idempotency_key))?;
+                .log_view(InvokeResultView::new_trigger(idempotency_key))?;
         } else {
             logln("");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_agent_invoke(
+                .log_view(InvokeResultView::new_agent_invoke(
                     idempotency_key,
                     result,
                     &agent_type,
@@ -670,7 +670,7 @@ impl WorkerCommandHandler {
             format!("for agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentSimulateCrashResult {
+        self.ctx.log_handler().log_view(AgentSimulateCrashResult {
             simulated: true,
             agent: agent_name.0.clone(),
         })?;
@@ -725,7 +725,7 @@ impl WorkerCommandHandler {
                 for (index, entry) in entries {
                     self.ctx
                         .log_handler()
-                        .log_view(&AgentOplogEntryView { index, entry })?;
+                        .log_view(AgentOplogEntryView { index, entry })?;
                 }
             }
 
@@ -797,7 +797,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentRevertResult {
+        self.ctx.log_handler().log_view(AgentRevertResult {
             reverted: true,
             agent: agent_name.0.clone(),
             last_oplog_index,
@@ -844,7 +844,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentCancelInvocationResult {
+            .log_view(AgentCancelInvocationResult {
                 canceled,
                 agent: agent_name.0,
                 idempotency_key: idempotency_key.value,
@@ -894,7 +894,7 @@ impl WorkerCommandHandler {
                     false,
                 )
                 .await?;
-            self.ctx.log_handler().log_view(&view)?;
+            self.ctx.log_handler().log_view(view)?;
             Ok(())
         }
     }
@@ -923,7 +923,7 @@ impl WorkerCommandHandler {
                     .and_then(|view| {
                         self.ctx
                             .log_handler()
-                            .render_view_truncated(&view, term_height)
+                            .render_view_truncated(view, term_height)
                     })
                     .unwrap_or_else(|e| format!("Error: {e:#}"));
 
@@ -1189,7 +1189,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentInterruptResult {
+        self.ctx.log_handler().log_view(AgentInterruptResult {
             interrupted: true,
             agent: agent_name.0.clone(),
         })?;
@@ -1216,7 +1216,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentResumeResult {
+        self.ctx.log_handler().log_view(AgentResumeResult {
             resumed: true,
             agent: agent_name.0.clone(),
         })?;
@@ -1298,12 +1298,12 @@ impl WorkerCommandHandler {
                     agent_name: agent_name.0.as_str().into(),
                     error: Some(error.to_string()),
                 });
-                self.ctx.log_handler().log_view(&update_results)?;
+                self.ctx.log_handler().log_view(update_results)?;
                 return Err(error);
             }
         }
 
-        self.ctx.log_handler().log_view(&update_results)?;
+        self.ctx.log_handler().log_view(update_results)?;
 
         Ok(())
     }
@@ -1351,7 +1351,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(metadata_view, true))?;
+            .log_view(WorkerGetView::from_metadata(metadata_view, true))?;
 
         Ok(())
     }
@@ -1375,7 +1375,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentDeleteResult {
+        self.ctx.log_handler().log_view(AgentDeleteResult {
             deleted: true,
             agent: agent_name.0.clone(),
         })?;
@@ -1439,7 +1439,7 @@ impl WorkerCommandHandler {
                 .collect(),
         };
 
-        self.ctx.log_handler().log_view(&view)?;
+        self.ctx.log_handler().log_view(view)?;
 
         log_action(
             "Listed files",
@@ -1512,7 +1512,7 @@ impl WorkerCommandHandler {
                     "File download cancelled",
                     format!("by user for file {}", output_path.log_color_highlight()),
                 );
-                self.ctx.log_handler().log_view(&AgentFileContentsResult {
+                self.ctx.log_handler().log_view(AgentFileContentsResult {
                     saved: false,
                     agent: agent_name.0.clone(),
                     path,
@@ -1529,7 +1529,7 @@ impl WorkerCommandHandler {
                     "File saved",
                     format!("to {}", output_path.log_color_highlight()),
                 );
-                self.ctx.log_handler().log_view(&AgentFileContentsResult {
+                self.ctx.log_handler().log_view(AgentFileContentsResult {
                     saved: true,
                     agent: agent_name.0.clone(),
                     path,
@@ -1589,7 +1589,7 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_view(AgentPluginToggleResult {
             activated: true,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
@@ -1640,7 +1640,7 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_view(AgentPluginToggleResult {
             activated: false,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),

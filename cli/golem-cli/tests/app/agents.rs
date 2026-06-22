@@ -937,9 +937,7 @@ async fn test_component_env_var_substitution() {
     assert!(outputs.success_or_dump());
 
     // But deploying will do so, so it should fail
-    let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
-        .await;
+    let outputs = ctx.cli([flag::SHOW_SECRETS, cmd::DEPLOY, flag::YES]).await;
     assert!(!outputs.success());
 
     assert!(outputs.stdout_contains_ordered([
@@ -958,9 +956,7 @@ async fn test_component_env_var_substitution() {
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_1", "123");
     ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_3", "456");
 
-    let outputs = ctx
-        .cli([flag::SHOW_SENSITIVE, cmd::DEPLOY, flag::YES])
-        .await;
+    let outputs = ctx.cli([flag::SHOW_SECRETS, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains_ordered([

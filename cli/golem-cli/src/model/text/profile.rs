@@ -18,6 +18,7 @@ use crate::log::{LogColorize, logln};
 use crate::model::ProfileView;
 use crate::model::cli_output::CliOutput;
 use crate::model::format::Format;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,8 @@ impl MessageWithFields for ProfileView {
         fields.build()
     }
 }
+
+impl Masked for ProfileView {}
 
 impl CliOutput for ProfileView {
     const KIND: &'static str = "profile.get";

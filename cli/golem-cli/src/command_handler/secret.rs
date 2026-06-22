@@ -165,10 +165,9 @@ impl SecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&SecretCreateView {
-            secret: result,
-            show_sensitive: self.ctx.show_sensitive(),
-        })?;
+        self.ctx
+            .log_handler()
+            .log_view(SecretCreateView(result.into()))?;
 
         Ok(())
     }
@@ -180,10 +179,9 @@ impl SecretCommandHandler {
     ) -> anyhow::Result<()> {
         let result = self.resolve_secret(path, id).await?;
 
-        self.ctx.log_handler().log_view(&SecretGetView {
-            secret: result,
-            show_sensitive: self.ctx.show_sensitive(),
-        })?;
+        self.ctx
+            .log_handler()
+            .log_view(SecretGetView(result.into()))?;
 
         Ok(())
     }
@@ -218,10 +216,9 @@ impl SecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&SecretUpdateView {
-            secret: result,
-            show_sensitive: self.ctx.show_sensitive(),
-        })?;
+        self.ctx
+            .log_handler()
+            .log_view(SecretUpdateView(result.into()))?;
 
         Ok(())
     }
@@ -241,10 +238,9 @@ impl SecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&SecretDeleteView {
-            secret: result,
-            show_sensitive: self.ctx.show_sensitive(),
-        })?;
+        self.ctx
+            .log_handler()
+            .log_view(SecretDeleteView(result.into()))?;
 
         Ok(())
     }
@@ -303,11 +299,10 @@ impl SecretCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&SecretListView {
-            show_sensitive: self.ctx.show_sensitive(),
+        self.ctx.log_handler().log_view(SecretListView {
             environment_name: environment.environment_name.0,
             show_ids,
-            secrets: results,
+            secrets: results.into_iter().map(Into::into).collect(),
         })?;
 
         Ok(())

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::CliOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
@@ -32,6 +33,8 @@ fn account_fields(account: &Account) -> Vec<(String, String)> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountGetView(pub Account);
+
+impl Masked for AccountGetView {}
 
 impl MessageWithFields for AccountGetView {
     fn message(&self) -> String {
@@ -53,6 +56,8 @@ impl CliOutput for AccountGetView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountNewView(pub Account);
 
+impl Masked for AccountNewView {}
+
 impl MessageWithFields for AccountNewView {
     fn message(&self) -> String {
         format!(
@@ -72,6 +77,8 @@ impl CliOutput for AccountNewView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountUpdateView(pub Account);
+
+impl Masked for AccountUpdateView {}
 
 impl MessageWithFields for AccountUpdateView {
     fn message(&self) -> String {
@@ -132,6 +139,8 @@ fn grant_count(data: &PermissionShareData) -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionShareGetView(pub PermissionShare);
 
+impl Masked for PermissionShareGetView {}
+
 impl MessageWithFields for PermissionShareGetView {
     fn message(&self) -> String {
         format!(
@@ -152,6 +161,8 @@ impl CliOutput for PermissionShareGetView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionShareNewView(pub PermissionShare);
 
+impl Masked for PermissionShareNewView {}
+
 impl MessageWithFields for PermissionShareNewView {
     fn message(&self) -> String {
         format!(
@@ -171,6 +182,8 @@ impl CliOutput for PermissionShareNewView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionShareUpdateView(pub PermissionShare);
+
+impl Masked for PermissionShareUpdateView {}
 
 impl MessageWithFields for PermissionShareUpdateView {
     fn message(&self) -> String {
