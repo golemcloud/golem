@@ -1882,7 +1882,7 @@ mod tests {
 
         let named_record = cases
             .iter()
-            .find(|case| case.name == "named-record")
+            .find(|case| case.name == "NamedRecord")
             .and_then(|case| case.payload.as_ref())
             .expect("missing NamedRecord case payload type");
         let SchemaType::Record { fields, .. } = named_record else {
@@ -1893,7 +1893,7 @@ mod tests {
 
         let multi_tuple = cases
             .iter()
-            .find(|case| case.name == "multi-tuple")
+            .find(|case| case.name == "MultiTuple")
             .and_then(|case| case.payload.as_ref())
             .expect("missing MultiTuple case payload type");
         assert!(matches!(multi_tuple, SchemaType::Tuple { .. }));
