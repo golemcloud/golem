@@ -432,6 +432,7 @@ impl EnvBasedTestDependencies {
                 registry_service,
                 config.environment_state_cache_capacity,
                 config.oplog_archive_interval,
+                true,
                 false,
             )
             .await,

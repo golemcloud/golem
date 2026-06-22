@@ -477,6 +477,7 @@ impl BenchmarkTestDependencies {
                 registry_service.clone(),
                 environment_state_cache_capacity,
                 None,
+                false,
                 otlp,
             )
             .await,
