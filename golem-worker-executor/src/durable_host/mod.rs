@@ -2934,6 +2934,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     self.public_state.worker().bump_read_only_cache_epoch();
                 }
 
+                if self.agent_mode() == AgentMode::Ephemeral
+                    && !matches!(output.result, AgentInvocationResult::AgentInitialization)
+                {
+                    self.public_state
+                        .worker()
+                        .remove_from_active_workers()
+                        .await;
+                }
+
                 // Capture the agent's oplog index right after
                 // `AgentInvocationFinished` was committed, together with the
                 // worker's per-instance fingerprint, so the response carries

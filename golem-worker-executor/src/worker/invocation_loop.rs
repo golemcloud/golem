@@ -1023,14 +1023,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             oplog_index: None,
             agent_fingerprint: None,
         };
-        if should_cleanup_terminal_ephemeral_invocation(
-            self.parent.agent_mode(),
-            self.store.data().component_metadata().metadata.is_agent(),
-            kind,
-        ) {
-            self.parent.remove_from_active_workers().await;
-        }
-
         match self
             .store
             .data_mut()
