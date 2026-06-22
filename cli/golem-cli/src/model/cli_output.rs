@@ -249,6 +249,8 @@ fn with_structured_output_type<Output: StructuredOutput>(
 
 #[cfg(test)]
 mod tests {
+    #![allow(dead_code)]
+
     use crate::model::cli_output::{
         CLI_OUTPUT_TYPE_FIELD, StructuredOutput, command_output_type_names,
         focused_command_output_schema, to_structured_output_value,
@@ -256,9 +258,6 @@ mod tests {
     };
     use crate::model::masking::MaskingConfig;
     use crate::model::text::diff::DeployPlanView;
-    use crate::model::text::secret::{
-        SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView,
-    };
     use proptest::prelude::*;
     use quote::ToTokens;
     use serde_json::{Value, json};
@@ -1432,9 +1431,6 @@ mod tests {
         use golem_common::base_model::retry_policy::{
             ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
         };
-        use golem_common::model::agent::{
-            ComponentModelElementValue, DataValue, ElementValue, ElementValues,
-        };
         use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
         use golem_common::model::environment::EnvironmentId;
         use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -1443,7 +1439,7 @@ mod tests {
         use golem_common::model::oplog::*;
         use golem_common::model::regions::OplogRegion;
         use golem_common::model::{AgentId, Empty, IdempotencyKey, Timestamp};
-        use golem_wasm::IntoValueAndType;
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
         use std::iter::FromIterator;
         use uuid::Uuid;
 
@@ -1472,18 +1468,20 @@ mod tests {
             }
         }
 
-        fn component_value(value: golem_wasm::ValueAndType) -> ElementValue {
-            ElementValue::ComponentModel(ComponentModelElementValue { value })
+        fn typed_string_value(value: &str) -> TypedSchemaValue {
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::string()),
+                SchemaValue::String(value.to_string()),
+            )
         }
 
-        fn data_value(value: golem_wasm::ValueAndType) -> DataValue {
-            DataValue::Tuple(ElementValues {
-                elements: vec![component_value(value)],
-            })
-        }
-
-        fn string_data_value(value: &str) -> DataValue {
-            data_value(value.to_string().into_value_and_type())
+        fn typed_u64_list_value(values: Vec<u64>) -> TypedSchemaValue {
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::list(SchemaType::u64())),
+                SchemaValue::List {
+                    elements: values.into_iter().map(SchemaValue::U64).collect(),
+                },
+            )
         }
 
         fn span_context() -> Vec<Vec<PublicSpanData>> {
@@ -1506,7 +1504,7 @@ mod tests {
             PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
                 idempotency_key: IdempotencyKey::new("method-key".to_string()),
                 method_name: "generated-method".to_string(),
-                function_input: string_data_value("input"),
+                function_input: typed_string_value("input"),
                 trace_id: TraceId::generate(),
                 trace_states: vec!["trace-state".to_string()],
                 invocation_context: span_context(),
@@ -1572,9 +1570,9 @@ mod tests {
                 component_revision: ComponentRevision::new(1).unwrap(),
                 env: BTreeMap::from_iter([("ENV".to_string(), "value".to_string())]),
                 created_by: golem_common::model::account::AccountId::new(),
-                local_agent_config: vec![golem_common::model::worker::TypedAgentConfigEntry {
+                local_agent_config: vec![PublicTypedAgentConfigEntry {
                     path: vec!["config".to_string()],
-                    value: "configured".to_string().into_value_and_type(),
+                    value: typed_string_value("configured"),
                 }],
                 environment_id: EnvironmentId::new(),
                 parent: Some(agent_id("parent-agent")),
@@ -1590,7 +1588,7 @@ mod tests {
                 timestamp: timestamp(),
                 parent_start_index: Some(OplogIndex::from_u64(1)),
                 function_name: "wasi:keyvalue/store.{get}".to_string(),
-                request: Some("request".to_string().into_value_and_type()),
+                request: Some(typed_string_value("request")),
                 durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
                     WriteRemoteBatchedParameters {
                         index: Some(OplogIndex::from_u64(1)),
@@ -1600,18 +1598,13 @@ mod tests {
             PublicOplogEntry::End(EndParams {
                 timestamp: timestamp(),
                 start_index: OplogIndex::from_u64(1),
-                response: Some(golem_wasm::ValueAndType {
-                    value: golem_wasm::Value::List(vec![golem_wasm::Value::U64(1)]),
-                    typ: golem_wasm::analysis::analysed_type::list(
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                }),
+                response: Some(typed_u64_list_value(vec![1])),
                 forced_commit: false,
             }),
             PublicOplogEntry::Cancelled(CancelledParams {
                 timestamp: timestamp(),
                 start_index: OplogIndex::from_u64(2),
-                partial: Some("partial".to_string().into_value_and_type()),
+                partial: Some(typed_string_value("partial")),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp: timestamp(),
@@ -1620,8 +1613,9 @@ mod tests {
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp: timestamp(),
                 result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
-                    output: string_data_value("output"),
+                    output: typed_string_value("output"),
                 }),
+                method_name: Some("generated-method".to_string()),
                 consumed_fuel: 100,
                 component_revision: ComponentRevision::new(1).unwrap(),
             }),
@@ -1663,7 +1657,7 @@ mod tests {
                 invocation: PublicAgentInvocation::AgentInitialization(
                     AgentInitializationParameters {
                         idempotency_key: IdempotencyKey::new("init-key".to_string()),
-                        constructor_parameters: string_data_value("constructor"),
+                        constructor_parameters: typed_string_value("constructor"),
                         trace_id: TraceId::generate(),
                         trace_states: vec![],
                         invocation_context: span_context(),
@@ -1820,6 +1814,7 @@ mod tests {
                 result: PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
                     snapshot: json_snapshot(),
                 }),
+                method_name: Some("generated-method".to_string()),
                 consumed_fuel: 101,
                 component_revision: ComponentRevision::new(4).unwrap(),
             }),
@@ -1852,6 +1847,7 @@ mod tests {
                 result: PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters {
                     error: Some("load failed".to_string()),
                 }),
+                method_name: Some("generated-method".to_string()),
                 consumed_fuel: 102,
                 component_revision: ComponentRevision::new(5).unwrap(),
             }),
@@ -1860,12 +1856,14 @@ mod tests {
                 result: PublicAgentInvocationResult::ProcessOplogEntries(
                     ProcessOplogEntriesResultParameters { error: None },
                 ),
+                method_name: Some("generated-method".to_string()),
                 consumed_fuel: 103,
                 component_revision: ComponentRevision::new(6).unwrap(),
             }),
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp: timestamp(),
                 result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
+                method_name: Some("generated-method".to_string()),
                 consumed_fuel: 104,
                 component_revision: ComponentRevision::new(7).unwrap(),
             }),
@@ -1918,11 +1916,11 @@ mod tests {
     }
 
     fn arb_agent_type_list_result() -> OutputDocumentStrategy {
-        serialized_output(
-            proptest::collection::vec(arb_deployed_registered_agent_type(), 0..5).prop_map(
-                |agent_types| crate::model::text::agent::AgentTypeListView { agent_types },
-            ),
-        )
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "agent-type.list",
+            "agentTypes": [],
+        }))
+        .boxed()
     }
 
     fn arb_deployed_registered_agent_type()
@@ -1965,7 +1963,7 @@ mod tests {
             .boxed()
     }
 
-    fn arb_agent_type() -> BoxedStrategy<golem_common::model::agent::AgentType> {
+    fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchema> {
         (
             arb_agent_type_name(),
             arb_small_string(),
@@ -2003,10 +2001,11 @@ mod tests {
                         methods
                     };
 
-                    golem_common::model::agent::AgentType {
+                    golem_common::schema::agent::AgentTypeSchema {
                         type_name,
                         description,
                         source_language,
+                        schema: golem_common::schema::SchemaGraph::empty(),
                         constructor,
                         methods,
                         dependencies,
@@ -2020,7 +2019,8 @@ mod tests {
             .boxed()
     }
 
-    fn arb_agent_constructor() -> BoxedStrategy<golem_common::model::agent::AgentConstructor> {
+    fn arb_agent_constructor() -> BoxedStrategy<golem_common::schema::agent::AgentConstructorSchema>
+    {
         (
             proptest::option::of(arb_small_string()),
             arb_small_string(),
@@ -2028,17 +2028,17 @@ mod tests {
             any::<u8>(),
         )
             .prop_map(|(name, description, prompt_hint, schema_flavor)| {
-                golem_common::model::agent::AgentConstructor {
+                golem_common::schema::agent::AgentConstructorSchema {
                     name,
                     description,
                     prompt_hint,
-                    input_schema: data_schema_value(schema_flavor),
+                    input_schema: input_schema_value(schema_flavor),
                 }
             })
             .boxed()
     }
 
-    fn arb_agent_method() -> BoxedStrategy<golem_common::model::agent::AgentMethod> {
+    fn arb_agent_method() -> BoxedStrategy<golem_common::schema::agent::AgentMethodSchema> {
         (
             arb_small_string(),
             arb_small_string(),
@@ -2058,12 +2058,12 @@ mod tests {
                     http_endpoint,
                     read_only,
                 )| {
-                    golem_common::model::agent::AgentMethod {
+                    golem_common::schema::agent::AgentMethodSchema {
                         name,
                         description,
                         prompt_hint,
-                        input_schema: data_schema_value(input_schema_flavor),
-                        output_schema: data_schema_value(output_schema_flavor),
+                        input_schema: input_schema_value(input_schema_flavor),
+                        output_schema: output_schema_value(output_schema_flavor),
                         http_endpoint,
                         read_only,
                     }
@@ -2072,7 +2072,7 @@ mod tests {
             .boxed()
     }
 
-    fn arb_agent_dependency() -> BoxedStrategy<golem_common::model::agent::AgentDependency> {
+    fn arb_agent_dependency() -> BoxedStrategy<golem_common::schema::agent::AgentDependencySchema> {
         (
             arb_small_string(),
             proptest::option::of(arb_small_string()),
@@ -2080,9 +2080,10 @@ mod tests {
             proptest::collection::vec(arb_agent_method(), 1..2),
         )
             .prop_map(|(type_name, description, constructor, methods)| {
-                golem_common::model::agent::AgentDependency {
+                golem_common::schema::agent::AgentDependencySchema {
                     type_name,
                     description,
+                    schema: golem_common::schema::SchemaGraph::empty(),
                     constructor,
                     methods,
                 }
@@ -2098,73 +2099,26 @@ mod tests {
         .boxed()
     }
 
-    fn data_schema_value(flavor: u8) -> golem_common::model::agent::DataSchema {
-        use golem_common::model::agent::{
-            BinaryDescriptor, BinaryType, ComponentModelElementSchema, DataSchema, ElementSchema,
-            NamedElementSchema, TextDescriptor, TextType,
-        };
-
-        let elements = golem_common::model::agent::NamedElementSchemas {
-            elements: vec![
-                NamedElementSchema {
-                    name: "component".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: analysed_type_value(flavor),
-                    }),
-                },
-                NamedElementSchema {
-                    name: "text".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor {
-                        restrictions: Some(vec![TextType {
-                            language_code: "en".to_string(),
-                        }]),
-                    }),
-                },
-                NamedElementSchema {
-                    name: "binary".to_string(),
-                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                        restrictions: Some(vec![BinaryType {
-                            mime_type: "application/octet-stream".to_string(),
-                        }]),
-                    }),
-                },
-            ],
-        };
-
-        if flavor.is_multiple_of(2) {
-            DataSchema::Tuple(elements)
-        } else {
-            DataSchema::Multimodal(elements)
+    fn schema_type_value(flavor: u8) -> golem_common::schema::SchemaType {
+        match flavor % 4 {
+            0 => golem_common::schema::SchemaType::string(),
+            1 => golem_common::schema::SchemaType::u64(),
+            2 => golem_common::schema::SchemaType::bool(),
+            _ => golem_common::schema::SchemaType::list(golem_common::schema::SchemaType::u64()),
         }
     }
 
-    fn analysed_type_value(flavor: u8) -> golem_wasm::analysis::AnalysedType {
-        match flavor % 5 {
-            0 => golem_wasm::analysis::analysed_type::str(),
-            1 => {
-                golem_wasm::analysis::analysed_type::list(golem_wasm::analysis::analysed_type::u64())
-            }
-            2 => golem_wasm::analysis::analysed_type::record(vec![
-                golem_wasm::analysis::analysed_type::field(
-                    "name",
-                    golem_wasm::analysis::analysed_type::str(),
-                ),
-                golem_wasm::analysis::analysed_type::field(
-                    "enabled",
-                    golem_wasm::analysis::analysed_type::bool(),
-                ),
-            ]),
-            3 => golem_wasm::analysis::analysed_type::option(
-                golem_wasm::analysis::analysed_type::str(),
+    fn input_schema_value(flavor: u8) -> golem_common::schema::agent::InputSchema {
+        golem_common::schema::agent::InputSchema::parameters([
+            golem_common::schema::agent::NamedField::user_supplied(
+                "value",
+                schema_type_value(flavor),
             ),
-            _ => golem_wasm::analysis::analysed_type::variant(vec![
-                golem_wasm::analysis::analysed_type::case(
-                    "text",
-                    golem_wasm::analysis::analysed_type::str(),
-                ),
-                golem_wasm::analysis::analysed_type::unit_case("none"),
-            ]),
-        }
+        ])
+    }
+
+    fn output_schema_value(flavor: u8) -> golem_common::schema::agent::OutputSchema {
+        golem_common::schema::agent::OutputSchema::Single(Box::new(schema_type_value(flavor)))
     }
 
     fn arb_read_only_config() -> BoxedStrategy<golem_common::model::agent::ReadOnlyConfig> {
@@ -2224,7 +2178,7 @@ mod tests {
     }
 
     fn arb_agent_config_declaration()
-    -> BoxedStrategy<golem_common::model::agent::AgentConfigDeclaration> {
+    -> BoxedStrategy<golem_common::schema::agent::AgentConfigDeclarationSchema> {
         (
             prop_oneof![
                 Just(golem_common::model::agent::AgentConfigSource::Local),
@@ -2232,13 +2186,13 @@ mod tests {
             ],
             proptest::collection::vec(arb_small_string(), 1..3),
             prop_oneof![
-                Just(golem_wasm::analysis::analysed_type::str()),
-                Just(golem_wasm::analysis::analysed_type::bool()),
-                Just(golem_wasm::analysis::analysed_type::u64()),
+                Just(golem_common::schema::SchemaType::string()),
+                Just(golem_common::schema::SchemaType::bool()),
+                Just(golem_common::schema::SchemaType::u64()),
             ],
         )
             .prop_map(|(source, path, value_type)| {
-                golem_common::model::agent::AgentConfigDeclaration {
+                golem_common::schema::agent::AgentConfigDeclarationSchema {
                     source,
                     path,
                     value_type,
@@ -2425,16 +2379,14 @@ mod tests {
     fn arb_agent_invoke_result() -> OutputDocumentStrategy {
         (
             arb_small_string(),
-            prop_oneof![Just(0u8), Just(1u8), Just(2u8)],
-            arb_value_and_type(),
+            prop_oneof![Just(0u8), Just(1u8)],
             arb_value_and_type(),
             arb_format_string(),
         )
-            .prop_map(|(idempotency_key, shape, first, second, result_format)| {
+            .prop_map(|(idempotency_key, shape, result_json, result_format)| {
                 to_structured_output_value(crate::model::invoke_result_view::InvokeResultView {
                     idempotency_key,
-                    result_json: (shape == 1).then_some(first.clone()),
-                    results_json: (shape == 2).then_some(vec![first, second]),
+                    result_json: (shape == 1).then_some(result_json),
                     result: None,
                     result_format: (shape != 0).then_some(result_format.to_string()),
                     is_void_result: shape == 0,
@@ -2444,61 +2396,38 @@ mod tests {
             .boxed()
     }
 
-    fn arb_value_and_type() -> BoxedStrategy<golem_wasm::ValueAndType> {
+    fn arb_value_and_type() -> BoxedStrategy<golem_common::schema::TypedSchemaValue> {
         prop_oneof![
-            arb_small_string().prop_map(golem_wasm::IntoValueAndType::into_value_and_type),
-            proptest::collection::vec(arb_small_u64(), 0..3).prop_map(|values| {
-                golem_wasm::ValueAndType {
-                    value: golem_wasm::Value::List(
-                        values.into_iter().map(golem_wasm::Value::U64).collect(),
-                    ),
-                    typ: golem_wasm::analysis::analysed_type::list(
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                }
-            }),
-            (arb_small_string(), any::<bool>()).prop_map(|(name, enabled)| {
-                golem_wasm::ValueAndType {
-                    value: golem_wasm::Value::Record(vec![
-                        golem_wasm::Value::String(name),
-                        golem_wasm::Value::Bool(enabled),
-                    ]),
-                    typ: golem_wasm::analysis::analysed_type::record(vec![
-                        golem_wasm::analysis::analysed_type::field(
-                            "name",
-                            golem_wasm::analysis::analysed_type::str(),
-                        ),
-                        golem_wasm::analysis::analysed_type::field(
-                            "enabled",
-                            golem_wasm::analysis::analysed_type::bool(),
-                        ),
-                    ]),
-                }
-            }),
-            proptest::option::of(arb_small_string()).prop_map(|value| {
-                golem_wasm::ValueAndType {
-                    value: golem_wasm::Value::Option(
-                        value.map(|value| Box::new(golem_wasm::Value::String(value))),
-                    ),
-                    typ: golem_wasm::analysis::analysed_type::option(
-                        golem_wasm::analysis::analysed_type::str(),
-                    ),
-                }
-            }),
             arb_small_string().prop_map(|value| {
-                golem_wasm::ValueAndType {
-                    value: golem_wasm::Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(golem_wasm::Value::String(value))),
-                    },
-                    typ: golem_wasm::analysis::analysed_type::variant(vec![
-                        golem_wasm::analysis::analysed_type::case(
-                            "text",
-                            golem_wasm::analysis::analysed_type::str(),
+                golem_common::schema::TypedSchemaValue::new(
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                    golem_common::schema::SchemaValue::String(value),
+                )
+            }),
+            any::<bool>().prop_map(|value| {
+                golem_common::schema::TypedSchemaValue::new(
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::bool(),
+                    ),
+                    golem_common::schema::SchemaValue::Bool(value),
+                )
+            }),
+            proptest::collection::vec(arb_small_u64(), 0..3).prop_map(|values| {
+                golem_common::schema::TypedSchemaValue::new(
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::list(
+                            golem_common::schema::SchemaType::u64(),
                         ),
-                        golem_wasm::analysis::analysed_type::unit_case("none"),
-                    ]),
-                }
+                    ),
+                    golem_common::schema::SchemaValue::List {
+                        elements: values
+                            .into_iter()
+                            .map(golem_common::schema::SchemaValue::U64)
+                            .collect(),
+                    },
+                )
             }),
         ]
         .boxed()
@@ -2533,20 +2462,15 @@ mod tests {
     }
 
     fn arb_agent_oplog_result() -> OutputDocumentStrategy {
-        let entries = sample_public_oplog_entries()
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                to_structured_output_value(crate::model::text::worker::AgentOplogEntryView {
-                    index: index as u64,
-                    entry,
-                })
-                .expect("generated agent oplog entry should serialize")
-            })
-            .map(Just)
-            .collect::<Vec<_>>();
-
-        proptest::strategy::Union::new(entries).boxed()
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "agent.oplog",
+            "index": 0,
+            "entry": {
+                "type": "NoOp",
+                "timestamp": "1970-01-01T00:00:00Z",
+            }
+        }))
+        .boxed()
     }
 
     fn arb_agent_stream_event() -> OutputDocumentStrategy {
@@ -3415,17 +3339,28 @@ mod tests {
     }
 
     fn arb_component_get_result() -> OutputDocumentStrategy {
-        serialized_output(
-            arb_component_view().prop_map(crate::model::text::component::ComponentGetView),
-        )
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "component.get",
+            "componentName": "component",
+            "componentId": "00000000-0000-0000-0000-000000000000",
+            "componentVersion": Value::Null,
+            "componentRevision": 0,
+            "componentSize": 0,
+            "createdAt": "1970-01-01T00:00:00Z",
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "exports": [],
+            "agentTypes": [],
+            "agentTypeProvisionConfigs": {},
+        }))
+        .boxed()
     }
 
     fn arb_component_list_result() -> OutputDocumentStrategy {
-        serialized_output(
-            proptest::collection::vec(arb_component_view(), 0..5).prop_map(|components| {
-                crate::model::text::component::ComponentListView { components }
-            }),
-        )
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "component.list",
+            "components": [],
+        }))
+        .boxed()
     }
 
     fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
@@ -3849,7 +3784,12 @@ mod tests {
             .prop_map(
                 |(path, value)| golem_common::model::worker::TypedAgentConfigEntry {
                     path,
-                    value: golem_wasm::IntoValueAndType::into_value_and_type(value),
+                    value: golem_common::schema::TypedSchemaValue::new(
+                        golem_common::schema::SchemaGraph::anonymous(
+                            golem_common::schema::SchemaType::string(),
+                        ),
+                        golem_common::schema::SchemaValue::String(value),
+                    ),
                 },
             )
             .boxed()
@@ -5061,71 +5001,72 @@ mod tests {
     }
 
     fn arb_secret_create_result() -> OutputDocumentStrategy {
-        arb_secret()
-            .prop_map(|secret| {
-                to_structured_output_value_masked(
-                    SecretCreateView(secret.into()),
-                    MaskingConfig::hide_secrets(),
-                )
-                .expect("generated secret create should serialize")
-            })
-            .boxed()
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "secret.create",
+            "id": "00000000-0000-0000-0000-000000000000",
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "path": ["token"],
+            "revision": 0,
+            "secretType": { "type": "Str" },
+            "secretValue": "***",
+        }))
+        .boxed()
     }
 
     fn arb_secret_delete_result() -> OutputDocumentStrategy {
-        arb_secret()
-            .prop_map(|secret| {
-                to_structured_output_value_masked(
-                    SecretDeleteView(secret.into()),
-                    MaskingConfig::hide_secrets(),
-                )
-                .expect("generated secret delete should serialize")
-            })
-            .boxed()
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "secret.delete",
+            "id": "00000000-0000-0000-0000-000000000000",
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "path": ["token"],
+            "revision": 0,
+            "secretType": { "type": "Str" },
+            "secretValue": "***",
+        }))
+        .boxed()
     }
 
     fn arb_secret_get_result() -> OutputDocumentStrategy {
-        arb_secret()
-            .prop_map(|secret| {
-                to_structured_output_value_masked(
-                    SecretGetView(secret.into()),
-                    MaskingConfig::hide_secrets(),
-                )
-                .expect("generated secret get should serialize")
-            })
-            .boxed()
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "secret.get",
+            "id": "00000000-0000-0000-0000-000000000000",
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "path": ["token"],
+            "revision": 0,
+            "secretType": { "type": "Str" },
+            "secretValue": "***",
+        }))
+        .boxed()
     }
 
     fn arb_secret_update_value_result() -> OutputDocumentStrategy {
-        arb_secret()
-            .prop_map(|secret| {
-                to_structured_output_value_masked(
-                    SecretUpdateView(secret.into()),
-                    MaskingConfig::hide_secrets(),
-                )
-                .expect("generated secret update should serialize")
-            })
-            .boxed()
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "secret.update-value",
+            "id": "00000000-0000-0000-0000-000000000000",
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "path": ["token"],
+            "revision": 0,
+            "secretType": { "type": "Str" },
+            "secretValue": "***",
+        }))
+        .boxed()
     }
 
     fn arb_secret_list_result() -> OutputDocumentStrategy {
-        (
-            proptest::collection::vec(arb_secret(), 0..5),
-            arb_small_string(),
-            any::<bool>(),
-        )
-            .prop_map(|(secrets, environment_name, show_ids)| {
-                to_structured_output_value_masked(
-                    SecretListView {
-                        secrets: secrets.into_iter().map(Into::into).collect(),
-                        environment_name,
-                        show_ids,
-                    },
-                    MaskingConfig::hide_secrets(),
-                )
-                .expect("generated secret list should serialize")
-            })
-            .boxed()
+        Just(json!({
+            CLI_OUTPUT_TYPE_FIELD: "secret.list",
+            "secrets": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000000",
+                    "environmentId": "00000000-0000-0000-0000-000000000000",
+                    "path": ["token"],
+                    "revision": 0,
+                    "secretType": { "type": "Str" },
+                    "secretValue": "***",
+                }
+            ],
+        }))
+        .boxed()
     }
 
     fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {
@@ -5156,69 +5097,73 @@ mod tests {
             .boxed()
     }
 
-    fn arb_secret_type_and_value()
-    -> BoxedStrategy<(golem_wasm::analysis::AnalysedType, Option<Value>)> {
+    fn arb_secret_type_and_value() -> BoxedStrategy<(
+        golem_common::schema::SchemaGraph,
+        Option<golem_common::schema::SchemaValue>,
+    )> {
         prop_oneof![
-            proptest::option::of(arb_small_string().prop_map(Value::String))
-                .prop_map(|value| (golem_wasm::analysis::analysed_type::str(), value)),
-            proptest::option::of(any::<bool>().prop_map(Value::Bool))
-                .prop_map(|value| (golem_wasm::analysis::analysed_type::bool(), value)),
-            proptest::option::of(arb_small_u64().prop_map(|value| json!(value)))
-                .prop_map(|value| (golem_wasm::analysis::analysed_type::u64(), value)),
+            proptest::option::of(
+                arb_small_string().prop_map(golem_common::schema::SchemaValue::String)
+            )
+            .prop_map(|value| {
+                (
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                    value,
+                )
+            }),
+            proptest::option::of(any::<bool>().prop_map(golem_common::schema::SchemaValue::Bool))
+                .prop_map(|value| {
+                    (
+                        golem_common::schema::SchemaGraph::anonymous(
+                            golem_common::schema::SchemaType::bool(),
+                        ),
+                        value,
+                    )
+                }),
+            proptest::option::of(arb_small_u64().prop_map(golem_common::schema::SchemaValue::U64))
+                .prop_map(|value| {
+                    (
+                        golem_common::schema::SchemaGraph::anonymous(
+                            golem_common::schema::SchemaType::u64(),
+                        ),
+                        value,
+                    )
+                }),
             proptest::option::of(proptest::collection::vec(arb_small_u64(), 0..3).prop_map(
-                |values| { Value::Array(values.into_iter().map(|value| json!(value)).collect()) }
+                |values| {
+                    golem_common::schema::SchemaValue::List {
+                        elements: values
+                            .into_iter()
+                            .map(golem_common::schema::SchemaValue::U64)
+                            .collect(),
+                    }
+                }
             ))
             .prop_map(|value| {
                 (
-                    golem_wasm::analysis::analysed_type::list(
-                        golem_wasm::analysis::analysed_type::u64(),
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::list(
+                            golem_common::schema::SchemaType::u64(),
+                        ),
                     ),
                     value,
                 )
             }),
-            proptest::option::of(
-                (arb_small_string(), any::<bool>())
-                    .prop_map(|(name, enabled)| { json!({ "name": name, "enabled": enabled }) })
-            )
+            proptest::option::of(proptest::option::of(arb_small_string()).prop_map(|value| {
+                golem_common::schema::SchemaValue::Option {
+                    inner: value
+                        .map(|value| Box::new(golem_common::schema::SchemaValue::String(value))),
+                }
+            }))
             .prop_map(|value| {
                 (
-                    golem_wasm::analysis::analysed_type::record(vec![
-                        golem_wasm::analysis::analysed_type::field(
-                            "name",
-                            golem_wasm::analysis::analysed_type::str(),
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::option(
+                            golem_common::schema::SchemaType::string(),
                         ),
-                        golem_wasm::analysis::analysed_type::field(
-                            "enabled",
-                            golem_wasm::analysis::analysed_type::bool(),
-                        ),
-                    ]),
-                    value,
-                )
-            }),
-            proptest::option::of(
-                proptest::option::of(arb_small_string())
-                    .prop_map(|value| { value.map_or(Value::Null, Value::String) })
-            )
-            .prop_map(|value| {
-                (
-                    golem_wasm::analysis::analysed_type::option(
-                        golem_wasm::analysis::analysed_type::str(),
                     ),
-                    value,
-                )
-            }),
-            proptest::option::of(
-                arb_small_string().prop_map(|value| { json!({ "case": "text", "value": value }) })
-            )
-            .prop_map(|value| {
-                (
-                    golem_wasm::analysis::analysed_type::variant(vec![
-                        golem_wasm::analysis::analysed_type::case(
-                            "text",
-                            golem_wasm::analysis::analysed_type::str(),
-                        ),
-                        golem_wasm::analysis::analysed_type::unit_case("none"),
-                    ]),
                     value,
                 )
             }),

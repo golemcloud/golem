@@ -332,6 +332,7 @@ mod tests {
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use serde_json::json;
     use test_r::test;
 
     fn sample_secret() -> super::SecretView {
@@ -386,7 +387,10 @@ mod tests {
         let masked = view.masked(MaskingConfig::hide_secrets()).unwrap();
         let json = serde_json::to_value(&masked).unwrap();
 
-        assert_eq!(json["secrets"][0]["secretValue"], json!("***"));
+        assert_eq!(
+            json["secrets"][0]["secretValue"],
+            json!({ "kind": "string", "value": "***" })
+        );
         assert!(!json.to_string().contains("super-secret"));
     }
 
@@ -397,7 +401,10 @@ mod tests {
         let masked = view.masked(MaskingConfig::hide_secrets()).unwrap();
         let json = serde_json::to_value(&masked).unwrap();
 
-        assert_eq!(json["secretValue"], json!("***"));
+        assert_eq!(
+            json["secretValue"],
+            json!({ "kind": "string", "value": "***" })
+        );
         assert!(!json.to_string().contains("super-secret"));
     }
 
@@ -408,7 +415,10 @@ mod tests {
         let masked = view.masked(MaskingConfig::show_secrets()).unwrap();
         let json = serde_json::to_value(&masked).unwrap();
 
-        assert_eq!(json["secretValue"], json!("super-secret"));
+        assert_eq!(
+            json["secretValue"],
+            json!({ "kind": "string", "value": "super-secret" })
+        );
     }
 
     #[test]

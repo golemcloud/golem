@@ -14,8 +14,8 @@
 
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::{Value, ValueAndType};
+use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
+use golem_common::schema::{SchemaType, SchemaValue};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -141,28 +141,22 @@ fn should_mask_config_path(
     !config.show_secrets && secret_paths.contains(&path.join("."))
 }
 
-fn masked_typed_secret_value() -> ValueAndType {
-    ValueAndType::new(Value::String(mask_secret()), analysed_type::str())
+fn masked_typed_secret_value() -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::string()),
+        SchemaValue::String(mask_secret()),
+    )
 }
 
 pub fn mask_json_secret_value(
     config: MaskingConfig,
-    value: &Option<serde_json::Value>,
-) -> Option<serde_json::Value> {
+    value: &Option<SchemaValue>,
+) -> Option<SchemaValue> {
     if config.show_secrets {
         value.clone()
     } else {
-        value
-            .as_ref()
-            .map(|_| serde_json::Value::String(mask_secret()))
+        value.as_ref().map(|_| SchemaValue::String(mask_secret()))
     }
-}
-
-pub fn mask_json_secret_value_or_null(
-    config: MaskingConfig,
-    value: &Option<serde_json::Value>,
-) -> serde_json::Value {
-    mask_json_secret_value(config, value).unwrap_or(serde_json::Value::Null)
 }
 
 pub fn mask_json_secret_with_fingerprint(
@@ -195,7 +189,6 @@ pub fn mask_json_secret_for_deploy_diff(
 mod tests {
     use super::*;
     use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-    use golem_wasm::json::ValueAndTypeJsonExtensions;
     use serde_json::json;
     use std::collections::BTreeSet;
     use test_r::test;
@@ -262,14 +255,25 @@ mod tests {
     fn typed_agent_config_mask_is_valid_typed_string_value() {
         let entries = vec![TypedAgentConfigEntry {
             path: vec!["token".to_string()],
-            value: ValueAndType::new(Value::Bool(true), analysed_type::bool()),
+            value: TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::bool()),
+                SchemaValue::Bool(true),
+            ),
         }];
         let secret_paths = BTreeSet::from_iter(["token".to_string()]);
 
         let masked =
             mask_typed_agent_config_entries(MaskingConfig::hide_secrets(), &entries, &secret_paths);
 
-        assert_eq!(masked[0].value.to_json_value().unwrap(), json!("***"));
-        assert_eq!(masked[0].value.typ, analysed_type::str());
+        assert_eq!(
+            golem_common::schema::render::to_json_value(
+                masked[0].value.graph(),
+                masked[0].value.root_type(),
+                masked[0].value.value(),
+            )
+            .unwrap(),
+            json!("***")
+        );
+        assert_eq!(masked[0].value.root_type(), &SchemaType::string());
     }
 }

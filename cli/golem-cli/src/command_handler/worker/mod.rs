@@ -64,7 +64,7 @@ use golem_client::model::{
     UpdateWorkerRequest,
 };
 use golem_common::model::agent::typed_constructor_parameters;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -2910,7 +2910,7 @@ fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
 }
 
 fn secret_config_paths_for_agent_type(
-    agent_types: &[AgentType],
+    agent_types: &[AgentTypeSchema],
     agent_type_name: &AgentTypeName,
 ) -> BTreeSet<String> {
     agent_types
@@ -3063,7 +3063,6 @@ mod tests {
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
     use pretty_assertions::assert_eq;
-    use std::collections::BTreeSet;
     use test_r::test;
     use uuid::Uuid;
 
