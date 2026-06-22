@@ -82,6 +82,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_workers::memory_probe::FixedProbe;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -1842,6 +1843,36 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
+        // The in-process test harness shares its process (and RSS) with the test
+        // framework and other services, so a process-RSS probe cannot isolate
+        // this executor's footprint. When a test pins a memory limit via
+        // system_memory_override, give the gate a fixed probe reporting that
+        // limit with zero current usage, so admission is decided solely on the
+        // granted accounting (exact and process-isolated) against the pinned
+        // limit. The usable_ratio (worker_memory_ratio) still applies, matching
+        // the pre-gate semaphore pool size of system_memory_override * ratio.
+        match golem_config.memory.system_memory_override {
+            Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
+                Box::new(FixedProbe::new(limit, 0)),
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )),
+            None => Arc::new(ActiveWorkers::new(
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )),
+        }
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -3221,21 +3252,21 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
                 owned_agent_id,
                 self_created_by,
-                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
                 config,
+                auth_ctx,
             )
             .await
     }
@@ -3247,10 +3278,10 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<UntypedDataValue, ServiceRpcError> {
         if self
             .remaining_failures
@@ -3268,10 +3299,10 @@ impl Rpc for FailingRpc {
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
+                    auth_ctx,
                 )
                 .await
         }
@@ -3284,10 +3315,10 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
@@ -3296,10 +3327,10 @@ impl Rpc for FailingRpc {
                 method_name,
                 method_parameters,
                 self_created_by,
-                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
+                auth_ctx,
             )
             .await
     }

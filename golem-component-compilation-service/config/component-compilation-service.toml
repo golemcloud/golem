@@ -1,6 +1,7 @@
 ## Generated from default config
 http_host = "0.0.0.0"
 http_port = 8084
+runtime_metrics_sampling_interval = "5s"
 
 [blob_storage]
 type = "LocalFileSystem"
@@ -102,6 +103,7 @@ without_time = false
 ## Generated from example config: with s3 blob storage and disabled compiled component service
 # http_host = "0.0.0.0"
 # http_port = 8084
+# runtime_metrics_sampling_interval = "5s"
 # 
 # [blob_storage]
 # type = "S3"

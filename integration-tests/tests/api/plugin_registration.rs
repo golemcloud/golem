@@ -320,14 +320,14 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
                 data: PermissionShareData {
                     lower_positive: vec![
                         format!(
-                            "environment({}/{}) @ {} : view : {}",
+                            "environment({}/{}/{}) @ {} : view :",
                             user_1.account_email.as_str(),
                             env.application_name.0,
-                            user_2.account_email.as_str(),
                             env.name.0,
+                            user_2.account_email.as_str(),
                         ),
                         format!(
-                            "component({}/{}/{}) @ {} : view : *",
+                            "component({}/{}/{}/*) @ {} : view : *",
                             user_1.account_email.as_str(),
                             env.application_name.0,
                             env.name.0,

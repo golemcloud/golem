@@ -28,10 +28,9 @@ pub use self::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
-use golem_common::model::card::owner::ApplicationOwnerPattern;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern,
-    EnvironmentVerb, PermissionTarget,
+    ClassPermissionTarget, EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
 };
 pub use golem_common::model::deployment::DeployValidationWarning;
 use golem_common::model::environment::Environment;
@@ -57,12 +56,11 @@ fn authorize_environment_permission(
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
-        owner: ApplicationOwnerPattern::Application {
+        owner: EnvironmentOwnerPattern::Environment {
             account: environment.owner_account_email.clone(),
             application: environment.application_name.clone(),
+            environment: environment.name.clone(),
         },
-        resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
-            environment.name.0.clone(),
-        )),
+        resource: EnvironmentResourcePattern::Any,
     }))
 }

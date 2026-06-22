@@ -21,6 +21,9 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::info;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {

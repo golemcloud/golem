@@ -19,14 +19,7 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::card::owner::{
-    AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
-};
-use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, CardAlgebraError, ClassPermissionTarget,
-    ComponentResourcePattern, ComponentVerb, EffectiveSurface, EnvironmentResourcePattern,
-    EnvironmentVerb, GrantSurface, PermissionTarget,
-};
+use golem_common::model::card::{CardAlgebraError, EffectiveSurface, PermissionTarget};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -189,6 +182,7 @@ pub struct UserAuthCtx {
 pub struct AgentAuthCtx {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
+    pub effective_surface: EffectiveSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -226,10 +220,15 @@ impl AuthCtx {
         AuthCtx::System
     }
 
-    pub fn agent(account_id: AccountId, account_email: AccountEmail) -> AuthCtx {
+    pub fn agent_with_effective_surface(
+        account_id: AccountId,
+        account_email: AccountEmail,
+        effective_surface: EffectiveSurface,
+    ) -> AuthCtx {
         AuthCtx::Agent(AgentAuthCtx {
             account_id,
             account_email,
+            effective_surface,
         })
     }
 
@@ -331,8 +330,7 @@ impl AuthCtx {
                 authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
             Self::Agent(agent) => {
-                let effective_surface = temporary_agent_effective_surface(&agent.account_email);
-                authorize_effective_surface_permission(&effective_surface, target)
+                authorize_effective_surface_permission(&agent.effective_surface, target)
             }
         }
     }
@@ -353,60 +351,6 @@ fn authorize_effective_surface_permission(
         Err(AuthorizationError::PermissionNotAllowed(Box::new(
             target.clone(),
         )))
-    }
-}
-
-fn temporary_agent_effective_surface(account: &AccountEmail) -> EffectiveSurface {
-    EffectiveSurface {
-        source_card_ids: Vec::new(),
-        lower: vec![GrantSurface {
-            positive: vec![
-                PermissionTarget::Environment(ClassPermissionTarget {
-                    owner: ApplicationOwnerPattern::AccountApplications {
-                        account: account.clone(),
-                    },
-                    verb: Some(EnvironmentVerb::View),
-                    resource: EnvironmentResourcePattern::Any,
-                }),
-                PermissionTarget::Component(ClassPermissionTarget {
-                    owner: EnvironmentOwnerPattern::AccountEnvironments {
-                        account: account.clone(),
-                    },
-                    verb: Some(ComponentVerb::View),
-                    resource: ComponentResourcePattern::Any,
-                }),
-                PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents {
-                        account: account.clone(),
-                    },
-                    verb: Some(AgentVerb::View),
-                    resource: AgentResourcePattern::Any,
-                }),
-                PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents {
-                        account: account.clone(),
-                    },
-                    verb: Some(AgentVerb::Invoke),
-                    resource: AgentResourcePattern::Any,
-                }),
-                PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents {
-                        account: account.clone(),
-                    },
-                    verb: Some(AgentVerb::Resume),
-                    resource: AgentResourcePattern::Any,
-                }),
-                PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents {
-                        account: account.clone(),
-                    },
-                    verb: Some(AgentVerb::UpdateRevision),
-                    resource: AgentResourcePattern::Any,
-                }),
-            ],
-            negative: Vec::new(),
-        }],
-        upper: Vec::new(),
     }
 }
 
@@ -636,6 +580,7 @@ mod protobuf {
     use super::{
         AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
     };
+    use applying::Apply;
     use golem_common::model::account::AccountEmail;
     use golem_common::model::auth::AccountRole;
     use golem_common::model::card::{CardId, EffectiveSurface, GrantSurface, PermissionTarget};
@@ -765,7 +710,11 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
-                account_email: AccountEmail::new(value.account_email),
+                account_email: AccountEmail::new(value.account_email.clone()),
+                effective_surface: value
+                    .effective_surface
+                    .ok_or("missing effective_surface")?
+                    .apply(deserialize_effective_surface)?,
             })
         }
     }
@@ -775,6 +724,7 @@ mod protobuf {
             Self {
                 account_id: Some(value.account_id.into()),
                 account_email: value.account_email.into_inner(),
+                effective_surface: Some(serialize_effective_surface(value.effective_surface)),
             }
         }
     }
