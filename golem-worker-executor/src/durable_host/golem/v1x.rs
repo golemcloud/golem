@@ -106,7 +106,6 @@ fn card_install_failure_to_wit(
     failure: CardInstallFailure,
 ) -> golem_api_1_x::host::CardInstallError {
     match failure {
-        CardInstallFailure::CardRevoked => golem_api_1_x::host::CardInstallError::Revoked,
         CardInstallFailure::NotFound => golem_api_1_x::host::CardInstallError::NotFound,
         CardInstallFailure::RecipientMismatch | CardInstallFailure::NotPermitted => {
             golem_api_1_x::host::CardInstallError::NotPermitted
@@ -663,12 +662,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let card = ctx
                     .state
                     .card_service
-                    .get_cards(vec![card_id])
+                    .check_cards(vec![card_id])
                     .await?
-                    .into_iter()
-                    .next();
-                let result = if let Some(card) = card {
-                    ctx.apply_card_install(None, card).await?
+                    .remove(&card_id);
+                let result = if let Some(crate::services::card::CardState::Live(card)) = card {
+                    ctx.apply_card_install(None, *card).await?
                 } else {
                     Err(CardInstallFailure::NotFound)
                 };

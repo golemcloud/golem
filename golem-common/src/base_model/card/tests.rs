@@ -327,7 +327,7 @@ fn derivation_witness_excludes_unrelated_parent() {
         EffectiveSurface::from_cards(&[needed_parent, unrelated_parent], &recipient).unwrap();
 
     let witness = surface
-        .validates_derivation_with_witness(std::slice::from_ref(&read_tmp), &[])
+        .validates_derivation(std::slice::from_ref(&read_tmp), &[])
         .unwrap();
 
     assert_eq!(witness, vec![needed_parent_id]);
@@ -357,7 +357,7 @@ fn derivation_witness_includes_multiple_needed_parents() {
         EffectiveSurface::from_cards(&[filesystem_parent, secret_parent], &recipient).unwrap();
 
     let witness = surface
-        .validates_derivation_with_witness(&[read_tmp, reveal_secret], &[])
+        .validates_derivation(&[read_tmp, reveal_secret], &[])
         .unwrap();
 
     assert_eq!(witness, vec![filesystem_parent_id, secret_parent_id]);

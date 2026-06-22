@@ -3372,7 +3372,7 @@ mod test {
                 OplogEntry::card_install_failed(
                     OplogIndex::from_u64(1),
                     card_id,
-                    CardInstallFailure::CardRevoked,
+                    CardInstallFailure::NotFound,
                 ),
             ),
         ]);

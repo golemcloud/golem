@@ -217,11 +217,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let owned_agent_id = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
-        let card_service = self.card_service.clone();
         self.workers
             .get_or_insert_simple(&agent_id, || {
                 Box::pin(async move {
-                    card_service.register_agent(owned_agent_id.clone()).await;
                     let worker = Worker::new(
                         &deps,
                         owned_agent_id.clone(),
@@ -235,13 +233,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     .in_current_span()
                     .await;
 
-                    match worker {
-                        Ok(worker) => Ok(Arc::new(worker)),
-                        Err(err) => {
-                            card_service.unregister_agent(&owned_agent_id).await;
-                            Err(err)
-                        }
-                    }
+                    worker.map(Arc::new)
                 })
             })
             .await
@@ -255,7 +247,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub async fn remove(&self, agent_id: &AgentId) {
         if let Some(worker) = self.workers.get(agent_id).await {
             self.card_service
-                .unregister_agent(worker.owned_agent_id())
+                .set_card_interest(worker.owned_agent_id().clone(), &[])
                 .await;
         }
         self.workers.remove(agent_id).await

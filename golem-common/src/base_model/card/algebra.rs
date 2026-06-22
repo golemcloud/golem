@@ -141,23 +141,7 @@ impl EffectiveSurface {
         &self,
         child_lower_positive: &[PermissionPattern],
         child_upper_positive: &[PermissionPattern],
-    ) -> Result<(), CardAlgebraError> {
-        self.validates_derivation_with_witness(child_lower_positive, child_upper_positive)
-            .map(|_| ())
-    }
-
-    pub fn validates_derivation_with_witness(
-        &self,
-        child_lower_positive: &[PermissionPattern],
-        child_upper_positive: &[PermissionPattern],
     ) -> Result<Vec<CardId>, CardAlgebraError> {
-        if self.source_card_ids.len() != self.lower.len()
-            || self.source_card_ids.len() != self.upper.len()
-        {
-            self.validates_derivation_legacy(child_lower_positive, child_upper_positive)?;
-            return Ok(self.source_card_ids.clone());
-        }
-
         let mut witness = Vec::new();
 
         for grant in child_lower_positive {
@@ -174,7 +158,7 @@ impl EffectiveSurface {
                     grant: Box::new(grant.clone()),
                 });
             };
-            push_unique(&mut witness, self.source_card_ids[parent_index]);
+            push_source_if_available(&mut witness, &self.source_card_ids, parent_index);
         }
 
         for grant in child_upper_positive {
@@ -186,36 +170,12 @@ impl EffectiveSurface {
                     });
                 }
                 if !surface.is_empty() {
-                    push_unique(&mut witness, self.source_card_ids[parent_index]);
+                    push_source_if_available(&mut witness, &self.source_card_ids, parent_index);
                 }
             }
         }
 
         Ok(witness)
-    }
-
-    fn validates_derivation_legacy(
-        &self,
-        child_lower_positive: &[PermissionPattern],
-        child_upper_positive: &[PermissionPattern],
-    ) -> Result<(), CardAlgebraError> {
-        for grant in child_lower_positive {
-            if !self.allows_lower(&grant.to_target())? {
-                return Err(CardAlgebraError::DerivationNotSubsumed {
-                    grant: Box::new(grant.clone()),
-                });
-            }
-        }
-
-        for grant in child_upper_positive {
-            if !self.allows_upper(&grant.to_target())? {
-                return Err(CardAlgebraError::DerivationNotSubsumed {
-                    grant: Box::new(grant.clone()),
-                });
-            }
-        }
-
-        Ok(())
     }
 
     fn allows_lower(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
@@ -236,6 +196,12 @@ impl EffectiveSurface {
         }
 
         Ok(true)
+    }
+}
+
+fn push_source_if_available(values: &mut Vec<CardId>, source_card_ids: &[CardId], index: usize) {
+    if let Some(card_id) = source_card_ids.get(index) {
+        push_unique(values, *card_id);
     }
 }
 

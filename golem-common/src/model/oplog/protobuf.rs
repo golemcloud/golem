@@ -187,9 +187,6 @@ fn card_install_failure_from_proto(
         golem_api_grpc::proto::golem::worker::CardInstallFailure::Unspecified => {
             Err("Unspecified card install failure".to_string())
         }
-        golem_api_grpc::proto::golem::worker::CardInstallFailure::CardRevoked => {
-            Ok(CardInstallFailure::CardRevoked)
-        }
         golem_api_grpc::proto::golem::worker::CardInstallFailure::NotFound => {
             Ok(CardInstallFailure::NotFound)
         }
@@ -206,9 +203,6 @@ fn card_install_failure_to_proto(
     value: CardInstallFailure,
 ) -> golem_api_grpc::proto::golem::worker::CardInstallFailure {
     match value {
-        CardInstallFailure::CardRevoked => {
-            golem_api_grpc::proto::golem::worker::CardInstallFailure::CardRevoked
-        }
         CardInstallFailure::NotFound => {
             golem_api_grpc::proto::golem::worker::CardInstallFailure::NotFound
         }
@@ -228,9 +222,6 @@ fn raw_card_install_failure_from_proto(
         golem_api_grpc::proto::golem::worker::RawCardInstallFailure::Unspecified => {
             Err("Unspecified raw card install failure".to_string())
         }
-        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::CardRevoked => {
-            Ok(CardInstallFailure::CardRevoked)
-        }
         golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotFound => {
             Ok(CardInstallFailure::NotFound)
         }
@@ -247,9 +238,6 @@ fn raw_card_install_failure_to_proto(
     value: CardInstallFailure,
 ) -> golem_api_grpc::proto::golem::worker::RawCardInstallFailure {
     match value {
-        CardInstallFailure::CardRevoked => {
-            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::CardRevoked
-        }
         CardInstallFailure::NotFound => {
             golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotFound
         }

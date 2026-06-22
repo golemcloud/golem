@@ -930,7 +930,7 @@ fn prepare_agent_initial_card_for_minting(
             },
         )?;
     effective_surface
-        .validates_derivation_with_witness(&lower_positive, &upper_positive)
+        .validates_derivation(&lower_positive, &upper_positive)
         .map_err(|error| ComponentError::InvalidAgentInitialPermissionCard {
             agent_type: agent_type_name.clone(),
             message: format!("card derivation is not allowed by the creator's cards: {error:?}"),
