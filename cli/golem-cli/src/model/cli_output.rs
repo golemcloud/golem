@@ -944,6 +944,135 @@ mod tests {
     }
 
     #[test]
+    fn cli_output_schema_validates_schema_native_secret_outputs() {
+        let schema = load_command_output_schema();
+        let validator = jsonschema::options()
+            .build(&schema)
+            .expect("command output schema must be a valid JSON schema");
+
+        let secret = golem_client::model::AgentSecretDto {
+            id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            path: golem_common::model::agent_secret::CanonicalAgentSecretPath(vec![
+                "token".to_string(),
+            ]),
+            revision: golem_common::model::agent_secret::AgentSecretRevision::new(1)
+                .expect("static secret revision should be valid"),
+            secret_type: golem_common::schema::SchemaGraph::anonymous(
+                golem_common::schema::SchemaType::string(),
+            ),
+            secret_value: Some(golem_common::schema::SchemaValue::String(
+                "super-secret".to_string(),
+            )),
+        };
+
+        let outputs = vec![
+            to_structured_output_value_masked(
+                crate::model::text::secret::SecretCreateView(secret.clone().into()),
+                MaskingConfig::hide_secrets(),
+            )
+            .expect("secret.create should serialize"),
+            to_structured_output_value_masked(
+                crate::model::text::secret::SecretDeleteView(secret.clone().into()),
+                MaskingConfig::hide_secrets(),
+            )
+            .expect("secret.delete should serialize"),
+            to_structured_output_value_masked(
+                crate::model::text::secret::SecretGetView(secret.clone().into()),
+                MaskingConfig::hide_secrets(),
+            )
+            .expect("secret.get should serialize"),
+            to_structured_output_value_masked(
+                crate::model::text::secret::SecretUpdateView(secret.clone().into()),
+                MaskingConfig::hide_secrets(),
+            )
+            .expect("secret.update-value should serialize"),
+            to_structured_output_value_masked(
+                crate::model::text::secret::SecretListView {
+                    secrets: vec![secret.into()],
+                    environment_name: "generated-environment".to_string(),
+                    show_ids: false,
+                },
+                MaskingConfig::hide_secrets(),
+            )
+            .expect("secret.list should serialize"),
+        ];
+
+        for output in outputs {
+            assert!(
+                validator.is_valid(&output),
+                "schema should accept schema-native secret output: {:?}",
+                validator
+                    .iter_errors(&output)
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+            );
+
+            let secret_view = output
+                .get("secrets")
+                .and_then(Value::as_array)
+                .and_then(|secrets| secrets.first())
+                .unwrap_or(&output);
+
+            assert_eq!(secret_view["secretType"]["root"]["kind"], json!("string"));
+            assert_eq!(secret_view["secretValue"]["kind"], json!("string"));
+            assert_eq!(secret_view["secretValue"]["value"], json!("***"));
+        }
+    }
+
+    #[test]
+    fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
+        let schema = load_command_output_schema();
+        let validator = jsonschema::options()
+            .build(&schema)
+            .expect("command output schema must be a valid JSON schema");
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+
+        let component = arb_component_view()
+            .new_tree(&mut runner)
+            .expect("component strategy should produce a value")
+            .current();
+        let agent_type = arb_deployed_registered_agent_type()
+            .new_tree(&mut runner)
+            .expect("agent type strategy should produce a value")
+            .current();
+
+        let outputs = vec![
+            to_structured_output_value(crate::model::text::component::ComponentGetView(
+                component.clone(),
+            ))
+            .expect("component.get should serialize"),
+            to_structured_output_value(crate::model::text::component::ComponentListView {
+                components: vec![component],
+            })
+            .expect("component.list should serialize"),
+            to_structured_output_value(crate::model::text::agent::AgentTypeListView {
+                agent_types: vec![agent_type],
+            })
+            .expect("agent-type.list should serialize"),
+            to_structured_output_value(crate::model::text::worker::AgentOplogEntryView {
+                index: 0,
+                entry: sample_public_oplog_entries()
+                    .into_iter()
+                    .next()
+                    .expect("sample oplog entries should not be empty"),
+            })
+            .expect("agent.oplog should serialize"),
+        ];
+
+        for output in outputs {
+            assert!(
+                validator.is_valid(&output),
+                "schema should accept schema-native output: {:?}",
+                validator
+                    .iter_errors(&output)
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn cli_output_schema_validates_discriminated_documents() {
         let schema = load_command_output_schema();
         let validator = jsonschema::options()
@@ -1916,11 +2045,11 @@ mod tests {
     }
 
     fn arb_agent_type_list_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "agent-type.list",
-            "agentTypes": [],
-        }))
-        .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_deployed_registered_agent_type(), 0..3).prop_map(
+                |agent_types| crate::model::text::agent::AgentTypeListView { agent_types },
+            ),
+        )
     }
 
     fn arb_deployed_registered_agent_type()
@@ -2462,15 +2591,15 @@ mod tests {
     }
 
     fn arb_agent_oplog_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "agent.oplog",
-            "index": 0,
-            "entry": {
-                "type": "NoOp",
-                "timestamp": "1970-01-01T00:00:00Z",
-            }
-        }))
-        .boxed()
+        serialized_output(
+            (
+                arb_small_u64(),
+                proptest::sample::select(sample_public_oplog_entries()),
+            )
+                .prop_map(|(index, entry)| {
+                    crate::model::text::worker::AgentOplogEntryView { index, entry }
+                }),
+        )
     }
 
     fn arb_agent_stream_event() -> OutputDocumentStrategy {
@@ -3339,28 +3468,17 @@ mod tests {
     }
 
     fn arb_component_get_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "component.get",
-            "componentName": "component",
-            "componentId": "00000000-0000-0000-0000-000000000000",
-            "componentVersion": Value::Null,
-            "componentRevision": 0,
-            "componentSize": 0,
-            "createdAt": "1970-01-01T00:00:00Z",
-            "environmentId": "00000000-0000-0000-0000-000000000000",
-            "exports": [],
-            "agentTypes": [],
-            "agentTypeProvisionConfigs": {},
-        }))
-        .boxed()
+        serialized_output(
+            arb_component_view().prop_map(crate::model::text::component::ComponentGetView),
+        )
     }
 
     fn arb_component_list_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "component.list",
-            "components": [],
-        }))
-        .boxed()
+        serialized_output(
+            proptest::collection::vec(arb_component_view(), 0..5).prop_map(|components| {
+                crate::model::text::component::ComponentListView { components }
+            }),
+        )
     }
 
     fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
@@ -5001,72 +5119,67 @@ mod tests {
     }
 
     fn arb_secret_create_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "secret.create",
-            "id": "00000000-0000-0000-0000-000000000000",
-            "environmentId": "00000000-0000-0000-0000-000000000000",
-            "path": ["token"],
-            "revision": 0,
-            "secretType": { "type": "Str" },
-            "secretValue": "***",
-        }))
-        .boxed()
+        arb_secret()
+            .prop_map(|secret| {
+                to_structured_output_value_masked(
+                    crate::model::text::secret::SecretCreateView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret create should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_delete_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "secret.delete",
-            "id": "00000000-0000-0000-0000-000000000000",
-            "environmentId": "00000000-0000-0000-0000-000000000000",
-            "path": ["token"],
-            "revision": 0,
-            "secretType": { "type": "Str" },
-            "secretValue": "***",
-        }))
-        .boxed()
+        arb_secret()
+            .prop_map(|secret| {
+                to_structured_output_value_masked(
+                    crate::model::text::secret::SecretDeleteView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret delete should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_get_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "secret.get",
-            "id": "00000000-0000-0000-0000-000000000000",
-            "environmentId": "00000000-0000-0000-0000-000000000000",
-            "path": ["token"],
-            "revision": 0,
-            "secretType": { "type": "Str" },
-            "secretValue": "***",
-        }))
-        .boxed()
+        arb_secret()
+            .prop_map(|secret| {
+                to_structured_output_value_masked(
+                    crate::model::text::secret::SecretGetView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret get should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_update_value_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "secret.update-value",
-            "id": "00000000-0000-0000-0000-000000000000",
-            "environmentId": "00000000-0000-0000-0000-000000000000",
-            "path": ["token"],
-            "revision": 0,
-            "secretType": { "type": "Str" },
-            "secretValue": "***",
-        }))
-        .boxed()
+        arb_secret()
+            .prop_map(|secret| {
+                to_structured_output_value_masked(
+                    crate::model::text::secret::SecretUpdateView(secret.into()),
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret update should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret_list_result() -> OutputDocumentStrategy {
-        Just(json!({
-            CLI_OUTPUT_TYPE_FIELD: "secret.list",
-            "secrets": [
-                {
-                    "id": "00000000-0000-0000-0000-000000000000",
-                    "environmentId": "00000000-0000-0000-0000-000000000000",
-                    "path": ["token"],
-                    "revision": 0,
-                    "secretType": { "type": "Str" },
-                    "secretValue": "***",
-                }
-            ],
-        }))
-        .boxed()
+        proptest::collection::vec(arb_secret(), 0..5)
+            .prop_map(|secrets| {
+                to_structured_output_value_masked(
+                    crate::model::text::secret::SecretListView {
+                        secrets: secrets.into_iter().map(Into::into).collect(),
+                        environment_name: "generated-environment".to_string(),
+                        show_ids: false,
+                    },
+                    MaskingConfig::hide_secrets(),
+                )
+                .expect("generated secret list should serialize")
+            })
+            .boxed()
     }
 
     fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {

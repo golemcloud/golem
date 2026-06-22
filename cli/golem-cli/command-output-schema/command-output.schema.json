@@ -3228,6 +3228,7 @@
         "type": { "const": "AgentInvocationFinished" },
         "timestamp": { "type": "string" },
         "result": { "$ref": "#/definitions/PublicAgentInvocationResult" },
+        "methodName": { "type": ["string", "null"] },
         "consumedFuel": { "type": "integer" },
         "componentRevision": { "type": "integer", "minimum": 0 }
       },
@@ -3876,16 +3877,17 @@
     },
     "AgentType": {
       "type": "object",
-      "required": ["typeName", "description", "sourceLanguage", "constructor", "methods", "dependencies", "mode", "httpMount", "snapshotting", "config"],
+      "required": ["type_name", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
       "properties": {
-        "typeName": { "type": "string" },
+        "type_name": { "type": "string" },
         "description": { "type": "string" },
-        "sourceLanguage": { "type": "string" },
+        "source_language": { "type": "string" },
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
         "constructor": { "$ref": "#/definitions/AgentConstructor" },
         "methods": { "type": "array", "items": { "$ref": "#/definitions/AgentMethod" } },
         "dependencies": { "type": "array", "items": { "$ref": "#/definitions/AgentDependency" } },
         "mode": { "$ref": "#/definitions/AgentMode" },
-        "httpMount": { "oneOf": [{ "$ref": "#/definitions/HttpMountDetails" }, { "type": "null" }] },
+        "http_mount": { "oneOf": [{ "$ref": "#/definitions/HttpMountDetails" }, { "type": "null" }] },
         "snapshotting": { "$ref": "#/definitions/Snapshotting" },
         "config": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigDeclaration" } }
       },
@@ -3893,61 +3895,49 @@
     },
     "AgentConstructor": {
       "type": "object",
-      "required": ["name", "description", "promptHint", "inputSchema"],
+      "required": ["description", "input_schema"],
       "properties": {
         "name": { "type": ["string", "null"] },
         "description": { "type": "string" },
-        "promptHint": { "type": ["string", "null"] },
-        "inputSchema": { "$ref": "#/definitions/DataSchema" }
+        "prompt_hint": { "type": ["string", "null"] },
+        "input_schema": { "$ref": "#/definitions/DataSchema" }
       },
       "additionalProperties": false
     },
     "AgentMethod": {
       "type": "object",
-      "required": ["name", "description", "promptHint", "inputSchema", "outputSchema", "httpEndpoint", "readOnly"],
+      "required": ["name", "description", "input_schema", "output_schema", "http_endpoint"],
       "properties": {
         "name": { "type": "string" },
         "description": { "type": "string" },
-        "promptHint": { "type": ["string", "null"] },
-        "inputSchema": { "$ref": "#/definitions/DataSchema" },
-        "outputSchema": { "$ref": "#/definitions/DataSchema" },
-        "httpEndpoint": { "type": "array", "items": { "$ref": "#/definitions/HttpEndpointDetails" } },
-        "readOnly": { "oneOf": [{ "$ref": "#/definitions/ReadOnlyConfig" }, { "type": "null" }] }
+        "prompt_hint": { "type": ["string", "null"] },
+        "input_schema": { "$ref": "#/definitions/DataSchema" },
+        "output_schema": { "$ref": "#/definitions/DataSchema" },
+        "http_endpoint": { "type": "array", "items": { "$ref": "#/definitions/HttpEndpointDetails" } },
+        "read_only": { "oneOf": [{ "$ref": "#/definitions/ReadOnlyConfig" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "AgentDependency": {
       "type": "object",
-      "required": ["typeName", "description", "constructor", "methods"],
+      "required": ["type_name", "schema", "constructor", "methods"],
       "properties": {
-        "typeName": { "type": "string" },
+        "type_name": { "type": "string" },
         "description": { "type": ["string", "null"] },
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
         "constructor": { "$ref": "#/definitions/AgentConstructor" },
         "methods": { "type": "array", "items": { "$ref": "#/definitions/AgentMethod" } }
       },
       "additionalProperties": false
     },
     "DataSchema": {
-      "oneOf": [
-        { "type": "object", "required": ["type", "elements"], "properties": { "type": { "const": "Tuple" }, "elements": { "type": "array", "items": { "$ref": "#/definitions/NamedElementSchema" } } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "elements"], "properties": { "type": { "const": "Multimodal" }, "elements": { "type": "array", "items": { "$ref": "#/definitions/NamedElementSchema" } } }, "additionalProperties": false }
-      ]
-    },
-    "NamedElementSchema": {
       "type": "object",
-      "required": ["name", "schema"],
+      "required": ["tag"],
       "properties": {
-        "name": { "type": "string" },
-        "schema": { "$ref": "#/definitions/ElementSchema" }
+        "tag": { "type": "string" },
+        "value": { "$ref": "#/definitions/JsonValue" }
       },
-      "additionalProperties": false
-    },
-    "ElementSchema": {
-      "oneOf": [
-        { "type": "object", "required": ["type", "elementType"], "properties": { "type": { "const": "ComponentModel" }, "elementType": { "$ref": "#/definitions/AnalysedType" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "restrictions"], "properties": { "type": { "const": "UnstructuredText" }, "restrictions": { "oneOf": [{ "type": "array", "items": { "$ref": "#/definitions/TextType" } }, { "type": "null" }] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "restrictions"], "properties": { "type": { "const": "UnstructuredBinary" }, "restrictions": { "oneOf": [{ "type": "array", "items": { "$ref": "#/definitions/BinaryType" } }, { "type": "null" }] } }, "additionalProperties": false }
-      ]
+      "additionalProperties": true
     },
     "TextType": {
       "type": "object",
@@ -3988,11 +3978,11 @@
     },
     "AgentConfigDeclaration": {
       "type": "object",
-      "required": ["source", "path", "valueType"],
+      "required": ["source", "path", "value_type"],
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "valueType": { "$ref": "#/definitions/AnalysedType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" }
       },
       "additionalProperties": false
     },
@@ -5058,9 +5048,46 @@
     },
     "ValueAndTypeJson": {
       "type": "object",
-      "required": ["typ", "value"],
+      "required": ["graph", "value"],
       "properties": {
-        "typ": { "$ref": "#/definitions/AnalysedType" },
+        "graph": { "$ref": "#/definitions/SchemaGraph" },
+        "value": { "$ref": "#/definitions/SchemaValue" }
+      },
+      "additionalProperties": false
+    },
+    "SchemaGraph": {
+      "type": "object",
+      "required": ["root"],
+      "properties": {
+        "defs": { "type": "array", "items": { "$ref": "#/definitions/SchemaTypeDef" } },
+        "root": { "$ref": "#/definitions/SchemaType" }
+      },
+      "additionalProperties": false
+    },
+    "SchemaTypeDef": {
+      "type": "object",
+      "required": ["id", "body"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": ["string", "null"] },
+        "body": { "$ref": "#/definitions/SchemaType" }
+      },
+      "additionalProperties": false
+    },
+    "SchemaType": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string" },
+        "value": { "$ref": "#/definitions/JsonValue" }
+      },
+      "additionalProperties": false
+    },
+    "SchemaValue": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string" },
         "value": { "$ref": "#/definitions/JsonValue" }
       },
       "additionalProperties": false
@@ -5273,8 +5300,13 @@
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/AnalysedType" },
-        "secretValue": { "$ref": "#/definitions/JsonValue" }
+        "secretType": { "$ref": "#/definitions/SchemaGraph" },
+        "secretValue": {
+          "oneOf": [
+            { "$ref": "#/definitions/SchemaValue" },
+            { "type": "null" }
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -5299,8 +5331,13 @@
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/AnalysedType" },
-        "secretValue": { "$ref": "#/definitions/JsonValue" }
+        "secretType": { "$ref": "#/definitions/SchemaGraph" },
+        "secretValue": {
+          "oneOf": [
+            { "$ref": "#/definitions/SchemaValue" },
+            { "type": "null" }
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -5325,8 +5362,13 @@
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/AnalysedType" },
-        "secretValue": { "$ref": "#/definitions/JsonValue" }
+        "secretType": { "$ref": "#/definitions/SchemaGraph" },
+        "secretValue": {
+          "oneOf": [
+            { "$ref": "#/definitions/SchemaValue" },
+            { "type": "null" }
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -5373,8 +5415,13 @@
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
         "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/AnalysedType" },
-        "secretValue": { "$ref": "#/definitions/JsonValue" }
+        "secretType": { "$ref": "#/definitions/SchemaGraph" },
+        "secretValue": {
+          "oneOf": [
+            { "$ref": "#/definitions/SchemaValue" },
+            { "type": "null" }
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -5404,9 +5451,12 @@
           "type": "integer",
           "minimum": 0
         },
-        "secretType": { "$ref": "#/definitions/AnalysedType" },
+        "secretType": { "$ref": "#/definitions/SchemaGraph" },
         "secretValue": {
-          "$ref": "#/definitions/JsonValue"
+          "oneOf": [
+            { "$ref": "#/definitions/SchemaValue" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
