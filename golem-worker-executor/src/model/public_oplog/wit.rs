@@ -109,6 +109,7 @@ fn raw_queued_card_event_to_wit(value: QueuedCardEvent) -> oplog::QueuedCardEven
 
 fn card_install_failure_to_wit(value: CardInstallFailure) -> oplog::CardInstallFailure {
     match value {
+        CardInstallFailure::CardRevoked => oplog::CardInstallFailure::CardRevoked,
         CardInstallFailure::NotFound => oplog::CardInstallFailure::NotFound,
         CardInstallFailure::RecipientMismatch => oplog::CardInstallFailure::RecipientMismatch,
         CardInstallFailure::NotPermitted => oplog::CardInstallFailure::NotPermitted,
@@ -117,7 +118,7 @@ fn card_install_failure_to_wit(value: CardInstallFailure) -> oplog::CardInstallF
 
 fn card_install_failure_from_wit(value: oplog::CardInstallFailure) -> CardInstallFailure {
     match value {
-        oplog::CardInstallFailure::CardRevoked => CardInstallFailure::NotFound,
+        oplog::CardInstallFailure::CardRevoked => CardInstallFailure::CardRevoked,
         oplog::CardInstallFailure::NotFound => CardInstallFailure::NotFound,
         oplog::CardInstallFailure::RecipientMismatch => CardInstallFailure::RecipientMismatch,
         oplog::CardInstallFailure::NotPermitted => CardInstallFailure::NotPermitted,

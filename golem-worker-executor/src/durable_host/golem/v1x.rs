@@ -106,6 +106,7 @@ fn card_install_failure_to_wit(
     failure: CardInstallFailure,
 ) -> golem_api_1_x::host::CardInstallError {
     match failure {
+        CardInstallFailure::CardRevoked => golem_api_1_x::host::CardInstallError::Revoked,
         CardInstallFailure::NotFound => golem_api_1_x::host::CardInstallError::NotFound,
         CardInstallFailure::RecipientMismatch | CardInstallFailure::NotPermitted => {
             golem_api_1_x::host::CardInstallError::NotPermitted

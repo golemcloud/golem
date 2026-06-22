@@ -795,7 +795,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
-            let reason = CardInstallFailure::NotFound;
+            let reason = match card_state {
+                Some(CardState::Revoked) => CardInstallFailure::CardRevoked,
+                _ => CardInstallFailure::NotFound,
+            };
 
             if let Some(queued_event_index) = queued_event_index {
                 self.public_state
@@ -843,10 +846,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         if is_live {
-            self.state
-                .card_service
-                .record_revoked_cards(&[card_id])
-                .await;
             let wallet_card_ids = self
                 .state
                 .agent_wallet_cards
@@ -2705,7 +2704,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    pub async fn update_state_to_new_component_revision(
+    async fn update_state_to_new_component_revision(
         &mut self,
         new_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
@@ -2795,16 +2794,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state.cached_agent_config_retry_policies = None;
             self.state.agent_effective_surface = agent_effective_surface;
             self.state.agent_wallet_cards = initial_wallet_cards;
-            let wallet_card_ids = self
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            self.state
-                .card_service
-                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
         };
 
         self.state.component_metadata = new_metadata;

@@ -1012,6 +1012,7 @@ impl From<QueuedCardEvent> for PublicQueuedCardEvent {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum CardInstallFailure {
+    CardRevoked,
     NotFound,
     RecipientMismatch,
     NotPermitted,
