@@ -70,16 +70,26 @@ pub fn focused_command_output_schema(output_types: &[String]) -> anyhow::Result<
         .get("definitions")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("Command output schema is missing definitions"))?;
+    let output_type_entries = schema_output_type_entries(&schema)?;
+    let known_output_types = output_type_entries
+        .iter()
+        .filter_map(|entry| entry.get("type"))
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
 
+    let mut selected = BTreeSet::<String>::new();
     let mut reachable = BTreeSet::<String>::new();
     let mut queue = VecDeque::<String>::new();
     for output_type in output_types {
-        if !definitions.contains_key(output_type) {
+        if !known_output_types.contains(output_type.as_str()) {
             bail!(
                 "Unknown output type: {output_type}; run `golem output-schema --types` to list known output types"
             );
         }
-        if reachable.insert(output_type.clone()) {
+        if !definitions.contains_key(output_type) {
+            bail!("Command output schema is missing definition {output_type}");
+        }
+        if selected.insert(output_type.clone()) && reachable.insert(output_type.clone()) {
             queue.push_back(output_type.clone());
         }
     }
@@ -116,7 +126,7 @@ pub fn focused_command_output_schema(output_types: &[String]) -> anyhow::Result<
     focused.insert(
         "oneOf".to_string(),
         Value::Array(
-            output_types
+            selected
                 .iter()
                 .map(|output_type| json_ref(output_type))
                 .collect(),
@@ -135,14 +145,10 @@ pub fn focused_command_output_schema(output_types: &[String]) -> anyhow::Result<
     }
     focused.insert("definitions".to_string(), Value::Object(pruned_definitions));
 
-    let selected = output_types
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
     focused.insert(
         CLI_OUTPUT_TYPES_FIELD.to_string(),
         Value::Array(
-            schema_output_type_entries(&schema)?
+            output_type_entries
                 .iter()
                 .filter(|entry| {
                     entry
@@ -845,6 +851,36 @@ mod tests {
             entries.keys().cloned().collect::<BTreeSet<_>>(),
             BTreeSet::from_iter(["agent.oplog".to_string(), "agent.stream".to_string()])
         );
+    }
+
+    #[test]
+    fn cli_output_schema_focus_deduplicates_requested_types() {
+        let schema =
+            focused_command_output_schema(&["agent.oplog".to_string(), "agent.oplog".to_string()])
+                .expect("focused schema should render");
+
+        let one_of = schema
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("focused schema must have oneOf");
+        assert_eq!(one_of.len(), 1);
+
+        let validator = jsonschema::options()
+            .build(&schema)
+            .expect("focused command output schema must be valid JSON schema");
+        let example = (arb_agent_oplog_result())
+            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+            .expect("oplog strategy should produce value")
+            .current();
+        assert!(validator.is_valid(&example));
+    }
+
+    #[test]
+    fn cli_output_schema_focus_rejects_helper_definition_names() {
+        let error = focused_command_output_schema(&["JsonValue".to_string()])
+            .expect_err("helper definition should not be accepted as an output type");
+
+        assert!(error.to_string().contains("Unknown output type: JsonValue"));
     }
 
     #[test]
@@ -2630,6 +2666,7 @@ mod tests {
                     total_linear_memory_size,
                     exported_resource_instances: exported_resource_instances.into_iter().collect(),
                     source_language: crate::agent_id_display::SourceLanguage::default(),
+                    secret_config_paths: BTreeSet::new(),
                 }
             })
             .boxed()

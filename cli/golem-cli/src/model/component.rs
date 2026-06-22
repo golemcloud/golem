@@ -32,7 +32,9 @@ use golem_common::model::component::{AgentFilePermissions, ComponentName};
 
 use crate::agent_id_display::render_type_for_language;
 use crate::model::app_raw;
-use crate::model::masking::{Masked, MaskingConfig, mask_secret, mask_sensitive_map};
+use crate::model::masking::{
+    Masked, MaskingConfig, mask_sensitive_map, mask_typed_agent_config_entries,
+};
 use golem_common::model::environment::EnvironmentId;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
@@ -130,11 +132,8 @@ impl Masked for ComponentView {
             }
 
             if let Some(secret_paths) = secret_config_paths_by_agent_type.get(&agent_type_name.0) {
-                for entry in &mut provision_config.config {
-                    if secret_paths.contains(&entry.path.join(".")) {
-                        entry.value.value = golem_wasm::Value::String(mask_secret());
-                    }
-                }
+                provision_config.config =
+                    mask_typed_agent_config_entries(config, &provision_config.config, secret_paths);
             }
         }
 

@@ -15,12 +15,14 @@
 use crate::model::app::ComponentLayerProperties;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::component::ComponentView;
-use crate::model::masking::{Masked, MaskingConfig};
+use crate::model::masking::{Masked, MaskingConfig, is_sensitive_key, mask_secret};
 use crate::model::text::fmt::*;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::component::ComponentName;
 use serde::Serializer;
+use serde::ser::Error;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,23 +215,156 @@ pub struct ComponentManifestTraceView {
 
 impl StructuredOutput for ComponentManifestTraceView {
     const KIND: &'static str = "component.manifest-trace";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_masked_value(config)
+            .map_err(S::Error::custom)?
+            .serialize(serializer)
+    }
 }
 
 impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
-        let rendered = if SHOULD_COLORIZE.should_colorize() {
-            to_colored_json(&self.properties)
-        } else {
-            serde_json::to_string_pretty(&self.properties).map_err(Into::into)
-        };
+        log_manifest_trace_properties(&self.properties);
+    }
 
-        match rendered {
-            Ok(rendered) => {
-                for line in rendered.lines() {
-                    logln(line);
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        if config.show_secrets {
+            self.log();
+        } else {
+            let mut properties = serde_json::to_value(&self.properties)?;
+            mask_component_layer_properties(&mut properties);
+            log_manifest_trace_value(&properties);
+        }
+        Ok(())
+    }
+}
+
+impl ComponentManifestTraceView {
+    fn to_masked_value(&self, config: MaskingConfig) -> anyhow::Result<Value> {
+        let mut value = serde_json::to_value(self)?;
+        if !config.show_secrets
+            && let Some(properties) = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("properties"))
+        {
+            mask_component_layer_properties(properties);
+        }
+        Ok(value)
+    }
+}
+
+fn log_manifest_trace_properties(properties: &ComponentLayerProperties) {
+    let rendered = if SHOULD_COLORIZE.should_colorize() {
+        to_colored_json(properties)
+    } else {
+        serde_json::to_string_pretty(properties).map_err(Into::into)
+    };
+
+    log_manifest_trace_rendered(rendered);
+}
+
+fn log_manifest_trace_value(properties: &Value) {
+    let rendered = if SHOULD_COLORIZE.should_colorize() {
+        to_colored_json(properties)
+    } else {
+        serde_json::to_string_pretty(properties).map_err(Into::into)
+    };
+
+    log_manifest_trace_rendered(rendered);
+}
+
+fn log_manifest_trace_rendered(rendered: anyhow::Result<String>) {
+    match rendered {
+        Ok(rendered) => {
+            for line in rendered.lines() {
+                logln(line);
+            }
+        }
+        Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
+    }
+}
+
+fn mask_component_layer_properties(properties: &mut Value) {
+    let Some(properties) = properties.as_object_mut() else {
+        return;
+    };
+
+    if let Some(config) = properties.get_mut("config") {
+        mask_config_property_payloads(config);
+    }
+    if let Some(env) = properties.get_mut("env") {
+        mask_sensitive_keyed_values(env);
+    }
+    if let Some(plugins) = properties.get_mut("plugins") {
+        mask_sensitive_keyed_values(plugins);
+    }
+}
+
+fn mask_config_property_payloads(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                match key.as_str() {
+                    "value" | "newValue" => mask_json_leaf_values(value),
+                    "insertedEntries" | "updatedEntries" => mask_json_object_values(value),
+                    _ => mask_config_property_payloads(value),
                 }
             }
-            Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
         }
+        Value::Array(values) => {
+            for value in values {
+                mask_config_property_payloads(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mask_json_object_values(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        for value in object.values_mut() {
+            mask_json_leaf_values(value);
+        }
+    }
+}
+
+fn mask_json_leaf_values(value: &mut Value) {
+    match value {
+        Value::Null => {}
+        Value::Array(values) => {
+            for value in values {
+                mask_json_leaf_values(value);
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                mask_json_leaf_values(value);
+            }
+        }
+        _ => *value = Value::String(mask_secret()),
+    }
+}
+
+fn mask_sensitive_keyed_values(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if is_sensitive_key(key) {
+                    mask_json_leaf_values(value);
+                } else {
+                    mask_sensitive_keyed_values(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                mask_sensitive_keyed_values(value);
+            }
+        }
+        _ => {}
     }
 }

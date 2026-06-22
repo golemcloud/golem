@@ -64,8 +64,8 @@ use golem_client::model::{
     UpdateWorkerRequest,
 };
 use golem_common::model::agent::{
-    AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId, NamedElementSchema,
+    AgentConfigSource, AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema,
+    DataValue, ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId, NamedElementSchema,
     NamedElementSchemas, UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
@@ -86,7 +86,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -1336,8 +1336,24 @@ impl WorkerCommandHandler {
             .cloned()
             .unwrap_or_default();
 
+        let secret_config_paths = component
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|agent_type| agent_type.type_name == agent_name_match.agent_type_name)
+            .map(|agent_type| {
+                agent_type
+                    .config
+                    .iter()
+                    .filter(|config| config.source == AgentConfigSource::Secret)
+                    .map(|config| config.path.join("."))
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+
         let mut metadata_view = AgentMetadataView::from(metadata)
             .with_defaults(defaults)
+            .with_secret_config_paths(secret_config_paths)
             .with_source_language(agent_name_match.source_language.clone());
         if let Some(parsed) = &agent_name_match.parsed_agent_id
             && agent_name_match.source_language.is_known()

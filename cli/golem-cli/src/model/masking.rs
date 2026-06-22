@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::json::NormalizedJsonValue;
+use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
+use golem_wasm::analysis::analysed_type;
+use golem_wasm::{Value, ValueAndType};
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MaskingConfig {
@@ -94,6 +99,52 @@ where
         .collect()
 }
 
+pub fn mask_agent_config_entries<'a>(
+    config: MaskingConfig,
+    values: impl IntoIterator<Item = &'a AgentConfigEntryDto>,
+    secret_paths: &BTreeSet<String>,
+) -> Vec<AgentConfigEntryDto> {
+    values
+        .into_iter()
+        .map(|entry| {
+            let mut entry = entry.clone();
+            if should_mask_config_path(config, &entry.path, secret_paths) {
+                entry.value = NormalizedJsonValue(serde_json::Value::String(mask_secret()));
+            }
+            entry
+        })
+        .collect()
+}
+
+pub fn mask_typed_agent_config_entries<'a>(
+    config: MaskingConfig,
+    values: impl IntoIterator<Item = &'a TypedAgentConfigEntry>,
+    secret_paths: &BTreeSet<String>,
+) -> Vec<TypedAgentConfigEntry> {
+    values
+        .into_iter()
+        .map(|entry| {
+            let mut entry = entry.clone();
+            if should_mask_config_path(config, &entry.path, secret_paths) {
+                entry.value = masked_typed_secret_value();
+            }
+            entry
+        })
+        .collect()
+}
+
+fn should_mask_config_path(
+    config: MaskingConfig,
+    path: &[String],
+    secret_paths: &BTreeSet<String>,
+) -> bool {
+    !config.show_secrets && secret_paths.contains(&path.join("."))
+}
+
+fn masked_typed_secret_value() -> ValueAndType {
+    ValueAndType::new(Value::String(mask_secret()), analysed_type::str())
+}
+
 pub fn mask_json_secret_value(
     config: MaskingConfig,
     value: &Option<serde_json::Value>,
@@ -143,7 +194,10 @@ pub fn mask_json_secret_for_deploy_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
+    use golem_wasm::json::ValueAndTypeJsonExtensions;
     use serde_json::json;
+    use std::collections::BTreeSet;
     use test_r::test;
 
     #[test]
@@ -172,5 +226,50 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.as_str().unwrap().starts_with("<masked-secret:"));
         assert!(!first.to_string().contains("abc"));
+    }
+
+    #[test]
+    fn agent_config_entries_are_masked_by_secret_path() {
+        let entries = vec![AgentConfigEntryDto {
+            path: vec!["regular".to_string()],
+            value: NormalizedJsonValue(json!("secret")),
+        }];
+        let secret_paths = BTreeSet::from_iter(["regular".to_string()]);
+
+        let masked =
+            mask_agent_config_entries(MaskingConfig::hide_secrets(), &entries, &secret_paths);
+        assert_eq!(masked[0].value.0, json!("***"));
+
+        let visible =
+            mask_agent_config_entries(MaskingConfig::show_secrets(), &entries, &secret_paths);
+        assert_eq!(visible[0].value.0, json!("secret"));
+    }
+
+    #[test]
+    fn agent_config_entries_do_not_use_sensitive_key_heuristics() {
+        let entries = vec![AgentConfigEntryDto {
+            path: vec!["apiToken".to_string()],
+            value: NormalizedJsonValue(json!("not-a-declared-secret")),
+        }];
+
+        let masked =
+            mask_agent_config_entries(MaskingConfig::hide_secrets(), &entries, &BTreeSet::new());
+
+        assert_eq!(masked[0].value.0, json!("not-a-declared-secret"));
+    }
+
+    #[test]
+    fn typed_agent_config_mask_is_valid_typed_string_value() {
+        let entries = vec![TypedAgentConfigEntry {
+            path: vec!["token".to_string()],
+            value: ValueAndType::new(Value::Bool(true), analysed_type::bool()),
+        }];
+        let secret_paths = BTreeSet::from_iter(["token".to_string()]);
+
+        let masked =
+            mask_typed_agent_config_entries(MaskingConfig::hide_secrets(), &entries, &secret_paths);
+
+        assert_eq!(masked[0].value.to_json_value().unwrap(), json!("***"));
+        assert_eq!(masked[0].value.typ, analysed_type::str());
     }
 }
