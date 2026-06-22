@@ -15,8 +15,8 @@
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
+use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -120,6 +120,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
+            let mut remove_from_active_workers = false;
 
             if let Some((kind, decision)) = self.pending_interrupt().await {
                 debug!(
@@ -149,7 +150,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     deferred_wakeups: &mut deferred_wakeups,
                 };
 
-                final_decision = inner_loop.run().await;
+                let result = inner_loop.run().await;
+                final_decision = result.retry_decision;
+                remove_from_active_workers = result.remove_from_active_workers;
             }
 
             self.suspend_worker(&store).await;
@@ -162,6 +165,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
                     self.stop_unloaded().await;
+                    if remove_from_active_workers {
+                        self.archive_ephemeral_oplog().await;
+                        self.parent
+                            .deps
+                            .active_workers()
+                            .remove(&self.owned_agent_id.agent_id())
+                            .await;
+                    }
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -268,6 +279,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 },
             )
             .await;
+    }
+
+    async fn archive_ephemeral_oplog(&self) {
+        while matches!(
+            EphemeralOplog::try_archive_blocking(&self.parent.oplog).await,
+            Some(true)
+        ) {}
     }
 
     async fn record_retry_interrupt_failure(&self, store: &Mutex<Store<Ctx>>, kind: InterruptKind) {
@@ -434,10 +452,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///   underlying retry logic.
     ///
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
-    pub async fn run(&mut self) -> Option<RetryDecision> {
+    pub async fn run(&mut self) -> InnerInvocationLoopResult {
         debug!("Invocation queue loop started");
 
         let mut final_decision = None;
+        let mut remove_from_active_workers = false;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
@@ -495,6 +514,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     final_decision = Some(decision);
                     break;
                 }
+                CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(decision) => {
+                    final_decision = Some(decision);
+                    remove_from_active_workers = true;
+                    break;
+                }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
             }
 
@@ -507,7 +531,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
-        final_decision
+        InnerInvocationLoopResult {
+            retry_decision: final_decision,
+            remove_from_active_workers,
+        }
     }
 
     async fn next_wakeup_or_initial(&mut self) -> Option<WorkerCommand> {
@@ -1007,19 +1034,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
             .await
         {
-            Ok(()) => {
-                if self.parent.agent_mode() == AgentMode::Ephemeral {
-                    if self.store.data().component_metadata().metadata.is_agent()
-                        && kind == AgentInvocationKind::AgentInitialization
-                    {
-                        CommandOutcome::Continue
-                    } else {
-                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
-                    }
-                } else {
-                    CommandOutcome::Continue
-                }
-            }
+            Ok(()) => successful_agent_invocation_outcome(
+                self.parent.agent_mode(),
+                self.store.data().component_metadata().metadata.is_agent(),
+                kind,
+            ),
             Err(error) => {
                 self.store
                     .data_mut()
@@ -1452,10 +1471,31 @@ enum CommandOutcome {
     BreakOuterLoop,
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
+    /// Break from the inner loop and remove the stopped worker from active workers.
+    BreakInnerLoopAndRemoveFromActiveWorkers(RetryDecision),
     /// Continue processing in the inner loop
     Continue,
     /// Stop draining for now and wait for the next command or idle timer wakeup
     WaitForWakeup,
+}
+
+struct InnerInvocationLoopResult {
+    retry_decision: Option<RetryDecision>,
+    remove_from_active_workers: bool,
+}
+
+fn successful_agent_invocation_outcome(
+    agent_mode: AgentMode,
+    is_agent_component: bool,
+    kind: AgentInvocationKind,
+) -> CommandOutcome {
+    if agent_mode == AgentMode::Ephemeral
+        && !(is_agent_component && kind == AgentInvocationKind::AgentInitialization)
+    {
+        CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(RetryDecision::None)
+    } else {
+        CommandOutcome::Continue
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1507,10 +1547,12 @@ fn snapshot_action_at(
 mod tests {
     use super::{
         CommandOutcome, PeriodicSnapshotAction, periodic_snapshot_failure_outcome,
-        snapshot_action_at, snapshot_baseline_timestamp,
+        snapshot_action_at, snapshot_baseline_timestamp, successful_agent_invocation_outcome,
     };
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
+    use golem_common::model::AgentInvocationKind;
+    use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1571,6 +1613,42 @@ mod tests {
         assert_eq!(
             periodic_snapshot_failure_outcome(&result),
             Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        );
+    }
+
+    #[test]
+    fn ephemeral_non_initialization_invocation_requests_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::BreakInnerLoopAndRemoveFromActiveWorkers(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn ephemeral_agent_initialization_does_not_request_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentInitialization
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn durable_invocation_does_not_request_active_worker_cleanup() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Durable,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::Continue
         );
     }
 }

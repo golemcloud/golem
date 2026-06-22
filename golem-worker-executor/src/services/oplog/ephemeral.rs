@@ -82,7 +82,7 @@ impl EphemeralOplogState {
     }
 
     async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
-        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+        let entries = std::mem::take(&mut self.buffer);
 
         let mut result = BTreeMap::new();
         let mut pairs = Vec::new();
