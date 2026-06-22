@@ -42,7 +42,7 @@ use crate::durable_host::durability::{
     DurabilityHost, HostFailureKind, InFunctionRetryController, InFunctionRetryHost,
     InternalRetryResult,
 };
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{OplogOps, PendingUpload};
 use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
 
@@ -316,6 +316,12 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// `true` when a `Start` entry was actually appended. It is `false` while snapshotting (where
     /// nothing is persisted) and for replay handles.
     persisted: bool,
+    /// Tracks the (possibly deferred) blob upload of this call's request payload, started when the
+    /// `Start` was reserved. Awaited before the matching `End` / `Cancelled` is appended so an
+    /// upload failure surfaces at the call site rather than only at the leaf oplog's commit barrier.
+    /// `PendingUpload::already_durable()` (a no-op) for replay handles, snapshotting, and inline
+    /// requests.
+    request_upload: PendingUpload,
     /// Replay-side resolver receiver; `Some` only for replay handles.
     replay: Option<ReplayCallHandle>,
     finished: bool,
@@ -558,6 +564,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         // the drop policy. The host-call `End` is what makes the call durable, not these follow-ups.
         self.finished = true;
         if self.persisted {
+            // Surface a deferred request-upload failure here, at the call site, before recording the
+            // `End` that references the request. The leaf oplog's commit barrier is the backstop, but
+            // awaiting here turns an upload failure into a graceful error instead of a commit-time
+            // panic. A no-op when the request was inline or eagerly uploaded.
+            self.request_upload.wait().await.map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to serialize and store durable call request: {err}"
+                ))
+            })?;
             let host_response: HostResponse = response.clone().into();
             let response_payload = ctx
                 .state
@@ -713,6 +728,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.finished = true;
         if self.is_live {
             if self.persisted {
+                // As in `complete`: surface a deferred request-upload failure at the call site before
+                // recording the `Cancelled` that references the request. A no-op when the request was
+                // inline or eagerly uploaded.
+                self.request_upload.wait().await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to serialize and store durable call request: {err}"
+                    ))
+                })?;
                 let partial_payload = match partial {
                     Some(partial) => {
                         let host_response: HostResponse = partial.into();
@@ -792,30 +815,41 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         let parent_start_index = ctx
             .state
             .child_parent_start_index(self.retry.function_type(), self.begin_index);
-        let (start_idx, persisted) = if snapshotting {
+        let (start_idx, persisted, request_upload) = if snapshotting {
             // Snapshotting mode persists nothing.
-            (ctx.state.oplog.current_oplog_index().await, false)
+            (
+                ctx.state.oplog.current_oplog_index().await,
+                false,
+                PendingUpload::already_durable(),
+            )
         } else {
             let request: HostRequest = request.into();
-            let request_payload =
-                ctx.state
-                    .oplog
-                    .upload_payload(&request)
-                    .await
-                    .map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "failed to serialize and store durable call request: {err}"
-                        ))
-                    })?;
-            let start = OplogEntry::Start {
-                timestamp: Timestamp::now_utc(),
-                parent_start_index,
-                function_name: Pair::HOST_FUNCTION_NAME,
-                request: Some(request_payload),
-                durable_function_type: self.retry.function_type().clone(),
-            };
-            let idx = ctx.state.oplog.add(start).await;
-            (idx, true)
+            let function_type = self.retry.function_type().clone();
+            // Reserve the request payload and append the `Start` in one guarded step: a big request
+            // blob's upload is *begun* but not awaited, so the `Start` is appended in initiation
+            // order before the (potentially slow) upload finishes. `add_start_with_reserved_payload`
+            // forbids — at compile time — any `.await` between reserving the payload and appending
+            // the `Start`, which is what keeps concurrent calls' `Start` entries in initiation
+            // order. The returned upload is awaited before this call's `End` / `Cancelled`.
+            let (idx, request_upload) = ctx
+                .state
+                .oplog
+                .add_start_with_reserved_payload(request, move |request_payload| {
+                    OplogEntry::Start {
+                        timestamp: Timestamp::now_utc(),
+                        parent_start_index,
+                        function_name: Pair::HOST_FUNCTION_NAME,
+                        request: Some(request_payload),
+                        durable_function_type: function_type,
+                    }
+                })
+                .await
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to serialize and store durable call request: {err}"
+                    ))
+                })?;
+            (idx, true, request_upload)
         };
         // Group a trap during this call against the enclosing scope `Start` if there is one, so the
         // failure is retried from the scope rather than from inside it; otherwise from this call's
@@ -826,6 +860,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             begin_index: self.begin_index,
             is_live: true,
             persisted,
+            request_upload,
             replay: None,
             finished: false,
             saved_retry_point: self.saved_retry_point,
@@ -867,6 +902,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             begin_index: self.begin_index,
             is_live: false,
             persisted: false,
+            request_upload: PendingUpload::already_durable(),
             replay: Some(replay),
             finished: false,
             saved_retry_point: self.saved_retry_point,
@@ -1049,6 +1085,7 @@ mod tests {
             begin_index: start_idx,
             is_live: true,
             persisted: true,
+            request_upload: PendingUpload::already_durable(),
             replay: None,
             finished: false,
             saved_retry_point: OplogIndex::INITIAL,

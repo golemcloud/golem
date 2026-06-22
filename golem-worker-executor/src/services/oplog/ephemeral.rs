@@ -16,7 +16,9 @@ use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, OplogArchive, WrappedOplogArchive,
 };
-use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogService, OrderedOplogStart, PendingUpload, downcast_oplog,
+};
 use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
@@ -364,6 +366,28 @@ impl Oplog for EphemeralOplog {
         let second_idx = state.push(second);
         state.maybe_commit().await;
         (first_idx, second_idx)
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        record_oplog_call("add_start_with_reserved_raw_payload");
+        // Ephemeral oplogs are never replayed, so cross-call `Start` ordering need not be
+        // deterministic and there is no deferred-upload/commit-barrier machinery here. Upload the
+        // request payload eagerly (so it is already durable) and then append the `Start`; the
+        // returned `PendingUpload` is therefore a no-op.
+        let raw = self.upload_raw_payload(serialized_request).await?;
+        let mut state = self.state.lock().await;
+        let entry = build_start(raw)?;
+        let index = state.push(entry.clone());
+        state.maybe_commit().await;
+        Ok(OrderedOplogStart {
+            index,
+            entry,
+            pending_upload: PendingUpload::already_durable(),
+        })
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

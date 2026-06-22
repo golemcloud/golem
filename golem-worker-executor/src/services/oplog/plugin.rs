@@ -15,7 +15,9 @@
 use crate::model::ExecutionStatus;
 use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
-use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
+use crate::services::oplog::{
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, OrderedOplogStart,
+};
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::worker_event::WorkerEventService;
@@ -25,7 +27,6 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -50,6 +51,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
@@ -764,6 +766,11 @@ impl OplogService for ForwardingOplogService {
 /// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
+    /// MUST stay a FIFO-fair async mutex (`tokio::sync::Mutex`), like `PrimaryOplog::state`.
+    /// `add_start_with_reserved_raw_payload` holds this lock across delegation to the inner oplog to
+    /// keep the mirrored buffer/`last_oplog_idx` in lockstep with the inner `Start` ordering, so the
+    /// wrapper must not reorder concurrent callers relative to initiation order. `tokio::sync::Mutex`
+    /// guarantees FIFO acquisition; `async_lock::Mutex` does not.
     state: Arc<Mutex<ForwardingOplogState>>,
     max_commit_count: usize,
     timer: Option<JoinHandle<()>>,
@@ -876,7 +883,7 @@ impl Drop for ForwardingOplog {
         }
         // Abort all background monitor tasks to prevent them from
         // outliving this oplog and causing resource contention.
-        if let Some(mut state) = self.state.try_lock() {
+        if let Ok(mut state) = self.state.try_lock() {
             for task in state.monitor_tasks.drain(..) {
                 task.abort();
             }
@@ -972,6 +979,26 @@ impl Oplog for ForwardingOplog {
         state.buffer.push_back(second.clone());
         state.last_oplog_idx = state.last_oplog_idx.next();
         self.inner.add_pair(start, Box::new(move |_| second)).await
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        // Hold this wrapper's lock across the delegation so concurrent calls are serialized here in
+        // the same order the inner (leaf) oplog assigns their `Start` indices, keeping this layer's
+        // mirrored `buffer`/`last_oplog_idx` in lockstep with the inner oplog. The `Start` entry is
+        // built deep in the leaf from the reserved payload reference, so — unlike `add`/`add_pair` —
+        // it is mirrored into the buffer only after the delegation returns it.
+        let mut state = self.state.lock().await;
+        let ordered = self
+            .inner
+            .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        state.buffer.push_back(ordered.entry.clone());
+        state.last_oplog_idx = state.last_oplog_idx.next();
+        Ok(ordered)
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -2052,6 +2079,20 @@ mod tests {
             *idx = idx.next();
             entries.push(entry);
             *idx
+        }
+
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            serialized_request: Vec<u8>,
+            build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<OrderedOplogStart, String> {
+            let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
+            let index = self.add(entry.clone()).await;
+            Ok(OrderedOplogStart {
+                index,
+                entry,
+                pending_upload: crate::services::oplog::PendingUpload::already_durable(),
+            })
         }
 
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {

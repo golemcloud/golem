@@ -1339,7 +1339,7 @@ pub enum OplogEntryLookupResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::oplog::CommitLevel;
+    use crate::services::oplog::{CommitLevel, OrderedOplogStart, PendingUpload};
     use async_trait::async_trait;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
@@ -1372,6 +1372,20 @@ mod tests {
             let mut entries = self.entries.lock().await;
             entries.push(entry);
             OplogIndex::from_u64(entries.len() as u64)
+        }
+
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            serialized_request: Vec<u8>,
+            build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<OrderedOplogStart, String> {
+            let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
+            let index = self.add(entry.clone()).await;
+            Ok(OrderedOplogStart {
+                index,
+                entry,
+                pending_upload: PendingUpload::already_durable(),
+            })
         }
 
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {

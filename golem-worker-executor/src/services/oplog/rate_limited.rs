@@ -14,7 +14,7 @@
 
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
-use crate::services::oplog::{CommitLevel, Oplog, OplogService};
+use crate::services::oplog::{CommitLevel, Oplog, OplogService, OrderedOplogStart};
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -117,21 +117,17 @@ impl RateLimitedOplog {
         }
         limiter.until_ready().await;
     }
-}
 
-impl Debug for RateLimitedOplog {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RateLimitedOplog")
-            .field("rate", &self.state.load().rate)
-            .finish()
-    }
-}
-
-#[async_trait]
-impl Oplog for RateLimitedOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    /// Applies one unit of oplog-write back-pressure for the current configured rate.
+    ///
+    /// This is overload protection (e.g. against a misbehaving busy-loop), so it is applied per
+    /// write. It MUST be invoked *after* the wrapped oplog has assigned the entry's index, never
+    /// before: a pre-index `.await` here would let concurrent durable calls' `Start` entries be
+    /// reordered relative to their initiation order, breaking replay determinism (see
+    /// [`Oplog::add_start_with_reserved_raw_payload`]). The per-write throttling rate is unchanged
+    /// by ordering it after the append.
+    async fn apply_rate_limit(&self) {
         let rate = self.resource_entry.oplog_writes_per_second();
-
         if rate > 0 && rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
             let current = self.state.load();
             if current.rate != rate {
@@ -147,8 +143,24 @@ impl Oplog for RateLimitedOplog {
                 self.apply_back_pressure(&current.limiter, rate).await;
             }
         }
+    }
+}
 
-        self.inner.add(entry).await
+impl Debug for RateLimitedOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimitedOplog")
+            .field("rate", &self.state.load().rate)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl Oplog for RateLimitedOplog {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        // Assign the index first, then throttle: see `apply_rate_limit`.
+        let idx = self.inner.add(entry).await;
+        self.apply_rate_limit().await;
+        idx
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -204,25 +216,26 @@ impl Oplog for RateLimitedOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
-        // Apply back-pressure once for the pair (same as `add`).
-        let rate = self.resource_entry.oplog_writes_per_second();
-        if rate > 0 && rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
-            let current = self.state.load();
-            if current.rate != rate {
-                let updated = self.state.rcu(|current| {
-                    if current.rate == rate {
-                        Arc::clone(current)
-                    } else {
-                        Arc::new(RateLimiterState::new(rate))
-                    }
-                });
-                self.apply_back_pressure(&updated.limiter, rate).await;
-            } else {
-                self.apply_back_pressure(&current.limiter, rate).await;
-            }
-        }
+        // Assign the indices first, then throttle once for the pair: see `apply_rate_limit`.
+        let indices = self.inner.add_pair(start, make_second).await;
+        self.apply_rate_limit().await;
+        indices
+    }
 
-        self.inner.add_pair(start, make_second).await
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        // Order the `Start` first (the inner oplog assigns its index), then throttle. Applying
+        // back-pressure before delegating would reorder concurrent calls' `Start` entries relative
+        // to initiation order; see `apply_rate_limit`.
+        let ordered = self
+            .inner
+            .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        self.apply_rate_limit().await;
+        Ok(ordered)
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -676,5 +689,86 @@ mod tests {
             fast_elapsed < Duration::from_millis(100),
             "Expected unlimited writes to be fast after raising rate, got {fast_elapsed:?}"
         );
+    }
+
+    // Through the rate-limited wrapper (a finite rate, so the back-pressure code path runs), the
+    // Start-ordering primitive still assigns indices in initiation order and defers a large request
+    // upload that the leaf oplog's commit barrier makes durable — proving the rate limiter applies
+    // back-pressure *after* delegation (index assignment), not before.
+    #[test]
+    async fn reserved_start_through_rate_limiter_is_ordered_and_durable() {
+        use crate::services::oplog::OplogOps;
+        use golem_common::model::oplog::host_functions::HostFunctionName;
+        use golem_common::model::oplog::{DurableFunctionType, HostRequest, OplogPayload};
+        use golem_wasm::{FromValueAndType, IntoValueAndType};
+
+        let oplog = make_oplog(resource_limits_with_rate(1000)).await;
+
+        // make_oplog uses max_payload_size = 4096, so this is stored externally (deferred upload).
+        let large_payload = vec![7u8; 64 * 1024];
+        let large_request = HostRequest::Custom(large_payload.clone().into_value_and_type());
+        let small_request = HostRequest::Custom("small".into_value_and_type());
+
+        let base = oplog.current_oplog_index().await;
+
+        let build_start = |function_name: HostFunctionName| {
+            move |request_payload| OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name,
+                request: Some(request_payload),
+                durable_function_type: DurableFunctionType::ReadRemote,
+            }
+        };
+
+        // Initiate the large (deferred-upload) call first, then the small one. Deliberately drop the
+        // large call's `PendingUpload` without awaiting it: the leaf commit barrier must still make
+        // the external blob durable.
+        let (large_idx, _pending) = oplog
+            .add_start_with_reserved_payload(
+                large_request,
+                build_start(HostFunctionName::Custom("large".to_string())),
+            )
+            .await
+            .unwrap();
+        let (small_idx, small_pending) = oplog
+            .add_start_with_reserved_payload(
+                small_request,
+                build_start(HostFunctionName::Custom("small".to_string())),
+            )
+            .await
+            .unwrap();
+
+        // Initiation order is preserved through the wrapper stack.
+        assert_eq!(large_idx, base.next());
+        assert_eq!(small_idx, large_idx.next());
+        // An inline payload is already durable.
+        small_pending.wait().await.unwrap();
+
+        oplog.commit(CommitLevel::Always).await;
+
+        // Read back from storage (no in-memory cache) and confirm the large request is external and
+        // its deferred blob upload became durable via the commit barrier.
+        let large_entry = oplog.read(large_idx).await;
+        let large_stored = match large_entry {
+            OplogEntry::Start {
+                request: Some(payload),
+                ..
+            } => {
+                assert!(
+                    matches!(payload, OplogPayload::External { .. }),
+                    "a large reserved request must be stored externally"
+                );
+                payload
+            }
+            other => panic!("unexpected entry: {other:?}"),
+        };
+        let downloaded: HostRequest = oplog.download_payload(large_stored).await.unwrap();
+        match downloaded {
+            HostRequest::Custom(vnt) => {
+                assert_eq!(Vec::<u8>::from_value_and_type(vnt).unwrap(), large_payload);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
     }
 }

@@ -19,15 +19,15 @@ use crate::metrics::storage::{
 };
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, cursor_value, next_scan_cursor,
-    scan_modes,
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, OrderedOplogStart,
+    PendingUpload, ReservedPayload, cursor_value, next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
     IndexedStorageNamespace,
 };
-use async_lock::Mutex;
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
@@ -47,6 +47,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{error, warn};
 
 async fn retry_storage_op<T, F, Fut>(
@@ -591,6 +592,12 @@ impl OplogConstructor for CreateOplogConstructor {
 }
 
 struct PrimaryOplog {
+    /// MUST stay a FIFO-fair async mutex (`tokio::sync::Mutex`).
+    /// `add_start_with_reserved_raw_payload` acquires this lock *before* assigning the `Start`
+    /// index, so deterministic replay ordering depends on tasks acquiring the lock in the same
+    /// order they called `lock()`. `tokio::sync::Mutex` documents that guarantee; `async_lock::Mutex`
+    /// does not (it bargs via a fast `try_lock` path and only enforces eventual fairness), so it
+    /// must not be used here.
     state: Arc<Mutex<PrimaryOplogState>>,
     key: String,
     close: Option<Box<dyn FnOnce() + Send + Sync>>,
@@ -639,6 +646,7 @@ impl PrimaryOplog {
                 account_id,
                 last_added_non_hint_entry: None,
                 persistence_level: PersistenceLevel::Smart,
+                pending_uploads: Vec::new(),
             })),
             key,
             close: Some(close),
@@ -663,11 +671,104 @@ struct PrimaryOplogState {
     account_id: AccountId,
     last_added_non_hint_entry: Option<OplogIndex>,
     persistence_level: PersistenceLevel,
+    /// In-flight external payload uploads started by [`PrimaryOplogState::reserve_raw_payload`] but
+    /// not yet known to be durable. The commit barrier in `append` waits on these before persisting
+    /// any buffered entries, so no committed entry can reference a not-yet-written blob.
+    pending_uploads: Vec<PendingUpload>,
 }
 
 impl PrimaryOplogState {
+    /// Computes a payload reference and, for an external (large) payload, spawns its blob upload and
+    /// registers it for the commit barrier — **without** awaiting the upload.
+    ///
+    /// Intentionally a non-`async` `fn`: computing the reference, spawning the upload, and
+    /// registering the [`PendingUpload`] happen as one non-yielding step under the held state lock.
+    /// The caller (`PrimaryOplog::add_start_with_reserved_raw_payload`) keeps the lock held and
+    /// builds and `push`es the `Start` from this reference with no `.await` in between, so concurrent
+    /// calls' `Start` entries stay in initiation order. That no-`.await` window is enforced at
+    /// compile time by the returned `!Send` [`ReserveGuard`].
+    fn reserve_raw_payload(&mut self, data: Vec<u8>) -> ReservedPayload {
+        if data.len() > self.max_payload_size {
+            let payload_id = PayloadId::new();
+            let md5_hash = md5::compute(&data).to_vec();
+            let path = format!("{}/{}", hex::encode(&md5_hash), payload_id.0);
+            let data_len = data.len() as u64;
+
+            let blob_storage = self.blob_storage.clone();
+            let environment_id = self.owned_agent_id.environment_id();
+            let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
+            let account_id = self.account_id.to_string();
+            let environment_id_label = environment_id.to_string();
+
+            let upload = async move {
+                blob_storage
+                    .put_raw(
+                        "oplog",
+                        "upload_payload",
+                        BlobStorageNamespace::OplogPayload {
+                            environment_id,
+                            agent_id,
+                            agent_mode,
+                        },
+                        Path::new(&path),
+                        &data,
+                    )
+                    .await
+                    .map_err(|e| format!("Failed uploading oplog data to the blob store {e}"))?;
+                record_storage_bytes_written(
+                    STORAGE_TYPE_OPLOG,
+                    &account_id,
+                    &environment_id_label,
+                    data_len,
+                );
+                Ok::<(), String>(())
+            };
+
+            let upload = tokio::spawn(upload)
+                .map(|joined| {
+                    joined.unwrap_or_else(|join_err| {
+                        Err(format!("oplog payload upload task failed: {join_err}"))
+                    })
+                })
+                .boxed()
+                .shared();
+            let pending = PendingUpload::spawned(upload);
+            self.pending_uploads.push(pending.clone());
+            ReservedPayload::new(
+                RawOplogPayload::External {
+                    payload_id,
+                    md5_hash,
+                },
+                pending,
+            )
+        } else {
+            ReservedPayload::new(
+                RawOplogPayload::SerializedInline(data),
+                PendingUpload::already_durable(),
+            )
+        }
+    }
+
     async fn append(&mut self, entries: Vec<OplogEntry>) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("append");
+
+        // Commit barrier: every deferred external payload reserved during this session must be
+        // durably written to blob storage before the entries (which may reference it) are persisted
+        // to indexed storage. `append` flushes the whole buffer, so waiting on all outstanding
+        // uploads is correct. A permanent upload failure is treated like a permanent storage
+        // failure (see `retry_storage_op`): there is no safe way to commit a dangling reference.
+        if !self.pending_uploads.is_empty() {
+            let pending = std::mem::take(&mut self.pending_uploads);
+            for upload in pending {
+                if let Err(err) = upload.wait().await {
+                    panic!(
+                        "Oplog payload upload failed for key '{}', cannot commit referencing entries: {err}",
+                        self.key
+                    );
+                }
+            }
+        }
 
         let entry_count = entries.len() as u64;
         let mut pairs = Vec::with_capacity(entries.len());
@@ -1090,6 +1191,47 @@ impl Oplog for PrimaryOplog {
             md5_hash,
         )
         .await
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        // ORDERING (Start determinism), part 1 — lock acquisition: `self.state` is a FIFO-fair
+        // `tokio::sync::Mutex`, so concurrent callers acquire it in the exact order they called
+        // `lock()`. Within a single component instance the host futures are polled on one thread and
+        // there is no `.await` between a subtask initiating its durable operation and this call, so
+        // "call order" equals "initiation order". FIFO acquisition therefore turns initiation order
+        // into `Start`-index order. A non-FIFO mutex (e.g. `async_lock::Mutex`) would let a
+        // later-initiated task barge ahead here and reorder the replay sequence.
+        let mut state = self.state.lock().await;
+        // ORDERING (Start determinism), part 2 — CRITICAL SECTION: from here until `push` assigns
+        // the index there must be NO `.await`. Reserving the payload, building the `Start`, and
+        // assigning its index happen as one non-yielding step under the held state lock, so a
+        // concurrent writer cannot interleave its own `Start` and reorder the deterministic replay
+        // sequence. The reservation only *starts* the (possibly large) blob upload; it is not
+        // awaited here. Durability of the blob before any referencing entry is committed is enforced
+        // by the commit barrier in `append`.
+        //
+        // The no-`.await` window is enforced at compile time by the `!Send` `guard`: holding it
+        // across an `.await` would make this `async_trait` (Send-bound) future fail to compile, so a
+        // future refactor that turns one of these synchronous steps into an awaited one is rejected
+        // rather than silently breaking ordering. Do not move `drop(guard)` before `push`.
+        let ReservedPayload {
+            raw,
+            pending,
+            guard,
+        } = state.reserve_raw_payload(serialized_request);
+        let entry = build_start(raw)?;
+        let index = state.push(entry.clone());
+        drop(guard);
+        state.maybe_commit().await;
+        Ok(OrderedOplogStart {
+            index,
+            entry,
+            pending_upload: pending,
+        })
     }
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {

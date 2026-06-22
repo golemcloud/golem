@@ -102,7 +102,7 @@ use golem_worker_executor::services::golem_config::{
     ResourceLimitsDisabledConfig, SchedulerStorageConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
-use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
+use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService, OrderedOplogStart};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
@@ -2570,6 +2570,16 @@ impl Oplog for TestOplog {
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
         self.oplog.add_pair(start, make_second).await
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        self.oplog
+            .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

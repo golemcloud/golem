@@ -757,6 +757,14 @@ mod tests {
             unimplemented!()
         }
 
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            _serialized_request: Vec<u8>,
+            _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+            unimplemented!()
+        }
+
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             unimplemented!()
         }

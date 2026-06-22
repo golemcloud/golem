@@ -17,7 +17,9 @@ use async_trait::async_trait;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
-use golem_worker_executor::services::oplog::{CommitLevel, Oplog};
+use golem_worker_executor::services::oplog::{
+    CommitLevel, Oplog, OrderedOplogStart, PendingUpload,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -72,6 +74,22 @@ impl Oplog for DebugOplog {
     // which internally can get committed.
     async fn add(&self, _entry: OplogEntry) -> OplogIndex {
         OplogIndex::NONE
+    }
+
+    // Mirrors `add`: a debugging session never writes to the oplog, so this builds the `Start` (to
+    // satisfy the return type) but does not persist it.
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
+        let index = self.add(entry.clone()).await;
+        Ok(OrderedOplogStart {
+            index,
+            entry,
+            pending_upload: PendingUpload::already_durable(),
+        })
     }
 
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {

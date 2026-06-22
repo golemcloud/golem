@@ -3165,3 +3165,172 @@ async fn scan_for_component_with_no_workers_terminates_immediately(_tracing: &Tr
         );
     }
 }
+
+/// A large request reserved with [`OplogOps::add_start_with_reserved_payload`] is stored externally,
+/// and its deferred blob upload is made durable by the leaf oplog's commit barrier even when the
+/// caller never awaits the returned [`PendingUpload`].
+#[test]
+async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let large_payload = vec![7u8; 1024 * 1024];
+    let request = HostRequest::Custom(large_payload.clone().into_value_and_type());
+
+    let last_oplog_idx = oplog.current_oplog_index().await;
+    // Deliberately drop the returned `PendingUpload` without awaiting it: the commit barrier in
+    // `append` must still make the deferred external blob durable before the referencing `Start` is
+    // committed.
+    let (start_idx, _pending) = oplog
+        .add_start_with_reserved_payload(request, |request_payload| OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("f".to_string()),
+            request: Some(request_payload),
+            durable_function_type: DurableFunctionType::ReadRemote,
+        })
+        .await
+        .unwrap();
+    assert_eq!(start_idx, last_oplog_idx.next());
+
+    oplog.commit(CommitLevel::Always).await;
+
+    // Read back from the service (storage), so the payload reference carries no in-memory cache and
+    // the download must hit blob storage.
+    let entries = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, start_idx, 1)
+        .await;
+    let entry = entries.into_values().next().expect("Start entry present");
+    let payload = match entry {
+        OplogEntry::Start {
+            request: Some(payload),
+            ..
+        } => {
+            assert!(
+                matches!(payload, OplogPayload::External { .. }),
+                "a large reserved request must be stored externally"
+            );
+            payload
+        }
+        other => panic!("unexpected entry: {other:?}"),
+    };
+
+    let downloaded: HostRequest = oplog_service
+        .download_payload(&owned_agent_id, AgentMode::Durable, payload)
+        .await
+        .unwrap();
+    match downloaded {
+        HostRequest::Custom(vnt) => {
+            assert_eq!(Vec::<u8>::from_value_and_type(vnt).unwrap(), large_payload);
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+}
+
+/// A small request reserved with [`OplogOps::add_start_with_reserved_payload`] is stored inline, and
+/// its [`PendingUpload`] is a no-op (nothing to upload).
+#[test]
+async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let request = HostRequest::Custom("request".into_value_and_type());
+
+    let last_oplog_idx = oplog.current_oplog_index().await;
+    let (start_idx, pending) = oplog
+        .add_start_with_reserved_payload(request, |request_payload| OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::Custom("f".to_string()),
+            request: Some(request_payload),
+            durable_function_type: DurableFunctionType::ReadRemote,
+        })
+        .await
+        .unwrap();
+    assert_eq!(start_idx, last_oplog_idx.next());
+    // Inline payloads are already durable: waiting is a no-op.
+    pending.wait().await.unwrap();
+
+    oplog.commit(CommitLevel::Always).await;
+
+    let entries = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, start_idx, 1)
+        .await;
+    let entry = entries.into_values().next().expect("Start entry present");
+    let payload = match entry {
+        OplogEntry::Start {
+            request: Some(payload),
+            ..
+        } => {
+            assert!(
+                matches!(payload, OplogPayload::SerializedInline { .. }),
+                "a small reserved request must be stored inline"
+            );
+            payload
+        }
+        other => panic!("unexpected entry: {other:?}"),
+    };
+
+    let downloaded: HostRequest = oplog_service
+        .download_payload(&owned_agent_id, AgentMode::Durable, payload)
+        .await
+        .unwrap();
+    match downloaded {
+        HostRequest::Custom(vnt) => {
+            assert_eq!(String::from_value_and_type(vnt).unwrap(), "request");
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+}
