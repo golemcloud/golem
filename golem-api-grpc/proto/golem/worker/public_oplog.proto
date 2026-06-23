@@ -67,6 +67,7 @@ message OplogEntry {
     StartParameters Start = 44;
     EndParameters End = 45;
     CancelledParameters Cancelled = 46;
+    CardRevokedParameters CardRevoked = 47;
   }
 }
 
@@ -273,6 +274,11 @@ message SetRetryPolicyParameters {
 message RemoveRetryPolicyParameters {
   google.protobuf.Timestamp timestamp = 1;
   string policy_name = 2;
+}
+
+message CardRevokedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
 }
 
 message EndAtomicRegionParameters {

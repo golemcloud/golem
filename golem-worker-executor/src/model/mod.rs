@@ -18,6 +18,7 @@ use futures::Stream;
 use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
+use golem_common::model::card::EffectiveSurface;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -75,6 +76,7 @@ pub struct AgentConfig {
     pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
+    pub agent_effective_surface: EffectiveSurface,
 }
 
 impl AgentConfig {
@@ -87,6 +89,7 @@ impl AgentConfig {
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
+        agent_effective_surface: EffectiveSurface,
     ) -> AgentConfig {
         AgentConfig {
             deleted_regions,
@@ -97,6 +100,7 @@ impl AgentConfig {
             created_by_email,
             initial_agent_config,
             last_snapshot_index,
+            agent_effective_surface,
         }
     }
 

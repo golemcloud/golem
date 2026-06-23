@@ -466,6 +466,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}name:              {}", &params.name);
         }
+        PublicOplogEntry::CardRevoked(params) => {
+            let _ = writeln!(result, "CARD REVOKED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+        }
     }
 
     result

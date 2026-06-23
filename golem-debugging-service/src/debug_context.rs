@@ -49,6 +49,7 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::card::CardService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -562,6 +563,7 @@ impl WorkerCtx for DebugContext {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -604,6 +606,7 @@ impl WorkerCtx for DebugContext {
             scheduler_service,
             rpc,
             worker_proxy,
+            card_service,
             component_service,
             account_resource_limits,
             config,
@@ -686,6 +689,10 @@ impl WorkerCtx for DebugContext {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn card_service(&self) -> Arc<dyn CardService> {
+        self.durable_ctx.card_service()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {

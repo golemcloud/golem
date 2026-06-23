@@ -435,6 +435,11 @@ impl PublicOplogEntry {
                 Self::string_match("removeretrypolicy", &[], query_path, query)
                     || Self::string_match("remove-retry-policy", &[], query_path, query)
             }
+            PublicOplogEntry::CardRevoked(params) => {
+                Self::string_match("cardrevoked", &[], query_path, query)
+                    || Self::string_match("card-revoked", &[], query_path, query)
+                    || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
         }
     }
 
