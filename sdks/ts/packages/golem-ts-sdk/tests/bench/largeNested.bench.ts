@@ -41,6 +41,8 @@ import {
   deserializeGraph,
   serializeGraphToWit,
   deserializeGraphFromWit,
+  compileGraphEncoder,
+  compileGraphDecoder,
 } from '../../src/internal/mapping/values/schemaValue';
 import {
   r,
@@ -130,12 +132,23 @@ interface Fixture {
   tsValue: unknown;
   schemaValue: SchemaValue;
   wit: ReturnType<typeof schemaValueToWit>;
+  // Compiled codec built once (outside the timed loop), as in largeInput.bench.
+  enc: (value: unknown) => ReturnType<typeof serializeGraphToWit>;
+  dec: (wit: ReturnType<typeof schemaValueToWit>) => unknown;
 }
 
 function makeFixture(label: string, graph: ResolvedGraph, tsValue: unknown): Fixture {
   const schemaValue = serializeGraph(tsValue, graph);
   const wit = schemaValueToWit(schemaValue);
-  return { label, graph, tsValue, schemaValue, wit };
+  return {
+    label,
+    graph,
+    tsValue,
+    schemaValue,
+    wit,
+    enc: compileGraphEncoder(graph),
+    dec: compileGraphDecoder(graph),
+  };
 }
 
 const treeFixtures: Fixture[] = SIZES.map((n) =>
@@ -195,6 +208,18 @@ function legs(title: string, fixtures: Fixture[]): void {
   describe(`${title}: decode round-trip FUSED (wire -> TS value)`, () => {
     for (const f of fixtures) {
       bench(f.label, () => void deserializeGraphFromWit(f.wit, f.graph), { time: TIME });
+    }
+  });
+
+  describe(`${title}: encode round-trip COMPILED (TS value -> wire)`, () => {
+    for (const f of fixtures) {
+      bench(f.label, () => void f.enc(f.tsValue), { time: TIME });
+    }
+  });
+
+  describe(`${title}: decode round-trip COMPILED (wire -> TS value)`, () => {
+    for (const f of fixtures) {
+      bench(f.label, () => void f.dec(f.wit), { time: TIME });
     }
   });
 }

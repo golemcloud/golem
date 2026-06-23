@@ -29,6 +29,7 @@ import {
   createWireEncoder,
   deserializeGraph,
   deserializeGraphFromWit,
+  getGraphCodec,
   serializeGraph,
   serializeGraphToWit,
 } from './schemaValue';
@@ -47,6 +48,35 @@ import {
 import { sdkPrincipalFromHost } from '../../../principal';
 import { QuotaToken } from '../../../host/quota';
 import { Config } from '../../../agentConfig';
+
+// ============================================================
+// Eager codec compilation (Wizer snapshot capture)
+// ============================================================
+
+// Compile the codec for a plain `schema` type's graph now, so the
+// compiled function objects are reachable when `golem build`'s Wizer step
+// snapshots the QuickJS heap. Called from the `@agent()` decorator, which runs
+// during top-level module evaluation — the exact moment Wizer pre-initializes.
+// Non-`schema` types have no compiled codec; they are skipped.
+function precompileRuntimeTypeInfo(type: RuntimeTypeInfo): void {
+  if (type.tag === 'schema') {
+    getGraphCodec(type.graph);
+  }
+}
+
+/** Eagerly compile codecs for an ordered parameter list (constructor / method input). */
+export function precompileParamCodecs(params: RuntimeParam[]): void {
+  for (const param of params) {
+    precompileRuntimeTypeInfo(param.type);
+  }
+}
+
+/** Eagerly compile the codec for a method output. */
+export function precompileOutputCodec(output: RuntimeOutput): void {
+  if (output.tag === 'single') {
+    precompileRuntimeTypeInfo(output.type);
+  }
+}
 
 // ============================================================
 // Per-value serialize / deserialize
@@ -245,7 +275,10 @@ export function encodeInputRecordToWit(args: any[], userParams: RuntimeParam[]):
     const value = i < args.length ? args[i] : undefined;
     const toSerialize =
       type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
-    return enc.emitGraph(toSerialize, type.graph);
+    const codec = getGraphCodec(type.graph);
+    return codec
+      ? codec.emit(toSerialize, enc.valueNodes)
+      : enc.emitGraph(toSerialize, type.graph);
   });
   const root = enc.pushRecord(fieldIndices);
   return { valueNodes: enc.valueNodes, root };
@@ -271,6 +304,11 @@ export function decodeInputRecordFromWit(
   const dec = createWireDecoder(input.valueNodes);
   const fieldIndices = dec.recordFieldIndices(input.root);
   let fieldIndex = 0;
+  // Cycle guard shared across compiled-codec field reads. Allocated lazily
+  // because rich/multimodal-only inputs never take the compiled path. Sibling
+  // fields are independent subtrees, so a single shared guard is correct (each
+  // read restores its entries to 0 on the way out).
+  let onPath: Uint8Array | undefined;
 
   const args = params.map((param) => {
     const type = param.type;
@@ -284,7 +322,15 @@ export function decodeInputRecordFromWit(
       throw new Error(`Missing argument for parameter '${param.name}'`);
     }
     const schemaType = type as Extract<RuntimeTypeInfo, { tag: 'schema' }>;
-    const result = dec.readGraph(fieldIndices[fieldIndex++], schemaType.graph);
+    const idx = fieldIndices[fieldIndex++];
+    const codec = getGraphCodec(schemaType.graph);
+    let result;
+    if (codec) {
+      if (!onPath) onPath = new Uint8Array(input.valueNodes.length);
+      result = codec.read(idx, input.valueNodes, onPath);
+    } else {
+      result = dec.readGraph(idx, schemaType.graph);
+    }
     return schemaType.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
   });
 
@@ -337,7 +383,8 @@ export function encodeOutputToWit(
   if (type.tag === 'schema') {
     const toSerialize =
       type.tsType.kind === 'quota-token' ? (returnValue as QuotaToken)._toRecord() : returnValue;
-    return serializeGraphToWit(toSerialize, type.graph);
+    const codec = getGraphCodec(type.graph);
+    return codec ? codec.encode(toSerialize) : serializeGraphToWit(toSerialize, type.graph);
   }
   return schemaValueToWit(serializeRuntimeValue(returnValue, type));
 }
@@ -360,7 +407,8 @@ export function decodeOutputFromWit(
   }
   const type = output.type;
   if (type.tag === 'schema') {
-    const result = deserializeGraphFromWit(value, type.graph);
+    const codec = getGraphCodec(type.graph);
+    const result = codec ? codec.decode(value) : deserializeGraphFromWit(value, type.graph);
     return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
   }
   return deserializeRuntimeValue('returnValue', schemaValueFromWit(value), type);

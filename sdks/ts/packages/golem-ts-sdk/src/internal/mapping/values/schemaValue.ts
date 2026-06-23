@@ -1527,3 +1527,864 @@ function matchesVariant(
   }
   return false;
 }
+
+// ============================================================
+// Compiled codecs
+// ============================================================
+// Hoists the per-node `resolveRef` + tag `switch` dispatch off the hot path by
+// specializing a fixed `ResolvedGraph` once into generated JS source, compiled
+// with `new Function` so QuickJS turns the whole structure into bytecode with no
+// per-node dispatch. One generated function per named def handles recursion;
+// everything else is inlined.
+//
+// The result is byte-identical to `serializeGraphToWit` on encode and value-equal
+// to `deserializeGraphFromWit` on decode. The only unsupported kind is `flags`,
+// which the interpreted codec does not support either; it raises
+// `CompileUnsupported`, letting callers fall back to the interpreted fused codec
+// (whose error message then describes the limitation).
+
+export class CompileUnsupported extends Error {
+  constructor(tag: string) {
+    super(`compiled codec does not support type kind '${tag}'`);
+    this.name = 'CompileUnsupported';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Code generation
+// ---------------------------------------------------------------------------
+// Emits JS source specialized to the graph and compiles it once with
+// `new Function`, so QuickJS turns the whole structure into bytecode with no
+// per-node dispatch and (for non-recursive structure) no per-node closure call.
+// One generated function per named def handles recursion; everything else is
+// inlined. Lists use `Array.prototype.map` (the QuickJS-favoured builtin).
+
+interface GenCtx {
+  fresh: () => string;
+  defName: (id: TypeId) => string;
+  consts: any[];
+}
+
+function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): string {
+  const b = rt.body;
+  switch (b.tag) {
+    case 'ref':
+      return `${ctx.defName(b.id)}(${valExpr}, nodes)`;
+    case 'bool':
+      out.push(`if (typeof ${valExpr} !== 'boolean') throw typeMismatch(${valExpr}, 'boolean');`);
+      return `(nodes.push({ tag: 'bool-value', val: ${valExpr} }) - 1)`;
+    case 'f32':
+    case 'f64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 's8':
+    case 's16':
+    case 's32':
+      out.push(`if (typeof ${valExpr} !== 'number') throw typeMismatch(${valExpr}, 'number');`);
+      return `(nodes.push({ tag: '${b.tag}-value', val: ${valExpr} }) - 1)`;
+    case 'u64': {
+      const iv = ctx.fresh();
+      out.push(`let ${iv};`);
+      out.push(
+        `if (typeof ${valExpr} === 'bigint') { ${iv} = nodes.push({ tag: 'u64-value', val: ${valExpr} }) - 1; } ` +
+          `else if (typeof ${valExpr} === 'number') { ${iv} = nodes.push({ tag: 'u64-value', val: BigInt(${valExpr}) }) - 1; } ` +
+          `else { throw typeMismatch(${valExpr}, 'bigint'); }`,
+      );
+      return iv;
+    }
+    case 's64':
+      out.push(`if (typeof ${valExpr} !== 'bigint') throw typeMismatch(${valExpr}, 'bigint');`);
+      return `(nodes.push({ tag: 's64-value', val: ${valExpr} }) - 1)`;
+    case 'char':
+      out.push(`if (typeof ${valExpr} !== 'string') throw typeMismatch(${valExpr}, 'string');`);
+      return `(nodes.push({ tag: 'char-value', val: ${valExpr} }) - 1)`;
+    case 'string':
+      out.push(`if (typeof ${valExpr} !== 'string') throw typeMismatch(${valExpr}, 'string');`);
+      return `(nodes.push({ tag: 'string-value', val: ${valExpr} }) - 1)`;
+    case 'enum': {
+      const k = ctx.consts.push(b.cases) - 1;
+      const ci = ctx.fresh();
+      out.push(`let ${ci} = -1; if (typeof ${valExpr} === 'string') ${ci} = C[${k}].indexOf(${valExpr});`);
+      out.push(
+        `if (${ci} === -1) throw new Error("Value '" + display(${valExpr}) + ` +
+          `"' does not match any of the enum values: " + C[${k}].join(', '));`,
+      );
+      return `(nodes.push({ tag: 'enum-value', val: ${ci} }) - 1)`;
+    }
+    case 'option': {
+      const ov = ctx.fresh();
+      out.push(`const ${ov} = ${valExpr};`);
+      const iv = ctx.fresh();
+      out.push(`let ${iv};`);
+      const sub: string[] = [];
+      const ie = genEnc(b.element, ov, sub, ctx);
+      const inner = ctx.fresh();
+      out.push(
+        `if (${ov} === null || ${ov} === undefined) { ${iv} = nodes.push({ tag: 'option-value', val: undefined }) - 1; } ` +
+          `else { ${sub.join(' ')} const ${inner} = ${ie}; ${iv} = nodes.push({ tag: 'option-value', val: ${inner} }) - 1; }`,
+      );
+      return iv;
+    }
+    case 'list': {
+      if (b.typedArray) {
+        const spec = TYPED_ARRAYS[b.typedArray];
+        const av = ctx.fresh();
+        out.push(`const ${av} = ${valExpr};`);
+        out.push(
+          `if (!TYPED_ARRAYS[${JSON.stringify(b.typedArray)}].is(${av})) throw typeMismatch(${av}, ${JSON.stringify(spec.name)});`,
+        );
+        const idxs = ctx.fresh();
+        out.push(`const ${idxs} = new Array(${av}.length);`);
+        const i = ctx.fresh();
+        const sub: string[] = [];
+        const ee = genEnc(b.element, `${av}[${i}]`, sub, ctx);
+        out.push(`for (let ${i} = 0; ${i} < ${av}.length; ${i}++) { ${sub.join(' ')} ${idxs}[${i}] = ${ee}; }`);
+        return `(nodes.push({ tag: 'list-value', val: ${idxs} }) - 1)`;
+      }
+      const lv = ctx.fresh();
+      out.push(`const ${lv} = ${valExpr};`);
+      out.push(`if (!Array.isArray(${lv})) throw typeMismatch(${lv}, 'Array');`);
+      const sub: string[] = [];
+      const ee = genEnc(b.element, 'x', sub, ctx);
+      const cb = sub.length ? `(x) => { ${sub.join(' ')} return ${ee}; }` : `(x) => ${ee}`;
+      return `(nodes.push({ tag: 'list-value', val: ${lv}.map(${cb}) }) - 1)`;
+    }
+    case 'record': {
+      const rv = ctx.fresh();
+      out.push(`const ${rv} = ${valExpr};`);
+      out.push(`if (typeof ${rv} !== 'object' || ${rv} === null) throw typeMismatch(${rv}, 'object');`);
+      const idxVars: string[] = [];
+      for (const f of b.fields) {
+        const nameLit = JSON.stringify(f.name);
+        const iv = ctx.fresh();
+        if (f.type.body.tag === 'option') {
+          out.push(`let ${iv};`);
+          const sub: string[] = [];
+          const fe = genEnc(f.type, `${rv}[${nameLit}]`, sub, ctx);
+          out.push(
+            `if (!Object.prototype.hasOwnProperty.call(${rv}, ${nameLit})) { ${iv} = nodes.push({ tag: 'option-value', val: undefined }) - 1; } ` +
+              `else { ${sub.join(' ')} ${iv} = ${fe}; }`,
+          );
+        } else {
+          const fe = genEnc(f.type, `${rv}[${nameLit}]`, out, ctx);
+          out.push(`const ${iv} = ${fe};`);
+        }
+        idxVars.push(iv);
+      }
+      return `(nodes.push({ tag: 'record-value', val: [${idxVars.join(', ')}] }) - 1)`;
+    }
+    case 'tuple': {
+      const tv = ctx.fresh();
+      out.push(`const ${tv} = ${valExpr};`);
+      if (b.empty !== undefined) {
+        const iv = ctx.fresh();
+        out.push(`let ${iv};`);
+        out.push(
+          `if (${tv} === null || ${tv} === undefined) { ${iv} = nodes.push({ tag: 'tuple-value', val: [] }) - 1; } ` +
+            `else { throw typeMismatch(${tv}, 'empty tuple'); }`,
+        );
+        return iv;
+      }
+      const len = b.elements.length;
+      out.push(
+        `if (!Array.isArray(${tv}) || ${tv}.length !== ${len}) throw typeMismatch(${tv}, 'Array of length ${len}');`,
+      );
+      const idxVars: string[] = [];
+      for (let i = 0; i < len; i++) {
+        const fe = genEnc(b.elements[i], `${tv}[${i}]`, out, ctx);
+        const iv = ctx.fresh();
+        out.push(`const ${iv} = ${fe};`);
+        idxVars.push(iv);
+      }
+      return `(nodes.push({ tag: 'tuple-value', val: [${idxVars.join(', ')}] }) - 1)`;
+    }
+    case 'map': {
+      const mv = ctx.fresh();
+      out.push(`const ${mv} = ${valExpr};`);
+      out.push(`if (!(${mv} instanceof Map)) throw typeMismatch(${mv}, 'Map');`);
+      const pair = ctx.fresh();
+      const keySub: string[] = [];
+      const keyExpr = genEnc(b.key, `${pair}[0]`, keySub, ctx);
+      const ki = ctx.fresh();
+      const valSub: string[] = [];
+      const valExpr2 = genEnc(b.value, `${pair}[1]`, valSub, ctx);
+      const vi = ctx.fresh();
+      const entries = ctx.fresh();
+      out.push(
+        `const ${entries} = Array.from(${mv}.entries()).map((${pair}) => { ` +
+          `${keySub.join(' ')} const ${ki} = ${keyExpr}; ${valSub.join(' ')} const ${vi} = ${valExpr2}; ` +
+          `return { key: ${ki}, value: ${vi} }; });`,
+      );
+      return `(nodes.push({ tag: 'map-value', val: ${entries} }) - 1)`;
+    }
+    case 'variant': {
+      // Each case becomes one arm of an `if / else if … else throw` chain that
+      // assigns the node index to `resIdx`; never a bare `return`, which would
+      // exit the enclosing generated def/root when the variant is nested.
+      const vv = ctx.fresh();
+      out.push(`const ${vv} = ${valExpr};`);
+      const casesK = ctx.consts.push(b.cases) - 1;
+      const resIdx = ctx.fresh();
+      out.push(`let ${resIdx};`);
+      const arms: { cond: string; body: string }[] = [];
+
+      if (b.tagged) {
+        out.push(
+          `if (typeof ${vv} !== 'object' || ${vv} === null) throw typeMismatch(${vv}, 'object with tag property');`,
+        );
+        out.push(`if (!('tag' in ${vv})) throw missingKey('tag', ${vv});`);
+        for (let i = 0; i < b.cases.length; i++) {
+          const c = b.cases[i];
+          const cond = `${vv}.tag === ${JSON.stringify(c.name)}`;
+          if (!c.payload) {
+            arms.push({
+              cond,
+              body: `${resIdx} = nodes.push({ tag: 'variant-value', val: { case_: ${i}, payload: undefined } }) - 1;`,
+            });
+            continue;
+          }
+          if (!c.valueKey) {
+            arms.push({
+              cond,
+              body: `throw internalError(${JSON.stringify(`Missing payload key for tagged case ${c.name}`)});`,
+            });
+            continue;
+          }
+          const keyLit = JSON.stringify(c.valueKey);
+          const sub: string[] = [];
+          const pe = genEnc(c.payload, `${vv}[${keyLit}]`, sub, ctx);
+          const pi = ctx.fresh();
+          arms.push({
+            cond,
+            body:
+              `if (!Object.prototype.hasOwnProperty.call(${vv}, ${keyLit})) throw missingKey(${keyLit}, ${vv}); ` +
+              `${sub.join(' ')} const ${pi} = ${pe}; ` +
+              `${resIdx} = nodes.push({ tag: 'variant-value', val: { case_: ${i}, payload: ${pi} } }) - 1;`,
+          });
+        }
+      } else {
+        // Plain union
+        for (let i = 0; i < b.cases.length; i++) {
+          const c = b.cases[i];
+          if (!c.payload) {
+            arms.push({
+              cond: `${vv} === ${JSON.stringify(c.name)}`,
+              body: `${resIdx} = nodes.push({ tag: 'variant-value', val: { case_: ${i}, payload: undefined } }) - 1;`,
+            });
+            continue;
+          }
+          const payloadK = ctx.consts.push(c.payload) - 1;
+          const sub: string[] = [];
+          const pe = genEnc(c.payload, vv, sub, ctx);
+          const pi = ctx.fresh();
+          arms.push({
+            cond: `matchesResolved(${vv}, C[${payloadK}], DEFS)`,
+            body: `${sub.join(' ')} const ${pi} = ${pe}; ${resIdx} = nodes.push({ tag: 'variant-value', val: { case_: ${i}, payload: ${pi} } }) - 1;`,
+          });
+        }
+      }
+
+      const chain = arms.map((a) => `if (${a.cond}) { ${a.body} }`).join(' else ');
+      out.push(`${chain}${arms.length ? ' else ' : ''}{ throw unionMismatch(C[${casesK}], ${vv}); }`);
+      return resIdx;
+    }
+    case 'result': {
+      const rv = ctx.fresh();
+      out.push(`const ${rv} = ${valExpr};`);
+      out.push(`if (typeof ${rv} !== 'object' || ${rv} === null) throw typeMismatch(${rv}, 'object');`);
+      out.push(`if (!('tag' in ${rv})) throw missingKey('tag', ${rv});`);
+      const resIdx = ctx.fresh();
+      out.push(`let ${resIdx};`);
+
+      const okBranch = (): string => {
+        if (b.ok) {
+          if (b.repr.tag === 'custom' && !b.repr.okValueName) {
+            return `{ throw internalError('unresolved key name for ok value'); }`;
+          }
+          const accessor = b.repr.tag === 'inbuilt' ? `${rv}.val` : `${rv}[${JSON.stringify(b.repr.okValueName)}]`;
+          const sub: string[] = [];
+          const ie = genEnc(b.ok, accessor, sub, ctx);
+          const inner = ctx.fresh();
+          return `{ ${sub.join(' ')} const ${inner} = ${ie}; ${resIdx} = nodes.push({ tag: 'result-value', val: { tag: 'ok-value', val: ${inner} } }) - 1; }`;
+        }
+        if (b.repr.tag === 'inbuilt') {
+          if (b.repr.okAbsent !== undefined) {
+            return `{ ${resIdx} = nodes.push({ tag: 'result-value', val: { tag: 'ok-value', val: undefined } }) - 1; }`;
+          }
+          return `{ throw internalError('unresolved ok type'); }`;
+        }
+        return `{ ${resIdx} = nodes.push({ tag: 'result-value', val: { tag: 'ok-value', val: undefined } }) - 1; }`;
+      };
+      const errBranch = (): string => {
+        if (b.err) {
+          if (b.repr.tag === 'custom' && !b.repr.errValueName) {
+            return `{ throw internalError('unresolved key name for err value'); }`;
+          }
+          const accessor = b.repr.tag === 'inbuilt' ? `${rv}.val` : `${rv}[${JSON.stringify(b.repr.errValueName)}]`;
+          const sub: string[] = [];
+          const ie = genEnc(b.err, accessor, sub, ctx);
+          const inner = ctx.fresh();
+          return `{ ${sub.join(' ')} const ${inner} = ${ie}; ${resIdx} = nodes.push({ tag: 'result-value', val: { tag: 'err-value', val: ${inner} } }) - 1; }`;
+        }
+        if (b.repr.tag === 'inbuilt') {
+          if (b.repr.errAbsent !== undefined) {
+            return `{ ${resIdx} = nodes.push({ tag: 'result-value', val: { tag: 'err-value', val: undefined } }) - 1; }`;
+          }
+          return `{ throw internalError('unresolved err type'); }`;
+        }
+        return `{ ${resIdx} = nodes.push({ tag: 'result-value', val: { tag: 'err-value', val: undefined } }) - 1; }`;
+      };
+
+      if (b.repr.tag === 'inbuilt') {
+        out.push(`if (!Object.prototype.hasOwnProperty.call(${rv}, 'val')) throw missingKey('val', ${rv});`);
+        out.push(
+          `if (${rv}.tag === 'ok') ${okBranch()} else if (${rv}.tag === 'err') ${errBranch()} else { throw typeMismatch(${rv}, 'Result'); }`,
+        );
+      } else {
+        out.push(
+          `if (${rv}.tag === 'ok') ${okBranch()} else if (${rv}.tag === 'err') ${errBranch()} else { throw typeMismatch(${rv}, 'object with tag property'); }`,
+        );
+      }
+      return resIdx;
+    }
+    case 'flags':
+      throw new CompileUnsupported(b.tag);
+  }
+}
+
+function genDecRange(iv: string, out: string[]): void {
+  out.push(
+    `if (${iv} < 0 || ${iv} >= nodes.length) throw new SchemaDecodeError("value node index out of range: " + ${iv} + " (nodes: " + nodes.length + ")");`,
+  );
+}
+
+function genDecGuardOpen(iv: string, out: string[]): void {
+  genDecRange(iv, out);
+  out.push(`if (onPath[${iv}] === 1) throw new SchemaDecodeError("cyclic value node reference at index " + ${iv});`);
+  out.push(`onPath[${iv}] = 1;`);
+}
+
+function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): string {
+  const b = rt.body;
+  switch (b.tag) {
+    case 'ref':
+      return `${ctx.defName(b.id)}(${idxExpr}, nodes, onPath)`;
+    case 'bool': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'bool-value') throw wireMismatch(${nv}, 'boolean');`);
+      return `${nv}.val`;
+    }
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 's8':
+    case 's16':
+    case 's32':
+    case 'f32':
+    case 'f64': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      const rv = ctx.fresh();
+      out.push(`let ${rv};`);
+      out.push(
+        `switch (${nv}.tag) { ` +
+          `case 'u8-value': case 'u16-value': case 'u32-value': case 's8-value': case 's16-value': case 's32-value': case 'f32-value': case 'f64-value': ${rv} = ${nv}.val; break; ` +
+          `case 'u64-value': case 's64-value': ${rv} = Number(${nv}.val); break; ` +
+          `default: throw wireMismatch(${nv}, 'number'); }`,
+      );
+      return rv;
+    }
+    case 'u64':
+    case 's64': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      const rv = ctx.fresh();
+      out.push(`let ${rv};`);
+      out.push(
+        `if (${nv}.tag === 'u64-value' || ${nv}.tag === 's64-value') ${rv} = ${nv}.val; else throw wireMismatch(${nv}, 'bigint');`,
+      );
+      return rv;
+    }
+    case 'char': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'char-value') throw wireMismatch(${nv}, 'char');`);
+      return `${nv}.val`;
+    }
+    case 'string': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'string-value') throw wireMismatch(${nv}, 'string');`);
+      return `${nv}.val`;
+    }
+    case 'enum': {
+      const k = ctx.consts.push(b.cases) - 1;
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'enum-value') throw wireMismatch(${nv}, 'enum');`);
+      return `C[${k}][${nv}.val]`;
+    }
+    case 'option': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'option-value') throw wireMismatch(${nv}, 'option');`);
+      const rv = ctx.fresh();
+      out.push(`let ${rv};`);
+      const sub: string[] = [];
+      const ie = genDec(b.element, `${nv}.val`, sub, ctx);
+      const noneExpr = b.noneRepr === 'null' ? 'null' : 'undefined';
+      out.push(`if (${nv}.val === undefined) { ${rv} = ${noneExpr}; } else { ${sub.join(' ')} ${rv} = ${ie}; }`);
+      out.push(`onPath[${iv}] = 0;`);
+      return rv;
+    }
+    case 'list': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'list-value') throw wireMismatch(${nv}, 'list');`);
+      if (b.typedArray) {
+        const arr = ctx.fresh();
+        out.push(`const ${arr} = TYPED_ARRAYS[${JSON.stringify(b.typedArray)}].make(${nv}.val.length);`);
+        const i = ctx.fresh();
+        const sub: string[] = [];
+        const ee = genDec(b.element, `${nv}.val[${i}]`, sub, ctx);
+        out.push(`for (let ${i} = 0; ${i} < ${nv}.val.length; ${i}++) { ${sub.join(' ')} ${arr}[${i}] = ${ee}; }`);
+        out.push(`onPath[${iv}] = 0;`);
+        return arr;
+      }
+      const sub: string[] = [];
+      const ee = genDec(b.element, 'ei', sub, ctx);
+      const cb = sub.length ? `(ei) => { ${sub.join(' ')} return ${ee}; }` : `(ei) => ${ee}`;
+      const rv = ctx.fresh();
+      out.push(`const ${rv} = ${nv}.val.map(${cb});`);
+      out.push(`onPath[${iv}] = 0;`);
+      return rv;
+    }
+    case 'record': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'record-value') throw wireMismatch(${nv}, 'record');`);
+      const ov = ctx.fresh();
+      out.push(`const ${ov} = {};`);
+      for (let i = 0; i < b.fields.length; i++) {
+        const fe = genDec(b.fields[i].type, `${nv}.val[${i}]`, out, ctx);
+        out.push(`${ov}[${JSON.stringify(b.fields[i].name)}] = ${fe};`);
+      }
+      out.push(`onPath[${iv}] = 0;`);
+      return ov;
+    }
+    case 'tuple': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      if (b.empty !== undefined) {
+        genDecRange(iv, out);
+        const nv = ctx.fresh();
+        out.push(`const ${nv} = nodes[${iv}];`);
+        out.push(`if (${nv}.tag !== 'tuple-value') throw wireMismatch(${nv}, 'tuple');`);
+        out.push(`if (${nv}.val.length !== 0) throw wireMismatch(${nv}, 'empty tuple');`);
+        return b.empty === 'null' ? 'null' : 'undefined';
+      }
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'tuple-value') throw wireMismatch(${nv}, 'tuple');`);
+      const len = b.elements.length;
+      out.push(`if (${nv}.val.length !== ${len}) throw wireMismatch(${nv}, 'tuple');`);
+      const ov = ctx.fresh();
+      out.push(`const ${ov} = new Array(${len});`);
+      for (let i = 0; i < len; i++) {
+        const fe = genDec(b.elements[i], `${nv}.val[${i}]`, out, ctx);
+        out.push(`${ov}[${i}] = ${fe};`);
+      }
+      out.push(`onPath[${iv}] = 0;`);
+      return ov;
+    }
+    case 'map': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'map-value') throw wireMismatch(${nv}, 'map');`);
+      const mapv = ctx.fresh();
+      out.push(`const ${mapv} = new Map();`);
+      const entry = ctx.fresh();
+      const keySub: string[] = [];
+      const keyExpr = genDec(b.key, `${entry}.key`, keySub, ctx);
+      const ki = ctx.fresh();
+      const valSub: string[] = [];
+      const valExpr2 = genDec(b.value, `${entry}.value`, valSub, ctx);
+      const vi = ctx.fresh();
+      out.push(
+        `for (const ${entry} of ${nv}.val) { ` +
+          `${keySub.join(' ')} const ${ki} = ${keyExpr}; ${valSub.join(' ')} const ${vi} = ${valExpr2}; ` +
+          `${mapv}.set(${ki}, ${vi}); }`,
+      );
+      out.push(`onPath[${iv}] = 0;`);
+      return mapv;
+    }
+    case 'variant': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'variant-value') throw wireMismatch(${nv}, 'variant');`);
+      const vv = ctx.fresh();
+      out.push(`const ${vv} = ${nv}.val;`);
+      const resVar = ctx.fresh();
+      out.push(`let ${resVar};`);
+      out.push(`switch (${vv}.case_) {`);
+      for (let i = 0; i < b.cases.length; i++) {
+        const c = b.cases[i];
+        const nameLit = JSON.stringify(c.name);
+        if (b.tagged) {
+          if (!c.payload) {
+            out.push(`case ${i}: { ${resVar} = { tag: ${nameLit} }; break; }`);
+            continue;
+          }
+          const keyLit = c.valueKey === undefined ? undefined : JSON.stringify(c.valueKey);
+          const sub: string[] = [];
+          const pe = genDec(c.payload, `${vv}.payload`, sub, ctx);
+          const emptyTagged = `${resVar} = { tag: ${nameLit} };`;
+          const undefinedCase =
+            c.payload.body.tag === 'option'
+              ? emptyTagged
+              : `throw wireMismatch(${nv}, 'variant');`;
+          const presentCase =
+            keyLit === undefined
+              ? `throw wireMismatch(${nv}, 'variant');`
+              : `${sub.join(' ')} ${resVar} = { tag: ${nameLit}, [${keyLit}]: ${pe} };`;
+          out.push(
+            `case ${i}: { if (${vv}.payload === undefined) { ${undefinedCase} } else { ${presentCase} } break; }`,
+          );
+          continue;
+        }
+        // Plain union
+        if (!c.payload) {
+          out.push(`case ${i}: { ${resVar} = ${nameLit}; break; }`);
+          continue;
+        }
+        const sub: string[] = [];
+        const pe = genDec(c.payload, `${vv}.payload`, sub, ctx);
+        out.push(
+          `case ${i}: { if (${vv}.payload === undefined) throw wireMismatch(${nv}, 'variant'); ` +
+            `${sub.join(' ')} ${resVar} = ${pe}; break; }`,
+        );
+      }
+      out.push(`default: throw wireMismatch(${nv}, 'variant'); }`);
+      out.push(`onPath[${iv}] = 0;`);
+      return resVar;
+    }
+    case 'result': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecGuardOpen(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      out.push(`if (${nv}.tag !== 'result-value') throw wireMismatch(${nv}, 'result');`);
+      const rr = ctx.fresh();
+      out.push(`const ${rr} = ${nv}.val;`);
+      out.push(
+        `if (${rr}.tag !== 'ok-value' && ${rr}.tag !== 'err-value') throw new SchemaDecodeError("unknown result value payload tag '" + ${rr}.tag + "'");`,
+      );
+      const isOk = ctx.fresh();
+      const hasVal = ctx.fresh();
+      out.push(`const ${isOk} = ${rr}.tag === 'ok-value';`);
+      out.push(`const ${hasVal} = ${rr}.val !== undefined;`);
+      const resVar = ctx.fresh();
+      const done = ctx.fresh();
+      out.push(`let ${resVar}; let ${done} = false;`);
+
+      if (b.repr.tag === 'inbuilt') {
+        const okStmts: string[] = [];
+        if (b.ok) {
+          const sub: string[] = [];
+          const ie = genDec(b.ok, `${rr}.val`, sub, ctx);
+          okStmts.push(`if (${hasVal}) { ${sub.join(' ')} ${resVar} = Result.ok(${ie}); ${done} = true; }`);
+        }
+        if (b.repr.okAbsent !== undefined) {
+          const absent = b.repr.okAbsent === 'null' ? 'null' : 'undefined';
+          okStmts.push(`if (!${hasVal}) { ${resVar} = Result.ok(${absent}); ${done} = true; }`);
+        }
+        const errStmts: string[] = [];
+        if (b.err) {
+          const sub: string[] = [];
+          const ie = genDec(b.err, `${rr}.val`, sub, ctx);
+          errStmts.push(`if (${hasVal}) { ${sub.join(' ')} ${resVar} = Result.err(${ie}); ${done} = true; }`);
+        }
+        if (b.repr.errAbsent !== undefined) {
+          const absent = b.repr.errAbsent === 'null' ? 'null' : 'undefined';
+          errStmts.push(`if (!${hasVal}) { ${resVar} = Result.err(${absent}); ${done} = true; }`);
+        }
+        out.push(`if (${isOk}) { ${okStmts.join(' ')} } else { ${errStmts.join(' ')} }`);
+      } else {
+        // custom repr
+        const okName = b.repr.okValueName;
+        const errName = b.repr.errValueName;
+        const hasOk = !!b.ok;
+        const hasErr = !!b.err;
+        const okNameLit = okName === undefined ? undefined : JSON.stringify(okName);
+        const errNameLit = errName === undefined ? undefined : JSON.stringify(errName);
+        if (okName && errName && hasOk && hasErr) {
+          const okSub: string[] = [];
+          const okE = genDec(b.ok!, `${rr}.val`, okSub, ctx);
+          const errSub: string[] = [];
+          const errE = genDec(b.err!, `${rr}.val`, errSub, ctx);
+          out.push(
+            `if (${isOk} && ${hasVal}) { ${okSub.join(' ')} ${resVar} = { tag: 'ok', [${okNameLit}]: ${okE} }; ${done} = true; } ` +
+              `else if (!${isOk} && ${hasVal}) { ${errSub.join(' ')} ${resVar} = { tag: 'err', [${errNameLit}]: ${errE} }; ${done} = true; }`,
+          );
+        } else if (okName && hasOk && !hasErr) {
+          const okSub: string[] = [];
+          const okE = genDec(b.ok!, `${rr}.val`, okSub, ctx);
+          out.push(
+            `if (${isOk} && ${hasVal}) { ${okSub.join(' ')} ${resVar} = { tag: 'ok', [${okNameLit}]: ${okE} }; ${done} = true; } ` +
+              `else { ${resVar} = { tag: 'err' }; ${done} = true; }`,
+          );
+        } else if (errName && hasErr && !hasOk) {
+          const errSub: string[] = [];
+          const errE = genDec(b.err!, `${rr}.val`, errSub, ctx);
+          out.push(
+            `if (!${isOk} && ${hasVal}) { ${errSub.join(' ')} ${resVar} = { tag: 'err', [${errNameLit}]: ${errE} }; ${done} = true; } ` +
+              `else { ${resVar} = { tag: 'ok' }; ${done} = true; }`,
+          );
+        } else {
+          if (okName && !hasOk) {
+            out.push(
+              `if (${isOk} && !${hasVal}) { ${resVar} = { tag: 'ok', [${okNameLit}]: undefined }; ${done} = true; }`,
+            );
+          }
+          if (errName && !hasErr) {
+            out.push(
+              `if (!${isOk} && !${hasVal}) { ${resVar} = { tag: 'err', [${errNameLit}]: undefined }; ${done} = true; }`,
+            );
+          }
+        }
+      }
+
+      out.push(`if (!${done}) throw wireMismatch(${nv}, 'result');`);
+      out.push(`onPath[${iv}] = 0;`);
+      return resVar;
+    }
+    case 'flags':
+      throw new CompileUnsupported(b.tag);
+  }
+}
+
+function makeGenCtx(graph: ResolvedGraph, prefix: string): GenCtx {
+  let counter = 0;
+  const defIndex = new Map<TypeId, number>();
+  let di = 0;
+  for (const id of graph.defs.keys()) defIndex.set(id, di++);
+  return {
+    fresh: () => `t${counter++}`,
+    defName: (id: TypeId) => {
+      const k = defIndex.get(id);
+      if (k === undefined) throw internalError(`unknown def '${id}'`);
+      return `${prefix}${k}`;
+    },
+    consts: [],
+  };
+}
+
+/**
+ * Generate and compile a node-level encoder for the graph. The
+ * returned function emits `value` into a caller-provided `nodes` pool and returns
+ * the root node index, so it can serve both the standalone single-root case and
+ * the boundary's multi-field shared-pool fusion. Throws {@link CompileUnsupported}
+ * during code generation (before `new Function`) for unsupported kinds.
+ */
+function genGraphEmitFn(
+  graph: ResolvedGraph,
+): (v: any, nodes: WitSchemaValueNode[]) => ValueNodeIndex {
+  const ctx = makeGenCtx(graph, 'e');
+  const lines: string[] = ['"use strict";'];
+  for (const [id, def] of graph.defs) {
+    const body: string[] = [];
+    const expr = genEnc(def, 'v', body, ctx);
+    lines.push(`const ${ctx.defName(id)} = (v, nodes) => {`, ...body, `return ${expr};`, `};`);
+  }
+  const rootBody: string[] = [];
+  const rootExpr = genEnc(graph.root, 'v', rootBody, ctx);
+  lines.push(`const __root = (v, nodes) => {`, ...rootBody, `return ${rootExpr};`, `};`, `return __root;`);
+  const factory = new Function(
+    'typeMismatch',
+    'missingKey',
+    'unionMismatch',
+    'internalError',
+    'matchesResolved',
+    'display',
+    'TYPED_ARRAYS',
+    'DEFS',
+    'C',
+    lines.join('\n'),
+  ) as (...a: any[]) => (v: any, nodes: WitSchemaValueNode[]) => ValueNodeIndex;
+  return factory(
+    typeMismatch,
+    missingKey,
+    unionMismatch,
+    internalError,
+    matchesResolved,
+    display,
+    TYPED_ARRAYS,
+    graph.defs,
+    ctx.consts,
+  );
+}
+
+/**
+ * Generate and compile a node-level decoder for the graph. The
+ * returned function reads the value at `idx` from a caller-provided `nodes` pool
+ * using a caller-provided `onPath` cycle guard, so it can serve both the
+ * standalone single-root case and the boundary's multi-field shared-pool fusion.
+ * Throws {@link CompileUnsupported} during code generation for unsupported kinds.
+ */
+function genGraphReadFn(
+  graph: ResolvedGraph,
+): (idx: ValueNodeIndex, nodes: WitSchemaValueNode[], onPath: Uint8Array) => any {
+  const ctx = makeGenCtx(graph, 'd');
+  const lines: string[] = ['"use strict";'];
+  for (const [id, def] of graph.defs) {
+    const body: string[] = [];
+    const expr = genDec(def, 'idx', body, ctx);
+    lines.push(`const ${ctx.defName(id)} = (idx, nodes, onPath) => {`, ...body, `return ${expr};`, `};`);
+  }
+  const rootBody: string[] = [];
+  const rootExpr = genDec(graph.root, 'idx', rootBody, ctx);
+  lines.push(
+    `const __root = (idx, nodes, onPath) => {`,
+    ...rootBody,
+    `return ${rootExpr};`,
+    `};`,
+    `return __root;`,
+  );
+  const factory = new Function(
+    'wireMismatch',
+    'SchemaDecodeError',
+    'Result',
+    'TYPED_ARRAYS',
+    'C',
+    lines.join('\n'),
+  ) as (...a: any[]) => (idx: ValueNodeIndex, nodes: WitSchemaValueNode[], onPath: Uint8Array) => any;
+  return factory(wireMismatch, SchemaDecodeError, Result, TYPED_ARRAYS, ctx.consts);
+}
+
+/** Generate and compile a standalone source-level encoder for the graph. */
+export function compileGraphEncoder(graph: ResolvedGraph): (value: any) => WitSchemaValueTree {
+  const rootFn = genGraphEmitFn(graph);
+  return (value) => {
+    const nodes: WitSchemaValueNode[] = [];
+    const r = rootFn(value, nodes);
+    return { valueNodes: nodes, root: r };
+  };
+}
+
+/** Generate and compile a standalone source-level decoder for the graph. */
+export function compileGraphDecoder(graph: ResolvedGraph): (wit: WitSchemaValueTree) => any {
+  const rootFn = genGraphReadFn(graph);
+  return (wit) => {
+    const onPath = new Uint8Array(wit.valueNodes.length);
+    return rootFn(wit.root, wit.valueNodes, onPath);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Compiled codec cache (production integration)
+// ---------------------------------------------------------------------------
+// A per-graph compiled codec that the runtime value boundary uses on
+// the hot invocation / RPC paths. `emit` / `read` operate on a caller-provided
+// node pool so they slot into the boundary's multi-field input-record fusion;
+// `encode` / `decode` are standalone single-value wrappers for method outputs.
+
+export interface GraphCodec {
+  /** Emit a TS value against this graph into a shared node pool; returns its node index. */
+  emit(value: any, nodes: WitSchemaValueNode[]): ValueNodeIndex;
+  /** Read this graph's value at `idx` from a shared node pool, guarded by `onPath`. */
+  read(idx: ValueNodeIndex, nodes: WitSchemaValueNode[], onPath: Uint8Array): any;
+  /** Standalone encode: TS value -> wire tree. */
+  encode(value: any): WitSchemaValueTree;
+  /** Standalone decode: wire tree -> TS value. */
+  decode(wit: WitSchemaValueTree): any;
+}
+
+function buildGraphCodec(graph: ResolvedGraph): GraphCodec {
+  // May throw CompileUnsupported during code generation, before `new Function`.
+  const emit = genGraphEmitFn(graph);
+  const read = genGraphReadFn(graph);
+  return {
+    emit,
+    read,
+    encode(value) {
+      const nodes: WitSchemaValueNode[] = [];
+      const root = emit(value, nodes);
+      return { valueNodes: nodes, root };
+    },
+    decode(wit) {
+      const onPath = new Uint8Array(wit.valueNodes.length);
+      return read(wit.root, wit.valueNodes, onPath);
+    },
+  };
+}
+
+// `null` marks a graph the compiler cannot or should not specialize (unsupported
+// kind, or a `new Function` failure): callers then use the interpreted fused
+// codec. Keyed by graph identity, which the registries keep stable between
+// agent-registration time and invocation. A `WeakMap` so codecs are collected
+// with their graphs.
+const graphCodecCache = new WeakMap<ResolvedGraph, GraphCodec | null>();
+
+/**
+ * Return a compiled codec for `graph`, or `null` if the graph cannot
+ * be specialized — in which case callers fall back to the interpreted fused
+ * codec. Results are cached per graph.
+ *
+ * Call this eagerly at agent-registration time (which runs during top-level
+ * module evaluation). The compiled function objects then become part of the
+ * Wizer pre-initialization snapshot captured by `golem build`, so the one-time
+ * `new Function` compilation cost is paid at build time and adds no per-process
+ * startup cost. A lazy first-invocation call still works but pays that cost at
+ * runtime.
+ */
+export function getGraphCodec(graph: ResolvedGraph): GraphCodec | null {
+  const cached = graphCodecCache.get(graph);
+  if (cached !== undefined) return cached;
+  let codec: GraphCodec | null;
+  try {
+    codec = buildGraphCodec(graph);
+  } catch {
+    // Unsupported kind or codegen/compile failure: fall back to the interpreted
+    // fused codec, which is always correct.
+    codec = null;
+  }
+  graphCodecCache.set(graph, codec);
+  return codec;
+}
