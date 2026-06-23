@@ -159,8 +159,14 @@ object WitSchemaValueNode {
 
   final case class UnionValue(payload: WitUnionValuePayload) extends WitSchemaValueNode
 
-  final case class SecretValue(payload: WitSecretValuePayload)    extends WitSchemaValueNode
-  final case class QuotaTokenValue(value: QuotaTokenValuePayload) extends WitSchemaValueNode
+  final case class SecretValue(payload: WitSecretValuePayload) extends WitSchemaValueNode
+
+  /**
+   * Flat carrier for an owned `quota-token` resource (`schema-value-node ::
+   * quota-token-handle(own<quota-token>)`). Carries the opaque affine handle
+   * unchanged; the take-once transfer happens at the JS host boundary.
+   */
+  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends WitSchemaValueNode
 }
 
 final case class WitTypedSchemaValue(graph: WitSchemaGraph, value: WitSchemaValueTree)

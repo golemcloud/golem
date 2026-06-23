@@ -51,7 +51,10 @@ pub use conversion::{
 };
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
-pub use host_managed::{HostManagedKind, RedactedSchemaValue, redacted_schema_value_debug};
+pub use host_managed::{
+    HostManagedKind, RedactedSchemaValue, redact_host_managed_type, redact_host_managed_typed_value,
+    redact_host_managed_value, redacted_schema_value_debug,
+};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,

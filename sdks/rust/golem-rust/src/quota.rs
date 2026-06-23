@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Ergonomic wrappers for the `golem:quota/host` WIT interface.
+//! Ergonomic wrappers for the `golem:quota/types` WIT interface.
 //!
 //! # Typical usage
 //!
@@ -28,12 +28,13 @@
 //! ```
 
 use crate::bindings::golem::quota::types;
+use crate::schema::wit::GuestQuotaTokenHandle;
 use std::time::Duration;
 
 #[cfg(feature = "export_golem_agentic")]
 use crate::schema::{
-    FromSchema, FromSchemaError, IntoSchema, QuotaTokenSpec, QuotaTokenValuePayload, SchemaBuilder,
-    SchemaType, SchemaValue, TypeId,
+    FromSchema, FromSchemaError, IntoSchema, QuotaTokenSpec, SchemaBuilder, SchemaType, SchemaValue,
+    TypeId,
 };
 
 /// Error returned when a reservation cannot be granted because the resource's
@@ -75,52 +76,6 @@ pub struct Reservation {
     raw: types::Reservation,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct QuotaTokenRecord {
-    pub environment_id: crate::EnvironmentId,
-    pub resource_name: String,
-    pub expected_use: u64,
-    pub last_credit: i64,
-    pub last_credit_at: crate::golem_schema::model::Datetime,
-}
-
-impl From<types::QuotaTokenRecord> for QuotaTokenRecord {
-    fn from(raw: types::QuotaTokenRecord) -> Self {
-        Self {
-            environment_id: crate::EnvironmentId {
-                uuid: crate::wire_uuid_to_schema(raw.environment_id.uuid),
-            },
-            resource_name: raw.resource_name,
-            expected_use: raw.expected_use,
-            last_credit: raw.last_credit,
-            last_credit_at: crate::golem_schema::model::Datetime::from_timestamp(
-                raw.last_credit_at.seconds as i64,
-                raw.last_credit_at.nanoseconds,
-            )
-            .expect("quota token timestamp must be representable as a schema datetime"),
-        }
-    }
-}
-
-impl From<QuotaTokenRecord> for types::QuotaTokenRecord {
-    fn from(value: QuotaTokenRecord) -> Self {
-        let seconds = value.last_credit_at.timestamp();
-        assert!(seconds >= 0, "quota token timestamp must be non-negative");
-        Self {
-            environment_id: types::EnvironmentId {
-                uuid: crate::schema_uuid_to_wire(value.environment_id.uuid),
-            },
-            resource_name: value.resource_name,
-            expected_use: value.expected_use,
-            last_credit: value.last_credit,
-            last_credit_at: types::Datetime {
-                seconds: seconds as u64,
-                nanoseconds: value.last_credit_at.timestamp_subsec_nanos(),
-            },
-        }
-    }
-}
-
 impl Reservation {
     /// Commit actual usage.
     ///
@@ -149,7 +104,7 @@ impl Reservation {
 /// }
 /// ```
 pub struct QuotaToken {
-    raw: types::QuotaToken,
+    handle: GuestQuotaTokenHandle,
 }
 
 impl QuotaToken {
@@ -160,7 +115,7 @@ impl QuotaToken {
     ///   credit rate and max-credit for fair scheduling.
     pub fn new(resource_name: &str, expected_use: u64) -> Self {
         Self {
-            raw: types::QuotaToken::new(resource_name, expected_use),
+            handle: GuestQuotaTokenHandle::new(types::new_token(resource_name, expected_use)),
         }
     }
 
@@ -173,9 +128,16 @@ impl QuotaToken {
     /// Returns `Err(FailedReservation)` when the enforcement policy is `reject`.
     /// For `throttle` / `terminate` policies the call suspends or terminates
     /// the agent before returning.
+    ///
+    /// # Panics
+    ///
+    /// Traps if this token has already been transferred (for example, sent to
+    /// another agent through an RPC call or returned from a method). Split the
+    /// token first if you need to both keep and send a capability.
     pub fn reserve(&self, amount: u64) -> Result<Reservation, FailedReservation> {
-        self.raw
-            .reserve(amount)
+        self.handle
+            .with_handle(|raw| types::reserve(raw, amount))
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"))
             .map(|raw| Reservation { raw })
             .map_err(FailedReservation::from)
     }
@@ -187,10 +149,15 @@ impl QuotaToken {
     ///
     /// # Panics
     ///
-    /// Traps if `child_expected_use` exceeds the parent's current expected-use.
+    /// Traps if `child_expected_use` exceeds the parent's current expected-use,
+    /// or if this token has already been transferred.
     pub fn split(&mut self, child_expected_use: u64) -> QuotaToken {
+        let raw = self
+            .handle
+            .with_handle(|raw| types::split(raw, child_expected_use))
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"));
         QuotaToken {
-            raw: self.raw.split(child_expected_use),
+            handle: GuestQuotaTokenHandle::new(raw),
         }
     }
 
@@ -201,21 +168,22 @@ impl QuotaToken {
     ///
     /// # Panics
     ///
-    /// Traps if the tokens refer to different resources.
+    /// Traps if the tokens refer to different resources, or if either token has
+    /// already been transferred.
     pub fn merge(&mut self, other: QuotaToken) {
-        self.raw.merge(other.raw);
-    }
-
-    pub fn to_record(&self) -> QuotaTokenRecord {
-        self.raw.to_record().into()
-    }
-
-    pub fn from_record(record: &QuotaTokenRecord) -> QuotaToken {
-        QuotaToken {
-            raw: types::QuotaToken::from_record(&record.clone().into()),
-        }
+        let other_raw = other
+            .handle
+            .take()
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"));
+        self.handle
+            .with_handle(|raw| types::merge(raw, other_raw))
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"));
     }
 }
+
+const TOKEN_CONSUMED: &str =
+    "quota token has already been transferred and can no longer be used; split the token first if \
+     you need to both keep and send a capability";
 
 #[cfg(feature = "export_golem_agentic")]
 impl IntoSchema for QuotaToken {
@@ -227,15 +195,12 @@ impl IntoSchema for QuotaToken {
         SchemaType::quota_token(QuotaTokenSpec::default())
     }
 
+    /// Lower the token into a schema value by sharing its opaque owned handle.
+    ///
+    /// The handle is not transferred here; it is moved out of the cell only when
+    /// the resulting [`SchemaValue`] is encoded into a WIT `schema-value-tree`.
     fn to_value(&self) -> SchemaValue {
-        let record = self.to_record();
-        SchemaValue::QuotaToken(QuotaTokenValuePayload {
-            environment_id: record.environment_id,
-            resource_name: record.resource_name,
-            expected_use: record.expected_use,
-            last_credit: record.last_credit,
-            last_credit_at: record.last_credit_at,
-        })
+        SchemaValue::QuotaToken(self.handle.clone())
     }
 }
 
@@ -243,22 +208,9 @@ impl IntoSchema for QuotaToken {
 impl FromSchema for QuotaToken {
     fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
         match value {
-            SchemaValue::QuotaToken(payload) => {
-                let seconds = payload.last_credit_at.timestamp();
-                if seconds < 0 {
-                    return Err(FromSchemaError::custom(
-                        "quota token timestamp must be non-negative",
-                    ));
-                }
-
-                Ok(QuotaToken::from_record(&QuotaTokenRecord {
-                    environment_id: payload.environment_id.clone(),
-                    resource_name: payload.resource_name.clone(),
-                    expected_use: payload.expected_use,
-                    last_credit: payload.last_credit,
-                    last_credit_at: payload.last_credit_at,
-                }))
-            }
+            SchemaValue::QuotaToken(handle) => Ok(QuotaToken {
+                handle: handle.clone(),
+            }),
             other => Err(FromSchemaError::shape_mismatch(
                 "quota-token",
                 format!("{other:?}"),

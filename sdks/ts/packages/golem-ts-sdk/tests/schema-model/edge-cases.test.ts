@@ -20,6 +20,7 @@ import type {
 } from 'golem:core/types@2.0.0';
 
 import {
+  GuestQuotaTokenHandle,
   SchemaBuilder,
   type SchemaGraph,
   type SchemaValue,
@@ -252,19 +253,64 @@ describe('rich semantic and capability values', () => {
     roundtripValue({ tag: 'quantity', value: { mantissa: -98765n, scale: -3, unit: 'm' } });
   });
 
-  it('union, secret, and quota-token values round-trip', () => {
+  it('union and secret values round-trip', () => {
     roundtripValue({ tag: 'union', unionTag: 'ssh', body: v.string('ssh://host') });
     roundtripValue({ tag: 'secret', secretRef: 'ref-abc' });
-    roundtripValue({
-      tag: 'quota-token',
-      value: {
-        environmentId: { uuid: { highBits: 1n, lowBits: 2n } },
-        resourceName: 'cpu',
-        expectedUse: 10n,
-        lastCredit: -5n,
-        lastCreditAt: { seconds: 1n, nanoseconds: 0 },
-      },
-    });
+  });
+
+  it('quota-token handle is lowered once and lifted back as an opaque handle', () => {
+    // `own<quota-token>` is opaque; a plain sentinel object stands in for the
+    // generated resource handle.
+    const raw = { id: 'opaque-quota-token' } as never;
+    const handle = GuestQuotaTokenHandle.fromRaw(raw);
+    expect(handle.isPresent()).toBe(true);
+
+    const wit = schemaValueToWit(v.quotaToken(handle));
+    // Lowering moves the owned handle into a `quota-token-handle` wire node...
+    expect(wit.valueNodes[wit.root]).toEqual({ tag: 'quota-token-handle', val: raw });
+    // ...and consumes the source handle (affine: send-once).
+    expect(handle.isPresent()).toBe(false);
+
+    const decoded = schemaValueFromWit(wit);
+    expect(decoded.tag).toBe('quota-token');
+    if (decoded.tag === 'quota-token') {
+      expect(decoded.handle.isPresent()).toBe(true);
+      expect(decoded.handle.take()).toBe(raw);
+    }
+  });
+
+  it('encoding an already-transferred quota-token handle is rejected', () => {
+    const handle = GuestQuotaTokenHandle.fromRaw({} as never);
+    schemaValueToWit(v.quotaToken(handle));
+    expect(() => schemaValueToWit(v.quotaToken(handle))).toThrow(/already transferred/);
+  });
+
+  it('aliasing one quota-token handle twice in a tree is rejected without transferring it', () => {
+    const handle = GuestQuotaTokenHandle.fromRaw({} as never);
+    const aliased: SchemaValue = {
+      tag: 'record',
+      fields: [v.quotaToken(handle), v.quotaToken(handle)],
+    };
+    expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
+    // The preflight rejects before any handle is moved out (atomic lowering).
+    expect(handle.isPresent()).toBe(true);
+  });
+
+  it('decoding a tree with an unreferenced quota-token handle node is rejected', () => {
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'string-value', val: 'root' },
+        // A handle node not reachable from the root must not be silently dropped.
+        { tag: 'quota-token-handle', val: {} as never },
+      ],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(wit)).toThrow(/not referenced from the root/);
+  });
+
+  it('quota-token handles cannot be serialized to JSON', () => {
+    const handle = GuestQuotaTokenHandle.fromRaw({} as never);
+    expect(() => JSON.stringify(handle)).toThrow(/cannot be serialized/);
   });
 
   it('discriminated union types with every rule round-trip', () => {

@@ -40,8 +40,8 @@ import type {
   Datetime,
   Uuid,
   EnvironmentId,
-  QuotaTokenValuePayload,
 } from 'golem:core/types@2.0.0';
+import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 
 export type {
   TypeId,
@@ -58,7 +58,6 @@ export type {
   Datetime,
   Uuid,
   EnvironmentId,
-  QuotaTokenValuePayload,
 };
 
 // These are part of the schema-model public surface but are only ever re-exported
@@ -202,7 +201,9 @@ export type SchemaValue =
   | { tag: 'union'; unionTag: string; body: SchemaValue }
   // Capability nodes
   | { tag: 'secret'; secretRef: string }
-  | { tag: 'quota-token'; value: QuotaTokenValuePayload };
+  // An opaque, affine owned `quota-token` handle. Carried by ownership; never
+  // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
+  | { tag: 'quota-token'; handle: GuestQuotaTokenHandle };
 
 export interface SchemaMapEntry {
   key: SchemaValue;
@@ -265,6 +266,7 @@ export const t = {
   result: (ok?: SchemaType, err?: SchemaType): SchemaType => schemaType({ tag: 'result', ok, err }),
   datetime: (): SchemaType => schemaType({ tag: 'datetime' }),
   duration: (): SchemaType => schemaType({ tag: 'duration' }),
+  quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
 };
 
 /** Compact constructors for schema field/case helpers. */
@@ -314,6 +316,7 @@ export const v = {
   option: (value?: SchemaValue): SchemaValue => ({ tag: 'option', value }),
   ok: (value?: SchemaValue): SchemaValue => ({ tag: 'result', result: { tag: 'ok', value } }),
   err: (value?: SchemaValue): SchemaValue => ({ tag: 'result', result: { tag: 'err', value } }),
+  quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
 };
 
 // ============================================================
@@ -334,6 +337,11 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   }
 
   if (a === b) return true;
+
+  // Quota-token handles are affine capabilities, not structural data: equality
+  // is identity only (mirrors the Rust shared-cell `PartialEq`). Without this,
+  // two distinct handles would compare equal (both expose no enumerable state).
+  if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false;
 
   if (typeof a === 'bigint' || typeof b === 'bigint') return a === b;
 

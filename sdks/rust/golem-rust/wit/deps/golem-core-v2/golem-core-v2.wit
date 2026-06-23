@@ -103,6 +103,19 @@ interface types {
     }
 
     // ============================================================
+    // Capability resources
+    // ============================================================
+
+    /// An unforgeable capability granting the right to consume a named
+    /// resource. The handle is opaque: a guest can only obtain one from the
+    /// host (e.g. via `golem:quota`) and can never inspect or fabricate its
+    /// internal state. When carried in a `schema-value-tree` (see
+    /// `schema-value-node::quota-token-handle`) the handle is transferred by
+    /// ownership; the host converts it to/from its internal trusted
+    /// representation at the boundary.
+    resource quota-token;
+
+    // ============================================================
     // Schema graph (self-contained type carrier)
     // ============================================================
 
@@ -477,7 +490,7 @@ interface types {
 
         // Capability nodes
         secret-value(secret-value-payload),
-        quota-token-value(quota-token-value-payload),
+        quota-token-handle(own<quota-token>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
     }
@@ -535,17 +548,6 @@ interface types {
     record secret-value-payload {
         /// Opaque, authority-resolved reference.
         secret-ref: string,
-    }
-
-    /// Capability value: quota-token transport is **by snapshot**. The receiver
-    /// re-acquires a live lease against `(environment-id, resource-name)` on
-    /// demand.
-    record quota-token-value-payload {
-        environment-id: environment-id,
-        resource-name: string,
-        expected-use: u64,
-        last-credit: s64,
-        last-credit-at: datetime,
     }
 
     // ============================================================

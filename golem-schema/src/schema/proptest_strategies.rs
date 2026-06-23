@@ -346,11 +346,30 @@ fn composite_schema_type_strategy(
 // --- Schema-value strategies ---
 
 pub fn schema_value_strategy() -> impl Strategy<Value = SchemaValue> {
-    let leaf = leaf_schema_value_strategy();
+    let leaf = leaf_schema_value_strategy_impl(true);
     leaf.prop_recursive(4, 32, 4, composite_schema_value_strategy)
 }
 
-fn leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
+/// Like [`schema_value_strategy`] but never produces a [`SchemaValue::QuotaToken`].
+///
+/// Quota tokens travel across the WASM boundary only as opaque owned handles,
+/// so they cannot round-trip through the pure (resolver-less) WIT codec. Use
+/// this strategy for tests of that pure path.
+pub fn transportable_schema_value_strategy() -> impl Strategy<Value = SchemaValue> {
+    let leaf = leaf_schema_value_strategy_impl(false);
+    leaf.prop_recursive(4, 32, 4, composite_schema_value_strategy)
+}
+
+fn leaf_schema_value_strategy_impl(include_quota: bool) -> BoxedStrategy<SchemaValue> {
+    let base = base_leaf_schema_value_strategy();
+    if include_quota {
+        prop_oneof![18 => base, 1 => quota_token_value_strategy()].boxed()
+    } else {
+        base
+    }
+}
+
+fn base_leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
     prop_oneof![
         any::<bool>().prop_map(SchemaValue::Bool),
         any::<i8>().prop_map(SchemaValue::S8),
@@ -388,7 +407,6 @@ fn leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
         }),
         short_string()
             .prop_map(|secret_ref| { SchemaValue::Secret(SecretValuePayload { secret_ref }) }),
-        quota_token_value_strategy(),
     ]
     .boxed()
 }
@@ -497,6 +515,13 @@ pub fn schema_graph_strategy() -> impl Strategy<Value = SchemaGraph> {
 
 pub fn typed_schema_value_strategy() -> impl Strategy<Value = TypedSchemaValue> {
     (schema_graph_strategy(), schema_value_strategy())
+        .prop_map(|(graph, value)| TypedSchemaValue::new(graph, value))
+}
+
+/// Like [`typed_schema_value_strategy`] but never produces a quota token in the
+/// value tree, so it round-trips through the pure (resolver-less) WIT codec.
+pub fn transportable_typed_schema_value_strategy() -> impl Strategy<Value = TypedSchemaValue> {
+    (schema_graph_strategy(), transportable_schema_value_strategy())
         .prop_map(|(graph, value)| TypedSchemaValue::new(graph, value))
 }
 

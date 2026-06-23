@@ -776,10 +776,19 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         response: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
-        let request_typed = golem_common::schema::wit::decode_typed(&request).map_err(|e| {
+        // The request/response values are guest-owned and never legally carry a
+        // quota token. Decode both through the rejecting path so any owned
+        // `quota-token` handle is deleted from the resource table rather than
+        // leaked. Both are drained before the first error is surfaced, so a
+        // handle in `response` cannot leak when `request` is rejected.
+        let request_typed =
+            golem_common::schema::wit::decode_typed_rejecting_quota_with(request, self);
+        let response_typed =
+            golem_common::schema::wit::decode_typed_rejecting_quota_with(response, self);
+        let request_typed = request_typed.map_err(|e| {
             anyhow::anyhow!("Failed to decode durable function request schema value: {e}")
         })?;
-        let response_typed = golem_common::schema::wit::decode_typed(&response).map_err(|e| {
+        let response_typed = response_typed.map_err(|e| {
             anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
         })?;
         DurabilityHost::persist_durable_function_invocation(

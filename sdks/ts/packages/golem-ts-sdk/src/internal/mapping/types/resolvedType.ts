@@ -43,7 +43,7 @@
 // Keeping `ResolvedType` acyclic means structural hashing / `JSON.stringify`
 // stay valid even for recursive graphs.
 
-import type { TypeId } from '../../schema-model';
+import type { QuotaTokenSpec, TypeId } from '../../schema-model';
 
 export type { TypeId };
 
@@ -119,6 +119,10 @@ export type ResolvedTypeBody =
   | { tag: 'flags'; names: string[] }
   | { tag: 'option'; element: ResolvedType; noneRepr: AbsentRepr }
   | { tag: 'result'; ok?: ResolvedType; err?: ResolvedType; repr: ResultRepr }
+  // The opaque `quota-token` capability. Carries only its spec; the runtime
+  // value is an unforgeable owned handle (see `GuestQuotaTokenHandle`), never a
+  // structural record.
+  | { tag: 'quota-token'; spec: QuotaTokenSpec }
   // A reference to a named composite registered in a `ResolvedGraph.defs` under
   // `id`. Used to close recursive / mutually-recursive cycles without object
   // cycles. Purely structural: occurrence-level hints (option / list / tuple /
@@ -197,6 +201,7 @@ export const r = {
     name?: string,
     owner?: string,
   ): ResolvedType => resolved({ tag: 'result', ok, err, repr }, name, owner),
+  quotaToken: (spec: QuotaTokenSpec): ResolvedType => resolved({ tag: 'quota-token', spec }),
   ref: (id: TypeId): ResolvedType => resolved({ tag: 'ref', id }),
 };
 

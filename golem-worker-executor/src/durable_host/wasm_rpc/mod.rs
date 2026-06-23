@@ -53,7 +53,9 @@ use golem_common::model::{
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
-use golem_schema::schema::wit::{decode_typed, decode_value, encode_value};
+use golem_schema::schema::wit::{
+    decode_typed_rejecting_quota_with, decode_value_with, encode_value_with, EncodeError,
+};
 
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
 use golem_schema::schema::wit::wire as core_wire;
@@ -144,8 +146,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .ok_or_else(|| anyhow::anyhow!("Agent type '{}' not found", agent_type_name))?;
 
         let input = schema_value_tree_to_typed_constructor_parameters(
-            &constructor,
+            constructor,
             &registered_agent_type.agent_type,
+            self,
         )
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
@@ -168,31 +171,54 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
 
-        let config = config
-            .into_iter()
-            .map(|c| {
-                // The config value travels as a self-contained
-                // `golem:core@2.0.0` typed-schema-value. Decode it and render
-                // the inner `SchemaValue` as plain (schema-guided) JSON,
-                // matching the `AgentConfigEntryDto` service-boundary contract:
-                // the DTO carries plain user JSON which
-                // `parse_worker_creation_agent_config` decodes with the schema
-                // graph (`from_json_value`).
-                let typed = decode_typed(&c.value)
-                    .map_err(|err| anyhow::anyhow!("Invalid agent config value: {err}"))?;
-                let encoded = golem_common::schema::render::to_json_value(
-                    typed.graph(),
-                    typed.root_type(),
-                    typed.value(),
-                )
-                .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
-
-                Ok::<_, anyhow::Error>(AgentConfigEntryDto {
-                    path: c.path,
-                    value: encoded.into(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // Each config value is a guest-owned `typed-schema-value` and never
+        // legally carries a quota token. Decode through the rejecting path so any
+        // owned `quota-token` handle is deleted from the resource table rather
+        // than leaked, and drain every config value before surfacing the first
+        // error so a handle in a later entry cannot leak when an earlier one is
+        // rejected.
+        let mut decoded_config = Vec::with_capacity(config.len());
+        let mut config_error: Option<anyhow::Error> = None;
+        for c in config {
+            match decode_typed_rejecting_quota_with(c.value, self) {
+                Ok(typed) => {
+                    if config_error.is_none() {
+                        // The config value travels as a self-contained
+                        // `golem:core@2.0.0` typed-schema-value. Render the inner
+                        // `SchemaValue` as plain (schema-guided) JSON, matching
+                        // the `AgentConfigEntryDto` service-boundary contract: the
+                        // DTO carries plain user JSON which
+                        // `parse_worker_creation_agent_config` decodes with the
+                        // schema graph (`from_json_value`).
+                        match golem_common::schema::render::to_json_value(
+                            typed.graph(),
+                            typed.root_type(),
+                            typed.value(),
+                        ) {
+                            Ok(encoded) => decoded_config.push(AgentConfigEntryDto {
+                                path: c.path,
+                                value: encoded.into(),
+                            }),
+                            Err(err) => {
+                                config_error = Some(anyhow::anyhow!(
+                                    "Failed serializing agent config: {err}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    if config_error.is_none() {
+                        config_error =
+                            Some(anyhow::anyhow!("Invalid agent config value: {err}"));
+                    }
+                }
+            }
+        }
+        if let Some(err) = config_error {
+            return Err(err);
+        }
+        let config = decoded_config;
 
         let span = create_rpc_connection_span(self, &remote_agent_id).await?;
 
@@ -279,7 +305,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // entry — replay reaches the same outcome via the same code
         // path.
         let input_value =
-            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
+            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input, self) {
                 Ok(parts) => parts,
                 Err(rpc_error) => return Ok(Err(rpc_error.into())),
             };
@@ -387,7 +413,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 // Project the schema-native reply to the WIT
                 // `option<schema-value-tree>` shape (`none` for a `unit`
                 // output) at the guest-facing boundary.
-                Ok(Ok(schema_value_to_wire_output(&value)))
+                Ok(Ok(schema_value_to_wire_output(&value, self)?))
             }
             Err(err) => {
                 error!("RPC error: {err}");
@@ -437,7 +463,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // Resolve the method and lift the input before opening durability
         // (see `invoke_and_await` for the rationale).
         let input_value =
-            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
+            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input, self) {
                 Ok(parts) => parts,
                 Err(rpc_error) => return Ok(Err(rpc_error.into())),
             };
@@ -583,7 +609,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // rather than as wasmtime traps. The future surfaces the error on the
         // first `get`.
         let input_value =
-            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input) {
+            match resolve_method_and_lift_input(&remote_agent_type, &method_name, input, self) {
                 Ok(parts) => parts,
                 Err(rpc_error) => {
                     // The method/input could not be resolved. The recorded
@@ -747,22 +773,26 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // an open durable function. `schedule_cancelable_invocation`
         // has no `RpcError` return channel, so these are surfaced as
         // wasmtime traps.
-        let (remote_agent_id, target_worker_fingerprint, input_value) = {
+        let (remote_agent_id, target_worker_fingerprint, remote_agent_type) = {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-            let remote_agent_id = payload.remote_agent_id.clone();
-            let target_worker_fingerprint = payload.target_fingerprint;
-            let remote_agent_type = payload.remote_agent_type.clone();
-
-            // Validate the method exists, then transport the input as a
-            // schema-free `SchemaValue` (the callee validates against its own
-            // schema when it lowers the scheduled invocation).
-            find_agent_method(&remote_agent_type, &method_name)?;
-            let input_value =
-                decode_value(&input).map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
-
-            (remote_agent_id, target_worker_fingerprint, input_value)
+            (
+                payload.remote_agent_id.clone(),
+                payload.target_fingerprint,
+                payload.remote_agent_type.clone(),
+            )
         };
+
+        // Lift the input first, then validate the method exists. Lifting
+        // consumes any owned `quota-token` handle the guest passed (releasing it
+        // from the resource table into a trusted snapshot via the
+        // `QuotaTokenResolver`), so it cannot leak if the method check fails. The
+        // input then travels as a schema-free `SchemaValue`; the callee
+        // validates it against its own schema when it lowers the scheduled
+        // invocation.
+        let input_value = decode_value_with(input, self)
+            .map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
+        find_agent_method(&remote_agent_type, &method_name)?;
         let scheduled_at =
             chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
                 .ok_or_else(|| {
@@ -1102,7 +1132,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     // Project the schema-native output to the WIT
                     // `option<schema-value-tree>` shape (`none` for `unit`)
                     // at the guest-facing boundary.
-                    Ok(Some(Ok(schema_value_to_wire_output(&value))))
+                    Ok(Some(Ok(schema_value_to_wire_output(&value, self)?)))
                 }
                 Ok(Some(Err(error))) => Ok(Some(Err(error))),
                 Ok(None) => Ok(None),
@@ -1202,7 +1232,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 SerializableInvokeResult::Completed(result) => match result {
                     // The persisted reply is already schema-native; project it
                     // to the WIT `option<schema-value-tree>` shape directly.
-                    Ok(value) => Ok(Some(Ok(schema_value_to_wire_output(&value)))),
+                    Ok(value) => Ok(Some(Ok(schema_value_to_wire_output(&value, self)?))),
                     Err(error) => {
                         let rpc_error: InternalRpcError = error.into();
                         let rpc_error: RpcError = rpc_error.into();
@@ -1853,11 +1883,29 @@ fn find_agent_method<'a>(
 /// method is resolved only to fast-fail an unknown method before durability is
 /// opened — a deterministic check that replay reproduces, surfaced as
 /// [`InternalRpcError`] so the caller can return `Err(RpcError)` to the guest.
-fn resolve_method_and_lift_input(
+///
+/// Any owned `quota-token` handle the guest passed in the input is consumed
+/// from the resource table here and converted into its trusted
+/// [`SchemaValue::QuotaToken`] snapshot via the `QuotaTokenResolver`, so the
+/// capability travels across the RPC hop as an unforgeable host snapshot rather
+/// than a guest-visible handle.
+fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
     agent_type: &AgentTypeSchema,
     method_name: &str,
     input: core_wire::SchemaValueTree,
+    resolver: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<SchemaValue, InternalRpcError> {
+    // Lift (and thereby consume) the guest input *before* the method-existence
+    // check. The owned `quota-token` handles the input may carry were already
+    // transferred into the host resource table at the WIT boundary, and the
+    // unknown-method branch returns a non-trapping `RpcError` (or, for
+    // `async-invoke-and-await`, a baked future) that leaves the instance — and
+    // its resource table — alive. Decoding first guarantees those handles are
+    // consumed/dropped even when the method is unknown.
+    let input_value =
+        decode_value_with(input, resolver).map_err(|err| InternalRpcError::ProtocolError {
+            details: format!("Invalid RPC input for method '{method_name}': {err}"),
+        })?;
     agent_type
         .methods
         .iter()
@@ -1868,9 +1916,7 @@ fn resolve_method_and_lift_input(
                 agent_type.type_name
             ),
         })?;
-    decode_value(&input).map_err(|err| InternalRpcError::ProtocolError {
-        details: format!("Invalid RPC input for method '{method_name}': {err}"),
-    })
+    Ok(input_value)
 }
 
 /// Project an RPC output [`SchemaValue`] into the WIT
@@ -1883,10 +1929,18 @@ fn resolve_method_and_lift_input(
 /// structurally indistinguishable from `unit` here and is likewise reported as
 /// `none`; both live and replay paths funnel through this helper, so the choice
 /// is applied consistently.
-fn schema_value_to_wire_output(value: &SchemaValue) -> Option<core_wire::SchemaValueTree> {
+///
+/// Lowering the reply to the guest-facing wire form mints a fresh owned
+/// `quota-token` handle for every [`SchemaValue::QuotaToken`] snapshot via the
+/// `QuotaTokenResolver`, so a capability returned from an RPC call reaches the
+/// caller's guest as an opaque, unforgeable resource handle.
+fn schema_value_to_wire_output<Ctx: WorkerCtx>(
+    value: &SchemaValue,
+    resolver: &mut DurableWorkerCtx<Ctx>,
+) -> Result<Option<core_wire::SchemaValueTree>, EncodeError> {
     match value {
-        SchemaValue::Tuple { elements } if elements.is_empty() => None,
-        value => Some(encode_value(value)),
+        SchemaValue::Tuple { elements } if elements.is_empty() => Ok(None),
+        value => Ok(Some(encode_value_with(value, resolver)?)),
     }
 }
 

@@ -42,7 +42,9 @@ use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_schema::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
+use golem_schema::schema::wit::{
+    decode_graph, decode_value_with, encode_typed, encode_value, reject_quota_handles_in_value_tree,
+};
 
 fn encode_registered_agent_type_schema_wire(
     schema: RegisteredAgentTypeSchema,
@@ -58,11 +60,18 @@ fn encode_registered_agent_type_schema_wire(
 /// The decoded value is validated directly against the constructor's
 /// [`AgentTypeSchema`] before being paired with that same schema graph. This
 /// stays on the hot path without lowering through legacy value carriers.
-pub(crate) fn schema_value_tree_to_typed_constructor_parameters(
-    input: &core_wire::SchemaValueTree,
+pub(crate) fn schema_value_tree_to_typed_constructor_parameters<Ctx: WorkerCtx>(
+    input: core_wire::SchemaValueTree,
     agent_type: &AgentTypeSchema,
+    resolver: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<TypedSchemaValue, String> {
-    let schema_value = decode_value(input).map_err(|e| format!("invalid input value tree: {e}"))?;
+    // The input is a guest-owned value tree, so it is decoded through the
+    // resolver-aware path: this consumes any owned `quota-token` handles it
+    // carries (lifting them to trusted snapshots) so none leak. Constructor
+    // parameters never legally contain a quota token, so such a value is then
+    // rejected by schema validation below.
+    let schema_value =
+        decode_value_with(input, resolver).map_err(|e| format!("invalid input value tree: {e}"))?;
     validate_constructor_input_value(&schema_value, agent_type)?;
     Ok(typed_constructor_parameters(agent_type, schema_value))
 }
@@ -412,8 +421,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get_agent_type_schema_model(AgentTypeName(agent_type_name.clone()))
             .await?
         {
-            match schema_value_tree_to_typed_constructor_parameters(&input, &registered.agent_type)
-            {
+            match schema_value_tree_to_typed_constructor_parameters(
+                input,
+                &registered.agent_type,
+                self,
+            ) {
                 Ok(input) => {
                     let agent_id = ParsedAgentId::try_new(
                         AgentTypeName(agent_type_name),
@@ -426,6 +438,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Err(err) => Ok(Err(wire::AgentError::InvalidInput(err))),
             }
         } else {
+            // Unknown agent type: this returns a non-trapping `AgentError`, so
+            // the instance (and its resource table) stay alive. Drain any owned
+            // `quota-token` handle the guest smuggled into the unused constructor
+            // input so it cannot leak. Constructor parameters never legally carry
+            // a quota token, so dropping them here is correct.
+            let _ = reject_quota_handles_in_value_tree(input, self);
             Ok(Err(wire::AgentError::InvalidType(agent_type_name)))
         }
     }
@@ -605,7 +623,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         // Encode the schema-native value into the wire value tree returned
-        // across the `golem:agent/host@2.0.0` boundary.
-        Ok(encode_value(&schema_value))
+        // across the `golem:agent/host@2.0.0` boundary. Config values are not a
+        // capability-minting source, so the pure encoder is used: a quota token
+        // appearing here is a schema/config error and is rejected rather than
+        // lowered into a live handle.
+        encode_value(&schema_value)
+            .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
     }
 }

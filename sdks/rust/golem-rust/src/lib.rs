@@ -39,12 +39,14 @@ pub fn decode_schema_graph(
     schema::wit::decode_graph(graph)
 }
 
-pub fn encode_schema_value(value: &SchemaValue) -> schema::wit::wire::SchemaValueTree {
+pub fn encode_schema_value(
+    value: &SchemaValue,
+) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
     schema::wit::encode_value(value)
 }
 
 pub fn decode_schema_value(
-    value: &schema::wit::wire::SchemaValueTree,
+    value: schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, schema::wit::DecodeError> {
     schema::wit::decode_value(value)
 }

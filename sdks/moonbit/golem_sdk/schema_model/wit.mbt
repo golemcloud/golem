@@ -555,25 +555,139 @@ fn ValueEncoder::emit_node(
     Quantity(q) => @types.QuantityValueNode(q)
     Union(tag, body) => @types.UnionValue({ tag, body: self.emit(body) })
     Secret(secret_ref) => @types.SecretValue({ secret_ref, })
-    QuotaToken(p) => {
-      guard datetime_valid(p.last_credit_at) else {
-        raise EncodeError(
-          "invalid quota-token last-credit-at datetime: nanoseconds must be < 1_000_000_000, got \{p.last_credit_at.nanoseconds}",
-        )
+    QuotaToken(handle) =>
+      // Move the owned `quota-token` resource out of the opaque handle exactly
+      // once. `schema_value_to_wit` preflights that every handle is present and
+      // unique, so this take always succeeds for a well-formed value tree.
+      match handle.take() {
+        Some(raw) => @types.QuotaTokenHandle(raw)
+        None =>
+          raise EncodeError(
+            "quota-token handle was already transferred; an owned quota-token can only be sent once",
+          )
       }
-      @types.QuotaTokenValue(p)
-    }
   }
 }
 
 ///|
 /// Encode a recursive `SchemaValue` into its flat `@types.SchemaValueTree`.
+///
+/// Any owned `quota-token` handle in `value` is moved into the wire tree as a
+/// `quota-token-handle` node (first encode wins); after this the originating
+/// handle is empty. A full validation preflight runs first so that *every*
+/// encode-time error — an aliased or already-transferred `quota-token`, or an
+/// out-of-range narrow integer / invalid datetime elsewhere in the tree — is
+/// raised *before* any handle is moved, keeping a failed encode from destroying
+/// a still-valid token.
 pub fn schema_value_to_wit(
   value : SchemaValue,
 ) -> @types.SchemaValueTree raise SchemaModelError {
+  preflight_value(value)
   let enc = ValueEncoder::new()
   let root = enc.emit(value)
   { value_nodes: enc.value_nodes, root }
+}
+
+///|
+/// Validate every encode-time invariant of `value` before `schema_value_to_wit`
+/// moves any owned `quota-token` handle, so a rejected value tree never destroys
+/// a still-valid token. This enforces the same narrow-integer and datetime
+/// ranges `emit_node` does, plus that every `quota-token` is still present and
+/// that no owned handle — compared by its underlying resource identity, not just
+/// holder identity — appears more than once in the tree.
+fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
+  let seen : Array[@types.QuotaToken] = []
+  preflight_walk(value, seen)
+}
+
+///|
+fn preflight_walk(
+  value : SchemaValue,
+  seen : Array[@types.QuotaToken],
+) -> Unit raise SchemaModelError {
+  match value {
+    S8(i) =>
+      if not(s8_in_range(i)) {
+        raise EncodeError("s8 value out of range: \{i}")
+      }
+    S16(i) =>
+      if not(s16_in_range(i)) {
+        raise EncodeError("s16 value out of range: \{i}")
+      }
+    U16(u) =>
+      if not(u16_in_range(u)) {
+        raise EncodeError("u16 value out of range: \{u}")
+      }
+    Datetime(dt) =>
+      if not(datetime_valid(dt)) {
+        raise EncodeError(
+          "invalid datetime value: nanoseconds must be < 1_000_000_000, got \{dt.nanoseconds}",
+        )
+      }
+    QuotaToken(handle) => {
+      // Peek (without consuming) the underlying owned resource so two distinct
+      // holders wrapping the same raw `quota-token` are also rejected, not only
+      // the same holder used twice.
+      let raw = match handle.with_handle(r => r) {
+        Some(raw) => raw
+        None =>
+          raise EncodeError(
+            "quota-token handle was already transferred; an owned quota-token can only be sent once",
+          )
+      }
+      for s in seen {
+        if s == raw {
+          raise EncodeError(
+            "the same quota-token handle appeared more than once in one value tree",
+          )
+        }
+      }
+      seen.push(raw)
+    }
+    Record(fields) =>
+      for f in fields {
+        preflight_walk(f, seen)
+      }
+    Variant(_, payload) =>
+      match payload {
+        Some(p) => preflight_walk(p, seen)
+        None => ()
+      }
+    Tuple(elements) =>
+      for e in elements {
+        preflight_walk(e, seen)
+      }
+    List(elements) =>
+      for e in elements {
+        preflight_walk(e, seen)
+      }
+    FixedList(elements) =>
+      for e in elements {
+        preflight_walk(e, seen)
+      }
+    Map(entries) =>
+      for e in entries {
+        preflight_walk(e.key, seen)
+        preflight_walk(e.value, seen)
+      }
+    Option(o) =>
+      match o {
+        Some(x) => preflight_walk(x, seen)
+        None => ()
+      }
+    ResultOk(o) =>
+      match o {
+        Some(x) => preflight_walk(x, seen)
+        None => ()
+      }
+    ResultErr(o) =>
+      match o {
+        Some(x) => preflight_walk(x, seen)
+        None => ()
+      }
+    Union(_, body) => preflight_walk(body, seen)
+    _ => ()
+  }
 }
 
 // ============================================================
@@ -584,11 +698,45 @@ pub fn schema_value_to_wit(
 priv struct ValueDecoder {
   nodes : Array[@types.SchemaValueNode]
   on_path : Array[Bool]
+  // An owned `quota-token` handle node may be lifted into the value tree at most
+  // once; track which handle nodes have already been claimed so a malformed tree
+  // that references the same handle node twice cannot wrap one owned resource in
+  // two handles.
+  lifted : Array[Bool]
+  // Underlying owned resources already lifted, so a malformed tree that carries
+  // the same raw `quota-token` in two *different* handle nodes is also rejected.
+  lifted_raws : Array[@types.QuotaToken]
 }
 
 ///|
 fn ValueDecoder::new(nodes : Array[@types.SchemaValueNode]) -> ValueDecoder {
-  { nodes, on_path: Array::make(nodes.length(), false) }
+  {
+    nodes,
+    on_path: Array::make(nodes.length(), false),
+    lifted: Array::make(nodes.length(), false),
+    lifted_raws: [],
+  }
+}
+
+///|
+/// Return the index of the first owned `quota-token` handle node that was never
+/// lifted into the decoded value tree, or `None` if every handle node was
+/// referenced exactly once from the root. Used after a successful decode to
+/// reject a tree that carries handles unreachable from the root.
+///
+/// This only inspects the node tags; it does not release the owned resources.
+/// MoonBit has no resource finalizer, so an owned `quota-token` left in a
+/// rejected or partially-decoded tree is released only when the guest instance
+/// is torn down. (Other SDKs lean on host/runtime GC for the same cleanup; a
+/// guest-side host `resource-drop` call here would pull the `golem:core/types`
+/// host import into this otherwise host-free package.)
+fn ValueDecoder::first_unreferenced_handle(self : ValueDecoder) -> Int? {
+  for i in 0..<self.nodes.length() {
+    if self.nodes[i] is @types.QuotaTokenHandle(_) && not(self.lifted[i]) {
+      return Some(i)
+    }
+  }
+  None
 }
 
 ///|
@@ -616,7 +764,7 @@ fn ValueDecoder::from_idx(
     raise DecodeError("cyclic value node reference at index \{idx}")
   }
   self.on_path[idx] = true
-  let result = self.from_node(self.nodes[idx])
+  let result = self.from_node(idx, self.nodes[idx])
   self.on_path[idx] = false
   result
 }
@@ -624,6 +772,7 @@ fn ValueDecoder::from_idx(
 ///|
 fn ValueDecoder::from_node(
   self : ValueDecoder,
+  idx : Int,
   n : @types.SchemaValueNode,
 ) -> SchemaValue raise SchemaModelError {
   match n {
@@ -693,23 +842,57 @@ fn ValueDecoder::from_node(
     @types.QuantityValueNode(q) => Quantity(q)
     @types.UnionValue(up) => Union(up.tag, self.from_idx(up.body))
     @types.SecretValue(sp) => Secret(sp.secret_ref)
-    @types.QuotaTokenValue(p) => {
-      guard datetime_valid(p.last_credit_at) else {
+    @types.QuotaTokenHandle(raw) => {
+      // Lift the owned `quota-token` resource into an opaque take-once holder.
+      // Track the originating node index as lifted so a malformed tree that
+      // references the same handle node twice cannot wrap one owned resource in
+      // two holders (the underlying `@types.QuotaToken` is a copyable value
+      // wrapper, so affine ownership is enforced here, not by the language).
+      guard not(self.lifted[idx]) else {
         raise DecodeError(
-          "invalid quota-token last-credit-at datetime: nanoseconds must be < 1_000_000_000, got \{p.last_credit_at.nanoseconds}",
+          "quota-token handle node referenced more than once at index \{idx}; an owned quota-token can only be lifted once",
         )
       }
-      QuotaToken(p)
+      // Also reject the same underlying owned resource appearing in two distinct
+      // handle nodes, which would otherwise wrap one resource in two holders.
+      for r in self.lifted_raws {
+        if r == raw {
+          raise DecodeError(
+            "the same owned quota-token resource appeared in more than one handle node",
+          )
+        }
+      }
+      self.lifted[idx] = true
+      self.lifted_raws.push(raw)
+      QuotaToken(GuestQuotaTokenHandle::new(raw))
     }
   }
 }
 
 ///|
 /// Decode a flat `@types.SchemaValueTree` into the recursive `SchemaValue`.
+///
+/// Owned `quota-token` handle nodes are lifted into opaque take-once holders as
+/// the tree is walked: each handle node may be referenced at most once (a second
+/// reference is rejected), and a valid tree must reference every handle node
+/// exactly once from the root. After a successful decode any handle node left
+/// unreferenced was unreachable and the tree is rejected as malformed.
+///
+/// Owned resources in a rejected or partially-decoded tree are not explicitly
+/// released here (see `first_unreferenced_handle`); MoonBit has no resource
+/// finalizer, so they are reclaimed when the guest instance is torn down.
 pub fn schema_value_from_wit(
   wit : @types.SchemaValueTree,
 ) -> SchemaValue raise SchemaModelError {
-  ValueDecoder::new(wit.value_nodes).from_idx(wit.root)
+  let decoder = ValueDecoder::new(wit.value_nodes)
+  let result = decoder.from_idx(wit.root)
+  match decoder.first_unreferenced_handle() {
+    Some(idx) =>
+      raise DecodeError(
+        "quota-token handle node at index \{idx} is not referenced from the root",
+      )
+    None => result
+  }
 }
 
 // ============================================================

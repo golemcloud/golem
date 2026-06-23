@@ -39,23 +39,87 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
-use golem_common::schema::{SchemaValue, TypedSchemaValue};
-use golem_schema::schema::wit::{decode_value, encode_typed, encode_value, wire};
+use golem_common::schema::{
+    redact_host_managed_typed_value, redact_host_managed_value, SchemaValue, TypedSchemaValue,
+};
+use golem_schema::schema::wit::{
+    decode_value, encode_typed, encode_value, reject_quota_handles_in_value_tree,
+    QuotaTokenHandleDropper, wire,
+};
 
 /// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT
-/// wire form used by the oplog-processor plugin interface. Public-oplog
-/// rendering always produces well-formed typed values, so encoding cannot
-/// fail in practice.
+/// wire form used by the oplog-processor plugin interface.
+///
+/// The oplog-processor boundary is untrusted: host-managed capability nodes
+/// (quota tokens, secrets) are redacted to plain strings before encoding rather
+/// than minting live owned handles or leaking trusted snapshots. After
+/// redaction the typed value contains no capability nodes, so the pure encoder
+/// cannot fail.
 fn encode_public_typed_schema_value(value: TypedSchemaValue) -> wire::TypedSchemaValue {
-    encode_typed(&value).expect("public oplog TypedSchemaValue must be encodable as core@2.0.0 WIT")
+    let value = redact_host_managed_typed_value(value);
+    encode_typed(&value)
+        .expect("public oplog TypedSchemaValue must be encodable as core@2.0.0 WIT after redaction")
 }
 
 fn encode_untyped_schema_value(value: SchemaValue) -> Result<wire::SchemaValueTree, String> {
-    Ok(encode_value(&value))
+    encode_value(&redact_host_managed_value(value)).map_err(|e| e.to_string())
 }
 
 fn decode_untyped_schema_value(value: wire::SchemaValueTree) -> Result<SchemaValue, String> {
     decode_value(&value).map_err(|e| e.to_string())
+}
+
+/// Drain owned `quota-token` handles out of guest-supplied raw oplog entries
+/// before they are converted with the pure (resolver-less)
+/// [`TryFrom<oplog::OplogEntry>`] path.
+///
+/// `enrich-oplog-entries` is the only guest-reachable caller of that conversion,
+/// and it returns the conversion error as a non-trapping `result::err` — so the
+/// instance, and its resource table, stay alive. The only live
+/// `schema-value-tree` carried by a *raw* oplog entry is each
+/// `create.local-agent-config[].value`; every other raw payload is an opaque
+/// `oplog-payload` byte blob. Quota tokens are never permitted in agent config,
+/// so any owned handle found there is deleted from the resource table (rather
+/// than leaked) and the whole batch is rejected. All entries are drained before
+/// the first error is surfaced, so a handle in a later entry cannot leak when an
+/// earlier entry is rejected.
+pub(crate) fn reject_quota_handles_in_oplog_entries<D: QuotaTokenHandleDropper>(
+    entries: Vec<(u64, oplog::OplogEntry)>,
+    dropper: &mut D,
+) -> Result<Vec<(u64, oplog::OplogEntry)>, String> {
+    let mut first_error: Option<String> = None;
+    let mut sanitized = Vec::with_capacity(entries.len());
+    for (index, entry) in entries {
+        let entry = match entry {
+            oplog::OplogEntry::Create(mut params) => {
+                let configs = std::mem::take(&mut params.local_agent_config);
+                let mut new_configs = Vec::with_capacity(configs.len());
+                for mut cfg in configs {
+                    match reject_quota_handles_in_value_tree(cfg.value, dropper) {
+                        Ok(tree) => {
+                            cfg.value = tree;
+                            new_configs.push(cfg);
+                        }
+                        Err(e) => {
+                            first_error.get_or_insert_with(|| {
+                                format!("agent config value must not contain a quota token: {e}")
+                            });
+                            // The owned handle(s) were already dropped; this
+                            // entry is discarded once the error is returned.
+                        }
+                    }
+                }
+                params.local_agent_config = new_configs;
+                oplog::OplogEntry::Create(params)
+            }
+            other => other,
+        };
+        sanitized.push((index, entry));
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(sanitized),
+    }
 }
 
 impl From<PublicOplogEntry> for oplog::PublicOplogEntry {

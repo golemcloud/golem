@@ -40,10 +40,7 @@ pub(open) trait MultimodalModality {
   /// Encode an instance to its `(case index, payload value)`.
   to_modality_value(Self) -> (UInt, @model.SchemaValue)
   /// Decode a `(case index, payload value)` back to an instance.
-  from_modality_value(
-    UInt,
-    @model.SchemaValue,
-  ) -> Self raise @schema.FromSchemaError
+  from_modality_value(UInt, @model.SchemaValue) -> Self raise @schema.FromSchemaError
 }
 
 ///|

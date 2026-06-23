@@ -55,6 +55,26 @@ pub(all) struct PromiseId {
 } derive(Show, Eq)
 
 ///|
+/// ============================================================
+/// Capability resources
+/// ============================================================
+/// An unforgeable capability granting the right to consume a named
+/// resource. The handle is opaque: a guest can only obtain one from the
+/// host (e.g. via `golem:quota`) and can never inspect or fabricate its
+/// internal state. When carried in a `schema-value-tree` (see
+/// `schema-value-node::quota-token-handle`) the handle is transferred by
+/// ownership; the host converts it to/from its internal trusted
+/// representation at the boundary.
+pub(all) struct QuotaToken(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn QuotaToken::drop(self : QuotaToken) -> Unit {
+  let QuotaToken(resource) = self
+  wasmImportResourceDropQuotaToken(resource)
+}
+
+///|
 /// A named type definition inside a `schema-graph`.
 ///
 /// The def itself does not carry metadata; metadata lives on the
@@ -424,18 +444,6 @@ pub(all) struct SecretValuePayload {
 } derive(Show, Eq)
 
 ///|
-/// Capability value: quota-token transport is **by snapshot**. The receiver
-/// re-acquires a live lease against `(environment-id, resource-name)` on
-/// demand.
-pub(all) struct QuotaTokenValuePayload {
-  environment_id : EnvironmentId
-  resource_name : String
-  expected_use : UInt64
-  last_credit : Int64
-  last_credit_at : Datetime
-} derive(Show, Eq)
-
-///|
 pub(all) enum SchemaValueNode {
   BoolValue(Bool)
   S8Value(Int)
@@ -469,7 +477,7 @@ pub(all) enum SchemaValueNode {
   QuantityValueNode(QuantityValue)
   UnionValue(UnionValuePayload)
   SecretValue(SecretValuePayload)
-  QuotaTokenValue(QuotaTokenValuePayload)
+  QuotaTokenHandle(QuotaToken)
 } derive(Show, Eq)
 
 ///|

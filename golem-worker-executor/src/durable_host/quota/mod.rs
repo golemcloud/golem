@@ -17,10 +17,7 @@ pub mod types;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::preview2::golem::quota::types::{
-    FailedReservation, Host, HostQuotaToken, HostReservation,
-};
-use crate::preview2::golem_quota::types::QuotaTokenRecord;
+use crate::preview2::golem::quota::types::{FailedReservation, Host, HostReservation};
 use crate::services::quota::LeaseInterest;
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
@@ -32,22 +29,51 @@ use golem_common::model::oplog::payload::{
     HostRequestQuotaCommitRequest, HostRequestQuotaReserveRequest, HostRequestQuotaTokenRequest,
     HostResponseQuotaCommitResult, HostResponseQuotaReserveResult, HostResponseQuotaTokenAcquired,
 };
-use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::quota::ReserveResult;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{ScheduledAction, Timestamp};
+use golem_schema::schema::schema_value::QuotaTokenValuePayload;
+use golem_schema::schema::wit::wire::HostQuotaToken;
+use golem_schema::schema::wit::{QuotaTokenHandleRep, QuotaTokenResolver};
 use golem_service_base::error::worker_executor::GolemSpecificWasmTrap;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::debug;
 use wasmtime::component::Resource;
+
+/// Borrow the [`QuotaTokenEntry`] stored inside a `quota-token` resource handle.
+///
+/// The resource's table representation is the opaque
+/// [`QuotaTokenHandleRep`]; this downcasts it back to the executor's real lease
+/// state. A type mismatch is a host invariant violation and fails loudly.
+fn token_entry<'a, Ctx: WorkerCtx>(
+    ctx: &'a mut DurableWorkerCtx<Ctx>,
+    token: &Resource<QuotaTokenHandleRep>,
+) -> anyhow::Result<&'a QuotaTokenEntry> {
+    ctx.table()
+        .get(token)?
+        .downcast_ref::<QuotaTokenEntry>()
+        .ok_or_else(|| anyhow::anyhow!("quota-token resource had unexpected payload type"))
+}
+
+/// Mutable variant of [`token_entry`].
+fn token_entry_mut<'a, Ctx: WorkerCtx>(
+    ctx: &'a mut DurableWorkerCtx<Ctx>,
+    token: &Resource<QuotaTokenHandleRep>,
+) -> anyhow::Result<&'a mut QuotaTokenEntry> {
+    ctx.table()
+        .get_mut(token)?
+        .downcast_mut::<QuotaTokenEntry>()
+        .ok_or_else(|| anyhow::anyhow!("quota-token resource had unexpected payload type"))
+}
 
 /// Ensure the token is live, acquiring a lease if it is still pending.
 /// Returns a mutable reference to the `LeaseInterest`.
 async fn get_live_lease_interest<'a, Ctx: WorkerCtx>(
     ctx: &'a mut DurableWorkerCtx<Ctx>,
-    token_resource: &Resource<QuotaTokenEntry>,
+    token_resource: &Resource<QuotaTokenHandleRep>,
 ) -> anyhow::Result<&'a mut LeaseInterest> {
     let svc = ctx.state.quota_service.clone();
-    let entry = ctx.table().get_mut(token_resource)?;
+    let entry = token_entry_mut(ctx, token_resource)?;
 
     if let LeaseInterestHandle::Live(ref mut interest) = entry.lease {
         return Ok(interest);
@@ -87,12 +113,12 @@ async fn get_live_lease_interest<'a, Ctx: WorkerCtx>(
     }
 }
 
-impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
-    async fn new(
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn new_token(
         &mut self,
         resource_name: String,
         expected_use: u64,
-    ) -> anyhow::Result<Resource<QuotaTokenEntry>> {
+    ) -> anyhow::Result<Resource<QuotaTokenHandleRep>> {
         let env_id = self.owned_agent_id.environment_id;
         let rn = ResourceName(resource_name.clone());
 
@@ -139,13 +165,13 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
             QuotaTokenEntry::live(interest)
         };
 
-        let resource = self.table().push(token_entry)?;
+        let resource = self.table().push(QuotaTokenHandleRep::new(token_entry))?;
         Ok(resource)
     }
 
     async fn reserve(
         &mut self,
-        self_: Resource<QuotaTokenEntry>,
+        self_: Resource<QuotaTokenHandleRep>,
         amount: u64,
     ) -> anyhow::Result<Result<Resource<ReservationEntry>, FailedReservation>> {
         let mut handle =
@@ -165,8 +191,7 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                             .single()
                             .unwrap_or_else(Utc::now);
 
-                        self.table()
-                            .get_mut(&self_)?
+                        token_entry_mut(self, &self_)?
                             .update_replayed_credit(replayed.credit_after, credit_at)?;
 
                         break 'reserve replayed.result;
@@ -231,7 +256,10 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                         debug!(
                             "Throttling agent due to failed quota reservation ({estimated_wait_nanos:?})"
                         );
-                        let quota_token = self.table().get(&self_)?;
+                        let (environment_id, resource_name) = {
+                            let quota_token = token_entry(self, &self_)?;
+                            (quota_token.environment_id(), quota_token.resource_name().clone())
+                        };
                         if agent_mode == AgentMode::Durable
                             && let Some(estimated_wait_nanos) = estimated_wait_nanos
                         {
@@ -259,8 +287,8 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                                 .await;
                         }
                         anyhow::bail!(GolemSpecificWasmTrap::AgentThrottledByQuota {
-                            environment_id: quota_token.environment_id(),
-                            resource_name: quota_token.resource_name().clone(),
+                            environment_id,
+                            resource_name,
                             timestamp: Timestamp::now_utc()
                         })
                     }
@@ -268,7 +296,7 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                         debug!(
                             "Terminating agent due to failed quota reservation ({estimated_wait_nanos:?})"
                         );
-                        let quota_token = self.table().get(&self_)?;
+                        let quota_token = token_entry(self, &self_)?;
                         anyhow::bail!(GolemSpecificWasmTrap::AgentTerminatedByQuota {
                             environment_id: quota_token.environment_id(),
                             resource_name: quota_token.resource_name().clone()
@@ -281,13 +309,13 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
     async fn split(
         &mut self,
-        self_: Resource<QuotaTokenEntry>,
+        self_: Resource<QuotaTokenHandleRep>,
         child_expected_use: u64,
-    ) -> anyhow::Result<Resource<QuotaTokenEntry>> {
+    ) -> anyhow::Result<Resource<QuotaTokenHandleRep>> {
         DurabilityHost::observe_function_call(self, "golem::quota::quota-token", "split");
 
         let child_entry = {
-            let entry = self.table().get_mut(&self_)?;
+            let entry = token_entry_mut(self, &self_)?;
             match &mut entry.lease {
                 LeaseInterestHandle::Live(interest) => {
                     let child_interest = interest
@@ -328,24 +356,24 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let child_resource = self.table().push(child_entry)?;
+        let child_resource = self.table().push(QuotaTokenHandleRep::new(child_entry))?;
         Ok(child_resource)
     }
 
     async fn merge(
         &mut self,
-        self_: Resource<QuotaTokenEntry>,
-        other: Resource<QuotaTokenEntry>,
+        self_: Resource<QuotaTokenHandleRep>,
+        other: Resource<QuotaTokenHandleRep>,
     ) -> anyhow::Result<()> {
         DurabilityHost::observe_function_call(self, "golem::quota::quota-token", "merge");
 
         // Validate that both tokens refer to the same resource before consuming `other`.
         let (self_env, self_rn) = {
-            let e = self.table().get(&self_)?;
+            let e = token_entry(self, &self_)?;
             (e.environment_id(), e.resource_name().clone())
         };
         let (other_env, other_rn) = {
-            let e = self.table().get(&other)?;
+            let e = token_entry(self, &other)?;
             (e.environment_id(), e.resource_name().clone())
         };
         if self_env != other_env || self_rn != other_rn {
@@ -356,10 +384,15 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
             );
         }
 
-        // Consume `other` from the resource table.
-        let other_entry = self.table().delete(other)?;
+        // Consume `other` from the resource table, taking ownership of its
+        // lease state out of the opaque handle representation.
+        let other_entry = self
+            .table()
+            .delete(other)?
+            .into_payload::<QuotaTokenEntry>()
+            .map_err(|_| anyhow::anyhow!("quota-token resource had unexpected payload type"))?;
 
-        let self_entry = self.table().get_mut(&self_)?;
+        let self_entry = token_entry_mut(self, &self_)?;
         match (&mut self_entry.lease, other_entry.lease) {
             (
                 LeaseInterestHandle::Live(self_interest),
@@ -394,39 +427,77 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn to_record(
+}
+
+/// Host side of the `golem:core/types@2.0.0` `quota-token` resource.
+///
+/// The resource itself is defined in `golem:core/types` (so it can travel
+/// inside a `schema-value-tree` as an opaque owned handle) and is bound to the
+/// opaque [`QuotaTokenHandleRep`] by golem-schema. The only operation the core
+/// interface declares for it is `drop`, which releases the underlying lease
+/// state back to the executor pool.
+impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
+    async fn drop(&mut self, rep: Resource<QuotaTokenHandleRep>) -> anyhow::Result<()> {
+        DurabilityHost::observe_function_call(self, "golem::core::quota-token", "drop");
+        self.table().delete(rep)?;
+        Ok(())
+    }
+}
+
+/// Boundary bridge that converts owned `quota-token` handles carried inside a
+/// `schema-value-tree` to/from the trusted [`QuotaTokenValuePayload`] snapshot.
+///
+/// These are pure resource-table operations: lifting a handle consumes it and
+/// snapshots its current credit state; lowering a snapshot materializes a fresh
+/// *pending* token whose live lease is re-acquired lazily on first use (matching
+/// the pre-refactor record-based transfer). No durable oplog entry is written
+/// here; the durable/cross-executor representation is the snapshot embedded in
+/// the surrounding value, never the live lease.
+impl<Ctx: WorkerCtx> QuotaTokenResolver for DurableWorkerCtx<Ctx> {
+    type Error = WorkerExecutorError;
+
+    fn snapshot_handle(
         &mut self,
-        rep: Resource<QuotaTokenEntry>,
-    ) -> anyhow::Result<QuotaTokenRecord> {
-        let entry = self.table().get(&rep)?;
-        Ok(QuotaTokenRecord {
-            environment_id: entry.environment_id().into(),
+        handle: Resource<QuotaTokenHandleRep>,
+    ) -> Result<QuotaTokenValuePayload, Self::Error> {
+        let entry = self
+            .table()
+            .delete(handle)
+            .map_err(|e| WorkerExecutorError::runtime(format!("invalid quota-token handle: {e}")))?
+            .into_payload::<QuotaTokenEntry>()
+            .map_err(|_| {
+                WorkerExecutorError::runtime("quota-token resource had unexpected payload type")
+            })?;
+
+        Ok(QuotaTokenValuePayload {
+            environment_id: golem_schema::model::EnvironmentId::new(entry.environment_id().0),
             resource_name: entry.resource_name().clone().0,
             expected_use: entry.expected_use(),
             last_credit: entry.last_credit(),
-            last_credit_at: SerializableDateTime::from(*entry.last_credit_at()).into(),
+            last_credit_at: *entry.last_credit_at(),
         })
     }
 
-    async fn from_record(
+    fn handle_from_snapshot(
         &mut self,
-        serialized: QuotaTokenRecord,
-    ) -> anyhow::Result<Resource<QuotaTokenEntry>> {
-        let token_entry = QuotaTokenEntry::pending(
-            EnvironmentId(serialized.environment_id.uuid.into()),
-            ResourceName(serialized.resource_name),
-            serialized.expected_use,
-            serialized.last_credit,
-            SerializableDateTime::from(serialized.last_credit_at).into(),
+        snapshot: &QuotaTokenValuePayload,
+    ) -> Result<Resource<QuotaTokenHandleRep>, Self::Error> {
+        let entry = QuotaTokenEntry::pending(
+            EnvironmentId(snapshot.environment_id.uuid),
+            ResourceName(snapshot.resource_name.clone()),
+            snapshot.expected_use,
+            snapshot.last_credit,
+            snapshot.last_credit_at,
         );
-        let resource = self.table().push(token_entry)?;
-        Ok(resource)
+        self.table()
+            .push(QuotaTokenHandleRep::new(entry))
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("failed to create quota-token handle: {e}"))
+            })
     }
 
-    async fn drop(&mut self, rep: Resource<QuotaTokenEntry>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "golem::quota::quota-token", "drop");
-        self.table().delete(rep)?;
-        Ok(())
+    fn drop_handle(&mut self, handle: Resource<QuotaTokenHandleRep>) {
+        let _ = self.table().delete(handle);
     }
 }
 
@@ -445,7 +516,7 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
         if !handle.is_live() {
             match handle.replay(self).await? {
                 CallReplayOutcome::Replayed(replayed) => {
-                    let token_resource: Resource<QuotaTokenEntry> =
+                    let token_resource: Resource<QuotaTokenHandleRep> =
                         Resource::new_own(entry.token.rep());
 
                     let credit_at = Utc
@@ -453,8 +524,7 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
                         .single()
                         .unwrap_or_else(Utc::now);
 
-                    self.table()
-                        .get_mut(&token_resource)?
+                    token_entry_mut(self, &token_resource)?
                         .update_replayed_credit(replayed.credit_after, credit_at)?;
 
                     return Ok(());
@@ -463,7 +533,7 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
             }
         }
 
-        let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(entry.token.rep());
+        let token_resource: Resource<QuotaTokenHandleRep> = Resource::new_own(entry.token.rep());
         let svc = self.state.quota_service.clone();
 
         let interest = match get_live_lease_interest(self, &token_resource).await {
@@ -496,5 +566,3 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 }
-
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}

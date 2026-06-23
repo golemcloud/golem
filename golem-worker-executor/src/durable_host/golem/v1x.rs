@@ -1482,6 +1482,21 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
 
+        // The raw oplog entries are guest-owned: their only live
+        // `schema-value-tree` (each `create.local-agent-config[].value`) may
+        // carry owned `quota-token` handles that were transferred into the
+        // resource table at the WIT boundary. The pure `TryFrom` conversion
+        // below rejects quota tokens but cannot delete the handles, and this
+        // function returns its error as a non-trapping `result::err`, so drain
+        // any such handle up front (rejecting the batch) before any other
+        // non-trapping early return can drop the entries without cleanup.
+        let entries = match crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
+            entries, self,
+        ) {
+            Ok(entries) => entries,
+            Err(e) => return Ok(Err(e)),
+        };
+
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let environment_id = golem_common::model::environment::EnvironmentId::from(

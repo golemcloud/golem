@@ -16,7 +16,6 @@
 
 package golem.host
 
-import golem.{EnvironmentId, Uuid}
 import golem.schema._
 import golem.schema.wire._
 import golem.host.js.schema._
@@ -105,15 +104,6 @@ object SchemaWireInterop {
   // ===========================================================================
   // Embedded common records
   // ===========================================================================
-
-  private def uuidToJs(u: Uuid): JsUuid =
-    JsUuid(js.BigInt(u.highBits.toString), js.BigInt(u.lowBits.toString))
-
-  private def uuidFromJs(j: JsUuid): Uuid =
-    Uuid(BigInt(j.highBits.toString), BigInt(j.lowBits.toString))
-
-  private def envIdToJs(e: EnvironmentId): JsEnvironmentId   = JsEnvironmentId(uuidToJs(e.uuid))
-  private def envIdFromJs(j: JsEnvironmentId): EnvironmentId = EnvironmentId(uuidFromJs(j.uuid))
 
   private def datetimeToJs(d: Datetime): JsDatetime   = JsDatetime(js.BigInt(d.seconds.toString), d.nanoseconds)
   private def datetimeFromJs(j: JsDatetime): Datetime = Datetime(BigInt(j.seconds.toString).toLong, j.nanoseconds)
@@ -280,24 +270,6 @@ object SchemaWireInterop {
 
   private def quotaSpecToJs(s: QuotaTokenSpec): JsQuotaTokenSpec   = JsQuotaTokenSpec(s.resourceName.orUndefined)
   private def quotaSpecFromJs(j: JsQuotaTokenSpec): QuotaTokenSpec = QuotaTokenSpec(j.resourceName.toOption)
-
-  private def quotaPayloadToJs(p: QuotaTokenValuePayload): JsQuotaTokenValuePayload =
-    JsQuotaTokenValuePayload(
-      envIdToJs(p.environmentId),
-      p.resourceName,
-      js.BigInt(U64.fromRawBits(p.expectedUse).toString),
-      js.BigInt(p.lastCredit.toString),
-      datetimeToJs(p.lastCreditAt)
-    )
-
-  private def quotaPayloadFromJs(j: JsQuotaTokenValuePayload): QuotaTokenValuePayload =
-    QuotaTokenValuePayload(
-      envIdFromJs(j.environmentId),
-      j.resourceName,
-      U64.toRawBits(BigInt(j.expectedUse.toString)),
-      BigInt(j.lastCredit.toString).toLong,
-      datetimeFromJs(j.lastCreditAt)
-    )
 
   // ===========================================================================
   // Schema graph: defs / fields / cases / type body / node
@@ -482,7 +454,17 @@ object SchemaWireInterop {
       case QuantityValueNode(v) => JsSchemaValueNode.quantityValueNode(quantityValueToJs(v))
       case UnionValue(p)        => JsSchemaValueNode.unionValue(JsUnionValuePayload(p.tag, p.body))
       case SecretValue(p)       => JsSchemaValueNode.secretValue(JsSecretValuePayload(p.secretRef))
-      case QuotaTokenValue(v)   => JsSchemaValueNode.quotaTokenValue(quotaPayloadToJs(v))
+      case QuotaTokenHandle(h)  =>
+        // Move the owned `quota-token` resource out of the opaque handle exactly
+        // once. `schemaValueToWit` preflights that every handle is present and
+        // unique, so this take always succeeds for a well-formed tree.
+        h.take() match {
+          case Some(raw) => JsSchemaValueNode.quotaTokenHandle(raw.asInstanceOf[js.Any])
+          case None      =>
+            throw new IllegalStateException(
+              "quota-token handle was already transferred; an owned quota-token can only be sent once"
+            )
+        }
     }
   }
 
@@ -536,8 +518,10 @@ object SchemaWireInterop {
       case "secret-value" =>
         val p = valOf(j).asInstanceOf[JsSecretValuePayload]
         SecretValue(WitSecretValuePayload(p.secretRef))
-      case "quota-token-value" => QuotaTokenValue(quotaPayloadFromJs(valOf(j).asInstanceOf[JsQuotaTokenValuePayload]))
-      case other               => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
+      case "quota-token-handle" =>
+        // Wrap the owned `quota-token` resource in a fresh take-once handle.
+        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(valOf(j)))
+      case other => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
     }
   }
 }

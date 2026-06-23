@@ -26,7 +26,9 @@
 //! here; the consumers pick it up automatically.
 
 use crate::schema::schema_type::SchemaType;
-use crate::schema::schema_value::SchemaValue;
+use crate::schema::schema_value::{
+    ResultValuePayload, SchemaValue, UnionValuePayload, VariantValuePayload,
+};
 use std::fmt;
 
 /// A closed set of "host-managed" capability kinds.
@@ -72,6 +74,203 @@ impl HostManagedKind {
             Self::QuotaToken => "<redacted: quota-token>",
         }
     }
+}
+
+/// Replace every host-managed capability value (see [`HostManagedKind`]) with a
+/// plain string placeholder, recursing through every container.
+///
+/// This is a lossy, deterministic transform used at untrusted export boundaries
+/// (the public oplog / oplog-processor plugin interface) where a capability must
+/// neither leak its trusted snapshot nor be lowered to a live owned handle.
+/// Quota tokens have no value representation in the WIT wire form other than an
+/// owned handle, so the only safe rendering is an ordinary string. Secrets carry
+/// a `secret-ref` reference that is likewise capability-identifying authority
+/// data, so they are redacted the same way.
+///
+/// The result is a well-formed [`SchemaValue`] in which every capability leaf
+/// has become a [`SchemaValue::String`]. Pair it with
+/// [`redact_host_managed_type`] (via [`redact_host_managed_typed_value`]) to keep
+/// a typed value's schema graph and value tree kind-consistent.
+pub fn redact_host_managed_value(value: SchemaValue) -> SchemaValue {
+    if let Some(kind) = HostManagedKind::from_value(&value) {
+        return SchemaValue::String(kind.redacted_placeholder().to_string());
+    }
+
+    match value {
+        SchemaValue::Record { fields } => SchemaValue::Record {
+            fields: fields.into_iter().map(redact_host_managed_value).collect(),
+        },
+        SchemaValue::Variant(p) => SchemaValue::Variant(VariantValuePayload {
+            case: p.case,
+            payload: p
+                .payload
+                .map(|inner| Box::new(redact_host_managed_value(*inner))),
+        }),
+        SchemaValue::Tuple { elements } => SchemaValue::Tuple {
+            elements: elements.into_iter().map(redact_host_managed_value).collect(),
+        },
+        SchemaValue::List { elements } => SchemaValue::List {
+            elements: elements.into_iter().map(redact_host_managed_value).collect(),
+        },
+        SchemaValue::FixedList { elements } => SchemaValue::FixedList {
+            elements: elements.into_iter().map(redact_host_managed_value).collect(),
+        },
+        SchemaValue::Map { entries } => SchemaValue::Map {
+            entries: entries
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        redact_host_managed_value(k),
+                        redact_host_managed_value(v),
+                    )
+                })
+                .collect(),
+        },
+        SchemaValue::Option { inner } => SchemaValue::Option {
+            inner: inner.map(|inner| Box::new(redact_host_managed_value(*inner))),
+        },
+        SchemaValue::Result(r) => SchemaValue::Result(match r {
+            ResultValuePayload::Ok { value } => ResultValuePayload::Ok {
+                value: value.map(|v| Box::new(redact_host_managed_value(*v))),
+            },
+            ResultValuePayload::Err { value } => ResultValuePayload::Err {
+                value: value.map(|v| Box::new(redact_host_managed_value(*v))),
+            },
+        }),
+        SchemaValue::Union(u) => SchemaValue::Union(UnionValuePayload {
+            tag: u.tag,
+            body: Box::new(redact_host_managed_value(*u.body)),
+        }),
+        // Capability leaves were handled above; everything else is a
+        // non-capability leaf with no nested capability material.
+        other => other,
+    }
+}
+
+/// Replace every host-managed capability type (see [`HostManagedKind`]) with a
+/// plain `string` type, recursing through every container and named definition.
+///
+/// Keeps the schema graph kind-consistent with the value tree produced by
+/// [`redact_host_managed_value`], so a redacted [`TypedSchemaValue`] still
+/// validates and renders through kind-paired walkers. The replacement uses a
+/// default metadata envelope so capability-specific specs and example material
+/// never cross the export boundary.
+pub fn redact_host_managed_type(ty: SchemaType) -> SchemaType {
+    if HostManagedKind::from_type(&ty).is_some() {
+        return SchemaType::String {
+            metadata: crate::schema::metadata::MetadataEnvelope::default(),
+        };
+    }
+
+    match ty {
+        SchemaType::Record { fields, metadata } => SchemaType::Record {
+            fields: fields
+                .into_iter()
+                .map(|f| crate::schema::schema_type::NamedFieldType {
+                    name: f.name,
+                    body: redact_host_managed_type(f.body),
+                    metadata: f.metadata,
+                })
+                .collect(),
+            metadata,
+        },
+        SchemaType::Variant { cases, metadata } => SchemaType::Variant {
+            cases: cases
+                .into_iter()
+                .map(|c| crate::schema::schema_type::VariantCaseType {
+                    name: c.name,
+                    payload: c.payload.map(redact_host_managed_type),
+                    metadata: c.metadata,
+                })
+                .collect(),
+            metadata,
+        },
+        SchemaType::Tuple { elements, metadata } => SchemaType::Tuple {
+            elements: elements.into_iter().map(redact_host_managed_type).collect(),
+            metadata,
+        },
+        SchemaType::List { element, metadata } => SchemaType::List {
+            element: Box::new(redact_host_managed_type(*element)),
+            metadata,
+        },
+        SchemaType::FixedList {
+            element,
+            length,
+            metadata,
+        } => SchemaType::FixedList {
+            element: Box::new(redact_host_managed_type(*element)),
+            length,
+            metadata,
+        },
+        SchemaType::Map {
+            key,
+            value,
+            metadata,
+        } => SchemaType::Map {
+            key: Box::new(redact_host_managed_type(*key)),
+            value: Box::new(redact_host_managed_type(*value)),
+            metadata,
+        },
+        SchemaType::Option { inner, metadata } => SchemaType::Option {
+            inner: Box::new(redact_host_managed_type(*inner)),
+            metadata,
+        },
+        SchemaType::Result { spec, metadata } => SchemaType::Result {
+            spec: crate::schema::schema_type::ResultSpec {
+                ok: spec.ok.map(|t| Box::new(redact_host_managed_type(*t))),
+                err: spec.err.map(|t| Box::new(redact_host_managed_type(*t))),
+            },
+            metadata,
+        },
+        SchemaType::Union { spec, metadata } => SchemaType::Union {
+            spec: crate::schema::schema_type::UnionSpec {
+                branches: spec
+                    .branches
+                    .into_iter()
+                    .map(|b| crate::schema::schema_type::UnionBranch {
+                        tag: b.tag,
+                        body: redact_host_managed_type(b.body),
+                        discriminator: b.discriminator,
+                        metadata: b.metadata,
+                    })
+                    .collect(),
+            },
+            metadata,
+        },
+        SchemaType::Future { inner, metadata } => SchemaType::Future {
+            inner: inner.map(|t| Box::new(redact_host_managed_type(*t))),
+            metadata,
+        },
+        SchemaType::Stream { inner, metadata } => SchemaType::Stream {
+            inner: inner.map(|t| Box::new(redact_host_managed_type(*t))),
+            metadata,
+        },
+        // Capability nodes were handled above; refs, primitives, and rich
+        // semantic leaves carry no nested capability material.
+        other => other,
+    }
+}
+
+/// Produce a redacted copy of a [`TypedSchemaValue`] in which every host-managed
+/// capability node — in both the schema graph and the value tree — becomes a
+/// plain string. See [`redact_host_managed_value`] / [`redact_host_managed_type`].
+pub fn redact_host_managed_typed_value(
+    typed: crate::schema::graph::TypedSchemaValue,
+) -> crate::schema::graph::TypedSchemaValue {
+    let (graph, value) = typed.into_parts();
+    let graph = crate::schema::graph::SchemaGraph {
+        defs: graph
+            .defs
+            .into_iter()
+            .map(|d| crate::schema::graph::SchemaTypeDef {
+                id: d.id,
+                name: d.name,
+                body: redact_host_managed_type(d.body),
+            })
+            .collect(),
+        root: redact_host_managed_type(graph.root),
+    };
+    crate::schema::graph::TypedSchemaValue::new(graph, redact_host_managed_value(value))
 }
 
 /// Wraps a [`SchemaValue`] so its `Debug` output redacts every host-managed
@@ -340,5 +539,129 @@ mod tests {
         assert!(rendered.contains("<redacted: quota-token>"), "{rendered}");
         // Non-capability material is preserved.
         assert!(rendered.contains("svc"), "{rendered}");
+    }
+
+    #[test]
+    fn redact_value_replaces_capability_leaves_with_strings() {
+        assert_eq!(
+            redact_host_managed_value(quota_token_value()),
+            SchemaValue::String("<redacted: quota-token>".to_string())
+        );
+        assert_eq!(
+            redact_host_managed_value(secret_value()),
+            SchemaValue::String("<redacted: secret>".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_value_preserves_structure_and_redacts_nested() {
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("svc".to_string()),
+                SchemaValue::List {
+                    elements: vec![secret_value(), quota_token_value()],
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(quota_token_value())),
+                },
+            ],
+        };
+        let redacted = redact_host_managed_value(value);
+        assert_eq!(
+            redacted,
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("svc".to_string()),
+                    SchemaValue::List {
+                        elements: vec![
+                            SchemaValue::String("<redacted: secret>".to_string()),
+                            SchemaValue::String("<redacted: quota-token>".to_string()),
+                        ],
+                    },
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String(
+                            "<redacted: quota-token>".to_string()
+                        ))),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn redact_type_replaces_capability_types_with_plain_string() {
+        assert_eq!(
+            redact_host_managed_type(SchemaType::quota_token(QuotaTokenSpec::default())),
+            SchemaType::string()
+        );
+        assert_eq!(
+            redact_host_managed_type(SchemaType::secret(SecretSpec::default())),
+            SchemaType::string()
+        );
+    }
+
+    #[test]
+    fn redact_typed_value_keeps_graph_and_value_kind_consistent() {
+        use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
+        use crate::schema::metadata::{MetadataEnvelope, TypeId};
+        use crate::schema::schema_type::NamedFieldType;
+
+        // A named definition whose body is a capability type, referenced from
+        // the root record alongside an inline capability field.
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("cap"),
+                name: None,
+                body: SchemaType::quota_token(QuotaTokenSpec::default()),
+            }],
+            root: SchemaType::Record {
+                fields: vec![
+                    NamedFieldType {
+                        name: "via_ref".to_string(),
+                        body: SchemaType::Ref {
+                            id: TypeId::new("cap"),
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        metadata: MetadataEnvelope::default(),
+                    },
+                    NamedFieldType {
+                        name: "inline".to_string(),
+                        body: SchemaType::secret(SecretSpec::default()),
+                        metadata: MetadataEnvelope::default(),
+                    },
+                ],
+                metadata: MetadataEnvelope::default(),
+            },
+        };
+        let value = SchemaValue::Record {
+            fields: vec![quota_token_value(), secret_value()],
+        };
+
+        let redacted = redact_host_managed_typed_value(TypedSchemaValue::new(graph, value));
+        let (graph, value) = redacted.into_parts();
+
+        // The referenced definition body is rewritten to a plain string.
+        assert_eq!(graph.defs[0].body, SchemaType::string());
+
+        // Inline capability type becomes a string; the ref is left intact and
+        // resolves to the rewritten string definition.
+        match &graph.root {
+            SchemaType::Record { fields, .. } => {
+                assert!(matches!(fields[0].body, SchemaType::Ref { .. }));
+                assert_eq!(fields[1].body, SchemaType::string());
+            }
+            other => panic!("expected record root, got {other:?}"),
+        }
+
+        // Both capability values become plain string placeholders.
+        assert_eq!(
+            value,
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("<redacted: quota-token>".to_string()),
+                    SchemaValue::String("<redacted: secret>".to_string()),
+                ],
+            }
+        );
     }
 }

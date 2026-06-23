@@ -25,29 +25,6 @@ pub fn Reservation::drop(self : Reservation) -> Unit {
 }
 
 ///|
-/// A serializable represenation of a quota-token, useful when sending across rpc boundaries.
-pub(all) struct QuotaTokenRecord {
-  environment_id : @host.EnvironmentId
-  resource_name : String
-  expected_use : UInt64
-  last_credit : Int64
-  last_credit_at : @wallClock.Datetime
-} derive(Show, Eq)
-
-///|
-/// An unforgeable capability granting the right to consume a named
-/// resource.  Dropping the token releases the underlying lease back to
-/// the executor pool.
-pub(all) struct QuotaToken(Int) derive(Show, Eq)
-
-///|
-/// Drops a resource handle.
-pub fn QuotaToken::drop(self : QuotaToken) -> Unit {
-  let QuotaToken(resource) = self
-  wasmImportResourceDropQuotaToken(resource)
-}
-
-///|
 /// Commit actual usage, consuming the reservation.
 ///
 /// If `used` < reserved  — unused capacity is returned to the pool.
@@ -63,38 +40,34 @@ pub fn Reservation::commit(this : Reservation, used : UInt64) -> Unit {
 /// - `resource-name` : the resource name (as declared in the manifest).
 /// - `expected-use`  : expected units per reservation; used to derive
 ///                      credit rate and max-credit for fair scheduling.
-pub fn QuotaToken::quota_token(
+pub fn new_token(
   resource_name : String,
   expected_use : UInt64,
-) -> QuotaToken {
+) -> @types.QuotaToken {
   let ptr = mbt_ffi_str2ptr(resource_name)
-  let result : Int = wasmImportConstructorQuotaToken(
+  let result : Int = wasmImportNewToken(
     ptr,
     resource_name.length(),
     expected_use.reinterpret_as_int64(),
   )
-  let ret = QuotaToken::QuotaToken(result)
+  let ret = @types.QuotaToken::QuotaToken(result)
   mbt_ffi_free(ptr)
   return ret
 }
 
 ///|
-/// Reserve `amount` units from the local allocation.
+/// Reserve `amount` units from the token's local allocation.
 ///
 /// Blocks internally until capacity is available or the resource's
 /// enforcement action fires.  Returns a `reservation` handle that
 /// must be committed (or dropped) to release unused capacity.
-pub fn QuotaToken::reserve(
-  self : QuotaToken,
+pub fn reserve(
+  token : @types.QuotaToken,
   amount : UInt64,
 ) -> Result[Reservation, FailedReservation] {
-  let QuotaToken(handle) = self
+  let @types.QuotaToken(handle) = token
   let return_area = mbt_ffi_malloc(24)
-  wasmImportMethodQuotaTokenReserve(
-    handle,
-    amount.reinterpret_as_int64(),
-    return_area,
-  )
+  wasmImportReserve(handle, amount.reinterpret_as_int64(), return_area)
 
   let lifted0 = match mbt_ffi_load8_u(return_area + 0) {
     0 => Result::Ok(Reservation::Reservation(mbt_ffi_load32(return_area + 8)))
@@ -116,84 +89,35 @@ pub fn QuotaToken::reserve(
 }
 
 ///|
-/// Split off a child token with `child-expected-use` units from this token.
+/// Split off a child token with `child-expected-use` units from `token`.
 ///
 /// The parent's `expected-use` is reduced by `child-expected-use`.
 /// Credits are divided proportionally between parent and child.
 ///
 /// Traps if `child-expected-use` exceeds the parent's current `expected-use`.
-pub fn QuotaToken::split(
-  self : QuotaToken,
+pub fn split(
+  token : @types.QuotaToken,
   child_expected_use : UInt64,
-) -> QuotaToken {
-  let QuotaToken(handle) = self
-  let result : Int = wasmImportMethodQuotaTokenSplit(
+) -> @types.QuotaToken {
+  let @types.QuotaToken(handle) = token
+  let result : Int = wasmImportSplit(
     handle,
     child_expected_use.reinterpret_as_int64(),
   )
-  let ret = QuotaToken::QuotaToken(result)
+  let ret = @types.QuotaToken::QuotaToken(result)
   return ret
 }
 
 ///|
-/// Merge `other` back into this token.
+/// Merge `other` back into `token`.
 ///
 /// The two tokens must refer to the same resource (same resource-name
 /// and environment).  `other` is consumed.
 ///
 /// Traps if the tokens refer to different resources.
-pub fn QuotaToken::merge(self : QuotaToken, other : QuotaToken) -> Unit {
-  let QuotaToken(handle) = self
+pub fn merge(token : @types.QuotaToken, other : @types.QuotaToken) -> Unit {
+  let @types.QuotaToken(handle) = token
 
-  let QuotaToken(handle0) = other
-  wasmImportMethodQuotaTokenMerge(handle, handle0)
-}
-
-///|
-/// Serialize this token to a quota-token-record
-pub fn QuotaToken::to_record(self : QuotaToken) -> QuotaTokenRecord {
-  let QuotaToken(handle) = self
-  let return_area = mbt_ffi_malloc(56)
-  wasmImportMethodQuotaTokenToRecord(handle, return_area)
-
-  let result = mbt_ffi_ptr2str(
-    mbt_ffi_load32(return_area + 16),
-    mbt_ffi_load32(return_area + 20),
-  )
-  let ret = QuotaTokenRecord::{
-    environment_id: @host.EnvironmentId::{
-      uuid: @types.Uuid::{
-        high_bits: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
-        low_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
-      },
-    },
-    resource_name: result,
-    expected_use: mbt_ffi_load64(return_area + 24).reinterpret_as_uint64(),
-    last_credit: mbt_ffi_load64(return_area + 32),
-    last_credit_at: @wallClock.Datetime::{
-      seconds: mbt_ffi_load64(return_area + 40).reinterpret_as_uint64(),
-      nanoseconds: mbt_ffi_load32(return_area + 48).reinterpret_as_uint(),
-    },
-  }
-  mbt_ffi_free(return_area)
-  return ret
-}
-
-///|
-/// Deserialize a token from this record, restoring all associated state
-pub fn QuotaToken::from_record(serialized : QuotaTokenRecord) -> QuotaToken {
-  let ptr = mbt_ffi_str2ptr(serialized.resource_name)
-  let result : Int = wasmImportStaticQuotaTokenFromRecord(
-    serialized.environment_id.uuid.high_bits.reinterpret_as_int64(),
-    serialized.environment_id.uuid.low_bits.reinterpret_as_int64(),
-    ptr,
-    serialized.resource_name.length(),
-    serialized.expected_use.reinterpret_as_int64(),
-    serialized.last_credit,
-    serialized.last_credit_at.seconds.reinterpret_as_int64(),
-    serialized.last_credit_at.nanoseconds.reinterpret_as_int(),
-  )
-  let ret = QuotaToken::QuotaToken(result)
-  mbt_ffi_free(ptr)
-  return ret
+  let @types.QuotaToken(handle0) = other
+  wasmImportMerge(handle, handle0)
 }

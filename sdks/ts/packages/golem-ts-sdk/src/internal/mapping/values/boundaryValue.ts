@@ -37,7 +37,6 @@ import {
   unstructuredTextToValue,
 } from '../../schema/rich';
 import { sdkPrincipalFromHost } from '../../../principal';
-import { QuotaToken } from '../../../host/quota';
 import { Config } from '../../../agentConfig';
 
 // ============================================================
@@ -46,11 +45,8 @@ import { Config } from '../../../agentConfig';
 
 export function serializeRuntimeValue(value: any, type: RuntimeTypeInfo): SchemaValue {
   switch (type.tag) {
-    case 'schema': {
-      const toSerialize =
-        type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
-      return serializeGraph(toSerialize, type.graph);
-    }
+    case 'schema':
+      return serializeGraph(value, type.graph);
     case 'unstructured-text':
       return unstructuredTextToValue(value);
     case 'unstructured-binary':
@@ -70,10 +66,8 @@ export function deserializeRuntimeValue(
   type: RuntimeTypeInfo,
 ): any {
   switch (type.tag) {
-    case 'schema': {
-      const result = deserializeGraph(value, type.graph);
-      return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
-    }
+    case 'schema':
+      return deserializeGraph(value, type.graph);
     case 'unstructured-text':
       return unstructuredTextFromValue(parameterName, value, type.languages);
     case 'unstructured-binary':

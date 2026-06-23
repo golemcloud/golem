@@ -130,16 +130,11 @@ pub(all) struct QuantityValue {
   unit : String
 } derive(Eq, Show)
 
+pub(all) struct QuotaToken(Int) derive(Eq, Show)
+pub fn QuotaToken::drop(Self) -> Unit
+
 pub(all) struct QuotaTokenSpec {
   resource_name : String?
-} derive(Eq, Show)
-
-pub(all) struct QuotaTokenValuePayload {
-  environment_id : EnvironmentId
-  resource_name : String
-  expected_use : UInt64
-  last_credit : Int64
-  last_credit_at : Datetime
 } derive(Eq, Show)
 
 pub(all) struct ResultSpec {
@@ -248,7 +243,7 @@ pub(all) enum SchemaValueNode {
   QuantityValueNode(QuantityValue)
   UnionValue(UnionValuePayload)
   SecretValue(SecretValuePayload)
-  QuotaTokenValue(QuotaTokenValuePayload)
+  QuotaTokenHandle(QuotaToken)
 } derive(Eq, Show)
 
 pub(all) struct SchemaValueTree {

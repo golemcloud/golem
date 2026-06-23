@@ -140,6 +140,8 @@ export function resolvedToSchemaType(resolved: ResolvedType): SchemaTypeMapping 
           body.ok ? toSchema(body.ok) : undefined,
           body.err ? toSchema(body.err) : undefined,
         );
+      case 'quota-token':
+        return t.quotaToken(body.spec);
       case 'record':
         return registerOrInline(rt, () =>
           t.record(body.fields.map((f) => schemaField(f.name, toSchema(f.type)))),
@@ -240,6 +242,8 @@ export function resolvedGraphToSchemaType(graph: ResolvedGraph): SchemaGraphMapp
           body.ok ? toSchema(body.ok) : undefined,
           body.err ? toSchema(body.err) : undefined,
         );
+      case 'quota-token':
+        return t.quotaToken(body.spec);
       case 'record':
         return t.record(body.fields.map((f) => schemaField(f.name, toSchema(f.type))));
       case 'variant':

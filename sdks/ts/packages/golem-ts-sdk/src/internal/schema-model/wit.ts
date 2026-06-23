@@ -44,6 +44,7 @@ import {
   type TypeId,
   emptyMetadata,
 } from './model';
+import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
 
 // ============================================================
@@ -395,7 +396,65 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
 // Schema value
 // ============================================================
 
+/**
+ * Verify, before any owned handle is moved, that every {@link SchemaValue}
+ * `quota-token` in `value` is still present and that no handle appears more than
+ * once. Running this as a preflight keeps lowering atomic: a value tree with an
+ * aliased or already-consumed token is rejected without partially transferring
+ * any handle.
+ */
+function preflightQuotaHandles(value: SchemaValue): void {
+  const seen = new Set<GuestQuotaTokenHandle>();
+  const visit = (v: SchemaValue): void => {
+    switch (v.tag) {
+      case 'quota-token':
+        if (!v.handle.isPresent()) {
+          throw new SchemaEncodeError(
+            'quota-token handle was already transferred; an owned quota-token can only be sent once',
+          );
+        }
+        if (seen.has(v.handle)) {
+          throw new SchemaEncodeError(
+            'the same quota-token handle appeared more than once in one value tree',
+          );
+        }
+        seen.add(v.handle);
+        return;
+      case 'record':
+        v.fields.forEach(visit);
+        return;
+      case 'variant':
+        if (v.payload !== undefined) visit(v.payload);
+        return;
+      case 'tuple':
+      case 'list':
+      case 'fixed-list':
+        v.elements.forEach(visit);
+        return;
+      case 'map':
+        v.entries.forEach((e) => {
+          visit(e.key);
+          visit(e.value);
+        });
+        return;
+      case 'option':
+        if (v.value !== undefined) visit(v.value);
+        return;
+      case 'result':
+        if (v.result.value !== undefined) visit(v.result.value);
+        return;
+      case 'union':
+        visit(v.body);
+        return;
+      default:
+        return;
+    }
+  };
+  visit(value);
+}
+
 export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
+  preflightQuotaHandles(value);
   const valueNodes: WitSchemaValueNode[] = [];
 
   function emit(v: SchemaValue): ValueNodeIndex {
@@ -490,8 +549,18 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'union-value', val: { tag: v.unionTag, body: emit(v.body) } };
       case 'secret':
         return { tag: 'secret-value', val: { secretRef: v.secretRef } };
-      case 'quota-token':
-        return { tag: 'quota-token-value', val: v.value };
+      case 'quota-token': {
+        // Move the owned `own<quota-token>` resource out of the take-once cell.
+        // The preflight above guarantees the handle is present and unique, so
+        // this take always succeeds; the guard is defensive only.
+        const raw = v.handle.take();
+        if (raw === undefined) {
+          throw new SchemaEncodeError(
+            'quota-token handle was already transferred; an owned quota-token can only be sent once',
+          );
+        }
+        return { tag: 'quota-token-handle', val: raw };
+      }
       default:
         throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
     }
@@ -616,8 +685,18 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
         return { tag: 'union', unionTag: n.val.tag, body: fromIdx(n.val.body) };
       case 'secret-value':
         return { tag: 'secret', secretRef: n.val.secretRef };
-      case 'quota-token-value':
-        return { tag: 'quota-token', value: n.val };
+      case 'quota-token-handle': {
+        // Lift the owned `own<quota-token>` resource into an opaque take-once
+        // handle. Take-once on the wire node as well, so a malformed tree that
+        // references the same handle node twice cannot wrap one owned resource
+        // into two handles.
+        const raw = n.val as typeof n.val | undefined;
+        if (raw === undefined) {
+          throw new SchemaDecodeError('quota-token handle referenced more than once');
+        }
+        (n as { val: unknown }).val = undefined;
+        return { tag: 'quota-token', handle: GuestQuotaTokenHandle.fromRaw(raw) };
+      }
       default:
         throw new SchemaDecodeError(
           `unknown schema value node tag '${(n as { tag: string }).tag}'`,
@@ -625,7 +704,43 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
     }
   }
 
-  return fromIdx(wit.root);
+  let result: SchemaValue;
+  try {
+    result = fromIdx(wit.root);
+  } catch (e) {
+    // On failure, release any handles still owned by the wire tree so a caught
+    // error cannot leave live owned `quota-token` resources dangling in the
+    // caller's object. (JS has no RAII drop; clearing the reference is the best
+    // we can do.)
+    drainUnconsumedQuotaHandles(nodes);
+    throw e;
+  }
+
+  // A valid tree references every owned `quota-token` handle exactly once from
+  // the root. Any handle node left unconsumed after a successful decode was
+  // unreachable from the root and is rejected as malformed (after clearing it).
+  const leftover = drainUnconsumedQuotaHandles(nodes);
+  if (leftover !== undefined) {
+    throw new SchemaDecodeError(`quota-token handle not referenced from the root: ${leftover}`);
+  }
+  return result;
+}
+
+/**
+ * Clear every owned `quota-token` handle still present in `nodes` (i.e. not
+ * moved out during decode) and return the index of the first one found, or
+ * `undefined` if none remained.
+ */
+function drainUnconsumedQuotaHandles(nodes: WitSchemaValueNode[]): number | undefined {
+  let first: number | undefined;
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (node.tag === 'quota-token-handle' && (node as { val: unknown }).val !== undefined) {
+      if (first === undefined) first = i;
+      (node as { val: unknown }).val = undefined;
+    }
+  }
+  return first;
 }
 
 // ============================================================
