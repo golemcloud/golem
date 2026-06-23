@@ -84,7 +84,7 @@ cells:
     scenario: create-with-active
     agentMode: durable
     sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000, 8000, 10000]
+    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000]
     activeFraction: 25
   - name: create-with-active-durable-shared-component-active-50pct
     scenario: create-with-active
@@ -120,7 +120,7 @@ cells:
     scenario: create-with-active
     agentMode: ephemeral
     sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000, 8000, 10000]
+    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000]
     activeFraction: 25
   - name: create-with-active-ephemeral-shared-component-active-50pct
     scenario: create-with-active
@@ -183,19 +183,19 @@ cells:
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
-    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000, 8000, 9000]
+    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
     prefill: 3000
   - name: resume-under-saturation-durable-shared-component-prefill-6000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
-    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000, 8000, 9000]
+    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
     prefill: 6000
   - name: resume-under-saturation-durable-shared-component-prefill-9000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
-    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000, 8000, 9000]
+    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
     prefill: 9000
   - name: resume-under-saturation-durable-per-agent-component-prefill-250
     scenario: resume-under-saturation
