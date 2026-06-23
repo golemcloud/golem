@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn extracts_binary() {
         let schema = SchemaType::binary(BinaryRestrictions::default());
-        let value = json!({"bytes": "AQID", "mime_type": "image/png"});
+        let value = json!({"bytes": "AQID", "mimeType": "image/png"});
         let result = extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap();
         match result {
             SchemaValue::Binary(b) => {
@@ -132,7 +132,7 @@ mod tests {
             mime_types: Some(vec!["image/png".to_string()]),
             ..Default::default()
         });
-        let value = json!({"bytes": "AQID", "mime_type": "image/jpeg"});
+        let value = json!({"bytes": "AQID", "mimeType": "image/jpeg"});
         let err =
             extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
         assert!(
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn error_on_invalid_base64() {
         let schema = SchemaType::binary(BinaryRestrictions::default());
-        let value = json!({"bytes": "!!!invalid!!!", "mime_type": "image/png"});
+        let value = json!({"bytes": "!!!invalid!!!", "mimeType": "image/png"});
         let err =
             extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
         assert!(err.contains("base64"), "got: {err}");
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn error_on_missing_bytes_field() {
         let schema = SchemaType::binary(BinaryRestrictions::default());
-        let value = json!({"mime_type": "image/png"});
+        let value = json!({"mimeType": "image/png"});
         let err =
             extract_multimodal_element_value("img", &value, &schema, &graph(), 0).unwrap_err();
         assert!(err.contains("bytes"), "got: {err}");

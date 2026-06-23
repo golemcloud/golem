@@ -11120,16 +11120,16 @@ components:
     BinaryRestrictions:
       type: object
       properties:
-        mime_types:
+        mimeTypes:
           nullable: true
           type: array
           items:
             type: string
-        min_bytes:
+        minBytes:
           nullable: true
           type: integer
           format: uint32
-        max_bytes:
+        maxBytes:
           nullable: true
           type: integer
           format: uint32
@@ -11285,10 +11285,10 @@ components:
           value:
             type: object
             properties:
-              field_name:
+              fieldName:
                 type: string
             required:
-            - field_name
+            - fieldName
         required:
         - rule
         - value
@@ -11368,13 +11368,13 @@ components:
     FieldDiscriminator:
       type: object
       properties:
-        field_name:
+        fieldName:
           type: string
         literal:
           nullable: true
           type: string
       required:
-      - field_name
+      - fieldName
     FilterComparator:
       type: string
       enum:
@@ -11610,12 +11610,12 @@ components:
           $ref: '#/components/schemas/PathDirection'
         kind:
           $ref: '#/components/schemas/PathKind'
-        allowed_mime_types:
+        allowedMimeTypes:
           nullable: true
           type: array
           items:
             type: string
-        allowed_extensions:
+        allowedExtensions:
           nullable: true
           type: array
           items:
@@ -12915,9 +12915,9 @@ components:
     QuantitySpec:
       type: object
       properties:
-        base_unit:
+        baseUnit:
           type: string
-        allowed_suffixes:
+        allowedSuffixes:
           type: array
           items:
             type: string
@@ -12932,7 +12932,7 @@ components:
           - $ref: '#/components/schemas/QuantityValue'
           - nullable: true
       required:
-      - base_unit
+      - baseUnit
     QuantityValue:
       type: object
       properties:
@@ -12951,7 +12951,7 @@ components:
     QuotaTokenSpec:
       type: object
       properties:
-        resource_name:
+        resourceName:
           nullable: true
           type: string
     RawSnapshotData:
@@ -13791,11 +13791,11 @@ components:
           type: array
           items:
             type: string
-        min_length:
+        minLength:
           nullable: true
           type: integer
           format: uint32
-        max_length:
+        maxLength:
           nullable: true
           type: integer
           format: uint32
@@ -13918,12 +13918,12 @@ components:
     UrlRestrictions:
       type: object
       properties:
-        allowed_schemes:
+        allowedSchemes:
           nullable: true
           type: array
           items:
             type: string
-        allowed_hosts:
+        allowedHosts:
           nullable: true
           type: array
           items:

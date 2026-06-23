@@ -8977,16 +8977,16 @@ components:
     BinaryRestrictions:
       type: object
       properties:
-        mime_types:
+        mimeTypes:
           type: array
           items:
             type: string
           nullable: true
-        min_bytes:
+        minBytes:
           type: integer
           format: uint32
           nullable: true
-        max_bytes:
+        maxBytes:
           type: integer
           format: uint32
           nullable: true
@@ -9576,9 +9576,9 @@ components:
           value:
             type: object
             required:
-            - field_name
+            - fieldName
             properties:
-              field_name:
+              fieldName:
                 type: string
     DomainRegistration:
       type: object
@@ -9853,9 +9853,9 @@ components:
     FieldDiscriminator:
       type: object
       required:
-      - field_name
+      - fieldName
       properties:
-        field_name:
+        fieldName:
           type: string
         literal:
           type: string
@@ -10785,12 +10785,12 @@ components:
           $ref: '#/components/schemas/PathDirection'
         kind:
           $ref: '#/components/schemas/PathKind'
-        allowed_mime_types:
+        allowedMimeTypes:
           type: array
           items:
             type: string
           nullable: true
-        allowed_extensions:
+        allowedExtensions:
           type: array
           items:
             type: string
@@ -11205,11 +11205,11 @@ components:
     QuantitySpec:
       type: object
       required:
-      - base_unit
+      - baseUnit
       properties:
-        base_unit:
+        baseUnit:
           type: string
-        allowed_suffixes:
+        allowedSuffixes:
           type: array
           items:
             type: string
@@ -11252,7 +11252,7 @@ components:
     QuotaTokenSpec:
       type: object
       properties:
-        resource_name:
+        resourceName:
           type: string
           nullable: true
     ReadOnlyConfig:
@@ -12427,11 +12427,11 @@ components:
           items:
             type: string
           nullable: true
-        min_length:
+        minLength:
           type: integer
           format: uint32
           nullable: true
-        max_length:
+        maxLength:
           type: integer
           format: uint32
           nullable: true
@@ -12556,12 +12556,12 @@ components:
     UrlRestrictions:
       type: object
       properties:
-        allowed_schemes:
+        allowedSchemes:
           type: array
           items:
             type: string
           nullable: true
-        allowed_hosts:
+        allowedHosts:
           type: array
           items:
             type: string
