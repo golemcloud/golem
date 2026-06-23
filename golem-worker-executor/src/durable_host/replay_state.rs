@@ -329,13 +329,6 @@ impl ReplayState {
                         let hash = Self::hash_log_entry(*level, context, message);
                         logs.insert(hash);
                     }
-                    if let OplogEntry::CardRevoked { card_id, .. } = &entry {
-                        self.record_replay_event(ReplayEvent::CardRevoked {
-                            card_id: CardId(*card_id),
-                        })
-                        .await;
-                    }
-
                     // Moving the replay pointer. Leaving last_replayed_non_hint_index unchanged, because this is a hint entry.
                     self.last_replayed_index.set(last_read_idx);
                     // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
