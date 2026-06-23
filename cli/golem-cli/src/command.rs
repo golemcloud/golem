@@ -2160,7 +2160,7 @@ pub mod api_token {
         /// List tokens
         #[command(after_help = crate::command_examples::API_TOKEN_LIST)]
         List,
-        /// Create new token
+        /// Create a new token. The token secret is intentionally printed once, including in structured output; store it securely.
         #[command(after_help = crate::command_examples::API_TOKEN_NEW)]
         New {
             /// Expiration timestamp of the generated token, in RFC 3339 format

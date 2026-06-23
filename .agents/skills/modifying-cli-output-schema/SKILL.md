@@ -204,6 +204,9 @@ regression seed.
 - Custom serializers such as manifest trace `appliedLayers`.
 - `skip_serializing_if` fields that should not be required.
 - New nested DTO variants not covered by generators.
+- `EnvironmentSetupPlanView` serializes the precomputed `EnvironmentSetupPlan.display`.
+  That display must be constructed with the active `MaskingConfig`; do not build
+  this view from unmasked environment setup display data.
 
 ## Checklist
 

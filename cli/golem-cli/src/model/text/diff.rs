@@ -425,6 +425,9 @@ impl Serialize for EnvironmentSetupPlanView<'_> {
     where
         S: Serializer,
     {
+        // EnvironmentSetupPlan.display is built with the active MaskingConfig.
+        // This view serializes that prepared display and must not be constructed
+        // from display data that skipped environment setup masking.
         self.0.display.serialize(serializer)
     }
 }

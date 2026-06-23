@@ -893,46 +893,11 @@ mod tests {
     #[test]
     fn agent_list_structured_output_masks_secret_config_paths() {
         let output = crate::model::worker::AgentsMetadataResponseView {
-            agents: vec![crate::model::worker::AgentMetadataView {
-                component_name: golem_common::model::component::ComponentName(
-                    "component".to_string(),
-                ),
-                agent_name: crate::model::worker::RawAgentId("agent()".to_string()),
-                created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
-                environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
-                env: BTreeMap::new().into_iter().collect(),
-                default_env: BTreeMap::new().into_iter().collect(),
-                config: vec![golem_common::model::worker::AgentConfigEntryDto {
-                    path: vec!["db".to_string(), "password".to_string()],
-                    value: golem_common::base_model::json::NormalizedJsonValue(json!(
-                        "runtime-secret"
-                    )),
-                }],
-                default_config: vec![golem_common::model::worker::AgentConfigEntryDto {
-                    path: vec!["db".to_string(), "password".to_string()],
-                    value: golem_common::base_model::json::NormalizedJsonValue(json!(
-                        "default-secret"
-                    )),
-                }],
-                status: golem_common::model::AgentStatus::Idle,
-                component_revision: golem_common::model::component::ComponentRevision::new(1)
-                    .unwrap(),
-                retry_count: 0,
-                pending_invocation_count: 0,
-                updates: vec![],
-                created_at: "2024-01-01T00:00:00Z".parse().unwrap(),
-                last_error: None,
-                component_size: 0,
-                total_linear_memory_size: 0,
-                exported_resource_instances: BTreeMap::new().into_iter().collect(),
-                source_language: crate::agent_id_display::SourceLanguage::default(),
-                secret_config_paths: BTreeSet::from_iter(["db.password".to_string()]),
-            }],
+            agents: vec![sample_agent_metadata_view()],
             cursors: BTreeMap::new(),
         };
 
-        let value = to_structured_output_value_masked(output, MaskingConfig::hide_secrets())
-            .expect("agent list should serialize");
+        let value = hidden_structured_output(output);
 
         assert_eq!(value["agents"][0]["config"][0]["value"], json!("***"));
         assert_eq!(
@@ -941,6 +906,316 @@ mod tests {
         );
         assert!(!value.to_string().contains("runtime-secret"));
         assert!(!value.to_string().contains("default-secret"));
+    }
+
+    #[test]
+    fn agent_get_structured_output_masks_secret_config_paths() {
+        let value = hidden_structured_output(crate::model::text::worker::WorkerGetView {
+            metadata: sample_agent_metadata_view(),
+            precise: true,
+        });
+
+        assert_eq!(value["metadata"]["config"][0]["value"], json!("***"));
+        assert_eq!(value["metadata"]["defaultConfig"][0]["value"], json!("***"));
+        assert_no_plaintext(&value, &["runtime-secret", "default-secret"]);
+    }
+
+    #[test]
+    fn component_get_and_list_structured_outputs_mask_secret_payloads() {
+        let component = sample_component_view();
+
+        let get = hidden_structured_output(crate::model::text::component::ComponentGetView(
+            component.clone(),
+        ));
+        let list = hidden_structured_output(crate::model::text::component::ComponentListView {
+            components: vec![component],
+        });
+
+        for value in [get, list] {
+            assert_no_plaintext(
+                &value,
+                &[
+                    "component-env-secret",
+                    "component-config-secret",
+                    "component-plugin-secret",
+                ],
+            );
+            assert!(value.to_string().contains("***"));
+        }
+    }
+
+    #[test]
+    fn component_manifest_trace_structured_output_masks_secret_payloads() {
+        let value =
+            hidden_structured_output(crate::model::text::component::ComponentManifestTraceView {
+                component_name: golem_common::model::component::ComponentName(
+                    "component".to_string(),
+                ),
+                properties: sample_component_layer_properties(),
+            });
+
+        assert_no_plaintext(
+            &value,
+            &[
+                "manifest-config-secret",
+                "manifest-env-secret",
+                "manifest-plugin-secret",
+            ],
+        );
+        assert!(value.to_string().contains("***"));
+    }
+
+    #[test]
+    fn deploy_diff_and_plan_structured_outputs_mask_secret_payloads() {
+        let diff = sample_deployment_diff_with_secret_updates();
+        let diff_value = hidden_structured_output(diff.clone());
+        let plan_value = hidden_structured_output(DeployPlanView {
+            deployment_diff: &diff,
+            environment_setup: None,
+        });
+
+        for value in [diff_value, plan_value] {
+            assert_no_plaintext(
+                &value,
+                &[
+                    "deploy-env-secret-old",
+                    "deploy-env-secret-new",
+                    "deploy-config-secret-old",
+                    "deploy-config-secret-new",
+                ],
+            );
+            assert!(value.to_string().contains("<masked-secret:"));
+        }
+    }
+
+    fn hidden_structured_output<Output: StructuredOutput>(output: Output) -> Value {
+        to_structured_output_value_masked(output, MaskingConfig::hide_secrets())
+            .expect("output should serialize with hidden secrets")
+    }
+
+    fn assert_no_plaintext(value: &Value, plaintexts: &[&str]) {
+        let serialized = value.to_string();
+        for plaintext in plaintexts {
+            assert!(
+                !serialized.contains(plaintext),
+                "structured output leaked plaintext {plaintext}: {serialized}"
+            );
+        }
+    }
+
+    fn sample_agent_metadata_view() -> crate::model::worker::AgentMetadataView {
+        crate::model::worker::AgentMetadataView {
+            component_name: golem_common::model::component::ComponentName("component".to_string()),
+            agent_name: crate::model::worker::RawAgentId("agent()".to_string()),
+            created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            env: BTreeMap::new().into_iter().collect(),
+            default_env: BTreeMap::new().into_iter().collect(),
+            config: vec![golem_common::model::worker::AgentConfigEntryDto {
+                path: vec!["db".to_string(), "password".to_string()],
+                value: golem_common::base_model::json::NormalizedJsonValue(json!("runtime-secret")),
+            }],
+            default_config: vec![golem_common::model::worker::AgentConfigEntryDto {
+                path: vec!["db".to_string(), "password".to_string()],
+                value: golem_common::base_model::json::NormalizedJsonValue(json!("default-secret")),
+            }],
+            status: golem_common::model::AgentStatus::Idle,
+            component_revision: golem_common::model::component::ComponentRevision::new(1).unwrap(),
+            retry_count: 0,
+            pending_invocation_count: 0,
+            updates: vec![],
+            created_at: "2024-01-01T00:00:00Z".parse().unwrap(),
+            last_error: None,
+            component_size: 0,
+            total_linear_memory_size: 0,
+            exported_resource_instances: BTreeMap::new().into_iter().collect(),
+            source_language: crate::agent_id_display::SourceLanguage::default(),
+            secret_config_paths: BTreeSet::from_iter(["db.password".to_string()]),
+        }
+    }
+
+    fn sample_component_view() -> crate::model::component::ComponentView {
+        let agent_type_name = golem_common::model::agent::AgentTypeName("agent".to_string());
+        crate::model::component::ComponentView {
+            component_name: golem_common::model::component::ComponentName("component".to_string()),
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+            component_version: Some("1.0.0".to_string()),
+            component_revision: 1,
+            component_size: 0,
+            created_at: fixed_datetime(),
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            exports: vec![],
+            agent_types: vec![sample_agent_type_schema(agent_type_name.clone())],
+            agent_type_provision_configs: BTreeMap::from_iter([(
+                agent_type_name,
+                golem_common::model::component_metadata::AgentTypeProvisionConfig {
+                    env: BTreeMap::from_iter([(
+                        "API_TOKEN".to_string(),
+                        "component-env-secret".to_string(),
+                    )]),
+                    config: vec![golem_common::model::worker::TypedAgentConfigEntry {
+                        path: vec!["db".to_string(), "password".to_string()],
+                        value: typed_schema_string("component-config-secret"),
+                    }],
+                    plugins: vec![golem_common::model::component::InstalledPlugin {
+                        environment_plugin_grant_id:
+                            golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId(
+                                uuid::Uuid::nil(),
+                            ),
+                        priority: golem_common::model::component::PluginPriority(1),
+                        parameters: BTreeMap::from_iter([(
+                            "apiKey".to_string(),
+                            "component-plugin-secret".to_string(),
+                        )]),
+                        plugin_registration_id:
+                            golem_common::model::plugin_registration::PluginRegistrationId(
+                                uuid::Uuid::nil(),
+                            ),
+                        plugin_name: "plugin".to_string(),
+                        plugin_version: "1.0.0".to_string(),
+                        oplog_processor_component_id: None,
+                        oplog_processor_component_revision: None,
+                    }],
+                    files: vec![],
+                },
+            )]),
+        }
+    }
+
+    fn sample_agent_type_schema(
+        agent_type_name: golem_common::model::agent::AgentTypeName,
+    ) -> golem_common::schema::agent::AgentTypeSchema {
+        golem_common::schema::agent::AgentTypeSchema {
+            type_name: agent_type_name,
+            description: String::new(),
+            source_language: String::new(),
+            schema: golem_common::schema::SchemaGraph::empty(),
+            constructor: golem_common::schema::agent::AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: input_schema_value(0),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: golem_common::model::agent::AgentMode::Durable,
+            http_mount: None,
+            snapshotting: golem_common::model::agent::Snapshotting::Disabled(
+                golem_common::model::Empty {},
+            ),
+            config: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                source: golem_common::model::agent::AgentConfigSource::Secret,
+                path: vec!["db".to_string(), "password".to_string()],
+                value_type: golem_common::schema::SchemaType::string(),
+            }],
+        }
+    }
+
+    fn typed_schema_string(value: &str) -> golem_common::schema::TypedSchemaValue {
+        golem_common::schema::TypedSchemaValue::new(
+            golem_common::schema::SchemaGraph::anonymous(golem_common::schema::SchemaType::string()),
+            golem_common::schema::SchemaValue::String(value.to_string()),
+        )
+    }
+
+    fn sample_component_layer_properties() -> crate::model::app::ComponentLayerProperties {
+        use crate::model::cascade::property::Property;
+
+        let layer = crate::model::app::ComponentLayerId::ComponentCommon(
+            golem_common::model::component::ComponentName("component".to_string()),
+        );
+        let mut properties = crate::model::app::ComponentLayerProperties::default();
+        properties.config.apply_layer(
+            &layer,
+            None,
+            Some(json!({ "db": { "password": "manifest-config-secret" } })),
+        );
+        properties.env.apply_layer(
+            &layer,
+            None,
+            (
+                crate::model::cascade::property::map::MapMergeMode::Upsert,
+                indexmap::IndexMap::from_iter([(
+                    "API_TOKEN".to_string(),
+                    "manifest-env-secret".to_string(),
+                )]),
+            ),
+        );
+        properties.plugins.apply_layer(
+            &layer,
+            None,
+            (
+                crate::model::cascade::property::vec::VecMergeMode::Append,
+                vec![crate::model::app_raw::PluginInstallation {
+                    account: None,
+                    name: "plugin".to_string(),
+                    version: "1.0.0".to_string(),
+                    parameters: std::collections::HashMap::from_iter([(
+                        "apiKey".to_string(),
+                        "manifest-plugin-secret".to_string(),
+                    )]),
+                }],
+            ),
+        );
+        properties
+    }
+
+    fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::DeploymentDiff {
+        use golem_common::model::diff::{Diffable, HashOf};
+
+        let mut current = golem_common::model::diff::Deployment::default();
+        let mut new = golem_common::model::diff::Deployment::default();
+        let wasm_hash = fixed_hash("wasm");
+
+        current.components.insert(
+            "component".to_string(),
+            HashOf::form_value(golem_common::model::diff::Component {
+                wasm_hash: wasm_hash.clone(),
+                agent_type_provision_configs: BTreeMap::from_iter([(
+                    "agent".to_string(),
+                    HashOf::form_value(sample_diff_provision_config(
+                        "deploy-env-secret-old",
+                        "deploy-config-secret-old",
+                    )),
+                )]),
+            }),
+        );
+        new.components.insert(
+            "component".to_string(),
+            HashOf::form_value(golem_common::model::diff::Component {
+                wasm_hash,
+                agent_type_provision_configs: BTreeMap::from_iter([(
+                    "agent".to_string(),
+                    HashOf::form_value(sample_diff_provision_config(
+                        "deploy-env-secret-new",
+                        "deploy-config-secret-new",
+                    )),
+                )]),
+            }),
+        );
+
+        golem_common::model::diff::Deployment::diff(&new, &current)
+            .expect("sample deployments should diff")
+            .expect("sample deployments should differ")
+    }
+
+    fn sample_diff_provision_config(
+        env_secret: &str,
+        config_secret: &str,
+    ) -> golem_common::model::diff::AgentTypeProvisionConfig {
+        golem_common::model::diff::AgentTypeProvisionConfig {
+            env: BTreeMap::from_iter([("API_TOKEN".to_string(), env_secret.to_string())]),
+            config: BTreeMap::from_iter([(
+                "db.password".to_string(),
+                golem_common::base_model::json::NormalizedJsonValue(json!(config_secret)),
+            )]),
+            files_by_path: BTreeMap::new(),
+            plugins_by_grant_id: BTreeMap::new(),
+        }
+    }
+
+    fn fixed_hash(input: &str) -> golem_common::model::diff::Hash {
+        golem_common::model::diff::Hash::new(blake3::hash(input.as_bytes()))
     }
 
     #[test]

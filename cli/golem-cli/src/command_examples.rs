@@ -668,6 +668,9 @@ pub const API_TOKEN_NEW: &str = "Examples:
   # Create a new long-lived token (default expires year 2100)
   golem-cli api-token new
 
+  # The token secret is printed once in this command's output, including with --format json.
+  # Store it securely; it cannot be retrieved later.
+
   # Create a token that expires on a specific RFC 3339 timestamp
   golem-cli api-token new --expires-at 2027-01-01T00:00:00Z";
 
