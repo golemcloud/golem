@@ -127,7 +127,7 @@ async fn test_scala_bridge_e2e() {
     let server_url = ctx.worker_service_url();
     let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
     let main_scala = formatdoc! {r#"
-        import golem.bridge.client.CounterAgentClient
+        import golem.bridge.client.counter_agent.CounterAgentClient
         import golem.bridge.runtime.GolemServer
 
         import scala.concurrent.Await
