@@ -96,6 +96,10 @@ const BUSY_MILLIS: u32 = 250;
 /// the latency distribution at that density and surface a latency ceiling.
 const INVOKES_PER_AGENT_PER_STEP: u32 = 50;
 
+/// Emit progress every N load rounds so GitHub Actions log lag is distinguishable
+/// from a genuinely stuck benchmark.
+const LOAD_ROUND_PROGRESS_INTERVAL: u32 = 5;
+
 /// Maximum number of agent-create invocations in flight at once while ramping a
 /// cell. The cost of a step is dominated by the round-trips for the new agents,
 /// so fanning them out cuts wall-clock from hours to minutes. The cap keeps the
@@ -870,6 +874,13 @@ async fn run_ramp_cell(
         let has_create_phase = !is_ephemeral || config.scenario == Scenario::CreateOnly;
         if has_create_phase && target > created {
             let batch: Vec<u32> = (created..target).collect();
+            info!(
+                "Density-agent[{}]: creating {} agents for target {target} ({} -> {})",
+                config.cell_name(),
+                batch.len(),
+                created,
+                target
+            );
             let timeout_current = timeout.current;
             let creates: Vec<AttemptOutcome> = futures::stream::iter(batch)
                 .map(|index| {
@@ -929,6 +940,10 @@ async fn run_ramp_cell(
                 }
             }
             created = target;
+            info!(
+                "Density-agent[{}]: create phase complete for target {target}",
+                config.cell_name()
+            );
         }
         outcome.max_agents_reached = target;
 
@@ -939,7 +954,12 @@ async fn run_ramp_cell(
         if load == 0 {
             continue;
         }
-        for _ in 0..INVOKES_PER_AGENT_PER_STEP {
+        info!(
+            "Density-agent[{}]: starting load rounds for target {target}, load {load}, rounds {}",
+            config.cell_name(),
+            INVOKES_PER_AGENT_PER_STEP
+        );
+        for round_index in 1..=INVOKES_PER_AGENT_PER_STEP {
             let timeout_current = timeout.current;
             let round: Vec<(u32, AttemptOutcome)> = futures::stream::iter(0..load)
                 .map(|index| {
@@ -1000,6 +1020,16 @@ async fn run_ramp_cell(
                 if detector.is_terminal() {
                     break 'ramp;
                 }
+            }
+            if round_index == 1
+                || round_index % LOAD_ROUND_PROGRESS_INTERVAL == 0
+                || round_index == INVOKES_PER_AGENT_PER_STEP
+            {
+                info!(
+                    "Density-agent[{}]: completed load round {round_index}/{} for target {target}, load {load}",
+                    config.cell_name(),
+                    INVOKES_PER_AGENT_PER_STEP
+                );
             }
         }
     }
@@ -1112,6 +1142,13 @@ async fn run_resume_cell(
             outcome.max_agents_reached = index + 1;
             return Ok(outcome);
         }
+        let done = index + 1;
+        if done == 1 || done % 500 == 0 || done == prefill {
+            info!(
+                "Density-agent[{}]: pre-filled {done}/{prefill} idle agents",
+                config.cell_name()
+            );
+        }
     }
     outcome.max_agents_reached = prefill;
 
@@ -1131,7 +1168,7 @@ async fn run_resume_cell(
             "Density-agent[{}]: resume probes at {target} total agents",
             config.cell_name()
         );
-        for _ in 0..RESUME_PROBES_PER_STEP {
+        for probe_index in 1..=RESUME_PROBES_PER_STEP {
             // Resume an existing (early) agent.
             let resume_index = (next_fresh.wrapping_mul(2_654_435_761)) % prefill;
             let (rc, ragent) = agent_for_index(config, resume_index, components)?;
@@ -1209,6 +1246,14 @@ async fn run_resume_cell(
             }
             if detector.is_terminal() {
                 break 'ramp;
+            }
+            if probe_index == 1 || probe_index % 5 == 0 || probe_index == RESUME_PROBES_PER_STEP {
+                info!(
+                    "Density-agent[{}]: completed resume probe {probe_index}/{} at target {target}, total agents {}",
+                    config.cell_name(),
+                    RESUME_PROBES_PER_STEP,
+                    outcome.max_agents_reached
+                );
             }
         }
     }
