@@ -54,7 +54,7 @@
 //!
 //! # Operational definitions (from #3523)
 //!
-//! - Load round: one concurrent `busy_for(500ms)` invocation per agent in the
+//! - Load round: one concurrent `busy_for(250ms)` invocation per agent in the
 //!   load set, all in flight at once, awaited together.
 //! - Passive (idle): for durable create-only, an agent is created/invoked once,
 //!   then left to drift toward `LoadedIdle` and become eviction-eligible.
@@ -88,19 +88,24 @@ const DURABLE_AGENT_TYPE: &str = "Counter";
 const EPHEMERAL_AGENT_TYPE: &str = "EphemeralCounter";
 
 /// CPU busy time per `busy_for` call defining one unit of load.
-const BUSY_MILLIS: u32 = 500;
+const BUSY_MILLIS: u32 = 250;
 
 /// Number of load rounds per ramp step. Each round invokes every agent in the
 /// step's load set once, concurrently, so a step applies this many waves of
 /// "one simultaneous invocation per loaded agent" — enough samples to measure
 /// the latency distribution at that density and surface a latency ceiling.
-const INVOKES_PER_AGENT_PER_STEP: u32 = 100;
+const INVOKES_PER_AGENT_PER_STEP: u32 = 50;
 
 /// Maximum number of agent-create invocations in flight at once while ramping a
 /// cell. The cost of a step is dominated by the round-trips for the new agents,
 /// so fanning them out cuts wall-clock from hours to minutes. The cap keeps the
 /// driver's own connection pool from becoming the bottleneck.
 const CREATE_CONCURRENCY: usize = 100;
+
+/// Maximum number of durable-agent deletions in flight during best-effort cell
+/// cleanup. Deleting a worker can load it first, so use a lower cap than create
+/// to avoid turning cleanup itself into another saturation event.
+const DELETE_CONCURRENCY: usize = 25;
 /// Fraction of a ramp batch that must fail at the transport level (request
 /// could not be sent / no round-trip) before the batch is judged as the
 /// executor being unreachable. A single transient send failure must not end a
@@ -601,14 +606,17 @@ pub async fn run_cell(
     let user = manifest.user_context(deps);
     let components = resolve_components(config, manifest, &user).await?;
 
-    let outcome = match config.scenario {
+    let mut outcome = match config.scenario {
         Scenario::ResumeUnderSaturation => {
             run_resume_cell(config, &user, &components, probe).await?
         }
         _ => run_ramp_cell(config, &user, &components, probe).await?,
     };
 
-    cleanup_cell_agents(config, &user, &components, &outcome).await;
+    if cleanup_cell_agents(config, &user, &components, &outcome).await == CleanupResult::Failed {
+        outcome.terminated_reason = TerminatedReason::ConnectionLost;
+        outcome.catastrophic_ceiling_agents = Some(outcome.max_agents_reached);
+    }
 
     log_cell_summary(config, &outcome);
 
@@ -662,14 +670,20 @@ fn log_cell_summary(config: &CellConfig, outcome: &CellOutcome) {
 /// out with the same bounded concurrency as creation. A whole-cleanup time
 /// budget and a transport-failure short-circuit bound the wall time so a
 /// degraded executor cannot stall the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupResult {
+    Succeeded,
+    Failed,
+}
+
 async fn cleanup_cell_agents(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
     components: &[ComponentDto],
     outcome: &CellOutcome,
-) {
+) -> CleanupResult {
     if config.mode == AgentMode::Ephemeral {
-        return;
+        return CleanupResult::Succeeded;
     }
     if outcome.terminated_reason.is_catastrophic() {
         info!(
@@ -677,11 +691,11 @@ async fn cleanup_cell_agents(
             config.cell_name(),
             outcome.terminated_reason
         );
-        return;
+        return CleanupResult::Succeeded;
     }
     let count = outcome.max_agents_reached;
     if count == 0 {
-        return;
+        return CleanupResult::Succeeded;
     }
     info!(
         "Density-agent[{}]: cleaning up {count} created agents",
@@ -700,7 +714,7 @@ async fn cleanup_cell_agents(
     // stalls on per-request timeouts.
     let transport_failed = Arc::new(AtomicBool::new(false));
     let delete_all = futures::stream::iter(agent_ids).for_each_concurrent(
-        CREATE_CONCURRENCY,
+        DELETE_CONCURRENCY,
         |agent_id| {
             let transport_failed = transport_failed.clone();
             async move {
@@ -725,15 +739,28 @@ async fn cleanup_cell_agents(
     );
 
     match tokio::time::timeout(CLEANUP_BUDGET, delete_all).await {
-        Ok(()) => info!(
-            "Density-agent[{}]: cleanup of {count} agents complete",
-            config.cell_name()
-        ),
-        Err(_) => warn!(
-            "Density-agent[{}]: cleanup exceeded {}s budget, abandoning",
-            config.cell_name(),
-            CLEANUP_BUDGET.as_secs()
-        ),
+        Ok(()) if transport_failed.load(Ordering::Relaxed) => {
+            warn!(
+                "Density-agent[{}]: cleanup of {count} agents abandoned after transport failure",
+                config.cell_name()
+            );
+            CleanupResult::Failed
+        }
+        Ok(()) => {
+            info!(
+                "Density-agent[{}]: cleanup of {count} agents complete",
+                config.cell_name()
+            );
+            CleanupResult::Succeeded
+        }
+        Err(_) => {
+            warn!(
+                "Density-agent[{}]: cleanup exceeded {}s budget, abandoning",
+                config.cell_name(),
+                CLEANUP_BUDGET.as_secs()
+            );
+            CleanupResult::Failed
+        }
     }
 }
 
