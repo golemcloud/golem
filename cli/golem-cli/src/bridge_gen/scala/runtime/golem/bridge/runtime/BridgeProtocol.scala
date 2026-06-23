@@ -129,14 +129,24 @@ object BridgeProtocol {
       revision    <- optionalBigInt(json, "componentRevision")
     } yield AgentInvocationResult(agentId, result, revision)
 
-  /** Extract and decode the `result.value` `SchemaValue` of a `TypedSchemaValue`. */
+  /**
+   * Extract and decode the `result.value` `SchemaValue` of a
+   * `TypedSchemaValue`. An absent or `null` `result` means the invocation
+   * produced no value (a unit method, or a fire-and-forget schedule). When
+   * `result` is present it must be a JSON object: a non-object `result` is a
+   * malformed response and is rejected rather than silently treated as "no
+   * value". A present `result` object without a `value` field still means "no
+   * value", matching the server's encoding of unit outputs.
+   */
   private def decodeResultValue(json: Json): Either[String, Option[SchemaValue]] =
     Json.field(json, "result") match {
       case None => Right(None)
       case Some(typed) =>
-        Json.field(typed, "value") match {
-          case None        => Right(None)
-          case Some(value) => SchemaValueCodec.fromJson(value).map(Some(_))
+        Json.asObject(typed).flatMap { _ =>
+          Json.field(typed, "value") match {
+            case None        => Right(None)
+            case Some(value) => SchemaValueCodec.fromJson(value).map(Some(_))
+          }
         }
     }
 

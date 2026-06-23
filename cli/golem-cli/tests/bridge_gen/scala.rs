@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::bridge_gen::fixtures::{
-    agent, def, field, method, multi_agent_wrapper_2_types, named_field, ref_to,
-    single_agent_wrapper_types, variant_case,
+    agent, def, field, local_config, method, multi_agent_wrapper_2_types, multimodal, named_field,
+    ref_to, single_agent_wrapper_types, variant_case,
 };
 use camino::Utf8Path;
 use golem_cli::bridge_gen::scala::scala::{
@@ -111,10 +111,11 @@ fn generated_project_layout_is_correct() {
         );
     }
 
-    let client_path = dir.join("src/main/scala/golem/bridge/client/CounterAgentClient.scala");
+    let client_path =
+        dir.join("src/main/scala/golem/bridge/client/counter_agent/CounterAgentClient.scala");
     assert!(client_path.exists(), "generated client object is missing");
     let client_source = std::fs::read_to_string(&client_path).unwrap();
-    assert!(client_source.contains("package golem.bridge.client"));
+    assert!(client_source.contains("package golem.bridge.client.counter_agent"));
     assert!(client_source.contains("object CounterAgentClient"));
     assert!(client_source.contains("\"CounterAgent\""));
 
@@ -129,29 +130,32 @@ fn generated_project_layout_is_correct() {
 fn generates_named_type_definitions() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
     let dir = pkg.package_dir();
-    let client =
-        std::fs::read_to_string(dir.join("src/main/scala/golem/bridge/client/Agent1Client.scala"))
-            .unwrap();
+    let client = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/agent1/Agent1Client.scala"),
+    )
+    .unwrap();
 
     // enum Color -> sealed trait + case objects (cases extend the fully
     // qualified trait so a nested case can never shadow it).
     assert!(client.contains("sealed trait Color extends Product with Serializable"));
-    assert!(client.contains("case object Red extends _root_.golem.bridge.client.Color"));
-    assert!(client.contains("case object Green extends _root_.golem.bridge.client.Color"));
-    assert!(client.contains("case object Blue extends _root_.golem.bridge.client.Color"));
+    assert!(client.contains("case object Red extends _root_.golem.bridge.client.agent1.Color"));
+    assert!(client.contains("case object Green extends _root_.golem.bridge.client.agent1.Color"));
+    assert!(client.contains("case object Blue extends _root_.golem.bridge.client.agent1.Color"));
 
     // record Person -> case class with mapped, fully qualified field types
     assert!(client.contains("final case class Person("));
     assert!(client.contains("firstName: _root_.scala.Predef.String"));
     assert!(client.contains("age: _root_.scala.Option[_root_.golem.bridge.runtime.UInt]"));
-    assert!(client.contains("eyeColor: _root_.golem.bridge.client.Color"));
+    assert!(client.contains("eyeColor: _root_.golem.bridge.client.agent1.Color"));
 
     // variant Location -> sealed trait + case classes / objects
     assert!(client.contains("sealed trait Location"));
     assert!(client.contains(
-        "final case class Home(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.Location"
+        "final case class Home(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.agent1.Location"
     ));
-    assert!(client.contains("case object Unknown extends _root_.golem.bridge.client.Location"));
+    assert!(
+        client.contains("case object Unknown extends _root_.golem.bridge.client.agent1.Location")
+    );
 }
 
 /// Each generated named composite type gets an `encode<Name>` / `decode<Name>`
@@ -162,7 +166,7 @@ fn generates_codecs_for_named_types() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/Agent1Client.scala"),
+            .join("src/main/scala/golem/bridge/client/agent1/Agent1Client.scala"),
     )
     .unwrap();
 
@@ -170,13 +174,13 @@ fn generates_codecs_for_named_types() {
 
     // enum Color: positional case index encode / decode.
     assert!(client.contains(
-        "def encodeColor(value: _root_.golem.bridge.client.Color): _root_.golem.bridge.runtime.SchemaValue"
+        "def encodeColor(value: _root_.golem.bridge.client.agent1.Color): _root_.golem.bridge.runtime.SchemaValue"
     ));
     assert!(client.contains(
-        "case _root_.golem.bridge.client.Color.Red => _root_.golem.bridge.runtime.SchemaValue.EnumValue(0)"
+        "case _root_.golem.bridge.client.agent1.Color.Red => _root_.golem.bridge.runtime.SchemaValue.EnumValue(0)"
     ));
     assert!(client.contains(
-        "def decodeColor(value: _root_.golem.bridge.runtime.SchemaValue): _root_.golem.bridge.client.Color"
+        "def decodeColor(value: _root_.golem.bridge.runtime.SchemaValue): _root_.golem.bridge.client.agent1.Color"
     ));
     assert!(client.contains("_root_.golem.bridge.runtime.SchemaValueCodec.enumCase(value)"));
 
@@ -186,9 +190,13 @@ fn generates_codecs_for_named_types() {
     // unsigned wrapper is routed through the range-validating runtime helper.
     assert!(client.contains("_root_.golem.bridge.runtime.SchemaValueCodec.recordFields(value)"));
     assert!(
-        client.contains("val f3 = _root_.golem.bridge.client.Codecs.encodeColor(value.eyeColor)")
+        client.contains(
+            "val f3 = _root_.golem.bridge.client.agent1.Codecs.encodeColor(value.eyeColor)"
+        )
     );
-    assert!(client.contains("val f3 = _root_.golem.bridge.client.Codecs.decodeColor(fields(3))"));
+    assert!(
+        client.contains("val f3 = _root_.golem.bridge.client.agent1.Codecs.decodeColor(fields(3))")
+    );
     assert!(client.contains("_root_.golem.bridge.runtime.SchemaValueCodec.encodeUInt(e0)"));
     assert!(client.contains("_root_.golem.bridge.runtime.SchemaValueCodec.asUInt(e0)"));
 
@@ -199,7 +207,7 @@ fn generates_codecs_for_named_types() {
         )
     );
     assert!(client.contains("_root_.golem.bridge.runtime.SchemaValueCodec.variantCase(value)"));
-    assert!(client.contains("_root_.golem.bridge.client.Location.Unknown"));
+    assert!(client.contains("_root_.golem.bridge.client.agent1.Location.Unknown"));
 }
 
 /// Fixed-list codecs validate the declared length on encode and decode, and
@@ -225,7 +233,7 @@ fn fixed_list_codec_is_length_checked_and_strict() {
     ));
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/MatrixAgentClient.scala"),
+            .join("src/main/scala/golem/bridge/client/matrix_agent/MatrixAgentClient.scala"),
     )
     .unwrap();
 
@@ -245,7 +253,7 @@ fn generates_client_surface() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/Agent1Client.scala"),
+            .join("src/main/scala/golem/bridge/client/agent1/Agent1Client.scala"),
     )
     .unwrap();
 
@@ -262,7 +270,7 @@ fn generates_client_surface() {
     assert!(client
         .contains("final class F1RemoteMethod private[Agent1Client] (resolved: _root_.golem.bridge.runtime.ResolvedAgent)"));
     assert!(client.contains(
-        "def apply(): _root_.scala.concurrent.Future[_root_.golem.bridge.client.Location]"
+        "def apply(): _root_.scala.concurrent.Future[_root_.golem.bridge.client.agent1.Location]"
     ));
     assert!(client.contains("methodParameters(), \"await\", _root_.scala.None"));
     assert!(client.contains("def trigger(): _root_.scala.concurrent.Future[_root_.scala.Unit]"));
@@ -272,7 +280,7 @@ fn generates_client_surface() {
     ));
     assert!(client.contains("\"schedule\", _root_.scala.Some(when.toIsoString)"));
     // The await result is decoded through the named-type codec.
-    assert!(client.contains("_root_.golem.bridge.client.Codecs.decodeLocation(__value)"));
+    assert!(client.contains("_root_.golem.bridge.client.agent1.Codecs.decodeLocation(__value)"));
 
     // Remote trait + factory.
     assert!(client.contains("trait Agent1Remote {"));
@@ -284,7 +292,7 @@ fn generates_client_surface() {
 
     // Durable agent: get / getPhantom / newPhantom, all returning the remote.
     assert!(client.contains("bindRemote(_root_.golem.bridge.runtime.ResolvedAgent("));
-    assert!(client.contains("def get(person: _root_.golem.bridge.client.Person"));
+    assert!(client.contains("def get(person: _root_.golem.bridge.client.agent1.Person"));
     assert!(client.contains(
         "phantom: _root_.golem.bridge.runtime.Uuid): _root_.scala.concurrent.Future[Agent1Remote]"
     ));
@@ -294,7 +302,7 @@ fn generates_client_surface() {
         "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId,"
     ));
     // Constructor parameters are packed through the named-type codec.
-    assert!(client.contains("_root_.golem.bridge.client.Codecs.encodePerson(person)"));
+    assert!(client.contains("_root_.golem.bridge.client.agent1.Codecs.encodePerson(person)"));
 }
 
 /// An ephemeral agent omits the parameter-addressable `get` constructor but
@@ -311,7 +319,7 @@ fn ephemeral_agent_omits_get_constructor() {
     ));
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/EphemeralAgentClient.scala"),
+            .join("src/main/scala/golem/bridge/client/ephemeral_agent/EphemeralAgentClient.scala"),
     )
     .unwrap();
 
@@ -364,7 +372,7 @@ fn codecs_reject_malformed_wire_shapes() {
     ));
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/GuardAgentClient.scala"),
+            .join("src/main/scala/golem/bridge/client/guard_agent/GuardAgentClient.scala"),
     )
     .unwrap();
 
@@ -441,7 +449,7 @@ fn client_surface_handles_reserved_and_keyword_names() {
     ));
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/HygieneAgentClient.scala"),
+            .join("src/main/scala/golem/bridge/client/hygiene_agent/HygieneAgentClient.scala"),
     )
     .unwrap();
 
@@ -535,7 +543,7 @@ fn named_type_members_avoid_reserved_member_names() {
     ));
     let client = std::fs::read_to_string(
         pkg.package_dir()
-            .join("src/main/scala/golem/bridge/client/MembersAgentClient.scala"),
+            .join("src/main/scala/golem/bridge/client/members_agent/MembersAgentClient.scala"),
     )
     .unwrap();
 
@@ -552,8 +560,12 @@ fn named_type_members_avoid_reserved_member_names() {
     // Variant and enum case members colliding with inherited members are
     // renamed too (they become members of the companion object).
     assert!(client
-        .contains("final case class toString_2(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.Choice"));
-    assert!(client.contains("case object toString_2 extends _root_.golem.bridge.client.Shade"));
+        .contains("final case class toString_2(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.members_agent.Choice"));
+    assert!(
+        client.contains(
+            "case object toString_2 extends _root_.golem.bridge.client.members_agent.Shade"
+        )
+    );
 
     cross_compile(pkg.package_dir().as_path());
 }
@@ -723,5 +735,205 @@ fn uuid_ref_is_remapped_through_the_walker() {
     assert!(
         names.iter().any(|n| matches!(n, ScalaTypeName::Derived(_))),
         "expected a derived name for the inline enum: {names:?}"
+    );
+}
+
+/// A multimodal method input/output (`list<variant<… Role::Multimodal>>`) is
+/// surfaced as a generated `sealed trait Multimodal<N>` with one case per
+/// modality and a `List[Multimodal<N>]` parameter / return type, decoded
+/// through the generated list codec. Structurally identical modality sets used
+/// by multiple methods collapse to a single generated type, and the result
+/// cross-compiles on both Scala versions.
+#[test]
+fn multimodal_input_and_output_cross_compiles() {
+    let parts = || {
+        vec![
+            variant_case("text", Some(SchemaType::string())),
+            variant_case("image-url", Some(SchemaType::string())),
+        ]
+    };
+    let pkg = GeneratedPackage::new(agent(
+        "MediaAgent",
+        // Non-same-language so modality case names normalize to UpperCamelCase.
+        "",
+        vec![field("name", SchemaType::string())],
+        vec![
+            // Multimodal input, scalar output.
+            method(
+                "describe",
+                vec![field("content", multimodal(parts()))],
+                Some(SchemaType::string()),
+            ),
+            // Scalar input, multimodal output reusing the same modality set.
+            method(
+                "render",
+                vec![field("prompt", SchemaType::string())],
+                Some(multimodal(parts())),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    ));
+    let client = std::fs::read_to_string(
+        pkg.package_dir()
+            .join("src/main/scala/golem/bridge/client/media_agent/MediaAgentClient.scala"),
+    )
+    .unwrap();
+
+    // One sealed trait with a case per modality (UpperCamelCase, payload typed).
+    assert!(client.contains("sealed trait Multimodal0 extends Product with Serializable"));
+    assert!(client.contains("object Multimodal0 {"));
+    assert!(client.contains(
+        "final case class Text(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.media_agent.Multimodal0"
+    ));
+    assert!(client.contains(
+        "final case class ImageUrl(value: _root_.scala.Predef.String) extends _root_.golem.bridge.client.media_agent.Multimodal0"
+    ));
+
+    // The structurally identical modality set used by both methods collapses to
+    // a single generated type (no `Multimodal1`).
+    assert!(
+        !client.contains("Multimodal1"),
+        "identical modality sets must collapse to one generated type"
+    );
+
+    // Input multimodal is surfaced as a single `List[Multimodal0]` parameter,
+    // packed through the generated list codec.
+    assert!(client.contains(
+        "content: _root_.scala.collection.immutable.List[_root_.golem.bridge.client.media_agent.Multimodal0]"
+    ));
+    assert!(
+        client.contains(
+            "_root_.golem.bridge.client.media_agent.Codecs.encodeMultimodal0List(content)"
+        )
+    );
+
+    // Output multimodal is decoded through the generated list codec.
+    assert!(client.contains(
+        "def apply(prompt: _root_.scala.Predef.String): _root_.scala.concurrent.Future[_root_.scala.collection.immutable.List[_root_.golem.bridge.client.media_agent.Multimodal0]]"
+    ));
+    assert!(
+        client.contains(
+            "_root_.golem.bridge.client.media_agent.Codecs.decodeMultimodal0List(__value)"
+        )
+    );
+
+    // Element codecs encode each modality to a positional variant case.
+    assert!(client.contains(
+        "def encodeMultimodal0(value: _root_.golem.bridge.client.media_agent.Multimodal0): _root_.golem.bridge.runtime.SchemaValue"
+    ));
+    assert!(
+        client.contains(
+            "_root_.golem.bridge.runtime.SchemaValue.VariantValue(1, _root_.scala.Some(p))"
+        )
+    );
+
+    cross_compile(pkg.package_dir().as_path());
+}
+
+/// A durable agent that declares local config overrides gets the
+/// `getWithConfig` / `getPhantomWithConfig` / `newPhantomWithConfig`
+/// constructor variants (mirroring the Scala SDK's RPC clients), each taking an
+/// `Option[T] = None` per declared override and building the
+/// `List[AgentConfigEntry]` from the supplied values. The plain constructors
+/// pass an empty config list, and the result cross-compiles on both Scala
+/// versions.
+#[test]
+fn local_config_overrides_cross_compiles() {
+    let pkg = GeneratedPackage::new({
+        let mut at = agent(
+            "ConfigAgent",
+            "scala",
+            vec![field("name", SchemaType::string())],
+            vec![method("ping", vec![], None)],
+            vec![],
+            AgentMode::Durable,
+        );
+        at.config = vec![
+            local_config(vec!["db", "host"], SchemaType::string()),
+            local_config(vec!["max-retries"], SchemaType::u32()),
+        ];
+        at
+    });
+    let client = std::fs::read_to_string(
+        pkg.package_dir()
+            .join("src/main/scala/golem/bridge/client/config_agent/ConfigAgentClient.scala"),
+    )
+    .unwrap();
+
+    // Config override parameters: one `Option[T] = None` per declared override,
+    // camelCased from the config path, after the constructor parameters.
+    assert!(client.contains(
+        "def getWithConfig(name: _root_.scala.Predef.String, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
+    ));
+    assert!(client.contains(
+        "def getPhantomWithConfig(name: _root_.scala.Predef.String, phantom: _root_.golem.bridge.runtime.Uuid, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
+    ));
+    assert!(client.contains(
+        "def newPhantomWithConfig(name: _root_.scala.Predef.String, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
+    ));
+
+    // Supplied overrides build `AgentConfigEntry` values keyed by the path.
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), configValue)"
+    ));
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), configValue)"
+    ));
+
+    // The plain constructors pass an empty config list.
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId, _root_.scala.collection.immutable.List()).map"
+    ));
+
+    cross_compile(pkg.package_dir().as_path());
+}
+
+/// An ephemeral agent with local config overrides omits the parameter-
+/// addressable `getWithConfig` (it has no `get`) but still exposes the phantom
+/// config variants; and a durable agent without config declarations emits no
+/// `…WithConfig` variants at all.
+#[test]
+fn config_override_constructors_respect_mode_and_absence() {
+    let ephemeral = GeneratedPackage::new({
+        let mut at = agent(
+            "EphemeralConfigAgent",
+            "scala",
+            vec![field("name", SchemaType::string())],
+            vec![method("ping", vec![], None)],
+            vec![],
+            AgentMode::Ephemeral,
+        );
+        at.config = vec![local_config(vec!["db", "host"], SchemaType::string())];
+        at
+    });
+    let ephemeral_client = std::fs::read_to_string(ephemeral.package_dir().join(
+        "src/main/scala/golem/bridge/client/ephemeral_config_agent/EphemeralConfigAgentClient.scala",
+    ))
+    .unwrap();
+    assert!(
+        !ephemeral_client.contains("def getWithConfig("),
+        "ephemeral agent must not expose getWithConfig"
+    );
+    assert!(ephemeral_client.contains("def getPhantomWithConfig("));
+    assert!(ephemeral_client.contains("def newPhantomWithConfig("));
+
+    let no_config = GeneratedPackage::new(agent(
+        "PlainAgent",
+        "scala",
+        vec![field("name", SchemaType::string())],
+        vec![method("ping", vec![], None)],
+        vec![],
+        AgentMode::Durable,
+    ));
+    let no_config_client = std::fs::read_to_string(
+        no_config
+            .package_dir()
+            .join("src/main/scala/golem/bridge/client/plain_agent/PlainAgentClient.scala"),
+    )
+    .unwrap();
+    assert!(
+        !no_config_client.contains("WithConfig"),
+        "an agent without config declarations must not emit any WithConfig variant"
     );
 }

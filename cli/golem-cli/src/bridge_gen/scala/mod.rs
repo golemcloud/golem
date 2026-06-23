@@ -19,8 +19,14 @@
 //! generator emits a fully self-contained sbt project. The static runtime code
 //! lives under the `golem.bridge.runtime` package (embedded from
 //! `src/bridge_gen/scala/runtime`) and the per-agent generated client lives
-//! under `golem.bridge.client`. Keeping the static code in its own package(s)
-//! makes it straightforward to extract into a published runtime library later.
+//! under a per-agent package `golem.bridge.client.<segment>` (the segment is
+//! derived from the agent type name; see
+//! [`ScalaBridgeGenerator::client_package_segment`]). Namespacing the client
+//! per agent keeps the generated `Codecs` object and top-level generated types
+//! from colliding when two generated SDKs end up on the same classpath; the
+//! static runtime is identical across SDKs and stays under the fixed
+//! `golem.bridge.runtime` package, making it straightforward to extract into a
+//! published runtime library later.
 //!
 //! The generated project depends only on the JDK (`java.net.http`) and a
 //! hand-rolled JSON model, has no third-party dependencies, and cross-compiles
@@ -34,7 +40,7 @@ pub mod type_name;
 pub use type_name::{RemappedType, ScalaTypeName};
 
 use crate::bridge_gen::scala::scala::{
-    escape_scala_ident, to_scala_term_ident, to_scala_type_ident, unique_idents,
+    escape_scala_ident, is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents,
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::scala::scala_writer::ScalaWriter;
@@ -42,18 +48,20 @@ use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use crate::fs;
 use crate::versions::scala_dep;
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::AgentMode;
-use golem_common::schema::graph::SchemaTypeDef;
-use golem_common::schema::schema_type::SchemaType;
+use golem_common::model::agent::{AgentConfigSource, AgentMode};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
+use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
+use golem_common::schema::multimodal::multimodal_variant_cases;
+use golem_common::schema::schema_type::{SchemaType, VariantCaseType};
 use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
 };
 use golem_common::schema::{
     AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField, OutputSchema,
 };
-use heck::ToUpperCamelCase;
+use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use include_dir::{Dir, include_dir};
 use indoc::formatdoc;
 
@@ -67,8 +75,12 @@ const SCALA_SOURCE_ROOT: &str = "src/main/scala";
 /// Fully-qualified package prefix of the static runtime types.
 const RUNTIME_PKG: &str = "_root_.golem.bridge.runtime";
 
-/// Fully-qualified package prefix of the generated client types.
-const CLIENT_PKG: &str = "_root_.golem.bridge.client";
+/// Root (un-rooted) package of the generated client types. The per-agent
+/// package segment (see [`ScalaBridgeGenerator::client_package_segment`]) is
+/// appended so that two generated SDKs placed on the same classpath cannot
+/// collide on a shared `golem.bridge.client` namespace (the generated `Codecs`
+/// object and named types differ per agent).
+const CLIENT_PKG_BASE: &str = "golem.bridge.client";
 
 /// Fully-qualified runtime `SchemaValue` companion (its case classes are
 /// referenced as `{SV}.BoolValue`, …). Always fully qualified so a generated
@@ -94,12 +106,20 @@ const SCHEMA_VALUE_TYPE: &str = "_root_.golem.bridge.runtime.SchemaValue";
 
 /// Generated object holding the per-named-type encode/decode codecs. Reserved
 /// in [`RESERVED_RUNTIME_TYPE_NAMES`] so no generated type can take its name.
-/// Always referenced fully qualified as `{CLIENT_PKG}.{CODECS_OBJECT}` at call
+/// Always referenced fully qualified as `{client_pkg}.{CODECS_OBJECT}` at call
 /// sites so a local term named `Codecs` can never shadow it.
 const CODECS_OBJECT: &str = "Codecs";
 
+/// Fully-qualified runtime `AgentConfigEntry` case class, used to build the
+/// per-agent local config overrides passed to `Bridge.createAgent`.
+const AGENT_CONFIG_ENTRY: &str = "_root_.golem.bridge.runtime.AgentConfigEntry";
+
 /// Immutable `List` constructor used throughout the generated codecs.
 const LIST: &str = "_root_.scala.collection.immutable.List";
+
+/// The empty immutable `List` literal, passed as the config argument by the
+/// plain constructors that do not take config overrides.
+const LIST_EMPTY: &str = "_root_.scala.collection.immutable.List()";
 
 /// Fully-qualified runtime REST transport object.
 const BRIDGE: &str = "_root_.golem.bridge.runtime.Bridge";
@@ -161,6 +181,11 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "get",
     "getPhantom",
     "newPhantom",
+    "getWithConfig",
+    "getPhantomWithConfig",
+    "newPhantomWithConfig",
+    "agentConfig",
+    "configValue",
 ];
 
 /// Member names a generated named type cannot use for a case-class field or a
@@ -229,6 +254,13 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "ResolvedAgent",
 ];
 
+/// The `(case_name, payload_schema)` modality pairs of one multimodal set.
+type MultimodalModalities = Vec<(String, SchemaType)>;
+
+/// A discovered multimodal modality set paired with its generated
+/// `Multimodal<N>` sealed-trait name.
+type NamedMultimodal = (MultimodalModalities, String);
+
 pub struct ScalaBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentTypeSchema,
@@ -236,6 +268,16 @@ pub struct ScalaBridgeGenerator {
     testing: bool,
     same_language: bool,
     type_naming: TypeNaming<ScalaTypeName>,
+    /// Distinct multimodal modality sets discovered up front (constructor input,
+    /// then each method's input and output, in declaration order), each mapped
+    /// to its generated `Multimodal<N>` sealed-trait name. Precomputed so the
+    /// generated client can reference `Multimodal<N>` while emission stays
+    /// `&self`, and so the names can be reserved in [`TypeNaming`] before user
+    /// types are assigned (a user type cannot then take a `Multimodal<N>` name).
+    /// The wire format is independent of these names (it is the structural
+    /// `list<variant<…>>`), so the discovery order only affects the generated
+    /// Scala API surface, never the bytes on the wire.
+    multimodals: Vec<NamedMultimodal>,
 }
 
 impl BridgeGenerator for ScalaBridgeGenerator {
@@ -266,6 +308,10 @@ impl ScalaBridgeGenerator {
     ) -> anyhow::Result<Self> {
         let same_language = agent_type.source_language.eq_ignore_ascii_case("scala");
 
+        // Discover the multimodal modality sets first so their generated
+        // `Multimodal<N>` names can be reserved in the walker below.
+        let multimodals = collect_multimodals(&agent_type)?;
+
         let reserved = RESERVED_RUNTIME_TYPE_NAMES
             .iter()
             .map(|name| ScalaTypeName::Derived((*name).to_string()))
@@ -279,7 +325,14 @@ impl ScalaBridgeGenerator {
             // the generated types, so its name must not be taken by one of them.
             .chain(std::iter::once(ScalaTypeName::Derived(
                 CODECS_OBJECT.to_string(),
-            )));
+            )))
+            // The generated multimodal sealed traits live in the client package
+            // too, so a user type must not be assigned one of their names.
+            .chain(
+                multimodals
+                    .iter()
+                    .map(|(_, name)| ScalaTypeName::Derived(name.clone())),
+            );
         let type_naming =
             TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved)?;
 
@@ -289,11 +342,61 @@ impl ScalaBridgeGenerator {
             testing,
             same_language,
             type_naming,
+            multimodals,
         })
     }
 
     fn library_name(&self) -> String {
         bridge_client_directory_name(&self.agent_type.type_name)
+    }
+
+    /// The per-agent client package segment appended to `golem.bridge.client`,
+    /// derived from the agent type name (e.g. `CounterAgent` -> `counter_agent`,
+    /// `foo-agent` -> `foo_agent`).
+    ///
+    /// The result is always a plain (non-backticked) lowercase Scala package
+    /// identifier: a backticked segment would be poor generated-DX and awkward
+    /// as a directory name. Any character outside `[a-z0-9_]` is replaced with
+    /// `_`, a leading non-letter is prefixed (`123-agent` -> `agent_123_agent`),
+    /// and a segment that is a Scala keyword is suffixed (`type` -> `type_`).
+    fn client_package_segment(&self) -> String {
+        let mut seg: String = self
+            .agent_type
+            .type_name
+            .as_str()
+            .to_snake_case()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if seg.is_empty() {
+            seg = "agent".to_string();
+        }
+        if !seg.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            seg = format!("agent_{seg}");
+        }
+        if is_scala_keyword(&seg) {
+            seg = format!("{seg}_");
+        }
+        seg
+    }
+
+    /// The dotted client package, e.g. `golem.bridge.client.counter_agent`. Used
+    /// in the generated `package …` declaration.
+    fn client_package(&self) -> String {
+        format!("{CLIENT_PKG_BASE}.{}", self.client_package_segment())
+    }
+
+    /// The fully-qualified (`_root_`-rooted) client package prefix, used at every
+    /// generated reference to a client-package type or the `Codecs` object so a
+    /// nested/local name can never shadow it.
+    fn client_pkg(&self) -> String {
+        format!("_root_.{}", self.client_package())
     }
 
     /// Name of the generated client object, e.g. `foo-agent` -> `FooAgentClient`.
@@ -315,12 +418,14 @@ impl ScalaBridgeGenerator {
               .settings(
                 name               := "{name}",
                 scalaVersion       := "{scala3}",
-                crossScalaVersions := Seq("{scala2}", "{scala3}")
+                crossScalaVersions := Seq("{scala2}", "{scala3}"),
+                libraryDependencies += "dev.zio" %% "zio-blocks-schema" % "{zio_blocks}"
               )
             "#,
             name = self.library_name(),
             scala2 = scala_dep::SCALA_2_VERSION,
             scala3 = scala_dep::SCALA_VERSION,
+            zio_blocks = scala_dep::ZIO_BLOCKS_VERSION,
         };
         fs::write_str(self.target_path.join("build.sbt"), build_sbt)?;
 
@@ -341,13 +446,14 @@ impl ScalaBridgeGenerator {
     fn write_client(&self) -> anyhow::Result<()> {
         let content = self.generate_client_source()?;
 
-        let client_path = self
+        let mut client_path = self
             .target_path
             .join(SCALA_SOURCE_ROOT)
             .join("golem")
             .join("bridge")
             .join("client")
-            .join(format!("{}.scala", self.client_object_name()));
+            .join(self.client_package_segment());
+        client_path.push(format!("{}.scala", self.client_object_name()));
         fs::write_str(client_path, content)?;
         Ok(())
     }
@@ -356,7 +462,7 @@ impl ScalaBridgeGenerator {
     /// imports, the generated type definitions, and the client object.
     fn generate_client_source(&self) -> anyhow::Result<String> {
         let mut writer = ScalaWriter::new();
-        writer.line("package golem.bridge.client");
+        writer.line(format!("package {}", self.client_package()));
         writer.blank();
         writer.line("import golem.bridge.runtime._");
         writer.blank();
@@ -364,6 +470,7 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         self.write_type_definitions(&mut writer)?;
+        self.write_multimodal_definitions(&mut writer)?;
 
         // Encode/decode codecs for every generated named composite type. The
         // structural (non-named) encode/decode is emitted inline at the use
@@ -602,8 +709,11 @@ impl ScalaBridgeGenerator {
         writer.line("}");
     }
 
-    /// Emits the mode-aware constructors (`get` for durable agents, plus
-    /// `getPhantom` and `newPhantom` for all agents), each returning a
+    /// Emits the mode-aware constructors. Every agent gets `getPhantom` and
+    /// `newPhantom`; durable agents additionally get `get`. When the agent
+    /// declares local config overrides, the matching `getWithConfig` /
+    /// `getPhantomWithConfig` / `newPhantomWithConfig` variants are emitted too
+    /// (mirroring the Scala SDK's RPC clients). Each constructor returns a
     /// `Future[<Agent>Remote]`.
     fn write_constructors(
         &self,
@@ -623,6 +733,20 @@ impl ScalaBridgeGenerator {
             .collect::<Vec<_>>();
         let invoke_args = param_names.join(", ");
 
+        // Local config overrides this agent declares (if any). The matching
+        // `…WithConfig` constructors are only emitted when this is non-empty.
+        let local_configs = self.local_configs();
+        let config_param_defs = self.config_param_defs(&param_names, &local_configs)?;
+        let config_decls = config_param_defs
+            .iter()
+            .map(|(name, ty)| format!("{name}: {ty}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let config_param_names = config_param_defs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+
         // Shared parameter-packing helper.
         writer.line(format!(
             "private def constructorParameters({param_decls}): {SCHEMA_VALUE_TYPE} = {{"
@@ -639,7 +763,7 @@ impl ScalaBridgeGenerator {
                 "def get({param_decls}): {FUTURE}[{remote_name}] = {{"
             ));
             writer.indent();
-            self.write_create_agent_body(writer, &invoke_args, "_root_.scala.None");
+            self.write_create_agent_body(writer, &invoke_args, "_root_.scala.None", LIST_EMPTY);
             writer.dedent();
             writer.line("}");
             writer.blank();
@@ -651,15 +775,12 @@ impl ScalaBridgeGenerator {
         } else {
             format!("{param_decls}, phantom: {UUID}")
         };
+        let phantom_some = format!("_root_.scala.Some({UUID}.toStandardString(phantom))");
         writer.line(format!(
             "def getPhantom({phantom_decls}): {FUTURE}[{remote_name}] = {{"
         ));
         writer.indent();
-        self.write_create_agent_body(
-            writer,
-            &invoke_args,
-            &format!("_root_.scala.Some({UUID}.toStandardString(phantom))"),
-        );
+        self.write_create_agent_body(writer, &invoke_args, &phantom_some, LIST_EMPTY);
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -674,17 +795,169 @@ impl ScalaBridgeGenerator {
             "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = getPhantom({new_phantom_args})"
         ));
 
+        // Config-override constructors, emitted only when the agent declares
+        // local config. Each builds the `List[AgentConfigEntry]` inline from the
+        // non-`None` config parameters and creates the agent with it.
+        if !local_configs.is_empty() {
+            let with_config_decls = |extra: &str| {
+                [param_decls.as_str(), extra, config_decls.as_str()]
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+
+            // `getWithConfig` (durable only).
+            if self.agent_type.mode == AgentMode::Durable {
+                writer.blank();
+                writer.line(format!(
+                    "def getWithConfig({}): {FUTURE}[{remote_name}] = {{",
+                    with_config_decls("")
+                ));
+                writer.indent();
+                self.write_config_list(writer, &config_param_names, &local_configs)?;
+                self.write_create_agent_body(
+                    writer,
+                    &invoke_args,
+                    "_root_.scala.None",
+                    "agentConfig",
+                );
+                writer.dedent();
+                writer.line("}");
+            }
+
+            // `getPhantomWithConfig`.
+            writer.blank();
+            writer.line(format!(
+                "def getPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
+                with_config_decls(&format!("phantom: {UUID}"))
+            ));
+            writer.indent();
+            self.write_config_list(writer, &config_param_names, &local_configs)?;
+            self.write_create_agent_body(writer, &invoke_args, &phantom_some, "agentConfig");
+            writer.dedent();
+            writer.line("}");
+
+            // `newPhantomWithConfig`: like `getPhantomWithConfig` but with a
+            // fresh random phantom id.
+            writer.blank();
+            writer.line(format!(
+                "def newPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
+                with_config_decls("")
+            ));
+            writer.indent();
+            self.write_config_list(writer, &config_param_names, &local_configs)?;
+            self.write_create_agent_body(
+                writer,
+                &invoke_args,
+                &format!("_root_.scala.Some({UUID}.toStandardString({UUID}.random()))"),
+                "agentConfig",
+            );
+            writer.dedent();
+            writer.line("}");
+        }
+
+        Ok(())
+    }
+
+    /// The agent's local (caller-overridable) config declarations, in order.
+    fn local_configs(&self) -> Vec<&AgentConfigDeclarationSchema> {
+        self.agent_type
+            .config
+            .iter()
+            .filter(|c| c.source == AgentConfigSource::Local)
+            .collect()
+    }
+
+    /// The `(name, type)` parameter declarations for the local config overrides,
+    /// each an `Option[T] = None`. Names are camelCase of the config path,
+    /// disambiguated away from each other, the constructor parameters, and the
+    /// reserved internal identifiers. Returns an empty list when there are no
+    /// local config declarations.
+    fn config_param_defs(
+        &self,
+        constructor_param_names: &[String],
+        local_configs: &[&AgentConfigDeclarationSchema],
+    ) -> anyhow::Result<Vec<(String, String)>> {
+        if local_configs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let base_names: Vec<String> = local_configs
+            .iter()
+            .map(|config| {
+                let joined = config.path.join("-").to_lower_camel_case();
+                if joined.is_empty() {
+                    escape_scala_ident("config")
+                } else {
+                    escape_scala_ident(&joined)
+                }
+            })
+            .collect();
+        let mut reserved: Vec<&str> = RESERVED_PARAM_NAMES.to_vec();
+        reserved.extend(constructor_param_names.iter().map(|s| s.as_str()));
+        let names = unique_idents_with_reserved(base_names, &reserved);
+
+        let mut defs = Vec::new();
+        for (idx, config) in local_configs.iter().enumerate() {
+            let ty = self.type_reference(&config.value_type)?;
+            defs.push((
+                names[idx].clone(),
+                format!("_root_.scala.Option[{ty}] = _root_.scala.None"),
+            ));
+        }
+        Ok(defs)
+    }
+
+    /// Emits `val agentConfig = List(<entry>, …).flatten`, where each `<entry>`
+    /// is the matching config parameter mapped (when present) to an
+    /// `AgentConfigEntry(path, encodedValue)`.
+    fn write_config_list(
+        &self,
+        writer: &mut ScalaWriter,
+        config_param_names: &[String],
+        local_configs: &[&AgentConfigDeclarationSchema],
+    ) -> anyhow::Result<()> {
+        writer.line(format!("val agentConfig = {LIST}("));
+        writer.indent();
+        for (idx, config) in local_configs.iter().enumerate() {
+            let name = &config_param_names[idx];
+            let path_lit = config
+                .path
+                .iter()
+                .map(|segment| scala_string_literal(segment))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let enc = self.encode_expr("value", &config.value_type, 0)?;
+            let comma = if idx + 1 < local_configs.len() {
+                ","
+            } else {
+                ""
+            };
+            writer.line(format!("{name}.map {{ value =>"));
+            writer.indent();
+            writer.line(format!("val configValue = {enc}"));
+            writer.line(format!(
+                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), configValue)"
+            ));
+            writer.dedent();
+            writer.line(format!("}}{comma}"));
+        }
+        writer.dedent();
+        writer.line(").flatten");
         Ok(())
     }
 
     /// Emits the shared body of a constructor: build the parameter record, call
     /// `Bridge.createAgent`, and bind the resolved agent into a remote. The
-    /// `phantom_expr` is the `Option[String]` phantom id expression.
+    /// `phantom_expr` is the `Option[String]` phantom id expression and
+    /// `config_expr` is the `List[AgentConfigEntry]` of local config overrides
+    /// (`List()` for the plain constructors that do not take config overrides).
     fn write_create_agent_body(
         &self,
         writer: &mut ScalaWriter,
         invoke_args: &str,
         phantom_expr: &str,
+        config_expr: &str,
     ) {
         writer.line(format!("val configuration = {CONFIGURATION}.get"));
         writer.line(format!(
@@ -695,7 +968,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.line(format!("val phantomId = {phantom_expr}"));
         writer.line(format!(
-            "{BRIDGE}.createAgent(configuration, agentTypeName, parameters, phantomId, {LIST}()).map {{ __response =>"
+            "{BRIDGE}.createAgent(configuration, agentTypeName, parameters, phantomId, {config_expr}).map {{ __response =>"
         ));
         writer.indent();
         writer.line(format!(
@@ -706,12 +979,22 @@ impl ScalaBridgeGenerator {
     }
 
     /// Emits the body of a parameter-packing helper: encodes each user-supplied
-    /// field positionally and wraps them in a record `SchemaValue`.
+    /// field positionally and wraps them in a record `SchemaValue`. A multimodal
+    /// input is still packed as a single-field record whose only field is the
+    /// encoded `list<variant<…>>` modality list (mirroring the Rust/TS bridges).
     fn write_param_record(
         &self,
         writer: &mut ScalaWriter,
         input: &InputSchema,
     ) -> anyhow::Result<()> {
+        if let Some((name, param)) = self.input_multimodal(input)? {
+            writer.line(format!(
+                "val f0 = {}.{CODECS_OBJECT}.encode{name}List({param})",
+                self.client_pkg()
+            ));
+            writer.line(format!("{SV}.RecordValue({LIST}(f0))"));
+            return Ok(());
+        }
         let fields = user_supplied_fields(input);
         let names = self.input_param_field_idents(&fields);
         let mut elems = Vec::new();
@@ -725,8 +1008,13 @@ impl ScalaBridgeGenerator {
     }
 
     /// The `(name, type)` parameter declarations for a constructor or method's
-    /// user-supplied input fields, in declaration order.
+    /// user-supplied input fields, in declaration order. A multimodal input is
+    /// surfaced as a single `List[Multimodal<N>]` parameter named after the
+    /// single user field.
     fn input_param_defs(&self, input: &InputSchema) -> anyhow::Result<Vec<(String, String)>> {
+        if let Some((name, param)) = self.input_multimodal(input)? {
+            return Ok(vec![(param, self.multimodal_list_type(&name))]);
+        }
         let fields = user_supplied_fields(input);
         let names = self.input_param_field_idents(&fields);
         let mut defs = Vec::new();
@@ -734,6 +1022,154 @@ impl ScalaBridgeGenerator {
             defs.push((names[idx].clone(), self.type_reference(&field.schema)?));
         }
         Ok(defs)
+    }
+
+    // --- Multimodal ---------------------------------------------------------
+
+    /// `Some((Multimodal<N> name, single-field param ident))` if `input` is the
+    /// structural multimodal form (a single user field of
+    /// `list<variant<… Role::Multimodal>>`), else `None`.
+    fn input_multimodal(&self, input: &InputSchema) -> anyhow::Result<Option<(String, String)>> {
+        match input_multimodal_cases(self.type_naming.graph(), input)? {
+            Some(cases) => {
+                let name = self.multimodal_name(&cases)?;
+                let fields = user_supplied_fields(input);
+                let param = self.input_param_field_idents(&fields)[0].clone();
+                Ok(Some((name, param)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// The generated `Multimodal<N>` name for a precomputed modality set.
+    fn multimodal_name(&self, cases: &[(String, SchemaType)]) -> anyhow::Result<String> {
+        self.multimodals
+            .iter()
+            .find(|(existing, _)| existing.as_slice() == cases)
+            .map(|(_, name)| name.clone())
+            .ok_or_else(|| {
+                anyhow!("multimodal modality set was not precomputed; this is a generator bug")
+            })
+    }
+
+    /// Fully-qualified reference to a generated `Multimodal<N>` sealed trait.
+    fn multimodal_type_ref(&self, name: &str) -> String {
+        format!("{}.{name}", self.client_pkg())
+    }
+
+    /// `List[<Multimodal<N>>]`, the Scala surface type of a multimodal value.
+    fn multimodal_list_type(&self, name: &str) -> String {
+        format!(
+            "_root_.scala.collection.immutable.List[{}]",
+            self.multimodal_type_ref(name)
+        )
+    }
+
+    /// Emits a `sealed trait Multimodal<N>` plus a companion object with one
+    /// `final case class <Modality>(value: <PayloadType>)` per modality, for
+    /// every distinct multimodal modality set discovered in the agent.
+    fn write_multimodal_definitions(&self, writer: &mut ScalaWriter) -> anyhow::Result<()> {
+        for (cases, name) in &self.multimodals {
+            let case_names = self.type_member_idents(cases.iter().map(|(case, _)| case.as_str()));
+            let self_type = self.multimodal_type_ref(name);
+            self.write_sealed_trait(writer, name, |w, this| {
+                for (idx, (_, payload)) in cases.iter().enumerate() {
+                    let case_name = &case_names[idx];
+                    let payload_type = this.type_reference(payload)?;
+                    w.line(format!(
+                        "final case class {case_name}(value: {payload_type}) extends {self_type}"
+                    ));
+                }
+                Ok(())
+            })?;
+            writer.blank();
+        }
+        Ok(())
+    }
+
+    /// Emits the `encode<Multimodal<N>>` / `decode<Multimodal<N>>` element
+    /// codecs and the `encode<Multimodal<N>>List` / `decode<Multimodal<N>>List`
+    /// list codecs for every multimodal modality set, inside the `Codecs`
+    /// object. A multimodal value encodes to a `list<variant<…>>` where the
+    /// modality index is the variant case index.
+    fn write_multimodal_codecs(&self, writer: &mut ScalaWriter) -> anyhow::Result<()> {
+        for (cases, name) in &self.multimodals {
+            let case_names = self.type_member_idents(cases.iter().map(|(case, _)| case.as_str()));
+            let self_type = self.multimodal_type_ref(name);
+
+            // encode<Name>: modality -> variant SchemaValue
+            writer.line(format!(
+                "def encode{name}(value: {self_type}): {SCHEMA_VALUE_TYPE} = {{"
+            ));
+            writer.indent();
+            writer.line("value match {");
+            writer.indent();
+            for (idx, (_, payload)) in cases.iter().enumerate() {
+                let case_name = &case_names[idx];
+                let enc = self.encode_expr("inner", payload, 0)?;
+                writer.line(format!("case {self_type}.{case_name}(inner) => {{"));
+                writer.indent();
+                writer.line(format!("val p = {enc}"));
+                writer.line(format!("{SV}.VariantValue({idx}, _root_.scala.Some(p))"));
+                writer.dedent();
+                writer.line("}");
+            }
+            writer.dedent();
+            writer.line("}");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+
+            // decode<Name>: variant SchemaValue -> modality
+            writer.line(format!(
+                "def decode{name}(value: {SCHEMA_VALUE_TYPE}): {self_type} = {{"
+            ));
+            writer.indent();
+            writer.line(format!(
+                "val (caseIndex, payload) = {CODEC}.variantCase(value)"
+            ));
+            writer.line("caseIndex match {");
+            writer.indent();
+            for (idx, (case_label, payload)) in cases.iter().enumerate() {
+                let case_name = &case_names[idx];
+                let context = scala_string_literal(&format!("{name}.{case_label}"));
+                let dec = self.decode_expr("p", payload, 0)?;
+                writer.line(format!("case {idx} => {{"));
+                writer.indent();
+                writer.line(format!(
+                    "val p = {CODEC}.requiredPayload(payload, {context})"
+                ));
+                writer.line(format!("{self_type}.{case_name}({dec})"));
+                writer.dedent();
+                writer.line("}");
+            }
+            writer.line(format!(
+                "case other => throw {BRIDGE_EXCEPTION}(s\"Invalid multimodal variant case index for {name}: $other\")"
+            ));
+            writer.dedent();
+            writer.line("}");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+
+            // List codecs.
+            let list_ty = self.multimodal_list_type(name);
+            writer.line(format!(
+                "def encode{name}List(values: {list_ty}): {SCHEMA_VALUE_TYPE} ="
+            ));
+            writer.indent();
+            writer.line(format!("{SV}.ListValue(values.map(encode{name}))"));
+            writer.dedent();
+            writer.blank();
+            writer.line(format!(
+                "def decode{name}List(value: {SCHEMA_VALUE_TYPE}): {list_ty} ="
+            ));
+            writer.indent();
+            writer.line(format!("{CODEC}.listElements(value).map(decode{name})"));
+            writer.dedent();
+            writer.blank();
+        }
+        Ok(())
     }
 
     /// Unique Scala term identifiers for the given input fields.
@@ -804,6 +1240,17 @@ impl ScalaBridgeGenerator {
     /// is a Scala expression operating on `__result` (the
     /// `AgentInvocationResult`) producing a value of `returnType`.
     fn output_return(&self, output: &OutputSchema) -> anyhow::Result<(String, String)> {
+        // A multimodal output (`list<variant<… Role::Multimodal>>`) is surfaced
+        // as `List[Multimodal<N>]`, decoded through the generated list codec.
+        if let Some(cases) = output_multimodal_cases(self.type_naming.graph(), output)? {
+            let name = self.multimodal_name(&cases)?;
+            let ret_ty = self.multimodal_list_type(&name);
+            let block = format!(
+                "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{}.{CODECS_OBJECT}.decode{name}List(__value)",
+                self.client_pkg()
+            );
+            return Ok((ret_ty, block));
+        }
         match output {
             OutputSchema::Unit => Ok((UNIT.to_string(), "()".to_string())),
             OutputSchema::Single(ty) => {
@@ -854,7 +1301,7 @@ impl ScalaBridgeGenerator {
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
-        let self_type = format!("{CLIENT_PKG}.{name}");
+        let self_type = format!("{}.{name}", self.client_pkg());
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let field_names = self.term_member_idents(fields.iter().map(|f| f.name.as_str()));
@@ -991,6 +1438,9 @@ impl ScalaBridgeGenerator {
             writer.blank();
         }
 
+        // Codecs for the generated multimodal sealed traits.
+        self.write_multimodal_codecs(writer)?;
+
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1004,7 +1454,7 @@ impl ScalaBridgeGenerator {
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
-        let self_type = format!("{CLIENT_PKG}.{name}");
+        let self_type = format!("{}.{name}", self.client_pkg());
         writer.line(format!(
             "def encode{name}(value: {self_type}): {SCHEMA_VALUE_TYPE} = {{"
         ));
@@ -1101,7 +1551,7 @@ impl ScalaBridgeGenerator {
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
-        let self_type = format!("{CLIENT_PKG}.{name}");
+        let self_type = format!("{}.{name}", self.client_pkg());
         writer.line(format!(
             "def decode{name}(value: {SCHEMA_VALUE_TYPE}): {self_type} = {{"
         ));
@@ -1231,7 +1681,8 @@ impl ScalaBridgeGenerator {
                 ScalaTypeName::Derived(name_str) => {
                     if is_named_composite(self.resolve_ref(typ)) {
                         return Ok(format!(
-                            "{CLIENT_PKG}.{CODECS_OBJECT}.encode{name_str}({val_expr})"
+                            "{}.{CODECS_OBJECT}.encode{name_str}({val_expr})",
+                            self.client_pkg()
                         ));
                     }
                 }
@@ -1256,7 +1707,8 @@ impl ScalaBridgeGenerator {
                 ScalaTypeName::Derived(name_str) => {
                     if is_named_composite(self.resolve_ref(typ)) {
                         return Ok(format!(
-                            "{CLIENT_PKG}.{CODECS_OBJECT}.decode{name_str}({val_expr})"
+                            "{}.{CODECS_OBJECT}.decode{name_str}({val_expr})",
+                            self.client_pkg()
                         ));
                     }
                 }
@@ -1606,7 +2058,7 @@ impl ScalaBridgeGenerator {
                 }
                 ScalaTypeName::Derived(name_str) => {
                     if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!("{CLIENT_PKG}.{name_str}"));
+                        return Ok(format!("{}.{name_str}", self.client_pkg()));
                     }
                 }
             }
@@ -1757,11 +2209,94 @@ fn scala_string_literal(value: &str) -> String {
             '\n' => escaped.push_str("\\n"),
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
+            // Any other control character would otherwise be emitted verbatim
+            // into the source literal (Scala rejects a raw control char such as
+            // a NUL, backspace, or form-feed inside a `"..."` literal), so
+            // escape every remaining char below U+0020 as a unicode escape.
+            other if (other as u32) < 0x20 => escaped.push_str(&format!("\\u{:04x}", other as u32)),
             other => escaped.push(other),
         }
     }
     escaped.push('"');
     escaped
+}
+
+/// The multimodal modality `(case_name, payload_schema)` pairs of a
+/// `list<variant<… Role::Multimodal>>` variant, erroring if a modality case has
+/// no payload (every modality must carry a body).
+fn multimodal_pairs(cases: &[VariantCaseType]) -> anyhow::Result<Vec<(String, SchemaType)>> {
+    cases
+        .iter()
+        .map(|case| {
+            let payload = case.payload.clone().ok_or_else(|| {
+                anyhow!(
+                    "Multimodal case `{}` has no payload schema; expected a modality body",
+                    case.name
+                )
+            })?;
+            Ok((case.name.clone(), payload))
+        })
+        .collect()
+}
+
+/// The modality pairs of `input` if it is the structural multimodal form (a
+/// single user field whose schema is `list<variant<… Role::Multimodal>>`).
+fn input_multimodal_cases(
+    graph: &SchemaGraph,
+    input: &InputSchema,
+) -> anyhow::Result<Option<Vec<(String, SchemaType)>>> {
+    let fields = user_supplied_fields(input);
+    if let [field] = fields.as_slice()
+        && let Some(cases) = multimodal_variant_cases(graph, &field.schema)?
+    {
+        return Ok(Some(multimodal_pairs(cases)?));
+    }
+    Ok(None)
+}
+
+/// The modality pairs of `output` if it is a single multimodal return value.
+fn output_multimodal_cases(
+    graph: &SchemaGraph,
+    output: &OutputSchema,
+) -> anyhow::Result<Option<Vec<(String, SchemaType)>>> {
+    if let OutputSchema::Single(ty) = output
+        && let Some(cases) = multimodal_variant_cases(graph, ty)?
+    {
+        return Ok(Some(multimodal_pairs(cases)?));
+    }
+    Ok(None)
+}
+
+/// Discovers the distinct multimodal modality sets used by the agent, mapping
+/// each to a generated `Multimodal<N>` name. Scans the constructor input first,
+/// then each method's input and output in declaration order; structurally
+/// identical sets (same modality names and payload schemas) collapse to one
+/// generated type. The wire format never depends on these names (it is the
+/// structural `list<variant<…>>`), so the discovery order only affects the
+/// generated Scala API surface.
+fn collect_multimodals(agent_type: &AgentTypeSchema) -> anyhow::Result<Vec<NamedMultimodal>> {
+    let graph = &agent_type.schema;
+    let mut candidates: Vec<Option<MultimodalModalities>> = Vec::new();
+    candidates.push(input_multimodal_cases(
+        graph,
+        &agent_type.constructor.input_schema,
+    )?);
+    for method in &agent_type.methods {
+        candidates.push(input_multimodal_cases(graph, &method.input_schema)?);
+        candidates.push(output_multimodal_cases(graph, &method.output_schema)?);
+    }
+
+    let mut known: Vec<MultimodalModalities> = Vec::new();
+    for cases in candidates.into_iter().flatten() {
+        if !known.contains(&cases) {
+            known.push(cases);
+        }
+    }
+    Ok(known
+        .into_iter()
+        .enumerate()
+        .map(|(idx, cases)| (cases, format!("Multimodal{idx}")))
+        .collect())
 }
 
 /// Whether a (ref-resolved) schema type becomes a generated Scala

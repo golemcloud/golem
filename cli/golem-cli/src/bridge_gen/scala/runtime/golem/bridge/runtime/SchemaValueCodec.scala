@@ -356,8 +356,8 @@ object SchemaValueCodec {
     case "u32"    => ranged(value, Zero, MaxU32, "u32").map(n => U32Value(n.toLong))
     // The unsigned wire value is stored as its raw 64 bits (matching the SDK).
     case "u64"    => ranged(value, Zero, MaxU64, "u64").map(n => U64Value(n.toLong))
-    case "f32"    => num(value).map(n => F32Value(n.toFloat))
-    case "f64"    => num(value).map(n => F64Value(n.toDouble))
+    case "f32"    => finiteFloat(value)
+    case "f64"    => finiteDouble(value)
     case "char"   => Json.asString(value).flatMap(charValue)
     case "string" => Json.asString(value).map(StringValue(_))
 
@@ -475,6 +475,26 @@ object SchemaValueCodec {
     Json.asNumberLiteral(json).flatMap { literal =>
       try Right(BigDecimal(literal))
       catch { case _: NumberFormatException => Left(s"Invalid number literal '$literal'") }
+    }
+
+  /**
+   * Decode a finite `f32`. A literal whose magnitude overflows the `Float`
+   * range (e.g. `1e10000`) converts to `Infinity`; reject it rather than
+   * silently producing a non-finite value the server would never emit.
+   */
+  private def finiteFloat(json: Json): Either[String, SchemaValue] =
+    num(json).flatMap { n =>
+      val f = n.toFloat
+      if (f.isNaN || f.isInfinite) Left(s"f32 value '${n.toString}' is not a finite float")
+      else Right(F32Value(f))
+    }
+
+  /** Decode a finite `f64`. See [[finiteFloat]]. */
+  private def finiteDouble(json: Json): Either[String, SchemaValue] =
+    num(json).flatMap { n =>
+      val d = n.toDouble
+      if (d.isNaN || d.isInfinite) Left(s"f64 value '${n.toString}' is not a finite double")
+      else Right(F64Value(d))
     }
 
   /** Decode an integral JSON number, rejecting fractional values. */
