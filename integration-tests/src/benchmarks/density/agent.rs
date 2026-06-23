@@ -1232,7 +1232,7 @@ async fn run_resume_cell(
                 return Ok(outcome);
             }
         }
-        if warmed == 1 || warmed % 500 == 0 || warmed == prefill {
+        if warmed == 1 || warmed.is_multiple_of(500) || warmed == prefill {
             info!(
                 "Density-agent[{}]: warmed {warmed}/{prefill} agents",
                 config.cell_name()
@@ -1244,12 +1244,10 @@ async fn run_resume_cell(
     probe.restart_executor().await?;
 
     let ramp = config.ramp.clone();
-    if let Some(max_target) = ramp.last() {
-        if *max_target > prefill {
-            anyhow::bail!(
-                "resume-under-saturation ramp target {max_target} exceeds prefill {prefill}"
-            );
-        }
+    if let Some(max_target) = ramp.last()
+        && *max_target > prefill
+    {
+        anyhow::bail!("resume-under-saturation ramp target {max_target} exceeds prefill {prefill}");
     }
     let mut resumed = 0u32;
 
