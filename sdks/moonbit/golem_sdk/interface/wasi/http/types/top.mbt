@@ -13,7 +13,7 @@ pub(all) enum Method {
   Trace
   Patch
   Other(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// This type corresponds to HTTP standard Related Schemes.
@@ -21,28 +21,28 @@ pub(all) enum Scheme {
   Http
   Https
   Other(String)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Defines the case payload type for `DNS-error` above:
 pub(all) struct DnsErrorPayload {
   rcode : String?
   info_code : UInt?
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Defines the case payload type for `TLS-alert-received` above:
 pub(all) struct TlsAlertReceivedPayload {
   alert_id : Byte?
   alert_message : String?
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// Defines the case payload type for `HTTP-response-{header,trailer}-size` above:
 pub(all) struct FieldSizePayload {
   field_name : String?
   field_size : UInt?
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// These cases are inspired by the IANA HTTP Proxy Error Types:
@@ -87,7 +87,7 @@ pub(all) suberror ErrorCode {
   LoopDetected
   ConfigurationError
   InternalError(String?)
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// This type enumerates the different kinds of errors that may occur when
@@ -96,7 +96,7 @@ pub(all) suberror HeaderError {
   InvalidSyntax
   Forbidden
   Immutable
-} derive(Debug, Eq)
+} derive(Show, Eq)
 
 ///|
 /// This following block defines the `fields` resource which corresponds to
@@ -109,7 +109,7 @@ pub(all) suberror HeaderError {
 /// `incoming-request.headers`, `outgoing-request.headers`) might be be
 /// immutable. In an immutable fields, the `set`, `append`, and `delete`
 /// operations will fail with `header-error.immutable`.
-pub(all) struct Fields(Int) derive(Debug, Eq)
+pub(all) struct Fields(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -120,7 +120,7 @@ pub fn Fields::drop(self : Fields) -> Unit {
 
 ///|
 /// Represents an incoming HTTP Request.
-pub(all) struct IncomingRequest(Int) derive(Debug, Eq)
+pub(all) struct IncomingRequest(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -131,7 +131,7 @@ pub fn IncomingRequest::drop(self : IncomingRequest) -> Unit {
 
 ///|
 /// Represents an outgoing HTTP Request.
-pub(all) struct OutgoingRequest(Int) derive(Debug, Eq)
+pub(all) struct OutgoingRequest(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -147,7 +147,7 @@ pub fn OutgoingRequest::drop(self : OutgoingRequest) -> Unit {
 ///
 /// These timeouts are separate from any the user may use to bound a
 /// blocking call to `wasi:io/poll.poll`.
-pub(all) struct RequestOptions(Int) derive(Debug, Eq)
+pub(all) struct RequestOptions(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -162,7 +162,7 @@ pub fn RequestOptions::drop(self : RequestOptions) -> Unit {
 /// This resource is used by the `wasi:http/incoming-handler` interface to
 /// allow a Response to be sent corresponding to the Request provided as the
 /// other argument to `incoming-handler.handle`.
-pub(all) struct ResponseOutparam(Int) derive(Debug, Eq)
+pub(all) struct ResponseOutparam(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -173,7 +173,7 @@ pub fn ResponseOutparam::drop(self : ResponseOutparam) -> Unit {
 
 ///|
 /// Represents an incoming HTTP Response.
-pub(all) struct IncomingResponse(Int) derive(Debug, Eq)
+pub(all) struct IncomingResponse(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -191,7 +191,7 @@ pub fn IncomingResponse::drop(self : IncomingResponse) -> Unit {
 /// an `input-stream` and the delivery of trailers as a `future-trailers`,
 /// and ensures that the user of this interface may only be consuming either
 /// the body contents or waiting on trailers at any given time.
-pub(all) struct IncomingBody(Int) derive(Debug, Eq)
+pub(all) struct IncomingBody(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -206,7 +206,7 @@ pub fn IncomingBody::drop(self : IncomingBody) -> Unit {
 /// In the case that the incoming HTTP Request or Response did not have any
 /// trailers, this future will resolve to the empty set of trailers once the
 /// complete Request or Response body has been received.
-pub(all) struct FutureTrailers(Int) derive(Debug, Eq)
+pub(all) struct FutureTrailers(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -217,7 +217,7 @@ pub fn FutureTrailers::drop(self : FutureTrailers) -> Unit {
 
 ///|
 /// Represents an outgoing HTTP Response.
-pub(all) struct OutgoingResponse(Int) derive(Debug, Eq)
+pub(all) struct OutgoingResponse(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -243,7 +243,7 @@ pub fn OutgoingResponse::drop(self : OutgoingResponse) -> Unit {
 /// error to the HTTP protocol by whatever means it has available,
 /// including: corrupting the body on the wire, aborting the associated
 /// Request, or sending a late status code for the Response.
-pub(all) struct OutgoingBody(Int) derive(Debug, Eq)
+pub(all) struct OutgoingBody(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -258,7 +258,7 @@ pub fn OutgoingBody::drop(self : OutgoingBody) -> Unit {
 ///
 /// This resource is returned by the `wasi:http/outgoing-handler` interface to
 /// provide the HTTP Response corresponding to the sent Request.
-pub(all) struct FutureIncomingResponse(Int) derive(Debug, Eq)
+pub(all) struct FutureIncomingResponse(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.

@@ -62,9 +62,9 @@ object ReadOnlySpec extends ZIOSpecDefault {
     AgentImplementation.registerClass[ReadOnlyTestAgent, ReadOnlyTestAgentImpl]
 
   private def readOnlyDynOf(name: String): js.Dynamic = {
-    val method  = defn.agentType.methods.find(_.name == name).get
-    val asAny   = method.asInstanceOf[js.Dynamic]
-    val ro      = asAny.readOnly
+    val method = defn.agentType.methods.find(_.name == name).get
+    val asAny  = method.asInstanceOf[js.Dynamic]
+    val ro     = asAny.readOnly
     ro
   }
 

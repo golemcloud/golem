@@ -30,7 +30,7 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -45,7 +45,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 
-use golem_common::model::agent::structural_format::format_structural;
+use golem_common::model::agent::structural_format::format_structural_typed;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -104,7 +104,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// - Suspending the worker
     /// - Process the retry decision
     pub async fn run(&mut self) {
-        loop {
+        let mut deferred_wakeups = VecDeque::new();
+
+        'outer: loop {
             debug!("Invocation queue loop creating the instance");
 
             let (instance, store) = if let Some((instance, store)) = self.create_instance().await {
@@ -144,6 +146,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
                     resume_replay_pending: self.resume_replay_pending.clone(),
+                    deferred_wakeups: &mut deferred_wakeups,
                 };
 
                 final_decision = inner_loop.run().await;
@@ -152,26 +155,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.suspend_worker(&store).await;
 
             if let Some(kind) = final_interrupt {
-                store
-                    .lock()
-                    .await
-                    .data_mut()
-                    .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
-                    .await;
+                self.record_retry_interrupt_failure(&store, kind).await;
             }
 
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
-                    self.parent
-                        .stop_internal(
-                            true,
-                            None,
-                            FinalWorkerState::Unloaded {
-                                startup_failure: None,
-                            },
-                        )
-                        .await;
+                    self.stop_unloaded().await;
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -182,15 +172,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         continue;
                     } else {
                         debug!("Invocation queue loop notifying parent about being stopped");
-                        self.parent
-                            .stop_internal(
-                                true,
-                                None,
-                                FinalWorkerState::Unloaded {
-                                    startup_failure: None,
-                                },
-                            )
-                            .await;
+                        self.stop_unloaded().await;
                         break;
                     }
                 }
@@ -200,64 +182,59 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::Delayed(delay)) => {
                     debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
-                    tokio::select! {
-                        _ = tokio::time::sleep(delay) => {
-                            debug!("Invocation queue loop restarting after delay");
-                            continue;
-                        }
-                        command = self.receiver.recv() => {
-                            if let Some((kind, decision)) = self.pending_interrupt().await {
-                                debug!(?decision, "Invocation queue loop interrupted during delayed retry");
-                                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                                    store
-                                        .lock()
-                                        .await
-                                        .data_mut()
-                                        .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
-                                        .await;
-                                }
-                                match decision {
-                                    RetryDecision::Immediate => continue,
-                                    RetryDecision::None => {
-                                        self.parent
-                                            .stop_internal(
-                                                true,
-                                                None,
-                                                FinalWorkerState::Unloaded {
-                                                    startup_failure: None,
-                                                },
-                                            )
-                                            .await;
-                                        break;
-                                    }
-                                    RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
-                                        unreachable!("interrupt decisions are only immediate or none")
-                                    }
-                                }
+                    let sleep = tokio::time::sleep(delay);
+                    tokio::pin!(sleep);
+                    loop {
+                        tokio::select! {
+                            _ = &mut sleep => {
+                                debug!("Invocation queue loop restarting after delay");
+                                continue 'outer;
                             }
+                            command = self.receiver.recv() => {
+                                let command = match command {
+                                    Some(command) => command,
+                                    None => {
+                                        debug!("Invocation queue loop command channel closed during delayed retry");
+                                        self.stop_unloaded().await;
+                                        break 'outer;
+                                    }
+                                };
 
-                            match command {
-                                Some(WorkerCommand::Unblock) => {
-                                    debug!("Invocation queue loop woke up during delayed retry");
-                                    continue;
+                                if let Some((kind, decision)) = self.pending_interrupt().await {
+                                    debug!(?decision, "Invocation queue loop interrupted during delayed retry");
+                                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                        self.record_retry_interrupt_failure(&store, kind).await;
+                                    }
+                                    match decision {
+                                        RetryDecision::Immediate => {
+                                            Self::defer_wakeup(&mut deferred_wakeups, command);
+                                            continue 'outer;
+                                        }
+                                        RetryDecision::None => {
+                                            self.stop_unloaded().await;
+                                            break 'outer;
+                                        }
+                                        RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
+                                            unreachable!("interrupt decisions are only immediate or none")
+                                        }
+                                    }
                                 }
-                                Some(WorkerCommand::ResumeReplay) => {
-                                    self.resume_replay_pending.store(false, Ordering::Release);
-                                    debug!("Invocation queue loop woke up for resume replay during delayed retry");
-                                    continue;
-                                }
-                                None => {
-                                    debug!("Invocation queue loop command channel closed during delayed retry");
-                                    self.parent
-                                        .stop_internal(
-                                            true,
-                                            None,
-                                            FinalWorkerState::Unloaded {
-                                                startup_failure: None,
-                                            },
-                                        )
-                                        .await;
-                                    break;
+
+                                match command {
+                                    WorkerCommand::InternalStatusChanged => {
+                                        debug!("Invocation queue loop ignored internal status change during delayed retry");
+                                        continue;
+                                    }
+                                    WorkerCommand::WorkAvailable => {
+                                        debug!("Invocation queue loop woke up during delayed retry");
+                                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
+                                        continue 'outer;
+                                    }
+                                    WorkerCommand::ResumeReplay => {
+                                        debug!("Invocation queue loop woke up for resume replay during delayed retry");
+                                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
+                                        continue 'outer;
+                                    }
                                 }
                             }
                         }
@@ -278,6 +255,43 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     break;
                 }
             }
+        }
+    }
+
+    async fn stop_unloaded(&self) {
+        self.parent
+            .stop_internal(
+                true,
+                None,
+                FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+            )
+            .await;
+    }
+
+    async fn record_retry_interrupt_failure(&self, store: &Mutex<Store<Ctx>>, kind: InterruptKind) {
+        store
+            .lock()
+            .await
+            .data_mut()
+            .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
+            .await;
+    }
+
+    fn defer_wakeup(deferred_wakeups: &mut VecDeque<WorkerCommand>, command: WorkerCommand) {
+        let already_deferred = match command {
+            WorkerCommand::WorkAvailable => deferred_wakeups
+                .iter()
+                .any(|command| matches!(command, WorkerCommand::WorkAvailable)),
+            WorkerCommand::ResumeReplay => deferred_wakeups
+                .iter()
+                .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
+            WorkerCommand::InternalStatusChanged => true,
+        };
+
+        if !already_deferred {
+            deferred_wakeups.push_back(command);
         }
     }
 
@@ -402,6 +416,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// permit back to the semaphore pool) and re-acquired on wake.
     concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
     resume_replay_pending: Arc<AtomicBool>,
+    deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -428,13 +443,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         // from the same account can start without evicting this one.
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
-        while let Some(cmd) = self.next_wakeup().await {
+        while let Some(cmd) = self.next_wakeup_or_initial().await {
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.acquire_concurrent_agent_permit().await;
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
-                WorkerCommand::Unblock => {
+                WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
                         if let Some(kind) = self.interrupt_signal.lock().await.take() {
                             break self.interrupt(kind).await;
@@ -495,6 +510,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         final_decision
     }
 
+    async fn next_wakeup_or_initial(&mut self) -> Option<WorkerCommand> {
+        match self.deferred_wakeups.pop_front() {
+            Some(command) => Some(command),
+            None => self.next_wakeup().await,
+        }
+    }
+
     /// Release the concurrent-agent permit back to the semaphore pool.
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
@@ -537,7 +559,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                     match self.receiver.try_recv() {
                         Ok(cmd) => Some(cmd),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::Unblock),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::WorkAvailable),
                         Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
                     }
                 }
@@ -1262,7 +1284,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &IdempotencyKey,
         invocation: &AgentInvocation,
         agent_id: &AgentId,
-        parsed_agent_id: &Option<LegacyParsedAgentId>,
+        parsed_agent_id: &Option<ParsedAgentId>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
@@ -1293,7 +1315,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),
                 AttributeValue::String(
-                    format_structural(&parsed_agent_id.parameters)
+                    format_structural_typed(&parsed_agent_id.parameters)
                         .unwrap_or_else(|err| format!("Cannot render: {}", err)),
                 ),
             )

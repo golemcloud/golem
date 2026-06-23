@@ -14,22 +14,26 @@
 
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
+use crate::preview2::exports::golem::agent::guest as guest_exports;
+use crate::preview2::exports::golem::api1_5_0::load_snapshot as load_snapshot_exports;
+use crate::preview2::exports::golem::api1_5_0::save_snapshot as save_snapshot_exports;
+use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_processor as oplog_processor_exports;
+use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
-use golem_common::model::agent::AgentError as AgentInvocationError;
-use golem_common::model::agent::UntypedDataValue;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
-use golem_common::model::agent::{
-    DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
-};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
-use golem_common::model::oplog::RawSnapshotData;
-use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
-use golem_common::model::{
-    AgentInvocation, AgentInvocationKind, AgentInvocationResult, OplogIndex,
-};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::agent::wit::decode_agent_error;
+use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::validation::value::validate_record_fields;
+use golem_schema::schema::wit::wire as core_wire;
+use golem_schema::schema::wit::{decode_value, encode_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use tracing::{Instrument, Level, debug, span};
+use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Describes how an invocation is being executed with respect to the oplog.
 #[allow(clippy::large_enum_variant)]
@@ -39,13 +43,6 @@ pub enum InvocationMode {
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::validate_value_matches_type;
-use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
-use golem_wasm::{FromValue, IntoValue, Value};
-use tracing::{Instrument, Level, debug, span};
-use wasmtime::component::{Func, Val};
-use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Invokes a function on a worker.
 ///
@@ -53,9 +50,9 @@ use wasmtime::{AsContextMut, StoreContextMut};
 ///
 /// Arguments:
 /// - `lowered`: the lowered invocation describing what to invoke
-/// - `kind`: the kind of agent invocation
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
+/// - `mode`: whether this is a live invocation or a replay
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
@@ -106,71 +103,6 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     }
 }
 
-fn find_function<'a, Ctx: WorkerCtx>(
-    mut store: &mut StoreContextMut<'a, Ctx>,
-    instance: &'a wasmtime::component::Instance,
-    parsed_function_name: &ParsedFunctionName,
-) -> Result<FindFunctionResult, WorkerExecutorError> {
-    let parsed_function_ref = parsed_function_name.function();
-
-    if matches!(
-        parsed_function_ref,
-        ParsedFunctionReference::RawResourceDrop { .. }
-    ) {
-        return Ok(FindFunctionResult::ResourceDrop);
-    }
-
-    match &parsed_function_name.site().interface_name() {
-        Some(interface_name) => {
-            let (_, exported_instance_idx) = instance
-                .get_export(&mut store, None, interface_name)
-                .ok_or(WorkerExecutorError::invalid_request(format!(
-                    "could not load exports for interface {interface_name}"
-                )))?;
-
-            let func = instance
-                .get_export(
-                    &mut store,
-                    Some(&exported_instance_idx),
-                    &parsed_function_name.function().function_name(),
-                )
-                .and_then(|(_, idx)| instance.get_func(&mut store, idx));
-
-            match func {
-                Some(func) => Ok(FindFunctionResult::ExportedFunction(func)),
-                None => match parsed_function_name.method_as_static() {
-                    None => Err(WorkerExecutorError::invalid_request(format!(
-                        "could not load function {} for interface {}",
-                        &parsed_function_name.function().function_name(),
-                        interface_name
-                    ))),
-                    Some(parsed_static) => instance
-                        .get_export(
-                            &mut store,
-                            Some(&exported_instance_idx),
-                            &parsed_static.function().function_name(),
-                        )
-                        .and_then(|(_, idx)| instance.get_func(&mut store, idx))
-                        .ok_or(WorkerExecutorError::invalid_request(format!(
-                            "could not load function {} or {} for interface {}",
-                            &parsed_function_name.function().function_name(),
-                            &parsed_static.function().function_name(),
-                            interface_name
-                        )))
-                        .map(FindFunctionResult::ExportedFunction),
-                },
-            }
-        }
-        None => instance
-            .get_func(store, parsed_function_name.function().function_name())
-            .ok_or(WorkerExecutorError::invalid_request(format!(
-                "could not load function {}",
-                &parsed_function_name.function().function_name()
-            )))
-            .map(FindFunctionResult::ExportedFunction),
-    }
-}
-
 /// Invokes a worker and calls the appropriate hooks to observe the invocation
 async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
@@ -180,18 +112,11 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
-    let parsed = ParsedFunctionName::parse(&lowered.wit_fqfn).map_err(|err| {
-        WorkerExecutorError::invalid_request(format!(
-            "Invalid function name {}: {err}",
-            lowered.wit_fqfn
-        ))
-    })?;
-
-    let function = find_function(&mut store, instance, &parsed)?;
-
-    let decoded_params =
-        validate_function_parameters(&mut store, &function, &lowered.wit_fqfn, &lowered.params)
-            .await?;
+    let LoweredInvocation {
+        display_name,
+        read_only_method,
+        call,
+    } = lowered;
 
     if let InvocationMode::Live(invocation) = mode {
         async {
@@ -210,30 +135,11 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     // strictness for the duration of the call. We restore the mode on every exit path:
     // normal `Ok` / `Err` returns from the wasmtime call site as well as panics that
     // unwind through the call. This is the only place where strictness is enabled.
-    let read_only_method = lowered.read_only_method.clone();
     if let Some(method_name) = &read_only_method {
         store.data_mut().enter_read_only_mode(method_name.clone());
     }
 
-    let kind = lowered.kind;
-    let call_future = async {
-        match function {
-            FindFunctionResult::ExportedFunction(function) => {
-                invoke(
-                    &mut store,
-                    function,
-                    decoded_params,
-                    &lowered.display_name,
-                    kind,
-                )
-                .await
-            }
-            FindFunctionResult::ResourceDrop => {
-                // Special function: drop
-                drop_resource(&mut store, &lowered.params, &lowered.display_name, kind).await
-            }
-        }
-    };
+    let call_future = dispatch_call(&mut store, instance, call, &display_name);
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
@@ -253,227 +159,134 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     call_result
 }
 
-async fn validate_function_parameters(
-    store: &mut impl AsContextMut<Data = impl WorkerCtx>,
-    function: &FindFunctionResult,
-    raw_function_name: &str,
-    function_input: &[Value],
-) -> Result<Vec<DecodeParamResult>, WorkerExecutorError> {
-    match function {
-        FindFunctionResult::ExportedFunction(func) => {
-            let mut store = store.as_context_mut();
-            let func_ty = func.ty(&store);
-            let param_types: Vec<_> = func_ty.params().collect();
-
-            if function_input.len() != param_types.len() {
-                return Err(WorkerExecutorError::ParamTypeMismatch {
-                    details: format!(
-                        "expected {}, got {} parameters",
-                        param_types.len(),
-                        function_input.len()
-                    ),
-                });
-            }
-
-            let mut results = Vec::new();
-            for (param, (_, param_type)) in function_input.iter().zip(param_types.iter()) {
-                let decoded = decode_param(param, param_type, store.data_mut())
-                    .await
-                    .map_err(WorkerExecutorError::from)?;
-                results.push(decoded);
-            }
-            Ok(results)
-        }
-        FindFunctionResult::ResourceDrop => {
-            if function_input.len() != 1 {
-                return Err(WorkerExecutorError::ValueMismatch {
-                    details: "unexpected parameter count for drop".to_string(),
-                });
-            }
-
-            let store = store.as_context_mut();
-            let self_uri = store.data().self_uri();
-
-            match function_input.first() {
-                Some(Value::Handle { uri, resource_id }) => {
-                    if uri == &self_uri.value {
-                        Ok(*resource_id)
-                    } else {
-                        Err(WorkerExecutorError::ValueMismatch {
-                            details: format!(
-                                "trying to drop handle for on wrong worker ({} vs {}) {}",
-                                uri, self_uri.value, raw_function_name
-                            ),
-                        })
-                    }
-                }
-                _ => Err(WorkerExecutorError::ValueMismatch {
-                    details: format!("unexpected function input for drop for {raw_function_name}"),
-                }),
-            }?;
-
-            Ok(vec![])
-        }
-    }
-}
-
-async fn invoke<Ctx: WorkerCtx>(
-    store: &mut impl AsContextMut<Data = Ctx>,
-    function: Func,
-    decoded_function_input: Vec<DecodeParamResult>,
-    display_name: &str,
-    kind: AgentInvocationKind,
-) -> Result<InvokeResult, WorkerExecutorError> {
-    let mut store = store.as_context_mut();
-
-    let mut params = Vec::new();
-    let mut resources_to_drop = Vec::new();
-    for result in decoded_function_input {
-        params.push(result.val);
-        resources_to_drop.extend(result.resources_to_drop);
-    }
-
-    let (results, consumed_fuel) =
-        call_exported_function(&mut store, function, params, display_name).await?;
-
-    for resource in resources_to_drop {
-        debug!("Dropping passed owned resources {:?}", resource);
-        resource
-            .resource_drop_async(&mut store)
-            .await
-            .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
-    }
-
-    match results {
-        Ok(results) => {
-            let types: Vec<_> = function.ty(&store).results().collect();
-
-            if results.len() > 1 {
-                Err(WorkerExecutorError::runtime(
-                    "Function returned with more than one values, which is not supported",
-                ))
-            } else {
-                let analysed_result_type = analysed_result_type_for_kind(kind);
-                let output = match results
-                    .iter()
-                    .zip(types.iter())
-                    .zip(analysed_result_type.as_ref())
-                    .next()
-                {
-                    Some(((val, typ), analysed_type)) => Some(
-                        encode_output(val, typ, analysed_type, store.data_mut())
-                            .await
-                            .map_err(WorkerExecutorError::from)?,
-                    ),
-                    None => None,
-                };
-                wrap_output_as_agent_result(kind, output, consumed_fuel)
-            }
-        }
-        Err(err) => {
-            let err: anyhow::Error = err.into();
-            let retry_from = retry_from_for_invocation_error(&mut store, &err).await;
-            let agent_mode = store.data().agent_mode();
-            Ok(InvokeResult::from_error::<Ctx>(
-                consumed_fuel,
-                &err,
-                retry_from,
-                agent_mode,
-            ))
-        }
-    }
-}
-
-/// Returns the static `AnalysedType` for the result of an invocation based on
-/// the `AgentInvocationKind`. This replaces the previous approach of looking up
-/// the analysed result type from persisted export metadata.
-///
-/// The return types correspond to the fixed WIT interfaces:
-/// - `AgentInitialization` → `result<_, agent-error>`
-/// - `AgentMethod` → `result<untyped data-value, agent-error>`
-/// - `SaveSnapshot` → `raw-snapshot-data` (record)
-/// - `LoadSnapshot` → `result<_, string>`
-/// - `ProcessOplogEntries` → `result<_, string>`
-/// - `ManualUpdate` → no return value
-fn analysed_result_type_for_kind(kind: AgentInvocationKind) -> Option<AnalysedType> {
-    use golem_wasm::analysis::analysed_type::{result, result_err, str};
-
-    match kind {
-        AgentInvocationKind::AgentInitialization => {
-            Some(result_err(AgentInvocationError::get_type()))
-        }
-        AgentInvocationKind::AgentMethod => Some(result(
-            UntypedDataValue::get_type(),
-            AgentInvocationError::get_type(),
-        )),
-        AgentInvocationKind::SaveSnapshot => Some(RawSnapshotData::get_type()),
-        AgentInvocationKind::LoadSnapshot => Some(result_err(str())),
-        AgentInvocationKind::ProcessOplogEntries => Some(result_err(str())),
-        AgentInvocationKind::ManualUpdate => None,
-    }
-}
-
-async fn drop_resource<Ctx: WorkerCtx>(
-    store: &mut impl AsContextMut<Data = Ctx>,
-    function_input: &[Value],
-    display_name: &str,
-    kind: AgentInvocationKind,
-) -> Result<InvokeResult, WorkerExecutorError> {
-    let mut store = store.as_context_mut();
-
-    let resource_id = match function_input.first() {
-        Some(Value::Handle { resource_id, .. }) => *resource_id,
-        _ => unreachable!(), // previously validated by `validate_function_parameters`
-    };
-
-    if let Some((_, resource)) = store.data_mut().get(resource_id).await {
-        debug!("Dropping resource {resource:?} in {display_name}");
-
-        let result = resource.resource_drop_async(&mut store).await;
-
-        let current_fuel_level = store.get_fuel().unwrap_or(0);
-        let consumed_fuel = store.data_mut().return_fuel(current_fuel_level);
-
-        match result {
-            Ok(_) => wrap_output_as_agent_result(kind, None, consumed_fuel),
-            Err(err) => {
-                let err: anyhow::Error = err.into();
-                let retry_from = retry_from_for_invocation_error(&mut store, &err).await;
-                let agent_mode = store.data().agent_mode();
-                Ok(InvokeResult::from_error::<Ctx>(
-                    consumed_fuel,
-                    &err,
-                    retry_from,
-                    agent_mode,
-                ))
-            }
-        }
-    } else {
-        wrap_output_as_agent_result(kind, None, 0)
-    }
-}
-
-async fn retry_from_for_invocation_error<Ctx: WorkerCtx>(
+/// Dispatches a single lowered invocation to the matching typed guest export
+/// accessor (`golem:agent/guest@2.0.0`, `golem:api/save-snapshot`,
+/// `golem:api/load-snapshot`, or `golem:api/oplog-processor`) and maps its
+/// typed result into an [`InvokeResult`].
+async fn dispatch_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    error: &anyhow::Error,
-) -> OplogIndex {
-    if let Some(override_) =
-        crate::durable_host::durability::find_semantic_trap_retry_override(error)
-    {
-        override_.retry_from
-    } else {
-        store.data().get_current_retry_point().await
+    instance: &wasmtime::component::Instance,
+    call: LoweredCall,
+    display_name: &str,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    match call {
+        LoweredCall::Initialize {
+            agent_type,
+            input,
+            principal,
+        } => {
+            let guest = load_agent_guest(store, instance)?;
+            prepare_guest_call(store, display_name).await;
+            let result = guest
+                .call_initialize(&mut *store, &agent_type, &input, &principal)
+                .await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(Ok(())) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: AgentInvocationResult::AgentInitialization,
+                }),
+                Ok(Err(wire_err)) => invoke_result_from_agent_error(consumed_fuel, wire_err),
+                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+            }
+        }
+        LoweredCall::Invoke {
+            method_name,
+            input,
+            principal,
+        } => {
+            let guest = load_agent_guest(store, instance)?;
+            prepare_guest_call(store, display_name).await;
+            let result = guest
+                .call_invoke(&mut *store, &method_name, &input, &principal)
+                .await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(Ok(maybe_output)) => {
+                    let output = decode_invoke_output(maybe_output)?;
+                    Ok(InvokeResult::Succeeded {
+                        consumed_fuel,
+                        result: AgentInvocationResult::AgentMethod { output },
+                    })
+                }
+                Ok(Err(wire_err)) => invoke_result_from_agent_error(consumed_fuel, wire_err),
+                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+            }
+        }
+        LoweredCall::SaveSnapshot => {
+            let guest = load_save_snapshot_guest(store, instance)?;
+            prepare_guest_call(store, display_name).await;
+            let result = guest.call_save(&mut *store).await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(snapshot) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: AgentInvocationResult::SaveSnapshot {
+                        snapshot: snapshot.into(),
+                    },
+                }),
+                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+            }
+        }
+        LoweredCall::LoadSnapshot { snapshot } => {
+            let guest = load_load_snapshot_guest(store, instance)?;
+            prepare_guest_call(store, display_name).await;
+            let result = guest.call_load(&mut *store, &snapshot).await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(inner) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: AgentInvocationResult::LoadSnapshot { error: inner.err() },
+                }),
+                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+            }
+        }
+        LoweredCall::ProcessOplogEntries {
+            account_info,
+            config,
+            component_id,
+            agent_id,
+            metadata,
+            first_entry_index,
+            entries,
+        } => {
+            let guest = load_oplog_processor_guest(store, instance)?;
+            prepare_guest_call(store, display_name).await;
+            let result = guest
+                .call_process(
+                    &mut *store,
+                    account_info,
+                    &config,
+                    component_id,
+                    &agent_id,
+                    &metadata,
+                    first_entry_index,
+                    &entries,
+                )
+                .await;
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(inner) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: AgentInvocationResult::ProcessOplogEntries { error: inner.err() },
+                }),
+                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+            }
+        }
     }
 }
 
-async fn call_exported_function<Ctx: WorkerCtx>(
-    store: &mut impl AsContextMut<Data = Ctx>,
-    function: Func,
-    params: Vec<Val>,
+/// Resets call counters and emits the invocation-start event before a guest
+/// call. Mirrors the bookkeeping the legacy dynamic dispatch performed.
+async fn prepare_guest_call<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
-) -> Result<(wasmtime::Result<Vec<Val>>, u64), WorkerExecutorError> {
-    let mut store = store.as_context_mut();
-
+) {
     store.data_mut().reset_invocation_call_counts();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
@@ -484,33 +297,145 @@ async fn call_exported_function<Ctx: WorkerCtx>(
             .event_service()
             .emit_invocation_start(display_name, idempotency_key, store.data().is_live());
     }
-
-    let mut results: Vec<Val> = function
-        .ty(&store)
-        .results()
-        .map(|_| Val::Bool(false))
-        .collect();
-
-    // Drive the component-model event loop until the guest task is fully
-    // quiescent rather than only until it returns its result via `task.return`.
-    // This ensures any tail work the guest keeps running afterwards (e.g.
-    // `wit_bindgen::spawn`ed futures) finishes -- and records its durable
-    // effects -- before the next invocation starts.
-    let result = store
-        .as_context_mut()
-        .run_concurrent_and_drain(async |accessor| {
-            function
-                .call_concurrent(accessor, &params, &mut results)
-                .await
-        })
-        .await
-        .and_then(|inner| inner);
-
-    let consumed_fuel_for_call =
-        finish_invocation_and_get_fuel_consumption(&mut store, display_name).await?;
-
-    Ok((result.map(|_| results), consumed_fuel_for_call))
 }
+
+/// Builds an [`InvokeResult`] from a wasmtime trap (guest panic, interrupt,
+/// exit, or runtime error) raised by a typed export call.
+async fn invoke_result_from_trap<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    consumed_fuel: u64,
+    err: wasmtime::Error,
+) -> InvokeResult {
+    let retry_from = store.data().get_current_retry_point().await;
+    let agent_mode = store.data().agent_mode();
+    let err: anyhow::Error = err.into();
+    InvokeResult::from_error::<Ctx>(consumed_fuel, &err, retry_from, agent_mode)
+}
+
+/// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
+/// `invoke`) into a failed [`InvokeResult`].
+fn invoke_result_from_agent_error(
+    consumed_fuel: u64,
+    wire_err: golem_agent::common::AgentError,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    let agent_error = decode_agent_error(wire_err).map_err(|e| {
+        WorkerExecutorError::runtime(format!("Failed to decode agent-error from guest: {e}"))
+    })?;
+    Ok(InvokeResult::Failed {
+        consumed_fuel,
+        error: OplogAgentError::InternalError(agent_error.to_string()),
+        retry_from: OplogIndex::INITIAL,
+        semantic_trap_retry_override: None,
+    })
+}
+
+/// Decodes the `option<schema-value-tree>` output of `invoke` into the
+/// schema-native [`SchemaValue`] carried across the gRPC / oplog boundary.
+///
+/// A `none` result (the declared `unit` output) is represented by the
+/// canonical empty tuple, matching the `unit` projection used on the caller
+/// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
+fn decode_invoke_output(
+    maybe_output: Option<core_wire::SchemaValueTree>,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    match maybe_output {
+        // `none` is the declared `unit` output.
+        None => Ok(SchemaValue::Tuple {
+            elements: Vec::new(),
+        }),
+        Some(tree) => decode_value(&tree).map_err(|e| {
+            WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
+        }),
+    }
+}
+
+/// Per-instance cache of typed guest export handles.
+///
+/// Resolving a typed export (`GuestIndices::new` + `load`) performs name-based
+/// export lookups and typed function signature checks against the component.
+/// Both the wasmtime [`Instance`](wasmtime::component::Instance) and the
+/// [`Store`](wasmtime::Store) holding this cache live for the entire worker
+/// instance lifetime and are reused across every invocation, so the resolved
+/// [`Guest`](guest_exports::Guest) handles (cheaply cloneable bundles of
+/// `Func` handles) can be resolved once and reused. Each interface is cached
+/// independently and resolved lazily on first use, because not every component
+/// exports every interface (e.g. `oplog-processor` is optional).
+#[derive(Clone, Default)]
+pub(crate) struct AgentExportFuncs {
+    agent_guest: Option<guest_exports::Guest>,
+    save_snapshot: Option<save_snapshot_exports::Guest>,
+    load_snapshot: Option<load_snapshot_exports::Guest>,
+    oplog_processor: Option<oplog_processor_exports::Guest>,
+}
+
+/// Generates a per-instance cached loader for a typed guest export interface.
+///
+/// On the first call for a given worker instance the export is resolved and
+/// stored in the [`AgentExportFuncs`] cache held by the worker's
+/// `DurableWorkerCtx`; subsequent calls return the cached handle, skipping the
+/// name-based lookup and typed signature checks.
+macro_rules! cached_guest_loader {
+    ($fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
+        fn $fn_name<Ctx: WorkerCtx>(
+            store: &mut StoreContextMut<'_, Ctx>,
+            instance: &wasmtime::component::Instance,
+        ) -> Result<$exports::Guest, WorkerExecutorError> {
+            if let Some(guest) = store
+                .data()
+                .durable_ctx()
+                .agent_export_funcs()
+                .$field
+                .clone()
+            {
+                return Ok(guest);
+            }
+
+            let instance_pre = instance.instance_pre(&*store);
+            let indices = $exports::GuestIndices::new(&instance_pre).map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(concat!($missing_msg, ": {}"), e))
+            })?;
+            let guest = indices.load(&mut *store, instance).map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(concat!($load_msg, ": {}"), e))
+            })?;
+
+            store
+                .data_mut()
+                .durable_ctx_mut()
+                .agent_export_funcs_mut()
+                .$field = Some(guest.clone());
+            Ok(guest)
+        }
+    };
+}
+
+cached_guest_loader!(
+    load_agent_guest,
+    guest_exports,
+    agent_guest,
+    "agent guest export not available",
+    "failed to load agent guest export"
+);
+cached_guest_loader!(
+    load_save_snapshot_guest,
+    save_snapshot_exports,
+    save_snapshot,
+    "save-snapshot export not available",
+    "failed to load save-snapshot export"
+);
+cached_guest_loader!(
+    load_load_snapshot_guest,
+    load_snapshot_exports,
+    load_snapshot,
+    "load-snapshot export not available",
+    "failed to load load-snapshot export"
+);
+cached_guest_loader!(
+    load_oplog_processor_guest,
+    oplog_processor_exports,
+    oplog_processor,
+    "oplog-processor export not available",
+    "failed to load oplog-processor export"
+);
 
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
@@ -614,59 +539,73 @@ impl InvokeResult {
     }
 }
 
-/// The result of lowering an `AgentInvocation` to its WIT-level representation.
+/// A single agent invocation lowered to the typed `golem:agent@2.0.0` /
+/// `golem:api` guest-export call it dispatches to.
 ///
-/// This is the single place that maps high-level agent invocations to the raw wasm function
-/// names and parameter values needed by the wasmtime runtime.
-#[derive(Debug)]
+/// This is the single place that maps a high-level [`AgentInvocation`] to the
+/// schema-native wire arguments the typed `bindgen!` export accessors expect.
 pub struct LoweredInvocation {
-    /// The kind of agent invocation this was lowered from
-    pub kind: AgentInvocationKind,
-    /// The fully-qualified WIT function name used for dispatch and metadata lookup
-    /// (e.g., "golem:agent/guest.{invoke}")
-    pub wit_fqfn: String,
     /// A human-readable name for tracing/spans/oplog display
     /// (e.g., the agent method name "do-something")
     pub display_name: String,
-    /// The exact WIT parameters to pass to the function
-    pub params: Vec<Value>,
     /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
     /// `read_only` metadata is set. The worker-executor uses this to enable the
     /// read-only invocation strictness mode for the duration of the call, trapping
     /// outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
     pub read_only_method: Option<String>,
+    /// The typed export call to perform.
+    call: LoweredCall,
+}
+
+/// The typed guest-export call an [`AgentInvocation`] lowers to, carrying the
+/// schema-native wire arguments needed by the `bindgen!`-generated accessors.
+enum LoweredCall {
+    Initialize {
+        agent_type: String,
+        input: core_wire::SchemaValueTree,
+        principal: golem_agent::common::Principal,
+    },
+    Invoke {
+        method_name: String,
+        input: core_wire::SchemaValueTree,
+        principal: golem_agent::common::Principal,
+    },
+    SaveSnapshot,
+    LoadSnapshot {
+        snapshot: golem_api_1_x::host::Snapshot,
+    },
+    ProcessOplogEntries {
+        account_info: oplog_processor_exports::AccountInfo,
+        config: Vec<(String, String)>,
+        component_id: core_wire::ComponentId,
+        agent_id: core_wire::AgentId,
+        metadata: golem_api_1_x::host::AgentMetadata,
+        first_entry_index: u64,
+        entries: Vec<golem_api_1_x::oplog::OplogEntry>,
+    },
 }
 
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
-    let kind = invocation.kind();
     match invocation {
         AgentInvocation::AgentInitialization {
             input, principal, ..
         } => {
-            let wit_fqfn = component_metadata
-                .agent_initialize_function_name()
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "agent initialize function not found in component".to_string(),
-                    )
-                })?;
-            let agent_type_str = agent_id
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_default();
+            let agent_type = resolve_agent_type(component_metadata, agent_id)?;
+            // The input carrier is already the schema-native parameter-record
+            // value the guest export expects, so it is encoded to the wire
+            // tree directly without any schema-driven re-lowering.
             Ok(LoweredInvocation {
-                kind,
-                wit_fqfn,
                 display_name: "initialize".to_string(),
-                params: vec![
-                    Value::String(agent_type_str),
-                    input.into_value(),
-                    principal.into_value(),
-                ],
                 read_only_method: None,
+                call: LoweredCall::Initialize {
+                    agent_type: agent_type.type_name.to_string(),
+                    input: encode_value(&input),
+                    principal: principal.into(),
+                },
             })
         }
         AgentInvocation::AgentMethod {
@@ -675,87 +614,54 @@ pub fn lower_invocation(
             principal,
             ..
         } => {
-            let mut read_only_method: Option<String> = None;
-            if let Some(agent_id) = agent_id {
-                let agent_type = component_metadata
-                    .find_agent_type_by_name(&agent_id.agent_type)
-                    .ok_or_else(|| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "Agent type '{}' not found in component",
-                            agent_id.agent_type
-                        ))
-                    })?;
-                let method = agent_type.methods.iter().find(|m| m.name == method_name);
-                match method {
-                    None => {
-                        return Err(WorkerExecutorError::invalid_request(format!(
-                            "Agent method '{method_name}' not found in agent type '{}'",
-                            agent_id.agent_type
-                        )));
-                    }
-                    Some(method) => {
-                        validate_input_against_schema(&input, &method.input_schema, &method_name)?;
-                        if method.read_only.is_some() {
-                            read_only_method = Some(method_name.clone());
-                        }
-                    }
-                }
-            }
-
-            let wit_fqfn = component_metadata
-                .agent_invoke_function_name()
+            let agent_type = resolve_agent_type(component_metadata, agent_id)?;
+            // The method is resolved only to classify read-only methods; the
+            // input carrier is already the schema-native parameter record and
+            // is encoded to the wire tree directly.
+            let method = agent_type
+                .methods
+                .iter()
+                .find(|m| m.name == method_name)
                 .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "agent invoke function not found in component".to_string(),
-                    )
+                    WorkerExecutorError::invalid_request(format!(
+                        "Agent method '{method_name}' not found in agent type '{}'",
+                        agent_type.type_name
+                    ))
                 })?;
+
+            let read_only_method = method.read_only.is_some().then(|| method_name.clone());
+            validate_schema_input_against_method_schema(
+                &input,
+                agent_type,
+                &method.input_schema,
+                &method_name,
+            )?;
+
             Ok(LoweredInvocation {
-                kind,
-                wit_fqfn,
                 display_name: method_name.clone(),
-                params: vec![
-                    Value::String(method_name),
-                    input.into_value(),
-                    principal.into_value(),
-                ],
                 read_only_method,
+                call: LoweredCall::Invoke {
+                    method_name,
+                    input: encode_value(&input),
+                    principal: principal.into(),
+                },
             })
         }
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
             "ManualUpdate should not be invoked as a wasm function directly".to_string(),
         )),
-        AgentInvocation::SaveSnapshot { .. } => {
-            let wit_fqfn = component_metadata
-                .save_snapshot_function_name()
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "save-snapshot function not found in component".to_string(),
-                    )
-                })?;
-            Ok(LoweredInvocation {
-                kind,
-                wit_fqfn,
-                display_name: "save-snapshot".to_string(),
-                params: vec![],
-                read_only_method: None,
-            })
-        }
-        AgentInvocation::LoadSnapshot { snapshot, .. } => {
-            let wit_fqfn = component_metadata
-                .load_snapshot_function_name()
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "load-snapshot function not found in component".to_string(),
-                    )
-                })?;
-            Ok(LoweredInvocation {
-                kind,
-                wit_fqfn,
-                display_name: "load-snapshot".to_string(),
-                params: vec![snapshot.into_value()],
-                read_only_method: None,
-            })
-        }
+        AgentInvocation::SaveSnapshot { .. } => Ok(LoweredInvocation {
+            display_name: "save-snapshot".to_string(),
+            read_only_method: None,
+            call: LoweredCall::SaveSnapshot,
+        }),
+        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
+            display_name: "load-snapshot".to_string(),
+            read_only_method: None,
+            call: LoweredCall::LoadSnapshot {
+                snapshot: snapshot.into(),
+            },
+        }),
         AgentInvocation::ProcessOplogEntries {
             account_id,
             config,
@@ -764,382 +670,266 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let wit_fqfn = component_metadata
-                .oplog_processor_function_name()
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "oplog-processor process function not found in component".to_string(),
-                    )
+            let component_id: core_wire::ComponentId = metadata.agent_id.component_id.into();
+            let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
+            let account_info = oplog_processor_exports::AccountInfo {
+                account_id: account_id.into(),
+            };
+            let metadata = metadata.into();
+            let entries = entries
+                .into_iter()
+                .map(golem_api_1_x::oplog::OplogEntry::try_from)
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to convert oplog entry for processing: {e}"
+                    ))
                 })?;
-
-            let val_account_info = Value::Record(vec![account_id.into_value()]);
-            let val_component_id = metadata.agent_id.component_id.into_value();
-            let mut config_pairs = Vec::new();
-            for (key, value) in config {
-                config_pairs.push(Value::Tuple(vec![key.into_value(), value.into_value()]));
-            }
-            let val_config = Value::List(config_pairs);
-
-            let val_agent_id = metadata.agent_id.clone().into_value();
-            let val_metadata = metadata.into_value();
-            let val_first_entry_index = first_entry_index.into_value();
-            let val_entries = Value::List(
-                entries
-                    .into_iter()
-                    .map(|entry| entry.into_value())
-                    .collect(),
-            );
 
             Ok(LoweredInvocation {
-                kind,
-                wit_fqfn,
                 display_name: "process-oplog-entries".to_string(),
-                params: vec![
-                    val_account_info,
-                    val_config,
-                    val_component_id,
-                    val_agent_id,
-                    val_metadata,
-                    val_first_entry_index,
-                    val_entries,
-                ],
                 read_only_method: None,
-            })
-        }
-    }
-}
-
-/// Wraps raw wasm output into the appropriate `InvokeResult` variant
-/// based on the type of `AgentInvocation`, decoding WIT result types and
-/// treating `agent-error` as a failed invocation.
-fn wrap_output_as_agent_result(
-    kind: AgentInvocationKind,
-    output: Option<Value>,
-    consumed_fuel: u64,
-) -> Result<InvokeResult, WorkerExecutorError> {
-    match kind {
-        AgentInvocationKind::AgentInitialization => match output {
-            Some(Value::Result(Ok(_))) => Ok(InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::AgentInitialization,
-            }),
-            Some(Value::Result(Err(Some(err_val)))) => {
-                let agent_error = AgentInvocationError::from_value(*err_val).map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to decode agent-error from initialize: {e}"
-                    ))
-                })?;
-                Ok(InvokeResult::Failed {
-                    consumed_fuel,
-                    error: OplogAgentError::InternalError(agent_error.to_string()),
-                    retry_from: OplogIndex::INITIAL,
-                    semantic_trap_retry_override: None,
-                })
-            }
-            Some(Value::Result(Err(None))) => Ok(InvokeResult::Failed {
-                consumed_fuel,
-                error: OplogAgentError::InternalError("Unknown agent error".to_string()),
-                retry_from: OplogIndex::INITIAL,
-                semantic_trap_retry_override: None,
-            }),
-            other => Err(WorkerExecutorError::runtime(format!(
-                "Unexpected result shape from initialize function: {other:?}"
-            ))),
-        },
-        AgentInvocationKind::AgentMethod => match output {
-            Some(Value::Result(Ok(Some(data_val)))) => {
-                let data = UntypedDataValue::from_value(*data_val).map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to convert agent method result: {e}"
-                    ))
-                })?;
-                Ok(InvokeResult::Succeeded {
-                    consumed_fuel,
-                    result: AgentInvocationResult::AgentMethod { output: data },
-                })
-            }
-            Some(Value::Result(Ok(None))) => Ok(InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::AgentMethod {
-                    output: UntypedDataValue::Tuple(vec![]),
+                call: LoweredCall::ProcessOplogEntries {
+                    account_info,
+                    config,
+                    component_id,
+                    agent_id,
+                    metadata,
+                    first_entry_index: u64::from(first_entry_index),
+                    entries,
                 },
-            }),
-            Some(Value::Result(Err(Some(err_val)))) => {
-                let agent_error = AgentInvocationError::from_value(*err_val).map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to decode agent-error from invoke: {e}"
-                    ))
-                })?;
-                Ok(InvokeResult::Failed {
-                    consumed_fuel,
-                    error: OplogAgentError::InternalError(agent_error.to_string()),
-                    retry_from: OplogIndex::INITIAL,
-                    semantic_trap_retry_override: None,
-                })
-            }
-            Some(Value::Result(Err(None))) => Ok(InvokeResult::Failed {
-                consumed_fuel,
-                error: OplogAgentError::InternalError("Unknown agent error".to_string()),
-                retry_from: OplogIndex::INITIAL,
-                semantic_trap_retry_override: None,
-            }),
-            other => Err(WorkerExecutorError::runtime(format!(
-                "Unexpected result shape from invoke function: {other:?}"
-            ))),
-        },
-        AgentInvocationKind::ManualUpdate => Ok(InvokeResult::Succeeded {
-            consumed_fuel,
-            result: AgentInvocationResult::ManualUpdate,
-        }),
-        AgentInvocationKind::SaveSnapshot => {
-            let snapshot = match output {
-                Some(v) => RawSnapshotData::from_value(v).map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Invalid result from save-snapshot function: {e}"
-                    ))
-                })?,
-                None => {
-                    return Err(WorkerExecutorError::runtime(
-                        "Missing result from save-snapshot function",
-                    ));
-                }
-            };
-            Ok(InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-            })
-        }
-        AgentInvocationKind::LoadSnapshot => {
-            let error = decode_result_error(output, "load-snapshot")?;
-            Ok(InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::LoadSnapshot { error },
-            })
-        }
-        AgentInvocationKind::ProcessOplogEntries => {
-            let error = decode_result_error(output, "process")?;
-            Ok(InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::ProcessOplogEntries { error },
             })
         }
     }
 }
 
-/// Decodes the output of a WIT function that returns `result<_, string>`.
-/// Returns `Ok(None)` if the result was Ok, `Ok(Some(error))` if it was Err(string),
-/// or `Err` if the output couldn't be decoded.
-fn decode_result_error(
-    output: Option<Value>,
-    function_name: &str,
-) -> Result<Option<String>, WorkerExecutorError> {
-    match output {
-        Some(value) => {
-            let result: Result<(), String> = FromValue::from_value(value).map_err(|e| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to decode result from {function_name} function: {e}"
-                ))
-            })?;
-            match result {
-                Ok(()) => Ok(None),
-                Err(error) => Ok(Some(error)),
-            }
-        }
-        None => Err(WorkerExecutorError::runtime(format!(
-            "Unexpected empty result from {function_name} function"
-        ))),
-    }
-}
-
-enum FindFunctionResult {
-    ExportedFunction(Func),
-    ResourceDrop,
-}
-
-fn validate_input_against_schema(
-    input: &UntypedDataValue,
-    schema: &DataSchema,
+fn validate_schema_input_against_method_schema(
+    input: &SchemaValue,
+    agent_type: &AgentTypeSchema,
+    input_schema: &InputSchema,
     method_name: &str,
 ) -> Result<(), WorkerExecutorError> {
-    let (elements, schema_elements) = match (input, schema) {
-        (UntypedDataValue::Tuple(elems), DataSchema::Tuple(schema)) => {
-            let schema_elems: Vec<_> = elems.iter().map(|e| (None, e)).collect();
-            let schema_defs: Vec<_> = schema.elements.iter().collect();
-            (schema_elems, schema_defs)
-        }
-        (UntypedDataValue::Multimodal(elems), DataSchema::Multimodal(schema)) => {
-            let schema_elems: Vec<_> = elems
-                .iter()
-                .map(|e| (Some(e.name.as_str()), &e.value))
-                .collect();
-            let schema_defs: Vec<_> = schema.elements.iter().collect();
-            (schema_elems, schema_defs)
-        }
-        (UntypedDataValue::Tuple(_), DataSchema::Multimodal(_)) => {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Method '{method_name}': expected multimodal input, got tuple"
-            )));
-        }
-        (UntypedDataValue::Multimodal(_), DataSchema::Tuple(_)) => {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Method '{method_name}': expected tuple input, got multimodal"
-            )));
-        }
+    let SchemaValue::Record { fields } = input else {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}': expected input parameter record"
+        )));
     };
 
-    if elements.len() != schema_elements.len() {
+    // Auto-injected fields (e.g. the principal) are supplied by the host to the
+    // guest export separately from the caller-provided input record, so they
+    // are excluded from both the parameter count and the value validation here.
+    let user_fields: Vec<_> = input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect();
+    if fields.len() != user_fields.len() {
         return Err(WorkerExecutorError::invalid_request(format!(
             "Method '{method_name}': expected {} parameters, got {}",
-            schema_elements.len(),
-            elements.len()
+            user_fields.len(),
+            fields.len()
         )));
     }
 
-    for (i, ((name, elem), schema_elem)) in elements.iter().zip(schema_elements.iter()).enumerate()
-    {
-        validate_element_against_schema(elem, schema_elem, method_name, i, *name)?;
-    }
-
-    Ok(())
+    validate_record_fields(
+        &agent_type.schema,
+        user_fields
+            .iter()
+            .map(|field| (field.name.as_str(), &field.schema)),
+        fields,
+    )
+    .map_err(|errors| {
+        WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}': invalid input parameter value: {}",
+            errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })
 }
 
-fn validate_element_against_schema(
-    element: &UntypedElementValue,
-    schema: &NamedElementSchema,
-    method_name: &str,
-    index: usize,
-    name: Option<&str>,
-) -> Result<(), WorkerExecutorError> {
-    let param_desc = name
-        .map(|n| format!("'{n}' (index {index})"))
-        .unwrap_or_else(|| format!("{index}"));
-
-    match (element, &schema.schema) {
-        (UntypedElementValue::ComponentModel(value), ElementSchema::ComponentModel(cm_schema)) => {
-            validate_value_matches_type(value, &cm_schema.element_type).map_err(|e| {
+/// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
+/// is available, otherwise the single declared agent type (or an error when the
+/// component declares zero or multiple types and no id was provided).
+fn resolve_agent_type<'a>(
+    component_metadata: &'a ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
+) -> Result<&'a AgentTypeSchema, WorkerExecutorError> {
+    match agent_id {
+        Some(id) => component_metadata
+            .find_agent_type_by_name_ref(&id.agent_type)
+            .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
-                    "Method '{method_name}', parameter {param_desc}: {e}"
+                    "Agent type '{}' not found in component",
+                    id.agent_type
                 ))
-            })
-        }
-        (UntypedElementValue::UnstructuredText(_), ElementSchema::UnstructuredText(_)) => Ok(()),
-        (UntypedElementValue::UnstructuredBinary(_), ElementSchema::UnstructuredBinary(_)) => {
-            Ok(())
-        }
-        _ => Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}', parameter {param_desc}: element type mismatch"
-        ))),
+            }),
+        None => match component_metadata.agent_types() {
+            [single] => Ok(single),
+            [] => Err(WorkerExecutorError::invalid_request(
+                "component declares no agent types".to_string(),
+            )),
+            _ => Err(WorkerExecutorError::invalid_request(
+                "agent id is required to resolve the agent type (component declares multiple)"
+                    .to_string(),
+            )),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm::IntoValue;
-    use golem_wasm::analysis::analysed_type::{result, result_err, str};
+    use golem_common::base_model::Empty;
+    use golem_common::base_model::agent::Snapshotting;
+    use golem_common::base_model::component_metadata::KnownExports;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::agent::{AgentTypeName, Principal};
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::schema::TypedSchemaValue;
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
+    };
+    use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::SchemaType;
+    use std::collections::BTreeMap;
     use test_r::test;
 
-    #[test]
-    fn analysed_result_type_matches_each_agent_invocation_kind() {
-        assert_eq!(
-            analysed_result_type_for_kind(AgentInvocationKind::AgentInitialization),
-            Some(result_err(AgentInvocationError::get_type()))
-        );
-        assert_eq!(
-            analysed_result_type_for_kind(AgentInvocationKind::AgentMethod),
-            Some(result(
-                UntypedDataValue::get_type(),
-                AgentInvocationError::get_type()
-            ))
-        );
-        assert_eq!(
-            analysed_result_type_for_kind(AgentInvocationKind::SaveSnapshot),
-            Some(RawSnapshotData::get_type())
-        );
-        assert_eq!(
-            analysed_result_type_for_kind(AgentInvocationKind::LoadSnapshot),
-            Some(result_err(str()))
-        );
-        assert_eq!(
-            analysed_result_type_for_kind(AgentInvocationKind::ProcessOplogEntries),
-            Some(result_err(str()))
-        );
-        assert_eq!(
-            analysed_result_type_for_kind(AgentInvocationKind::ManualUpdate),
-            None
-        );
-    }
+    const AGENT_TYPE: &str = "test-agent";
+    const METHOD_NAME: &str = "do-work";
 
-    #[test]
-    fn wrap_output_decodes_agent_method_result_using_data_value_shape() {
-        let result = wrap_output_as_agent_result(
-            AgentInvocationKind::AgentMethod,
-            Some(Value::Result(Ok(Some(Box::new(
-                UntypedDataValue::Tuple(vec![]).into_value(),
-            ))))),
-            42,
-        )
-        .unwrap();
-
-        match result {
-            InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::AgentMethod { output },
-            } => {
-                assert_eq!(consumed_fuel, 42);
-                assert_eq!(output, UntypedDataValue::Tuple(vec![]));
-            }
-            other => panic!("unexpected invoke result: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn wrap_output_decodes_load_snapshot_error_result() {
-        let result = wrap_output_as_agent_result(
-            AgentInvocationKind::LoadSnapshot,
-            Some(Err::<(), _>("failed to load snapshot".to_string()).into_value()),
-            7,
-        )
-        .unwrap();
-
-        match result {
-            InvokeResult::Succeeded {
-                consumed_fuel,
-                result: AgentInvocationResult::LoadSnapshot { error },
-            } => {
-                assert_eq!(consumed_fuel, 7);
-                assert_eq!(error, Some("failed to load snapshot".to_string()));
-            }
-            other => panic!("unexpected invoke result: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn wrap_output_decodes_save_snapshot_record() {
-        let snapshot = RawSnapshotData {
-            data: vec![1, 2, 3],
-            mime_type: "application/octet-stream".to_string(),
+    /// Component metadata with one agent type whose `do-work` method takes two
+    /// user-supplied parameters (`count: u32`, `label: string`) plus an
+    /// auto-injected `principal` field.
+    fn metadata() -> ComponentMetadata {
+        let method = AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("label", SchemaType::string()),
+                NamedField::auto_injected(
+                    "principal",
+                    golem_common::schema::agent::AutoInjectedKind::Principal,
+                    SchemaType::string(),
+                ),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
         };
-
-        let result = wrap_output_as_agent_result(
-            AgentInvocationKind::SaveSnapshot,
-            Some(snapshot.clone().into_value()),
-            11,
+        let at = AgentTypeSchema {
+            type_name: AgentTypeName(AGENT_TYPE.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(Vec::new()),
+            },
+            methods: vec![method],
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
+        };
+        ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![at],
+            BTreeMap::new(),
         )
-        .unwrap();
+    }
 
-        match result {
-            InvokeResult::Succeeded {
-                consumed_fuel,
-                result:
-                    AgentInvocationResult::SaveSnapshot {
-                        snapshot: actual_snapshot,
-                    },
-            } => {
-                assert_eq!(consumed_fuel, 11);
-                assert_eq!(actual_snapshot, snapshot);
-            }
-            other => panic!("unexpected invoke result: {other:?}"),
+    fn agent_id() -> ParsedAgentId {
+        let parameters = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+            SchemaValue::Record { fields: Vec::new() },
+        );
+        ParsedAgentId::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+    }
+
+    fn method_invocation(input: SchemaValue) -> AgentInvocation {
+        AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::new("k".to_string()),
+            method_name: METHOD_NAME.to_string(),
+            input,
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
         }
+    }
+
+    #[test]
+    fn method_with_valid_input_lowers_ok() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
+        };
+        let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
+            .expect("valid input should lower");
+        assert_eq!(lowered.display_name, METHOD_NAME);
+        assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
+    fn method_with_non_record_input_is_rejected() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        let Err(err) = lower_invocation(
+            method_invocation(SchemaValue::U32(1)),
+            &metadata,
+            Some(&agent_id),
+        ) else {
+            panic!("non-record input must be rejected");
+        };
+        assert!(
+            err.to_string().contains("expected input parameter record"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn method_with_wrong_arity_is_rejected() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        // Only one value for two user-supplied parameters.
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7)],
+        };
+        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
+        else {
+            panic!("arity mismatch must be rejected");
+        };
+        assert!(
+            err.to_string().contains("expected 2 parameters, got 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn method_with_field_type_mismatch_is_rejected() {
+        let metadata = metadata();
+        let agent_id = agent_id();
+        // Second field should be a string.
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7), SchemaValue::Bool(true)],
+        };
+        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
+        else {
+            panic!("field type mismatch must be rejected");
+        };
+        assert!(
+            err.to_string().contains("invalid input parameter value"),
+            "unexpected error: {err}"
+        );
     }
 }

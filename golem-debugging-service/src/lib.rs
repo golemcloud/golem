@@ -39,6 +39,7 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::card::CardService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
@@ -132,6 +133,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
         runtime: Handle,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
@@ -167,6 +169,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             engine,
             linker,
             runtime,
+            card_service,
             component_service,
             shard_manager_service,
             worker_service,
@@ -211,6 +214,7 @@ pub async fn create_debugging_service_services(
     engine: Arc<Engine>,
     linker: Arc<Linker<DebugContext>>,
     runtime: Handle,
+    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     shard_manager_service: Arc<dyn ShardManagerService>,
     worker_service: Arc<dyn WorkerService>,
@@ -255,6 +259,7 @@ pub async fn create_debugging_service_services(
         engine.clone(),
         linker.clone(),
         runtime.clone(),
+        card_service.clone(),
         component_service.clone(),
         shard_manager_service.clone(),
         quota_service.clone(),
@@ -297,6 +302,7 @@ pub async fn create_debugging_service_services(
         engine.clone(),
         linker.clone(),
         runtime.clone(),
+        card_service.clone(),
         component_service.clone(),
         worker_fork.clone(),
         worker_service.clone(),
@@ -331,6 +337,7 @@ pub async fn create_debugging_service_services(
         active_workers,
         agent_types_service,
         agent_webhooks_service,
+        card_service,
         engine,
         linker,
         runtime,
@@ -375,13 +382,19 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing debug worker executor");
 
-    let total_system_memory = golem_config.memory.total_system_memory();
-    let system_memory = golem_config.memory.system_memory();
-    let worker_memory = golem_config.memory.worker_memory();
+    let memory_snapshot =
+        golem_worker_executor::services::active_workers::memory_probe::default_probe(
+            golem_config.memory.system_memory_override,
+        )
+        .snapshot();
+    let total_system_memory = memory_snapshot.limit_bytes;
+    let used_system_memory = memory_snapshot.current_bytes;
+    let worker_memory =
+        (total_system_memory as f64 * golem_config.memory.worker_memory_ratio) as u64;
     info!(
-        "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
+        "Measured memory limit: {}, Currently used: {}, Usable for workers: {}",
         ISizeFormatter::new(total_system_memory, humansize::BINARY),
-        ISizeFormatter::new(system_memory, humansize::BINARY),
+        ISizeFormatter::new(used_system_memory, humansize::BINARY),
         ISizeFormatter::new(worker_memory, humansize::BINARY)
     );
 
@@ -470,7 +483,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
-    golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+    golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
         &mut linker,
         get_durable_ctx,
     )?;

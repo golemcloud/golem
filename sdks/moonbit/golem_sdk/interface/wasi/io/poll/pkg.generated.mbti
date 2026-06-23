@@ -1,17 +1,13 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/wasi/io/poll"
 
-import {
-  "moonbitlang/core/debug",
-}
-
 // Values
 pub fn poll(Array[Pollable]) -> FixedArray[UInt]
 
 // Errors
 
 // Types and methods
-pub(all) struct Pollable(Int) derive(Eq, @debug.Debug)
+pub(all) struct Pollable(Int) derive(Eq, Show)
 pub fn Pollable::block(Self) -> Unit
 pub fn Pollable::drop(Self) -> Unit
 pub fn Pollable::ready(Self) -> Bool

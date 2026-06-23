@@ -14,26 +14,17 @@
 
 //! Bridge SDK generators for the Rust and TypeScript client targets.
 //!
-//! The internal walkers in [`rust`] and [`typescript`] operate on the
-//! schema layer ([`golem_common::schema::SchemaType`] /
-//! [`golem_common::schema::graph::SchemaGraph`]) — [`type_naming::TypeNaming`]
-//! keys generated names by [`SchemaType`](golem_common::schema::schema_type::SchemaType)
-//! structural identity, with named legacy composites carried as
-//! [`SchemaType::Ref`](golem_common::schema::schema_type::SchemaType::Ref)
-//! against a shared graph imported via
-//! [`analysed_type_to_schema_graph`](golem_common::schema::adapters::analysed_type::analysed_type_to_schema_graph).
-//!
-//! The public entry point ([`BridgeGenerator::new`]) still takes a legacy
-//! [`AgentType`] from the agent declaration; the generator converts each
-//! reachable [`AnalysedType`](golem_wasm::analysis::AnalysedType) into a
-//! [`SchemaType`](golem_common::schema::schema_type::SchemaType) at the call
-//! site of the walker. The string templates the generators emit continue to
-//! reference the legacy `golem_wasm::analysis::AnalysedType` /
-//! `golem_wasm::Value` surface plus the `IntoValue` / `FromValue` traits —
-//! that is the SDK contract this generator targets. When the walker needs to
-//! embed a legacy `AnalysedType` literal it projects the schema body back
-//! via [`schema_type_to_analysed_type`](golem_common::schema::adapters::analysed_type::schema_type_to_analysed_type)
-//! at the emission point.
+//! The internal walkers in [`rust`] and [`typescript`] operate directly on
+//! the schema layer ([`golem_common::schema::SchemaType`] /
+//! [`golem_common::schema::graph::SchemaGraph`]). The public entry point
+//! ([`BridgeGenerator::new`]) takes a schema-native
+//! [`AgentTypeSchema`](golem_common::schema::AgentTypeSchema); the agent's own
+//! [`SchemaGraph`](golem_common::schema::graph::SchemaGraph) is adopted as the
+//! ref-resolution graph and [`type_naming::TypeNaming`] keys generated names by
+//! [`SchemaType`](golem_common::schema::schema_type::SchemaType) structural
+//! identity. The generators emit schema-native `SchemaValue` (`{kind,value}`)
+//! encode/decode code; there is no longer any dependency on the legacy
+//! `AnalysedType` / `IntoValue` / `FromValue` surface.
 
 pub mod parameter_naming;
 pub mod rust;
@@ -41,11 +32,16 @@ pub mod type_naming;
 pub mod typescript;
 
 use camino::Utf8Path;
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::schema::AgentTypeSchema;
 use heck::ToKebabCase;
 
 pub trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self>
+    fn new(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self>
     where
         Self: Sized;
     fn generate(&mut self) -> anyhow::Result<()>;

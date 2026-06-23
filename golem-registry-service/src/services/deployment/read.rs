@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::authorize_environment_permission;
-use super::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror, schema_mirror_error};
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
@@ -323,7 +322,10 @@ impl DeploymentService {
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.0.clone(),
             ))?
-            .try_into()?;
+            .try_into_deployed(
+                environment.owner_account_id,
+                environment.owner_account_email,
+            )?;
 
         Ok(agent_types)
     }
@@ -345,7 +347,12 @@ impl DeploymentService {
             .list_deployment_agent_types(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into())
+            .map(|r| {
+                r.try_into_deployed(
+                    environment.owner_account_id,
+                    environment.owner_account_email.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(agent_types)
@@ -368,6 +375,8 @@ impl DeploymentService {
             .environment_service
             .get_in_application(application.id, environment_name, auth)
             .await?;
+
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         self.get_deployed_agent_type(environment.id, agent_type_name)
             .await
@@ -455,6 +464,8 @@ impl DeploymentService {
             .get_in_application(application.id, environment_name, auth)
             .await?;
 
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
+
         // Validate that the deployment revision exists in this environment
         self.deployment_repo
             .get_deployment_revision(environment.id.0, deployment_revision.into())
@@ -472,166 +483,11 @@ impl DeploymentService {
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.0.clone(),
             ))?
-            .try_into()?;
+            .try_into_deployed(
+                environment.owner_account_id,
+                environment.owner_account_email,
+            )?;
 
         Ok(agent_type)
-    }
-
-    // -- Schema-mirror methods ------------------------------------------------
-    //
-    // These parallel the methods above and additionally return the
-    // schema-layer [`AgentTypeSchema`] computed from the legacy
-    // `AgentType` via the registry-service mirror. They exist for the
-    // duration of the migration so consumers can read either form
-    // without forcing a wire/persistence change today.
-
-    pub async fn get_deployed_agent_type_with_schema(
-        &self,
-        environment_id: EnvironmentId,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
-        let legacy = self
-            .get_deployed_agent_type(environment_id, agent_type_name)
-            .await?;
-        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
-    }
-
-    pub async fn list_deployed_agent_types_with_schema(
-        &self,
-        environment_id: EnvironmentId,
-    ) -> Result<Vec<DeployedAgentTypeMirror>, DeploymentError> {
-        self.list_deployed_agent_types(environment_id)
-            .await?
-            .into_iter()
-            .map(DeployedAgentTypeMirror::from_legacy)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(schema_mirror_error)
-    }
-
-    pub async fn get_latest_deployed_agent_type_by_component_revision_with_schema(
-        &self,
-        environment_id: EnvironmentId,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
-        let legacy = self
-            .get_latest_deployed_agent_type_by_component_revision(
-                environment_id,
-                component_id,
-                component_revision,
-                agent_type_name,
-            )
-            .await?;
-        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
-    }
-
-    pub async fn list_latest_deployed_agent_types_by_component_revision_with_schema(
-        &self,
-        environment_id: EnvironmentId,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-    ) -> Result<Vec<DeployedAgentTypeMirror>, DeploymentError> {
-        self.list_latest_deployed_agent_types_by_component_revision(
-            environment_id,
-            component_id,
-            component_revision,
-        )
-        .await?
-        .into_iter()
-        .map(DeployedAgentTypeMirror::from_legacy)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(schema_mirror_error)
-    }
-
-    pub async fn get_deployment_agent_type_with_schema(
-        &self,
-        environment_id: EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        agent_type_name: &AgentTypeName,
-        auth: &AuthCtx,
-    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
-        let legacy = self
-            .get_deployment_agent_type(environment_id, deployment_revision, agent_type_name, auth)
-            .await?;
-        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
-    }
-
-    pub async fn list_deployment_agent_types_with_schema(
-        &self,
-        environment_id: EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        auth: &AuthCtx,
-    ) -> Result<Vec<DeployedAgentTypeMirror>, DeploymentError> {
-        self.list_deployment_agent_types(environment_id, deployment_revision, auth)
-            .await?
-            .into_iter()
-            .map(DeployedAgentTypeMirror::from_legacy)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(schema_mirror_error)
-    }
-
-    pub async fn get_latest_deployed_agent_type_by_names_with_schema(
-        &self,
-        account_id: AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        auth: &AuthCtx,
-    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
-        let legacy = self
-            .get_latest_deployed_agent_type_by_names(
-                account_id,
-                app_name,
-                environment_name,
-                agent_type_name,
-                auth,
-            )
-            .await?;
-        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
-    }
-
-    pub async fn resolve_agent_type_by_names_with_schema(
-        &self,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        deployment_revision: Option<DeploymentRevision>,
-        owner_account_email: Option<&str>,
-        auth: &AuthCtx,
-    ) -> Result<ResolvedAgentTypeMirror, DeploymentError> {
-        let legacy = self
-            .resolve_agent_type_by_names(
-                app_name,
-                environment_name,
-                agent_type_name,
-                deployment_revision,
-                owner_account_email,
-                auth,
-            )
-            .await?;
-        ResolvedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
-    }
-
-    pub async fn get_agent_type_by_names_at_deployment_with_schema(
-        &self,
-        account_id: AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        deployment_revision: DeploymentRevision,
-        auth: &AuthCtx,
-    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
-        let legacy = self
-            .get_agent_type_by_names_at_deployment(
-                account_id,
-                app_name,
-                environment_name,
-                agent_type_name,
-                deployment_revision,
-                auth,
-            )
-            .await?;
-        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
     }
 }

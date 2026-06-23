@@ -52,6 +52,7 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -74,7 +75,7 @@ use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::{RetryDecision, Worker};
@@ -93,7 +94,7 @@ use futures::TryStreamExt;
 use futures::future::try_join_all;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -116,6 +117,8 @@ use golem_common::model::{
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -123,8 +126,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -169,6 +170,7 @@ impl Drop for WorkerDir {
 }
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_service_base::model::auth::AuthCtx;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
@@ -256,6 +258,50 @@ pub enum InvocationStrictness {
     /// trap immediately with [`AgentError::ReadOnlyViolation`].
     ReadOnly,
 }
+
+pub(crate) fn agent_effective_surface_from_component_metadata(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    agent_id: &ParsedAgentId,
+) -> golem_common::model::card::EffectiveSurface {
+    let template = component
+        .metadata
+        .agent_type_initial_permission_template(&agent_id.agent_type)
+        .cloned()
+        .unwrap_or_else(|| {
+            golem_common::model::component_metadata::AgentInitialPermissionTemplate::default_for(
+                &component.environment_name,
+                &component.component_name,
+            )
+        });
+
+    let context = golem_common::model::card::AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        agent_type: agent_id.agent_type.clone(),
+    };
+
+    let Ok(mut card) = golem_common::model::card::monomorphize_agent_initial_card(
+        &template.lower_positive,
+        &template.lower_negative,
+        &template.upper_positive,
+        &template.upper_negative,
+        &context,
+    ) else {
+        return golem_common::model::card::EffectiveSurface::default();
+    };
+    card.card_id = template.card_id;
+
+    golem_common::model::card::EffectiveSurface::from_cards(
+        std::slice::from_ref(&card),
+        &golem_common::model::card::recipient::RecipientPattern::Any,
+    )
+    .unwrap_or_default()
+}
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -270,6 +316,30 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    /// Per-instance cache of resolved typed guest export handles, populated
+    /// lazily on first use during invocation dispatch.
+    agent_export_funcs: AgentExportFuncs,
+    _store_alive_guard: StoreAliveGuard,
+}
+
+/// Increments the live-`Store` gauge on construction and decrements it on drop.
+/// Held as a field of [`DurableWorkerCtx`], which is the data of the wasmtime
+/// `Store`, so the gauge follows the `Store`'s true lifetime regardless of which
+/// reference keeps it alive. A persistent gap above the resident-worker count
+/// indicates `Store`s retained after their worker was deleted.
+struct StoreAliveGuard;
+
+impl StoreAliveGuard {
+    fn new() -> Self {
+        crate::metrics::workers::inc_worker_store_alive();
+        StoreAliveGuard
+    }
+}
+
+impl Drop for StoreAliveGuard {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_store_alive();
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -283,10 +353,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
     }
 
+    /// Returns the per-instance cache of resolved typed guest export handles.
+    pub(crate) fn agent_export_funcs(&self) -> &AgentExportFuncs {
+        &self.agent_export_funcs
+    }
+
+    /// Returns a mutable reference to the per-instance cache of resolved typed
+    /// guest export handles.
+    pub(crate) fn agent_export_funcs_mut(&mut self) -> &mut AgentExportFuncs {
+        &mut self.agent_export_funcs
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -301,6 +382,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
@@ -412,7 +494,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            )
+            )?
         } else {
             HashMap::new()
         };
@@ -466,6 +548,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 blob_store_service,
                 rdbms_service,
                 quota_service,
+                card_service,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -478,6 +561,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 worker_config.current_filesystem_storage_usage,
+                worker_config.agent_effective_surface,
                 worker_fork,
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
@@ -498,6 +582,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            agent_export_funcs: AgentExportFuncs::default(),
+            _store_alive_guard: StoreAliveGuard::new(),
         })
     }
 
@@ -595,7 +681,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by_email
     }
 
-    pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    pub fn agent_effective_surface(&self) -> golem_common::model::card::EffectiveSurface {
+        self.state.agent_effective_surface.clone()
+    }
+
+    pub fn agent_auth_ctx(&self) -> AuthCtx {
+        AuthCtx::agent_with_effective_surface(
+            self.created_by(),
+            self.created_by_email().clone(),
+            self.agent_effective_surface(),
+        )
+    }
+
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -626,35 +724,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiView(self)
     }
 
-    pub fn wasi_ctx_view(&mut self) -> WasiCtxView<'_> {
-        let inner = &mut *self;
-        let ctx = Arc::get_mut(&mut inner.wasi)
-            .expect("WasiCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("WasiCtx mutex must never fail");
-        let table = Arc::get_mut(&mut inner.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
-            .expect("IoCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("IoCtx mutex must never fail");
-        WasiCtxView { ctx, table, io_ctx }
-    }
-
-    /// Reads the worker's WASI environment variables synchronously by going
-    /// through the p3 `cli::environment` Host implementation provided by
-    /// wasmtime-wasi. Replaces the previous `wasmtime_wasi::p2::bindings::cli::
-    /// environment::Host::get_environment(self).await` call sites that no
-    /// longer exist after the p2 durable wrappers were removed.
-    pub fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
-        use wasmtime_wasi::cli::WasiCliView;
-        let mut view = self.as_wasi_view();
-        let mut cli_view = WasiCliView::cli(&mut view);
-        wasmtime_wasi::p3::bindings::cli::environment::Host::get_environment(&mut cli_view)
-    }
-
     pub fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_> {
         // Sync the replay flag observed by `WasiHttpHooks::send_request` with
         // the current durable execution state before exposing the view to
@@ -676,6 +745,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn as_wasi_http_view_p3(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        let is_replay = self.state.is_replay();
+        self.http_hooks
+            .is_replay
+            .store(is_replay, std::sync::atomic::Ordering::Release);
         let inner = &mut *self;
         let table = Arc::get_mut(&mut inner.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
@@ -698,6 +771,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_service(&self) -> Arc<dyn ComponentService> {
         self.state.component_service.clone()
+    }
+
+    pub fn card_service(&self) -> Arc<dyn CardService> {
+        self.state.card_service.clone()
     }
 
     pub fn agent_types_service(&self) -> Arc<dyn AgentTypesService> {
@@ -1355,7 +1432,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
-            self.state.set_ambient_retry_point(result);
+            self.state.current_retry_point = result;
             Ok(result)
         } else {
             // When there is no scope `Start` entry, the current retry point can only
@@ -1381,7 +1458,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .await
                     .unwrap_or(self.state.replay_state.last_replayed_non_hint_index()),
             };
-            self.state.set_ambient_retry_point(new_retry_point);
+            self.state.current_retry_point = new_retry_point;
 
             Ok(begin_index)
         }
@@ -1523,7 +1600,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The transaction scope is now open until commit/rollback; block checkpoints.
             self.state
                 .push_durable_scope(begin_index, DurableScopeKind::Transaction);
-            self.state.set_ambient_retry_point(begin_index);
+            self.state.current_retry_point = begin_index;
 
             Ok((begin_index, tx))
         } else {
@@ -1713,7 +1790,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The (possibly re-begun) transaction scope is open until commit/rollback.
             self.state
                 .push_durable_scope(result, DurableScopeKind::Transaction);
-            self.state.set_ambient_retry_point(original_begin_index);
+            self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
         }
@@ -2461,26 +2538,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .cloned()
         });
 
-        let mut current_files = self.state.files.write().await;
-        update_filesystem(
-            &mut current_files,
-            &self.state.file_loader,
-            self.owned_agent_id.environment_id,
-            self.worker_dir.path(),
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.as_slice())
-                .unwrap_or_default(),
-        )
-        .await?;
-
-        let mut read_only_paths = self.state.read_only_paths.write().unwrap();
-        *read_only_paths = compute_read_only_paths(&current_files);
-
-        if let Some(agent_id) = self.parsed_agent_id() {
+        let updated_agent_state = if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
                 .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
                         "Agent type {} not found in updated agent metadata",
@@ -2494,12 +2555,74 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
-            );
+            )?;
 
-            validate_agent_config(&updated_agent_config, &agent_type)?;
+            validate_agent_config(&updated_agent_config, agent_type)?;
 
+            let liveness = match new_metadata
+                .metadata
+                .agent_type_initial_permission_template(&agent_id.agent_type)
+                .map(|template| template.card_id)
+            {
+                Some(card_id) => {
+                    let liveness = self
+                        .state
+                        .card_service
+                        .check_cards(vec![card_id])
+                        .await?
+                        .get(&card_id)
+                        .copied()
+                        .unwrap_or(crate::services::card::CardLiveness::Revoked {
+                            newly_detected: true,
+                        });
+                    if liveness.newly_detected_revocation() {
+                        self.public_state
+                            .worker()
+                            .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                            .await;
+                    }
+                    liveness
+                }
+                None => crate::services::card::CardLiveness::Live,
+            };
+
+            let agent_effective_surface = if liveness.is_live() {
+                agent_effective_surface_from_component_metadata(
+                    &new_metadata,
+                    &self.owned_agent_id,
+                    &agent_id,
+                )
+            } else {
+                golem_common::model::card::EffectiveSurface::default()
+            };
+
+            Some((updated_agent_config, agent_effective_surface))
+        } else {
+            None
+        };
+
+        {
+            let mut current_files = self.state.files.write().await;
+            update_filesystem(
+                &mut current_files,
+                &self.state.file_loader,
+                self.owned_agent_id.environment_id,
+                self.worker_dir.path(),
+                new_agent_type_provision_configs
+                    .as_ref()
+                    .map(|c| c.files.as_slice())
+                    .unwrap_or_default(),
+            )
+            .await?;
+
+            let mut read_only_paths = self.state.read_only_paths.write().unwrap();
+            *read_only_paths = compute_read_only_paths(&current_files);
+        }
+
+        if let Some((updated_agent_config, agent_effective_surface)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
+            self.state.agent_effective_surface = agent_effective_surface;
         };
 
         self.state.component_metadata = new_metadata;
@@ -2835,11 +2958,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     | AgentInvocationResult::ProcessOplogEntries { .. } => true,
                 };
 
+                // Only `AgentMethod` results need the method name persisted so the
+                // public oplog renderer can resolve the correct output schema.
+                let method_name = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => {
+                        Some(full_function_name.to_string())
+                    }
+                    _ => None,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
                     .add_agent_invocation_finished(
                         &output.result,
+                        method_name,
                         consumed_fuel,
                         component_revision,
                     )
@@ -3751,71 +3884,6 @@ mod tests {
         );
         assert_eq!(next_idempotency_key_oplog_index, OplogIndex::from_u64(12));
     }
-
-    #[test]
-    fn atomic_region_side_effect_marking_uses_begin_index_not_position() {
-        let mut regions = vec![
-            ActiveAtomicRegion {
-                begin_index: OplogIndex::from_u64(10),
-                next_idempotency_key_oplog_index: OplogIndex::from_u64(11),
-                has_side_effects: false,
-                in_flight_call_count: 0,
-            },
-            ActiveAtomicRegion {
-                begin_index: OplogIndex::from_u64(20),
-                next_idempotency_key_oplog_index: OplogIndex::from_u64(21),
-                has_side_effects: false,
-                in_flight_call_count: 0,
-            },
-        ];
-
-        assert!(mark_atomic_region_has_side_effects_for(
-            &mut regions,
-            OplogIndex::from_u64(20)
-        ));
-
-        assert!(!regions[0].has_side_effects);
-        assert!(regions[1].has_side_effects);
-        assert!(!mark_atomic_region_has_side_effects_for(
-            &mut regions,
-            OplogIndex::from_u64(30)
-        ));
-    }
-
-    #[test]
-    fn atomic_region_in_flight_call_tracking_uses_begin_index() {
-        let mut regions = vec![
-            ActiveAtomicRegion {
-                begin_index: OplogIndex::from_u64(10),
-                next_idempotency_key_oplog_index: OplogIndex::from_u64(11),
-                has_side_effects: false,
-                in_flight_call_count: 0,
-            },
-            ActiveAtomicRegion {
-                begin_index: OplogIndex::from_u64(20),
-                next_idempotency_key_oplog_index: OplogIndex::from_u64(21),
-                has_side_effects: false,
-                in_flight_call_count: 0,
-            },
-        ];
-
-        assert!(register_atomic_region_call(
-            &mut regions,
-            OplogIndex::from_u64(20)
-        ));
-        assert_eq!(regions[0].in_flight_call_count, 0);
-        assert_eq!(regions[1].in_flight_call_count, 1);
-
-        assert!(unregister_atomic_region_call(
-            &mut regions,
-            OplogIndex::from_u64(20)
-        ));
-        assert_eq!(regions[1].in_flight_call_count, 0);
-        assert!(!unregister_atomic_region_call(
-            &mut regions,
-            OplogIndex::from_u64(20)
-        ));
-    }
 }
 
 #[async_trait]
@@ -4352,7 +4420,7 @@ pub(crate) struct HttpOutputStreamState {
 }
 
 #[derive(Debug, Clone)]
-struct ActiveAtomicRegion {
+pub(crate) struct ActiveAtomicRegion {
     begin_index: OplogIndex,
     next_idempotency_key_oplog_index: OplogIndex,
     has_side_effects: bool,
@@ -4464,6 +4532,7 @@ struct PrivateDurableWorkerState {
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
     quota_service: Arc<dyn QuotaService>,
+    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -4471,7 +4540,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<LegacyParsedAgentId>,
+    agent_id: Option<ParsedAgentId>,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
@@ -4517,6 +4586,7 @@ struct PrivateDurableWorkerState {
     read_only_method_name: Option<String>,
 
     component_metadata: Component,
+    agent_effective_surface: golem_common::model::card::EffectiveSurface,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -4540,7 +4610,7 @@ struct PrivateDurableWorkerState {
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
-    agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 
     /// Cached named retry policies derived from `agent_config` only. Lazily populated and
     /// invalidated whenever `agent_config` is reassigned.
@@ -4569,12 +4639,12 @@ struct PrivateDurableWorkerState {
     /// [`PrivateDurableWorkerState::effective_retry_point`], which layers priority on top of this
     /// field: an active atomic region (whole region retried from its begin index) wins, then an open
     /// durable scope (error grouped at the scope `Start`), and only otherwise does it fall back to
-    /// `ambient_retry_point`. Keep them distinct: write `ambient_retry_point`, read
+    /// `current_retry_point`. Keep them distinct: write `current_retry_point`, read
     /// `effective_retry_point()`.
-    ambient_retry_point: OplogIndex,
+    current_retry_point: OplogIndex,
 
-    /// Tracks the active atomic regions by their begin index. This is used together with `ambient_retry_point` to
-    /// determine the effective retry point associated with an error; while `ambient_retry_point` is changed for each
+    /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
+    /// determine the effective retry point associated with an error; while `current_retry_point` is changed for each
     /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
     /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
     /// from scratch.
@@ -4597,8 +4667,6 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
-    /// Queue of live durable calls dropped by cancellable p3 host futures. Drop only enqueues an
-    /// owned snapshot; later safe worker-access windows drain it and record `Cancelled` entries.
     dropped_call_events: (
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
@@ -4640,7 +4708,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -4651,6 +4719,7 @@ impl PrivateDurableWorkerState {
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -4663,6 +4732,7 @@ impl PrivateDurableWorkerState {
         component_metadata: Component,
         total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
+        agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
@@ -4670,7 +4740,7 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
-        agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+        agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -4712,6 +4782,7 @@ impl PrivateDurableWorkerState {
             blob_store_service,
             rdbms_service,
             quota_service,
+            card_service,
             component_service,
             agent_types_service,
             environment_state_service,
@@ -4735,6 +4806,7 @@ impl PrivateDurableWorkerState {
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
             component_metadata,
+            agent_effective_surface,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,
@@ -4757,7 +4829,7 @@ impl PrivateDurableWorkerState {
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
             pending_update: tokio::sync::Mutex::new(pending_update),
-            ambient_retry_point: OplogIndex::INITIAL,
+            current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
             dropped_call_events,
@@ -4945,11 +5017,11 @@ impl PrivateDurableWorkerState {
     }
 
     fn ambient_retry_point(&self) -> OplogIndex {
-        self.ambient_retry_point
+        self.current_retry_point
     }
 
     fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
-        self.ambient_retry_point = retry_point;
+        self.current_retry_point = retry_point;
     }
 
     fn mirror_call_retry_point(&mut self, retry_from: OplogIndex) {
@@ -4962,15 +5034,15 @@ impl PrivateDurableWorkerState {
 
     /// The retry point to associate with an error, with priority `atomic region > global`. While an
     /// atomic region is active the whole region is retried from its begin index; otherwise the error
-    /// is grouped at `ambient_retry_point`, which the durable-call machinery keeps pointing at the
+    /// is grouped at `current_retry_point`, which the durable-call machinery keeps pointing at the
     /// enclosing scope `Start` (or the call's own `Start` when unscoped). Durable scopes do **not**
     /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
-    /// grouping is driven by the explicitly-maintained `ambient_retry_point` instead.
+    /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
     fn effective_retry_point(&self) -> OplogIndex {
         if let Some(region) = self.active_atomic_regions.last() {
             region.begin_index
         } else {
-            self.ambient_retry_point
+            self.current_retry_point
         }
     }
 
@@ -5005,17 +5077,13 @@ impl PrivateDurableWorkerState {
         );
     }
 
-    /// Mark the outermost active atomic region as having side effects.
+    /// Mark the outermost active atomic region as having side effects
     pub fn mark_atomic_region_has_side_effects(&mut self) {
         if let Some(region) = self.active_atomic_regions.first_mut() {
             region.has_side_effects = true;
         }
     }
 
-    /// Mark the atomic region identified by `begin_index` as having side effects.
-    ///
-    /// Concurrent host calls must mark the region they belonged to when initiated, not whichever
-    /// region happens to be outermost when they complete.
     pub fn mark_atomic_region_has_side_effects_for(&mut self, begin_index: OplogIndex) -> bool {
         mark_atomic_region_has_side_effects_for(&mut self.active_atomic_regions, begin_index)
     }
@@ -5341,6 +5409,24 @@ impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiView<'_, Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtx<Ctx> {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        let ctx = Arc::get_mut(&mut self.wasi)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail");
+        let table = Arc::get_mut(&mut self.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut self.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        WasiCtxView { ctx, table, io_ctx }
+    }
+}
+
 // This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
 impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
     fn ctx(&mut self) -> WasiCtxView<'_> {
@@ -5364,12 +5450,6 @@ impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
 impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         self.as_wasi_http_view()
-    }
-}
-
-impl<Ctx: WorkerCtx> wasmtime_wasi_http::p3::WasiHttpView for DurableWorkerCtx<Ctx> {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
-        self.as_wasi_http_view_p3()
     }
 }
 

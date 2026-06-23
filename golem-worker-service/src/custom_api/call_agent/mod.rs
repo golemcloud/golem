@@ -20,10 +20,7 @@ use self::cache_headers::{
     add_vary_header, build_cache_control_value, build_etag_value, headers as cache_header,
     if_none_match_hits, parse_if_none_match_entries, supports_http_revalidation,
 };
-use self::parameter_parsing::{
-    parse_path_segment_value, parse_path_segment_value_to_component_model,
-    parse_query_or_header_value,
-};
+use self::parameter_parsing::{parse_path_segment_value, parse_query_or_header_value};
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
 use super::error::RequestHandlerError;
@@ -33,15 +30,14 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
-use golem_common::model::agent::{
-    BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
-    ElementValues, LegacyParsedAgentId, OidcPrincipal, Principal, ReadOnlyConfig, TextReference,
-    TextReferenceValue, UntypedDataValue, UntypedElementValue,
-};
+use golem_common::model::agent::{OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig};
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
-use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
+use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
+use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
+use golem_service_base::custom_api::{
+    CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
+};
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::ValueAndType;
 use http::{Method, StatusCode};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -92,10 +88,12 @@ impl CallAgentHandler {
 
         debug!("Invoking agent {agent_id}");
 
-        let method_params_data_value = UntypedDataValue::Tuple(method_params);
+        let method_params_value = SchemaValue::Record {
+            fields: method_params,
+        };
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
-            method_params_data_value.into();
+        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+            method_params_value.into();
 
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
@@ -117,10 +115,7 @@ impl CallAgentHandler {
                 None,
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
-                AuthCtx::agent(
-                    resolved_route.route.account_id,
-                    resolved_route.route.account_email.clone(),
-                ),
+                AuthCtx::System,
                 proto_principal,
                 Some(resolved_route.route.environment_id),
             )
@@ -200,9 +195,8 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
-        let Some((current_fingerprint, current_oplog)) = self
-            .fetch_current_validator(resolved_route, agent_id)
-            .await?
+        let Some((current_fingerprint, current_oplog)) =
+            self.fetch_current_validator(agent_id).await?
         else {
             return Ok(None);
         };
@@ -235,18 +229,11 @@ impl CallAgentHandler {
     /// the oplog index describe the same agent instance.
     async fn fetch_current_validator(
         &self,
-        resolved_route: &ResolvedRouteEntry,
         agent_id: &AgentId,
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(
-                agent_id,
-                AuthCtx::agent(
-                    resolved_route.route.account_id,
-                    resolved_route.route.account_email.clone(),
-                ),
-            )
+            .get_metadata(agent_id, AuthCtx::System)
             .await
         {
             Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),
@@ -270,12 +257,13 @@ impl CallAgentHandler {
         let CallAgentBehaviour {
             component_id,
             agent_type,
+            constructor_input,
             constructor_parameters,
             phantom,
             ..
         } = behaviour;
 
-        let mut values = Vec::with_capacity(constructor_parameters.len());
+        let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
             match param {
@@ -287,20 +275,22 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    let value = parse_path_segment_value_to_component_model(raw, parameter_type)?;
-
-                    values.push(ElementValue::ComponentModel(ComponentModelElementValue {
-                        value: ValueAndType::new(value, parameter_type.into()),
-                    }));
+                    fields.push(parse_path_segment_value(raw, parameter_type)?);
                 }
             }
         }
 
-        let data_value = DataValue::Tuple(ElementValues { elements: values });
+        // The agent-id parameters travel as a self-contained `TypedSchemaValue`:
+        // the constructor's compiled `SchemaGraph` paired with the positional
+        // record of the (user-supplied) constructor parameters.
+        let parameters = TypedSchemaValue::new(
+            constructor_input.graph.clone(),
+            SchemaValue::Record { fields },
+        );
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id = LegacyParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
+        let agent_id = ParsedAgentId::try_new(agent_type.clone(), parameters, phantom_id)
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
@@ -315,10 +305,14 @@ impl CallAgentHandler {
         request: &RichRequest,
         behaviour: &CallAgentBehaviour,
         mut body: ParsedRequestBody,
-    ) -> Result<Vec<UntypedElementValue>, RequestHandlerError> {
+    ) -> Result<Vec<SchemaValue>, RequestHandlerError> {
         let query_params = request.query_params();
         let headers = request.headers();
 
+        // The producer emits `method_parameters` in user-supplied input
+        // declaration order, so iterating them in order builds the positional
+        // `SchemaValue::Record` the executor validates against (which excludes
+        // auto-injected fields like the principal).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
 
         for param in &behaviour.method_parameters {
@@ -364,11 +358,14 @@ impl CallAgentHandler {
                 }
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
-                    ParsedRequestBody::JsonBody(golem_wasm::Value::Record(fields)) => {
-                        UntypedElementValue::ComponentModel(
-                            fields[usize::from(*field_index)].clone(),
-                        )
-                    }
+                    ParsedRequestBody::JsonBody(SchemaValue::Record { fields }) => fields
+                        .get(usize::from(*field_index))
+                        .cloned()
+                        .ok_or_else(|| {
+                            RequestHandlerError::invariant_violated(
+                                "JSON body field index out of range for parsed body",
+                            )
+                        })?,
 
                     ParsedRequestBody::JsonBody(_) => {
                         return Err(RequestHandlerError::invariant_violated(
@@ -391,9 +388,15 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
-                            value: BinaryReference::Inline(binary_source),
-                        })
+                        let raw = SchemaValue::Binary(BinaryValuePayload {
+                            bytes: binary_source.data,
+                            mime_type: binary_source.mime_type,
+                        });
+                        // The field schema is either the canonical unstructured
+                        // wrapper (raw body -> `inline` case; DA: url-referenced
+                        // request bodies are not accepted) or a bare `Binary`
+                        // rich scalar (raw value as-is).
+                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
                     }
 
                     _ => {
@@ -411,9 +414,17 @@ impl CallAgentHandler {
                             )
                         })?;
 
-                        UntypedElementValue::UnstructuredText(TextReferenceValue {
-                            value: TextReference::Inline(text_source),
-                        })
+                        let raw = SchemaValue::Text(TextValuePayload {
+                            text: text_source.data,
+                            language: text_source
+                                .text_type
+                                .map(|text_type| text_type.language_code),
+                        });
+                        // The field schema is either the canonical unstructured
+                        // wrapper (raw body -> `inline` case; DA: url-referenced
+                        // request bodies are not accepted) or a bare `Text` rich
+                        // scalar (raw value as-is).
+                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
                     }
 
                     _ => {
@@ -429,6 +440,28 @@ impl CallAgentHandler {
 
         Ok(values)
     }
+}
+
+/// Build the method-input value for a raw unstructured request body, wrapping
+/// the decoded `Text` / `Binary` value in the canonical `inline` case when the
+/// bound field schema is an unstructured `variant { inline, url }` wrapper, or
+/// passing it through unchanged for a bare `Text` / `Binary` rich scalar.
+fn wrap_unstructured_body_value(
+    body_schema: &RequestBodySchema,
+    raw: SchemaValue,
+) -> Result<SchemaValue, RequestHandlerError> {
+    let expected = match body_schema {
+        RequestBodySchema::BinaryBody { expected } | RequestBodySchema::TextBody { expected } => {
+            expected
+        }
+        _ => {
+            return Err(RequestHandlerError::invariant_violated(
+                "Unstructured body parameter used but body schema is not a text/binary body",
+            ));
+        }
+    };
+    wrap_unstructured_inline_for_schema(&expected.graph, &expected.graph.root, raw)
+        .map_err(|err| anyhow!("Failed to build unstructured body value: {err}").into())
 }
 
 /// HTTP methods for which the worker-service emits read-only cache headers

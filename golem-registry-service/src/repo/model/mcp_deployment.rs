@@ -174,6 +174,16 @@ pub struct McpDeploymentExtRevisionRecord {
     pub revision: McpDeploymentRevisionRecord,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct McpDeploymentAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub deployment: McpDeploymentExtRevisionRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<McpDeploymentExtRevisionRecord> for McpDeployment {
     type Error = McpDeploymentRepoError;
 

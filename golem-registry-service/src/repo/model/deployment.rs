@@ -34,7 +34,7 @@ use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::{AgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
@@ -48,6 +48,7 @@ use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionI
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
+use golem_common::schema::AgentTypeSchema;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -379,7 +380,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub owner_account_id: Uuid,
     pub owner_account_email: String,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
 }
 
 impl DeploymentRegisteredAgentTypeRecord {
@@ -434,6 +435,40 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
 }
 
 #[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentRegisteredAgentTypeScopedRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+    pub canonical_agent_type_name: String,
+
+    pub component_id: Uuid,
+    pub component_name: String,
+    pub component_revision_id: i64,
+    pub webhook_prefix_authority_and_path: Option<String>,
+    pub agent_type: Blob<AgentTypeSchema>,
+}
+
+impl DeploymentRegisteredAgentTypeScopedRecord {
+    pub fn try_into_deployed(
+        self,
+        owner_account_id: AccountId,
+        owner_account_email: AccountEmail,
+    ) -> Result<DeployedRegisteredAgentType, DeployRepoError> {
+        Ok(DeployedRegisteredAgentType {
+            agent_type: self.agent_type.into_value(),
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: self.component_id.into(),
+                component_revision: self.component_revision_id.try_into()?,
+                component_name: self.component_name,
+                account_id: owner_account_id,
+                account_email: owner_account_email,
+            },
+            webhook_prefix_authority_and_path: self.webhook_prefix_authority_and_path,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
 pub struct ResolvedAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -444,7 +479,7 @@ pub struct ResolvedAgentTypeRecord {
     pub component_name: String,
     pub component_revision_id: i64,
     pub webhook_prefix_authority_and_path: Option<String>,
-    pub agent_type: Blob<AgentType>,
+    pub agent_type: Blob<AgentTypeSchema>,
     pub owner_account_id: Uuid,
     pub owner_account_email: String,
 }

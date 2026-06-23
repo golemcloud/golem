@@ -16,7 +16,6 @@ harness = false
 
 [dependencies]
 golem-common = { workspace = true, default-features = false, features = ["client"] }
-golem-wasm = { workspace = true, default-features = false, features = ["client"] }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }

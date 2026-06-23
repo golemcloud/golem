@@ -17,11 +17,12 @@ use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
+use crate::schema::wit::{decode_value, encode_value};
 use crate::{
     agentic::{
         AgentTypeName, with_agent_initiator, with_agent_instance, with_agent_instance_async,
     },
-    golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
+    golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Guest},
 };
 
 fn serialize_principal(p: &Principal) -> Vec<u8> {
@@ -37,18 +38,16 @@ pub struct Component;
 impl Guest for Component {
     fn initialize(
         agent_type: String,
-        input: DataValue,
+        input: crate::schema::wit::wire::SchemaValueTree,
         principal: Principal,
     ) -> Result<(), AgentError> {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
-        let agent_types = agent_registry::get_all_agent_types();
-
-        let agent_type = agent_types
-            .iter()
-            .find(|x| x.type_name == agent_type)
+        let agent_type_name = AgentTypeName(agent_type.clone());
+        let _agent_type = agent_registry::get_enriched_agent_type_by_name(&agent_type_name)
             .unwrap_or_else(|| {
+                let agent_types = agent_registry::get_all_agent_types();
                 panic!(
                 "Agent definition not found for agent name: {}. Available agents in this app is {}",
                 agent_type,
@@ -60,9 +59,10 @@ impl Guest for Component {
             )
             });
 
-        let agent_type_name = AgentTypeName(agent_type.type_name.clone());
-
         register_principal(&principal);
+
+        let input = decode_value(&input)
+            .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
 
         with_agent_initiator(
             |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
@@ -74,9 +74,17 @@ impl Guest for Component {
     #[allow(clippy::await_holding_refcell_ref)]
     fn invoke(
         method_name: String,
-        input: DataValue,
+        input: crate::schema::wit::wire::SchemaValueTree,
         principal: Principal,
-    ) -> Result<DataValue, AgentError> {
+    ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
+        let (_agent_type_name, _, _) = parse_agent_id(
+            &std::env::var("GOLEM_AGENT_ID")
+                .expect("GOLEM_AGENT_ID environment variable must be set"),
+        )
+        .map_err(|e| AgentError::InvalidInput(e.to_string()))?;
+        let input = decode_value(&input)
+            .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
+
         with_agent_instance_async(|resolved_agent| async move {
             resolved_agent
                 .agent
@@ -84,6 +92,7 @@ impl Guest for Component {
                 .as_mut()
                 .invoke(method_name, input, principal)
                 .await
+                .map(|value| value.map(|value| encode_value(&value)))
         })
     }
 
@@ -172,6 +181,10 @@ impl LoadSnapshotGuest for Component {
 
         let (agent_type_name, agent_parameters, _) =
             parse_agent_id(&id).map_err(|e| e.to_string())?;
+        let agent_parameters = crate::decode_typed_schema_value(&agent_parameters)
+            .map_err(|e| e.to_string())?
+            .into_parts()
+            .1;
 
         with_agent_initiator(
             |initiator| async move { initiator.initiate(agent_parameters, principal).await },

@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ComponentError;
+use super::{ComponentError, environment_from_component_record};
 use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
+use crate::services::card::CardService;
 use crate::services::component::utils::prepare_component_files_for_upload;
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
@@ -27,14 +28,15 @@ use crate::services::environment_plugin_grant::{
 };
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{
+    AgentInitialPermissionTemplate, AgentTypeProvisionConfig,
+};
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
-use golem_common::model::agent::{AgentConfigSource, AgentType};
+use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
-    ComponentVerb, PermissionTarget,
+    ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
@@ -46,16 +48,18 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_common::schema::SchemaValue;
+use golem_common::schema::agent::{AgentTypeSchema, typed_schema_value_with_projected_defs};
+use golem_common::schema::render::from_json_value;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -65,6 +69,7 @@ use tracing::info;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
+    card_service: Arc<CardService>,
     object_store: Arc<ComponentObjectStore>,
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_agent_files_service: Arc<InitialAgentFilesService>,
@@ -76,6 +81,7 @@ pub struct ComponentWriteService {
 impl ComponentWriteService {
     pub fn new(
         component_repo: Arc<dyn ComponentRepo>,
+        card_service: Arc<CardService>,
         object_store: Arc<ComponentObjectStore>,
         component_compilation: Arc<dyn ComponentCompilationService>,
         initial_agent_files_service: Arc<InitialAgentFilesService>,
@@ -85,6 +91,7 @@ impl ComponentWriteService {
     ) -> Self {
         Self {
             component_repo,
+            card_service,
             object_store,
             component_compilation,
             initial_agent_files_service,
@@ -92,6 +99,34 @@ impl ComponentWriteService {
             environment_service,
             environment_plugin_grant_service,
         }
+    }
+
+    async fn create_default_initial_permissions(
+        &self,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        agent_types: &[AgentTypeSchema],
+        environment_name: &EnvironmentName,
+        component_name: &ComponentName,
+    ) -> Result<BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>, ComponentError> {
+        let mut result = BTreeMap::new();
+
+        for agent_type in agent_types {
+            let template =
+                AgentInitialPermissionTemplate::default_for(environment_name, component_name);
+            self.card_service
+                .create_agent_initial_card(
+                    component_id,
+                    component_revision,
+                    agent_type.type_name.clone(),
+                    &template,
+                )
+                .await?;
+
+            result.insert(agent_type.type_name.clone(), template);
+        }
+
+        Ok(result)
     }
 
     pub async fn create(
@@ -215,6 +250,16 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
+        let component_metadata = component_metadata.with_agent_initial_permissions(
+            self.create_default_initial_permissions(
+                component_id,
+                ComponentRevision::INITIAL,
+                component_metadata.agent_types(),
+                &environment.name,
+                &component_creation.component_name,
+            )
+            .await?,
+        );
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
@@ -279,18 +324,9 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(component_record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&component_record)?;
 
-        let component_name = ComponentName(component_record.name.clone());
+        let component_name = ComponentName(component_record.component.name.clone());
 
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
             .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
@@ -300,13 +336,7 @@ impl ComponentWriteService {
             return Err(ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let mut component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email.clone(),
-            environment.application_name.clone(),
-            environment.name.clone(),
-        )?;
+        let mut component = component_record.try_into_model()?;
 
         if component_update.current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -322,9 +352,12 @@ impl ComponentWriteService {
         let agent_types_changed = component_update.agent_types.is_some();
         let allow_incompatible_config = component_update.allow_incompatible_config;
 
-        let agent_types = component_update
-            .agent_types
-            .unwrap_or(component.metadata.agent_types().to_vec());
+        // When no agent type update is supplied, fall back to the schema-native
+        // agent types already stored on the existing component metadata.
+        let agent_types = match component_update.agent_types {
+            Some(agent_types) => agent_types,
+            None => component.metadata.agent_types().to_vec(),
+        };
 
         let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
         if agent_types_changed {
@@ -415,12 +448,22 @@ impl ComponentWriteService {
 
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 new_wasm.clone(),
                 final_provision_configs,
             )
             .await?;
+            component.metadata = metadata.with_agent_initial_permissions(
+                self.create_default_initial_permissions(
+                    component.id,
+                    component.revision,
+                    metadata.agent_types(),
+                    &environment.name,
+                    &component.component_name,
+                )
+                .await?,
+            );
         } else if agent_types_changed {
             // TODO: skip the download here
             let old_data = self
@@ -428,12 +471,22 @@ impl ComponentWriteService {
                 .get(environment_id, &component.object_store_key)
                 .await?;
 
-            component.metadata = analyze_and_validate_component_wasm(
+            let metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 Arc::from(old_data),
                 final_provision_configs,
             )
             .await?;
+            component.metadata = metadata.with_agent_initial_permissions(
+                self.create_default_initial_permissions(
+                    component.id,
+                    component.revision,
+                    metadata.agent_types(),
+                    &environment.name,
+                    &component_name,
+                )
+                .await?,
+            );
         } else if provision_configs_changed {
             component.metadata = component
                 .metadata
@@ -482,29 +535,14 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(component_record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&component_record)?;
 
-        let component_name = ComponentName(component_record.name.clone());
+        let component_name = ComponentName(component_record.component.name.clone());
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
             .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::Delete)?;
 
-        let component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email,
-            environment.application_name,
-            environment.name,
-        )?;
+        let component = component_record.try_into_model()?;
 
         if current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -711,7 +749,7 @@ impl ComponentWriteService {
         existing: AgentTypeProvisionConfig,
         update: AgentTypeProvisionConfigUpdate,
         uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
-        agent_type: &AgentType,
+        agent_type: &AgentTypeSchema,
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
@@ -847,7 +885,7 @@ fn resolve_plugins_for_creation(
 }
 
 fn validate_and_transform_config_entries(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_entries: Vec<AgentConfigEntryDto>,
 ) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
     validate_agent_config_declarations(agent_type)?;
@@ -874,13 +912,29 @@ fn validate_and_transform_config_entries(
             );
         }
 
-        let value =
-            ValueAndType::parse_with_type(&config_value.value.0, &matching_declaration.value_type)
-                .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+        // The DTO carries the config value as plain user JSON. Decode it
+        // (schema-guided) against the agent graph and the declaration's
+        // schema-native `value_type` (refs resolve through the agent's `defs`),
+        // validate it, then store a self-contained `TypedSchemaValue` whose defs
+        // are projected to exactly those reachable from `value_type`.
+        let declared_type = &matching_declaration.value_type;
+
+        let schema_value: SchemaValue =
+            from_json_value(&agent_type.schema, declared_type, &config_value.value.0).map_err(
+                |err| ComponentError::AgentConfigTypeMismatch {
                     agent: agent_type.type_name.clone(),
                     key: config_value.path.clone(),
-                    errors,
-                })?;
+                    errors: vec![format!("config value is not a valid schema value: {err}")],
+                },
+            )?;
+
+        validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
+            ComponentError::AgentConfigTypeMismatch {
+                agent: agent_type.type_name.clone(),
+                key: config_value.path.clone(),
+                errors: errors.iter().map(|e| e.to_string()).collect(),
+            }
+        })?;
 
         if !seen_keys.insert(config_value.path.clone()) {
             return Err(ComponentError::AgentConfigDuplicateValue {
@@ -888,6 +942,12 @@ fn validate_and_transform_config_entries(
                 path: config_value.path,
             });
         }
+
+        let value = typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            matching_declaration.value_type.clone(),
+            schema_value,
+        );
 
         results.push(TypedAgentConfigEntry {
             path: config_value.path,
@@ -899,7 +959,7 @@ fn validate_and_transform_config_entries(
 }
 
 fn check_config_entries_match(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config: &[TypedAgentConfigEntry],
 ) -> Result<(), ComponentError> {
     validate_agent_config_declarations(agent_type)?;
@@ -923,7 +983,25 @@ fn check_config_entries_match(
             );
         };
 
-        if entry.value.typ != matching_declaration.value_type {
+        // Strict compatibility gate. The stored config value is positional
+        // (records/variants carry no field/case names at runtime), so it may
+        // only be reinterpreted under the updated declaration when the two
+        // types are *structurally identical*. Field/case renames, reorderings
+        // and width changes are rejected because they would silently change
+        // the meaning of the stored value even though it would still
+        // "validate" against the new shape. The comparison is cross-graph so
+        // the stored value's own graph is compared against the updated agent
+        // graph, and coinductive so recursive types terminate.
+        // Compare the stored value's own graph against the updated agent graph
+        // plus the borrowed declared `value_type`; `is_equivalent_cross_graph`
+        // resolves refs through `defs` and never reads `graph.root`, so there is
+        // no need to clone the agent's whole `defs` into a temporary graph.
+        if !is_equivalent_cross_graph(
+            entry.value.graph(),
+            entry.value.root_type(),
+            &agent_type.schema,
+            &matching_declaration.value_type,
+        ) {
             return Err(ComponentError::AgentConfigOldConfigNotValid {
                 agent: agent_type.type_name.clone(),
                 key: entry.path.clone(),
@@ -934,7 +1012,7 @@ fn check_config_entries_match(
 }
 
 async fn analyze_and_validate_component_wasm(
-    agent_types: Vec<AgentType>,
+    agent_types: Vec<AgentTypeSchema>,
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> Result<ComponentMetadata, ComponentError> {
@@ -951,7 +1029,7 @@ async fn analyze_and_validate_component_wasm(
 }
 
 fn provision_configs_for_agent_types(
-    agent_types: &[AgentType],
+    agent_types: &[AgentTypeSchema],
     provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
     let agent_type_names = agent_types
@@ -986,6 +1064,27 @@ fn validate_component_metadata_invariants(
         }
     }
 
+    for agent_type in metadata.agent_types() {
+        match metadata.agent_type_initial_permission_template(&agent_type.type_name) {
+            Some(_) => {}
+            _ => {
+                return Err(ComponentError::MissingAgentInitialPermissionTemplate(
+                    agent_type.type_name.clone(),
+                ));
+            }
+        }
+    }
+
+    for agent_type_name in metadata.agent_type_initial_permission_templates().keys() {
+        if !agent_type_names.contains(agent_type_name) {
+            return Err(
+                ComponentError::UndeclaredAgentTypeInInitialPermissionTemplate(
+                    agent_type_name.clone(),
+                ),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -997,16 +1096,17 @@ fn authorize_component_permission(
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
-        owner: EnvironmentOwnerPattern::Environment {
+        owner: ComponentOwnerPattern::Component {
             account: environment.owner_account_email.clone(),
             application: environment.application_name.clone(),
             environment: environment.name.clone(),
+            component: component_name.clone(),
         },
-        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+        resource: ComponentResourcePattern::Any,
     }))
 }
 
-fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
+fn validate_agent_config_declarations(agent_type: &AgentTypeSchema) -> Result<(), ComponentError> {
     for declaration in &agent_type.config {
         validate_agent_config_path(&agent_type.type_name, &declaration.path)?;
     }

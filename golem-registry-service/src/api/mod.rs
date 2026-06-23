@@ -86,7 +86,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             HealthcheckApi,
             AccountsApi::new(
                 services.account_service.clone(),
-                services.plan_service.clone(),
                 services.token_service.clone(),
                 services.auth_service.clone(),
             ),

@@ -41,7 +41,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
                 Ok(HostResponseWallClock {
                     time: SerializableDateTime {
-                        seconds: result.seconds,
+                        seconds: result.seconds as i64,
                         nanoseconds: result.nanoseconds,
                     },
                 })
@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
                 Ok(HostResponseWallClock {
                     time: SerializableDateTime {
-                        seconds: result.seconds,
+                        seconds: result.seconds as i64,
                         nanoseconds: result.nanoseconds,
                     },
                 })

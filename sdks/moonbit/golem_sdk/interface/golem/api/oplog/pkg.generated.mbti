@@ -7,7 +7,6 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -34,21 +33,21 @@ pub(all) suberror WorkerError {
   EphemeralFuelExhausted(EphemeralFuelExhausted)
   EphemeralCannotSuspend(EphemeralCannotSuspend)
   ReadOnlyViolation(ReadOnlyViolation)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Types and methods
 pub(all) struct ActivatePluginParameters {
   timestamp : @wallClock.Datetime
   plugin : PluginInstallationDescription
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentInitializationParameters {
   idempotency_key : String
-  constructor_parameters : TypedDataValue
+  constructor_parameters : @types.TypedSchemaValue
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[Array[SpanData]]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum AgentInvocation {
   AgentInitialization(AgentInitializationParameters)
@@ -57,18 +56,19 @@ pub(all) enum AgentInvocation {
   LoadSnapshot(LoadSnapshotParameters)
   ProcessOplogEntries(ProcessOplogEntriesParameters)
   ManualUpdate(ManualUpdateParameters)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentInvocationFinishedParameters {
   timestamp : @wallClock.Datetime
   result : AgentInvocationResult
+  method_name : String?
   consumed_fuel : Int64
   component_revision : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentInvocationOutputParameters {
-  output : TypedDataValue
-} derive(Eq, @debug.Debug)
+  output : @types.TypedSchemaValue
+} derive(Eq, Show)
 
 pub(all) enum AgentInvocationResult {
   AgentInitialization(AgentInvocationOutputParameters)
@@ -77,65 +77,65 @@ pub(all) enum AgentInvocationResult {
   LoadSnapshot(FallibleResultParameters)
   SaveSnapshot(SaveSnapshotResultParameters)
   ProcessOplogEntries(FallibleResultParameters)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentInvocationStartedParameters {
   timestamp : @wallClock.Datetime
   invocation : AgentInvocation
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AgentMethodInvocationParameters {
   idempotency_key : String
   method_name : String
-  function_input : TypedDataValue
+  function_input : @types.TypedSchemaValue
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[Array[SpanData]]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum AgentMode {
   DURABLE
   EPHEMERAL
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 pub fn AgentMode::from(Int) -> Self
 pub fn AgentMode::ordinal(Self) -> Int
 
 pub(all) struct AgentTerminatedByQuotaError {
   environment_id : @host.EnvironmentId
   resource_name : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct AndThenState {
   left : Int
   right : Int
   on_right : Bool
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct BeginRemoteTransactionParameters {
   timestamp : @wallClock.Datetime
   transaction_id : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct CancelPendingInvocationParameters {
   timestamp : @wallClock.Datetime
   idempotency_key : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct CancelledParameters {
   timestamp : @wallClock.Datetime
   start_index : UInt64
-  partial : @types.ValueAndType?
-} derive(Eq, @debug.Debug)
+  partial : @types.TypedSchemaValue?
+} derive(Eq, Show)
 
 pub(all) struct ChangePersistenceLevelParameters {
   timestamp : @wallClock.Datetime
   persistence_level : @host.PersistenceLevel
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct CountBoxState {
   attempts : UInt
   inner : Int
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct CreateParameters {
   timestamp : @wallClock.Datetime
@@ -152,55 +152,55 @@ pub(all) struct CreateParameters {
   local_agent_config : Array[LocalAgentConfigEntry]
   original_phantom_id : @types.Uuid?
   instance_id : @types.Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct CreateResourceParameters {
   timestamp : @wallClock.Datetime
   id : UInt64
   name : String
   owner : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct DeactivatePluginParameters {
   timestamp : @wallClock.Datetime
   plugin : PluginInstallationDescription
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct DropResourceParameters {
   timestamp : @wallClock.Datetime
   id : UInt64
   name : String
   owner : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EndAtomicRegionParameters {
   timestamp : @wallClock.Datetime
   begin_index : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EndParameters {
   timestamp : @wallClock.Datetime
   start_index : UInt64
-  response : @types.ValueAndType?
+  response : @types.TypedSchemaValue?
   forced_commit : Bool
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EnvironmentPluginGrantId {
   uuid : @types.Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EphemeralCannotSuspend {
   reason : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EphemeralFuelExhausted {
   overdraft_limit : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct EphemeralSleepTooLong {
   requested_nanos : UInt64
   max_nanos : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ErrorParameters {
   timestamp : @wallClock.Datetime
@@ -208,33 +208,33 @@ pub(all) struct ErrorParameters {
   retry_from : UInt64
   inside_atomic_region : Bool
   retry_policy_state : RetryPolicyState?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ExternalSpanData {
   span_id : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct FailedUpdateParameters {
   timestamp : @wallClock.Datetime
   target_revision : UInt64
   details : String?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct FallibleResultParameters {
   error : String?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct FilesystemStorageUsageUpdateParameters {
   timestamp : @wallClock.Datetime
   delta : Int64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct FinishSpanParameters {
   timestamp : @wallClock.Datetime
   span_id : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct GetOplog(Int) derive(Eq, @debug.Debug)
+pub(all) struct GetOplog(Int) derive(Eq, Show)
 pub fn GetOplog::drop(Self) -> Unit
 pub fn GetOplog::get_next(Self) -> Array[PublicOplogEntry]?
 pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
@@ -242,21 +242,21 @@ pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
 pub(all) struct GrowMemoryParameters {
   timestamp : @wallClock.Datetime
   delta : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct JumpParameters {
   timestamp : @wallClock.Datetime
   jump : OplogRegion
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct LoadSnapshotParameters {
   snapshot : SnapshotData
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct LocalAgentConfigEntry {
   path : Array[String]
-  value : @types.ValueAndType
-} derive(Eq, @debug.Debug)
+  value : @types.TypedSchemaValue
+} derive(Eq, Show)
 
 pub(all) struct LocalSpanData {
   span_id : String
@@ -265,7 +265,7 @@ pub(all) struct LocalSpanData {
   linked_context : UInt64?
   attributes : Array[@context.Attribute]
   inherited : Bool
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum LogLevel {
   STDOUT
@@ -276,7 +276,7 @@ pub(all) enum LogLevel {
   WARN
   ERROR
   CRITICAL
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 pub fn LogLevel::from(Int) -> Self
 pub fn LogLevel::ordinal(Self) -> Int
 
@@ -285,11 +285,11 @@ pub(all) struct LogParameters {
   level : LogLevel
   context : String
   message : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ManualUpdateParameters {
   target_revision : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum OplogEntry {
   Create(RawCreateParameters)
@@ -333,17 +333,17 @@ pub(all) enum OplogEntry {
   OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters)
   SetRetryPolicy(SetRetryPolicyParameters)
   RemoveRetryPolicy(RemoveRetryPolicyParameters)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
   payload_id : @types.Uuid
   md5_hash : FixedArray[Byte]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum OplogPayload {
   Inline(FixedArray[Byte])
   External(OplogExternalPayload)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct OplogProcessorCheckpointParameters {
   timestamp : @wallClock.Datetime
@@ -352,28 +352,28 @@ pub(all) struct OplogProcessorCheckpointParameters {
   confirmed_up_to : UInt64
   sending_up_to : UInt64
   last_batch_start : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct OplogRegion {
   start : UInt64
   end : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct PairState {
   left : Int
   right : Int
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct PendingAgentInvocationParameters {
   timestamp : @wallClock.Datetime
   invocation : AgentInvocation
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct PendingUpdateParameters {
   timestamp : @wallClock.Datetime
   target_revision : UInt64
   description : UpdateDescription
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct PluginInstallationDescription {
   environment_plugin_grant_id : EnvironmentPluginGrantId
@@ -381,11 +381,11 @@ pub(all) struct PluginInstallationDescription {
   plugin_name : String
   plugin_version : String
   parameters : Array[(String, String)]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ProcessOplogEntriesParameters {
   idempotency_key : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum PublicOplogEntry {
   Create(CreateParameters)
@@ -429,19 +429,20 @@ pub(all) enum PublicOplogEntry {
   OplogProcessorCheckpoint(OplogProcessorCheckpointParameters)
   SetRetryPolicy(SetRetryPolicyParameters)
   RemoveRetryPolicy(RemoveRetryPolicyParameters)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawActivatePluginParameters {
   timestamp : @wallClock.Datetime
   plugin_grant_id : EnvironmentPluginGrantId
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawAgentInvocationFinishedParameters {
   timestamp : @wallClock.Datetime
   result : OplogPayload
+  method_name : String?
   consumed_fuel : Int64
   component_revision : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawAgentInvocationStartedParameters {
   timestamp : @wallClock.Datetime
@@ -450,19 +451,19 @@ pub(all) struct RawAgentInvocationStartedParameters {
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[SpanData]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawBeginRemoteTransactionParameters {
   timestamp : @wallClock.Datetime
   transaction_id : String
   original_begin_index : UInt64?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawCancelledParameters {
   timestamp : @wallClock.Datetime
   start_index : UInt64
   partial : OplogPayload?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawCreateParameters {
   timestamp : @wallClock.Datetime
@@ -479,31 +480,31 @@ pub(all) struct RawCreateParameters {
   local_agent_config : Array[RawLocalAgentConfigEntry]
   original_phantom_id : @types.Uuid?
   instance_id : @types.Uuid
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawCreateResourceParameters {
   timestamp : @wallClock.Datetime
   id : UInt64
   resource_type_id : ResourceTypeId
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawDeactivatePluginParameters {
   timestamp : @wallClock.Datetime
   plugin_grant_id : EnvironmentPluginGrantId
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawDropResourceParameters {
   timestamp : @wallClock.Datetime
   id : UInt64
   resource_type_id : ResourceTypeId
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawEndParameters {
   timestamp : @wallClock.Datetime
   start_index : UInt64
   response : OplogPayload?
   forced_commit : Bool
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawErrorParameters {
   timestamp : @wallClock.Datetime
@@ -511,12 +512,12 @@ pub(all) struct RawErrorParameters {
   retry_from : UInt64
   inside_atomic_region : Bool
   retry_policy_state : RetryPolicyState?
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawLocalAgentConfigEntry {
   path : Array[String]
-  value : @types.WitValue
-} derive(Eq, @debug.Debug)
+  value : @types.SchemaValueTree
+} derive(Eq, Show)
 
 pub(all) struct RawOplogProcessorCheckpointParameters {
   timestamp : @wallClock.Datetime
@@ -525,7 +526,7 @@ pub(all) struct RawOplogProcessorCheckpointParameters {
   confirmed_up_to : UInt64
   sending_up_to : UInt64
   last_batch_start : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawPendingAgentInvocationParameters {
   timestamp : @wallClock.Datetime
@@ -534,24 +535,24 @@ pub(all) struct RawPendingAgentInvocationParameters {
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[SpanData]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawPendingUpdateParameters {
   timestamp : @wallClock.Datetime
   description : RawUpdateDescription
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawSnapshotBasedUpdate {
   target_revision : UInt64
   payload : OplogPayload
   mime_type : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawSnapshotParameters {
   timestamp : @wallClock.Datetime
   data : OplogPayload
   mime_type : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawStartParameters {
   timestamp : @wallClock.Datetime
@@ -559,54 +560,54 @@ pub(all) struct RawStartParameters {
   function_name : String
   request : OplogPayload?
   durable_function_type : WrappedFunctionType
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RawSuccessfulUpdateParameters {
   timestamp : @wallClock.Datetime
   target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[EnvironmentPluginGrantId]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum RawUpdateDescription {
   Automatic(UInt64)
   SnapshotBased(RawSnapshotBasedUpdate)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ReadOnlyViolation {
   method_ : String
   host_function : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RemoteTransactionParameters {
   timestamp : @wallClock.Datetime
   begin_index : UInt64
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RemoveRetryPolicyParameters {
   timestamp : @wallClock.Datetime
   name : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct ResourceTypeId {
   name : String
   owner : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RetryPolicyState {
   nodes : Array[StateNode]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct RevertParameters {
   timestamp : @wallClock.Datetime
   dropped_region : OplogRegion
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct SaveSnapshotResultParameters {
   snapshot : SnapshotData
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
-pub(all) struct SearchOplog(Int) derive(Eq, @debug.Debug)
+pub(all) struct SearchOplog(Int) derive(Eq, Show)
 pub fn SearchOplog::drop(Self) -> Unit
 pub fn SearchOplog::get_next(Self) -> Array[(UInt64, PublicOplogEntry)]?
 pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
@@ -614,37 +615,37 @@ pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
 pub(all) struct SetRetryPolicyParameters {
   timestamp : @wallClock.Datetime
   policy : @retry.NamedRetryPolicy
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct SetSpanAttributeParameters {
   timestamp : @wallClock.Datetime
   span_id : String
   key : String
   value : @context.AttributeValue
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct SnapshotData {
   data : FixedArray[Byte]
   mime_type : String
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct SnapshotParameters {
   timestamp : @wallClock.Datetime
   data : SnapshotData
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum SpanData {
   LocalSpan(LocalSpanData)
   ExternalSpan(ExternalSpanData)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct StartParameters {
   timestamp : @wallClock.Datetime
   parent_start_index : UInt64?
   function_name : String
-  request : @types.ValueAndType?
+  request : @types.TypedSchemaValue?
   durable_function_type : WrappedFunctionType
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct StartSpanParameters {
   timestamp : @wallClock.Datetime
@@ -652,7 +653,7 @@ pub(all) struct StartSpanParameters {
   parent : String?
   linked_context_id : String?
   attributes : Array[@context.Attribute]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum StateNode {
   Counter(UInt)
@@ -661,28 +662,23 @@ pub(all) enum StateNode {
   CountBox(CountBoxState)
   AndThen(AndThenState)
   Pair(PairState)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct SuccessfulUpdateParameters {
   timestamp : @wallClock.Datetime
   target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[PluginInstallationDescription]
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) struct Timestamp {
   timestamp : @wallClock.Datetime
-} derive(Eq, @debug.Debug)
-
-pub(all) struct TypedDataValue {
-  value : @types.DataValue
-  schema : @types.DataSchema
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum UpdateDescription {
   AutoUpdate
   SnapshotBased(@host.Snapshot)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 pub(all) enum WrappedFunctionType {
   ReadLocal
@@ -691,7 +687,7 @@ pub(all) enum WrappedFunctionType {
   WriteRemote
   WriteRemoteBatched(UInt64?)
   WriteRemoteTransaction(UInt64?)
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Type aliases
 

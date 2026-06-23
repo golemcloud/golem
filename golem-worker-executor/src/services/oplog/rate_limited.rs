@@ -700,14 +700,14 @@ mod tests {
         use crate::services::oplog::OplogOps;
         use golem_common::model::oplog::host_functions::HostFunctionName;
         use golem_common::model::oplog::{DurableFunctionType, HostRequest, OplogPayload};
-        use golem_wasm::{FromValueAndType, IntoValueAndType};
+        use golem_common::schema::{FromSchema, IntoTypedSchemaValue};
 
         let oplog = make_oplog(resource_limits_with_rate(1000)).await;
 
         // make_oplog uses max_payload_size = 4096, so this is stored externally (deferred upload).
         let large_payload = vec![7u8; 64 * 1024];
-        let large_request = HostRequest::Custom(large_payload.clone().into_value_and_type());
-        let small_request = HostRequest::Custom("small".into_value_and_type());
+        let large_request = HostRequest::Custom(large_payload.clone().into_typed_schema_value().unwrap());
+        let small_request = HostRequest::Custom("small".into_typed_schema_value().unwrap());
 
         let base = oplog.current_oplog_index().await;
 
@@ -766,7 +766,7 @@ mod tests {
         let downloaded: HostRequest = oplog.download_payload(large_stored).await.unwrap();
         match downloaded {
             HostRequest::Custom(vnt) => {
-                assert_eq!(Vec::<u8>::from_value_and_type(vnt).unwrap(), large_payload);
+                assert_eq!(Vec::<u8>::from_value(vnt.value()).unwrap(), large_payload);
             }
             other => panic!("unexpected request: {other:?}"),
         }

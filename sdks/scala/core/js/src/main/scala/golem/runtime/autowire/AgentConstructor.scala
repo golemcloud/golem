@@ -17,57 +17,48 @@
 package golem.runtime.autowire
 
 import golem.Principal
-import golem.data._
-import golem.host.js._
-import golem.runtime.ConstructorMetadata
 import golem.FutureInterop
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
+import golem.runtime.{ConstructorMetadata, InputRecordCodec}
 
 import scala.concurrent.Future
 import scala.scalajs.js
 
+/**
+ * A wired agent constructor: decodes the `golem:agent@2.0.0` constructor input
+ * (a `schema-value-tree` whose root encodes the parameter-list record) via its
+ * [[InputRecordCodec]] and builds an instance.
+ */
 trait AgentConstructor[Instance] {
   def info: ConstructorMetadata
 
-  def schema: JsDataSchema
-
-  def initialize(payload: JsDataValue, principal: Principal): js.Promise[Instance]
+  def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance]
 }
 
 object AgentConstructor {
-  def asyncJs[A, Instance](ctorInfo: ConstructorMetadata)(build: (A, Principal) => js.Promise[Instance])(implicit
-    codec: GolemSchema[A]
-  ): AgentConstructor[Instance] =
-    async[A, Instance](ctorInfo)((a, principal) => FutureInterop.fromPromise(build(a, principal)))
 
-  def noArgs[Instance](description: String, prompt: Option[String] = None)(build: Principal => Instance)(implicit
-    codec: GolemSchema[Unit]
+  def sync[A, Instance](info: ConstructorMetadata, inputCodec: InputRecordCodec[A])(
+    build: (A, Principal) => Instance
   ): AgentConstructor[Instance] =
-    sync[Unit, Instance](ConstructorMetadata(name = None, description = description, promptHint = prompt))(
-      (_, principal) => build(principal)
-    )
+    async[A, Instance](info, inputCodec)((a, principal) => Future.successful(build(a, principal)))
 
-  def sync[A, Instance](ctorInfo: ConstructorMetadata)(build: (A, Principal) => Instance)(implicit
-    codec: GolemSchema[A]
-  ): AgentConstructor[Instance] =
-    async[A, Instance](ctorInfo)((a, principal) => Future.successful(build(a, principal)))
-
-  def async[A, Instance](
-    ctorInfo: ConstructorMetadata
-  )(build: (A, Principal) => Future[Instance])(implicit codec: GolemSchema[A]): AgentConstructor[Instance] =
+  def async[A, Instance](info: ConstructorMetadata, inputCodec: InputRecordCodec[A])(
+    build: (A, Principal) => Future[Instance]
+  ): AgentConstructor[Instance] = {
+    val ctorInfo = info
     new AgentConstructor[Instance] {
       override val info: ConstructorMetadata = ctorInfo
-      override val schema: JsDataSchema      = HostSchemaEncoder.encode(codec.schema)
 
-      override def initialize(payload: JsDataValue, principal: Principal): js.Promise[Instance] =
-        HostValueDecoder
-          .decode(codec.schema, payload)
-          .flatMap(codec.decode)
+      override def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
+        SchemaPayload
+          .decode[A](input)(inputCodec)
           .fold(
             err =>
               js.Promise
-                .reject(JsAgentError.invalidInput(err).asInstanceOf[Any])
+                .reject(JsAgentError.invalidInput(err.toString).asInstanceOf[Any])
                 .asInstanceOf[js.Promise[Instance]],
             value => FutureInterop.toPromise(build(value, principal))
           )
     }
+  }
 }

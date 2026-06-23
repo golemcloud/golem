@@ -1,7 +1,7 @@
 declare module 'golem:durability/durability@1.5.0' {
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemApi150Oplog from 'golem:api/oplog@1.5.0';
-  import * as golemCore150Types from 'golem:core/types@1.5.0';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
@@ -30,10 +30,10 @@ declare module 'golem:durability/durability@1.5.0' {
   export function currentDurableExecutionState(): DurableExecutionState;
   /**
    * Writes a record to the agent's oplog representing a durable function invocation
-   * The request and response are defined as pairs of value and type, which makes it
+   * The request and response are defined as schema-carrying values, which makes it
    * self-describing for observers of oplogs.
    */
-  export function persistDurableFunctionInvocation(functionName: string, request: ValueAndType, response: ValueAndType, functionType: DurableFunctionType): void;
+  export function persistDurableFunctionInvocation(functionName: string, request: TypedSchemaValue, response: TypedSchemaValue, functionType: DurableFunctionType): void;
   /**
    * Reads the next persisted durable function invocation from the oplog during replay
    */
@@ -55,7 +55,7 @@ declare module 'golem:durability/durability@1.5.0' {
   export type WrappedFunctionType = golemApi150Oplog.WrappedFunctionType;
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type Pollable = wasiIo023Poll.Pollable;
-  export type ValueAndType = golemCore150Types.ValueAndType;
+  export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type DurableFunctionType = WrappedFunctionType;
   /**
    * Represents the current durable execution state
@@ -76,15 +76,15 @@ declare module 'golem:durability/durability@1.5.0' {
   export type OplogEntryVersion = "v1" | "v2";
   /**
    * Represents a persisted durable function invocation. The `response` field
-   * contains a value and its type information together, making the user-defined payload observable by external tools.
+   * contains a value and its schema graph together, making the user-defined payload observable by external tools.
    */
   export type PersistedDurableFunctionInvocation = {
     /** The timestamp of the invocation. */
     timestamp: Datetime;
     /** The invoked function's unique name */
     functionName: string;
-    /** Arbitrary structured value (and type) describing the invocation's result */
-    response: ValueAndType;
+    /** Arbitrary structured value and schema graph describing the invocation's result */
+    response: TypedSchemaValue;
     /** Type of the durable function invocation */
     functionType: DurableFunctionType;
     /** Oplog entry version */

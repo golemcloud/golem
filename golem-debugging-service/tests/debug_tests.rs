@@ -1,6 +1,6 @@
 use crate::*;
 use golem_common::base_model::component::ComponentRevision;
-use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
@@ -512,6 +512,7 @@ async fn test_playback_with_overrides(
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: Timestamp::now_utc(),
             result: original_result.clone(),
+            method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,
         });
@@ -584,7 +585,7 @@ fn previous_index(index: OplogIndex) -> OplogIndex {
 async fn run_repo_add_two(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    repo_id: &LegacyParsedAgentId,
+    repo_id: &ParsedAgentId,
 ) -> anyhow::Result<()> {
     executor
         .invoke_and_await_agent(
@@ -610,7 +611,7 @@ async fn run_repo_add_two(
 async fn run_repo_workflow(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    repo_id: &LegacyParsedAgentId,
+    repo_id: &ParsedAgentId,
 ) -> anyhow::Result<RepoWorkflowResult> {
     // Add two items
     run_repo_add_two(executor, component, repo_id).await?;

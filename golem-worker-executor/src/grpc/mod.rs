@@ -51,8 +51,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
-use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal, UntypedDataValue};
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -65,6 +65,7 @@ use golem_common::model::{
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PendingUpdateKind, ScanCursor, ScheduledAction, ShardId, Timestamp,
 };
+use golem_common::schema::SchemaValue;
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
@@ -72,7 +73,6 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -298,7 +298,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if existing_entry.path != request_entry.path {
                 return false;
             }
-            let existing_json = existing_entry.value.to_json_value().ok();
+            // Compare the existing entry's plain (schema-guided) JSON (the same
+            // form the request DTO carries) against the requested value.
+            let existing_json = golem_common::schema::render::to_json_value(
+                existing_entry.value.graph(),
+                existing_entry.value.root_type(),
+                existing_entry.value.value(),
+            )
+            .ok();
             if existing_json.as_ref() != Some(&request_entry.value.0) {
                 return false;
             }
@@ -492,6 +499,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ForkWorkerRequest,
     ) -> Result<ForkWorkerResponse, WorkerExecutorError> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+
         let account_id_proto = request
             .component_owner_account_id
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
@@ -529,16 +542,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, &source_agent_id);
 
-        let account_email = AccountEmail::new(request.component_owner_account_email);
-
         self.services
             .worker_fork_service()
             .fork(
                 account_id,
-                &account_email,
                 &owned_source_agent_id,
                 &owned_target_agent_id.agent_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
+                &auth_ctx,
             )
             .await?;
 
@@ -1120,12 +1131,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        if let Ok(agent_id) = LegacyParsedAgentId::parse(
+        if let Ok(agent_id) = ParsedAgentId::parse(
             &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
         ) && let Some(agent_type) = component_metadata
             .metadata
-            .find_agent_type_by_name(&agent_id.agent_type)
+            .find_agent_type_by_name_ref(&agent_id.agent_type)
             && agent_type.mode == AgentMode::Ephemeral
         {
             return Err(WorkerExecutorError::invalid_request(
@@ -1146,13 +1157,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .component_service()
             .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
             .await
-            && let Ok(agent_id) = LegacyParsedAgentId::parse(
+            && let Ok(agent_id) = ParsedAgentId::parse(
                 &owned_agent_id.agent_id.agent_id,
                 &target_component_metadata.metadata,
             )
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(&agent_id.agent_type)
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {
@@ -1351,7 +1362,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1455,7 +1466,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1706,8 +1717,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
 
                 let agent_type =
-                    LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id)
-                        .ok();
+                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
                 let installation = agent_type
                     .as_ref()
@@ -1779,7 +1789,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         let agent_type =
-            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
         let installation = agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
@@ -1866,7 +1876,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "method_name is required for non-lookup invocations",
                 ))?;
 
-        let method_parameters: UntypedDataValue = request
+        let method_parameters: SchemaValue = request
             .method_parameters
             .clone()
             .ok_or(WorkerExecutorError::invalid_request(

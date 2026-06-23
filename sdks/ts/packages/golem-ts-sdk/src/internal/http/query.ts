@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { QueryVariable } from 'golem:agent/common@1.5.0';
+import { QueryVariable } from 'golem:agent/common@2.0.0';
 import { rejectEmptyString } from './validation';
 
 // parseQuery is intended for HTTP endpoint definitions, not mounts

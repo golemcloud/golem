@@ -40,8 +40,9 @@ pub struct TypeAttrs {
     /// field delegate to the inner type instead of getting a graph slot.
     pub transparent: bool,
     /// `#[schema(rename_all = "...")]` — default rename strategy for fields
-    /// and variant cases. Defaults to `kebab-case` (matching the
-    /// component-model convention).
+    /// and variant cases. Defaults to preserving the native Rust identifier so
+    /// generated bridges show identifiers exactly as written in the user's
+    /// code.
     pub rename_all: RenameAll,
     /// `#[schema(tag = "…", content = "…")]` — adjacently-tagged variant
     /// emission. Mutually exclusive with `#[schema(union)]`.
@@ -52,7 +53,9 @@ pub struct TypeAttrs {
 /// Strategy for default field / case naming.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameAll {
+    /// Keep the native Rust identifier verbatim.
     #[default]
+    Preserve,
     Kebab,
     Snake,
     Camel,
@@ -63,6 +66,7 @@ pub enum RenameAll {
 impl RenameAll {
     fn from_string(raw: &str, span: proc_macro2::Span) -> syn::Result<Self> {
         match raw {
+            "preserve" => Ok(Self::Preserve),
             "kebab-case" => Ok(Self::Kebab),
             "snake_case" => Ok(Self::Snake),
             "camelCase" => Ok(Self::Camel),
@@ -71,7 +75,7 @@ impl RenameAll {
             other => Err(syn::Error::new(
                 span,
                 format!(
-                    "unknown rename_all strategy `{other}` (expected one of `kebab-case`, `snake_case`, `camelCase`, `PascalCase`, `SCREAMING_SNAKE_CASE`)"
+                    "unknown rename_all strategy `{other}` (expected one of `preserve`, `kebab-case`, `snake_case`, `camelCase`, `PascalCase`, `SCREAMING_SNAKE_CASE`)"
                 ),
             )),
         }

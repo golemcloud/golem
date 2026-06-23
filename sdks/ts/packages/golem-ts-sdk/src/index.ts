@@ -14,8 +14,9 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentType, Principal, DataValue } from 'golem:agent/common@1.5.0';
-import { uuidToString, parseUuid } from 'golem:core/types@1.5.0';
+import { AgentType, Principal } from 'golem:agent/common@2.0.0';
+import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
+import { schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -46,7 +47,7 @@ export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
-export { CancellationToken } from 'golem:agent/host@1.5.0';
+export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';
@@ -65,11 +66,11 @@ let initializationPrincipal: Principal | undefined = undefined;
 
 async function initialize(
   agentTypeName: string,
-  input: DataValue,
+  input: SchemaValueTree,
   principal: Principal,
 ): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
-  // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
+  // If the input differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
   if (resolvedAgent) {
     throw createCustomError(`Agent is already initialized in this container`);
@@ -85,7 +86,7 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = initiator.initiate(input, principal);
+  const initiateResult = initiator.initiate(schemaValueFromWit(input), principal);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
@@ -97,17 +98,17 @@ async function initialize(
 
 async function invoke(
   methodName: string,
-  input: DataValue,
+  input: SchemaValueTree,
   principal: Principal,
-): Promise<DataValue> {
+): Promise<SchemaValueTree | undefined> {
   if (!resolvedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
 
-  const result = await resolvedAgent.invoke(methodName, input, principal);
+  const result = await resolvedAgent.invoke(methodName, schemaValueFromWit(input), principal);
 
   if (result.tag === 'ok') {
-    return result.val;
+    return result.val === undefined ? undefined : schemaValueToWit(result.val);
   } else {
     throw result.val;
   }

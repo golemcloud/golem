@@ -59,6 +59,7 @@ message RawOplogEntry {
     RawStartParameters start = 43;
     RawEndParameters end = 44;
     RawCancelledParameters cancelled = 45;
+    RawCardRevokedParameters card_revoked = 46;
   }
 }
 
@@ -174,6 +175,7 @@ message RawAgentInvocationFinishedParameters {
   RawOplogPayload result = 1;
   int64 consumed_fuel = 2;
   uint64 component_revision = 3;
+  optional string method_name = 4;
 }
 
 message RawErrorParameters {
@@ -308,6 +310,10 @@ message RawSetRetryPolicyParameters {
 
 message RawRemoveRetryPolicyParameters {
   string name = 1;
+}
+
+message RawCardRevokedParameters {
+  golem.common.UUID card_id = 1;
 }
 
 message RawOplogEntryWithIndex {

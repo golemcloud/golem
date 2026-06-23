@@ -30,7 +30,7 @@ use anyhow::anyhow;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -45,6 +45,7 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -100,10 +101,8 @@ pub trait OplogProcessorPlugin: Send + Sync {
     async fn lookup_invocation_status(
         &self,
         environment_id: EnvironmentId,
-        plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
         caller_account_id: AccountId,
-        caller_account_email: &golem_common::model::account::AccountEmail,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError>;
 }
@@ -389,7 +388,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     proto_metadata,
                     initial_oplog_index,
                     proto_entries,
-                    &worker_metadata.created_by_email,
+                    &AuthCtx::System,
                 )
                 .await
                 .map_err(|e| {
@@ -445,19 +444,16 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn lookup_invocation_status(
         &self,
         environment_id: EnvironmentId,
-        _plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
-        caller_account_id: AccountId,
-        caller_account_email: &golem_common::model::account::AccountEmail,
+        _caller_account_id: AccountId,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.worker_proxy
             .lookup_invocation_status(
                 target_agent_id,
                 idempotency_key.clone(),
-                caller_account_id,
-                caller_account_email,
                 Some(environment_id),
+                &AuthCtx::System,
             )
             .await
             .map_err(|e| {
@@ -1146,10 +1142,9 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let agent_type = LegacyParsedAgentId::parse_agent_type_name(
-            &self.initial_worker_metadata.agent_id.agent_id,
-        )
-        .ok();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
+                .ok();
         let plugin = match agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
@@ -1323,8 +1318,6 @@ impl ForwardingOplogState {
                 let oplog_plugins = self.oplog_plugins.clone();
                 let environment_id = metadata.environment_id;
                 let caller_account_id = metadata.created_by;
-                let caller_account_email = metadata.created_by_email.clone();
-                let plugin_clone = plugin.clone();
                 let target_clone = target_agent_id.clone();
                 let monitor = tokio::spawn(
                     async move {
@@ -1343,10 +1336,8 @@ impl ForwardingOplogState {
                             match oplog_plugins
                                 .lookup_invocation_status(
                                     environment_id,
-                                    &plugin_clone,
                                     &target_clone,
                                     caller_account_id,
-                                    &caller_account_email,
                                     &idempotency_key,
                                 )
                                 .await
@@ -1563,7 +1554,7 @@ impl ForwardingOplogState {
                 }
             }
 
-            let agent_type = LegacyParsedAgentId::parse_agent_type_name(
+            let agent_type = ParsedAgentId::parse_agent_type_name(
                 &self.initial_worker_metadata.agent_id.agent_id,
             )
             .ok();
@@ -1605,10 +1596,8 @@ impl ForwardingOplogState {
                 .oplog_plugins
                 .lookup_invocation_status(
                     environment_id,
-                    &plugin,
                     &old_target,
                     self.initial_worker_metadata.created_by,
-                    &self.initial_worker_metadata.created_by_email,
                     &last_key,
                 )
                 .await
@@ -1925,10 +1914,8 @@ mod tests {
         async fn lookup_invocation_status(
             &self,
             _environment_id: EnvironmentId,
-            _plugin: &InstalledPlugin,
             _target_agent_id: &AgentId,
             caller_account_id: AccountId,
-            _caller_account_email: &golem_common::model::account::AccountEmail,
             _idempotency_key: &IdempotencyKey,
         ) -> Result<InvocationStatus, WorkerExecutorError> {
             self.lookups

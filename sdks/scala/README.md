@@ -14,7 +14,6 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 - **Trait-based agent definitions** - Define your agent's interface as a Scala trait with annotated methods
 - **Automatic schema derivation** - Derives schemas for component-model serialization
 - **Macro-powered autowiring** - Compile-time generation of RPC handlers, WIT types, and metadata
-- **Multimodal data support** - First-class support for text and binary segments with MIME/language constraints
 - **Transaction helpers** - Both fallible and infallible transaction patterns with automatic rollback
 - **Snapshot integration** - Simple hooks for state persistence across component instances
 
@@ -47,9 +46,9 @@ object Name {
 }
 
 // Note on custom types:
-// - The SDK requires a `golem.data.GolemSchema[T]` for any input/output types used in agent methods.
-// - You typically do NOT define `GolemSchema` yourself; it is derived automatically from `zio.blocks.schema.Schema`.
-// - If you see a compile error like "Unable to summon GolemSchema ...", add/derive an implicit `Schema[T]` instead.
+// - The SDK requires a `zio.blocks.schema.Schema[T]` for any input/output types used in agent methods.
+// - From it the SDK derives the `golem.schema.IntoSchema[T]` / `golem.schema.FromSchema[T]` instances automatically.
+// - If you see a compile error about a missing IntoSchema/FromSchema, add/derive an implicit `Schema[T]`:
 //   Scala 3: `final case class MyType(...) derives Schema`
 //   Scala 2: `implicit val schema: Schema[MyType] = Schema.derived`
 
@@ -125,10 +124,10 @@ Notes:
 ### Custom data types (Schemas)
 
 If you use custom Scala types as **constructor inputs** (via `class Id(...)`) or **method parameters/return values**,
-the SDK must be able to derive a `golem.data.GolemSchema[T]` for them.
+the SDK must be able to derive a `zio.blocks.schema.Schema[T]` for them.
 
-You normally **do not** define `GolemSchema` directly -- instead, derive/provide a `zio.blocks.schema.Schema[T]`,
-and `GolemSchema` will be derived automatically from it.
+From that `Schema[T]` the SDK derives the `golem.schema.IntoSchema[T]` / `golem.schema.FromSchema[T]` instances it
+needs to cross the `golem:core/types@2.0.0` value boundary -- you only need to derive/provide the `Schema[T]`.
 
 For example (Scala 3):
 
@@ -195,7 +194,6 @@ object Example {
 
 - **[Getting started](example/README.md)** - Minimal end-to-end project setup (Scala.js + golem-cli)
 - **[Snapshot helpers](docs/snapshot.md)** - State persistence helpers
-- **[Multimodal helpers](docs/multimodal.md)** - Text/binary segment schemas with constraints
 - **[Transaction helpers](docs/transactions.md)** - Infallible and fallible transaction patterns
 - **[Result helpers](docs/result.md)** - WIT-friendly `Result` type for error handling
 - **[Supported versions](docs/supported-versions.md)** - Compatibility matrix
@@ -222,14 +220,14 @@ Agents can operate in different modes:
 - **`Durable`** - State persists across invocations (default)
 - **`Ephemeral`** - Fresh instance per invocation
 
-### Structured Schemas
+### Schemas
 
-ZIO-Golem uses a structured schema system that maps Scala types to WIT (WebAssembly Interface Types):
-
-- **Component** - Standard WIT component-model types (records, enums, lists, etc.)
-- **UnstructuredText** - Text with optional language constraints
-- **UnstructuredBinary** - Binary data with MIME type constraints
-- **Multimodal** - Composite payloads combining multiple modalities
+ZIO-Golem maps Scala types to WIT (WebAssembly Interface Types) through
+`zio.blocks.schema.Schema` derivation. Provide (or derive) a `Schema[T]` for any type used as a
+constructor input, method parameter, or return value, and the SDK derives the
+`golem.schema.IntoSchema[T]` / `golem.schema.FromSchema[T]` instances needed to cross the
+`golem:core/types@2.0.0` value boundary. Standard WIT component-model shapes (records, variants,
+enums, lists, options, results, primitives, etc.) are supported out of the box.
 
 ### Annotations
 

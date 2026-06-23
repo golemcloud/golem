@@ -8,7 +8,7 @@
   "keywords": ["golem", "wasm", "agent", "sdk", "webassembly", "durable", "component-model"],
   "description": "Golem SDK for MoonBit — build durable, fault-tolerant agents on the Golem platform",
   "scripts": {
-    "bindgen": "wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub"
+    "bindgen": "bash scripts/regen-bindings.sh"
   },
   "preferred-target": "wasm"
 }

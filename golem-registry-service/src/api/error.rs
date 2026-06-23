@@ -522,6 +522,10 @@ impl From<ComponentError> for ApiError {
             ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
+            ComponentError::MissingAgentInitialPermissionTemplate(_)
+            | ComponentError::UndeclaredAgentTypeInInitialPermissionTemplate(_) => {
+                Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
+            }
             ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::LimitExceeded(inner) => inner.into(),
@@ -602,6 +606,9 @@ impl From<PermissionShareError> for ApiError {
             PermissionShareError::InvalidGrant { .. }
             | PermissionShareError::InvalidRecipient { .. } => {
                 Self::bad_request(api::error_code::INVALID_PERMISSION_SHARE_GRANT, error)
+            }
+            PermissionShareError::GrantNotDelegable(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
             PermissionShareError::Unauthorized(inner) => inner.into(),
             PermissionShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {

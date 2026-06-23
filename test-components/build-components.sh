@@ -114,21 +114,25 @@ if [ "$check_only" = true ] && ([ "$clean_only" = true ] || [ "$rebuild" = true 
   exit 1
 fi
 
-# Locate the golem-cli binary produced by `cargo make build`. The workspace
-# target directory can be redirected (via CARGO_TARGET_DIR, a cargo config, or a
-# cargo wrapper script), so ask cargo for its actual location instead of
-# assuming the default ../target. Fall back to ../target if cargo metadata is
-# unavailable.
-if [ -n "${CARGO_TARGET_DIR:-}" ]; then
-  target_dir="$CARGO_TARGET_DIR"
-else
-  target_dir="$(cd "${TEST_COMP_DIR:-$(pwd)}/.." && cargo metadata --no-deps --format-version=1 2>/dev/null \
-    | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
-  if [ -z "$target_dir" ]; then
-    target_dir="${TEST_COMP_DIR:-$(pwd)}/../target"
+# Resolve the cargo target directory robustly so the script works even when the
+# target dir is redirected (e.g. via CARGO_TARGET_DIR, cargo config, or a cargo
+# wrapper). Falls back to CARGO_TARGET_DIR, then the default `<repo>/target`.
+resolve_target_dir() {
+  local repo_root="$1"
+  local target_dir=""
+  if command -v cargo >/dev/null 2>&1; then
+    target_dir=$(cargo metadata --no-deps --format-version 1 --manifest-path "${repo_root}/Cargo.toml" 2>/dev/null \
+      | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
   fi
-fi
-GOLEM_CLI="${target_dir}/debug/golem-cli"
+  if [ -z "$target_dir" ]; then
+    target_dir="${CARGO_TARGET_DIR:-${repo_root}/target}"
+  fi
+  printf '%s' "$target_dir"
+}
+
+REPO_ROOT="$(cd "${TEST_COMP_DIR:-$(pwd)}/.." && pwd)"
+TARGET_DIR="$(resolve_target_dir "$REPO_ROOT")"
+GOLEM_CLI="${TARGET_DIR}/debug/golem-cli"
 
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]

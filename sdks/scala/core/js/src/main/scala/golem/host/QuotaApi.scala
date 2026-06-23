@@ -17,11 +17,24 @@
 package golem.host
 
 import golem.host.js._
-import golem.data.GolemSchema
 import golem.Uuid
 import golem.EnvironmentId
+import golem.schema.{
+  Datetime => SchemaDatetime,
+  FromSchema,
+  FromSchemaError,
+  IntoSchema,
+  QuotaTokenSpec,
+  QuotaTokenValuePayload,
+  SchemaGraph,
+  SchemaType,
+  SchemaTypeBody,
+  SchemaValue,
+  U64
+}
 import zio.blocks.schema.Schema
 
+import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
@@ -143,19 +156,21 @@ object QuotaApi {
       underlying.merge(other.underlying)
 
     /**
-      * Reserve `amount` units, run `f`, then commit the actual usage returned
-      * by `f`.  Commits zero usage on failure and re-throws.
-      *
-      * {{{
-      *   val result = token.withReservation(BigInt(500)) { reservation =>
-      *     Future {
-      *       val data = callExternalApi()
-      *       (data.tokensUsed, data)
-      *     }
-      *   }
-      * }}}
-      */
-    def withReservation[T](amount: BigInt)(f: Reservation => Future[(BigInt, T)]): Future[Either[FailedReservation, T]] =
+     * Reserve `amount` units, run `f`, then commit the actual usage returned by
+     * `f`. Commits zero usage on failure and re-throws.
+     *
+     * {{{
+     *   val result = token.withReservation(BigInt(500)) { reservation =>
+     *     Future {
+     *       val data = callExternalApi()
+     *       (data.tokensUsed, data)
+     *     }
+     *   }
+     * }}}
+     */
+    def withReservation[T](amount: BigInt)(
+      f: Reservation => Future[(BigInt, T)]
+    ): Future[Either[FailedReservation, T]] =
       QuotaApi.withReservation(this, amount)(f)
 
     private[golem] def toRecord(): QuotaTokenRecord = {
@@ -220,58 +235,88 @@ object QuotaApi {
       )
 
     /**
-     * Automatic serialization for RPC: `QuotaToken` is transparently converted
-     * to/from [[QuotaTokenRecord]] when passing across agent boundaries.
+     * Automatic serialization for RPC: `QuotaToken` is a schema-native
+     * capability node (`golem:core/types@2.0.0` `quota-token` /
+     * `quota-token-value`), not a plain record. The receiver re-acquires a live
+     * lease against `(environment-id, resource-name)` from the
+     * [[QuotaTokenValuePayload]] snapshot.
      *
      * Users do not need to call `toRecord` / `fromRecord` manually.
      */
-    implicit val golemSchema: GolemSchema[QuotaToken] = {
-      val recordSchema = GolemSchema.fromBlocksSchema[QuotaTokenRecord]
-      new GolemSchema[QuotaToken] {
-        override def schema                                        = recordSchema.schema
-        override def elementSchema                                 = recordSchema.elementSchema
-        override def encode(value: QuotaToken)                     = recordSchema.encode(value.toRecord())
-        override def decode(value: golem.data.StructuredValue)     = recordSchema.decode(value).map(fromRecord)
-        override def encodeElement(value: QuotaToken)              = recordSchema.encodeElement(value.toRecord())
-        override def decodeElement(value: golem.data.ElementValue) = recordSchema.decodeElement(value).map(fromRecord)
+    implicit val intoSchema: IntoSchema[QuotaToken] =
+      new IntoSchema[QuotaToken] {
+        override lazy val graph: SchemaGraph =
+          SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec())))
+
+        override def toValue(token: QuotaToken): SchemaValue = {
+          val r = token.toRecord()
+          SchemaValue.QuotaTokenValue(
+            QuotaTokenValuePayload(
+              environmentId = r.environmentId,
+              resourceName = r.resourceName,
+              expectedUse = U64.toRawBits(r.expectedUse),
+              lastCredit = r.lastCredit.toLong,
+              lastCreditAt = SchemaDatetime(r.lastCreditAtSeconds.toLong, r.lastCreditAtNanos)
+            )
+          )
+        }
       }
-    }
+
+    implicit val fromSchema: FromSchema[QuotaToken] =
+      new FromSchema[QuotaToken] {
+        override def fromValue(value: SchemaValue): Either[FromSchemaError, QuotaToken] =
+          value match {
+            case SchemaValue.QuotaTokenValue(p) =>
+              Right(
+                fromRecord(
+                  QuotaTokenRecord(
+                    environmentId = p.environmentId,
+                    resourceName = p.resourceName,
+                    expectedUse = U64.fromRawBits(p.expectedUse),
+                    lastCredit = BigInt(p.lastCredit),
+                    lastCreditAtSeconds = BigInt(p.lastCreditAt.seconds),
+                    lastCreditAtNanos = p.lastCreditAt.nanoseconds
+                  )
+                )
+              )
+            case other =>
+              Left(FromSchemaError(s"expected quota-token value for QuotaToken, got $other"))
+          }
+      }
   }
 
   private implicit val ec: ExecutionContext = ExecutionContext.global
 
   /**
-    * Reserve `amount` units from `token`, run `f`, then commit the actual usage
-    * returned by `f`.  Commits zero usage on failure and re-throws, ensuring
-    * unused capacity is always returned to the pool.
-    *
-    * Returns `Future(Left(FailedReservation))` if the reservation could not be
-    * granted, or `Future(Right(value))` on success.
-    *
-    * {{{
-    *   val result = withReservation(token, BigInt(500)) { reservation =>
-    *     Future {
-    *       val data = callExternalApi()
-    *       (data.tokensUsed, data)
-    *     }
-    *   }
-    * }}}
-    */
+   * Reserve `amount` units from `token`, run `f`, then commit the actual usage
+   * returned by `f`. Commits zero usage on failure and re-throws, ensuring
+   * unused capacity is always returned to the pool.
+   *
+   * Returns `Future(Left(FailedReservation))` if the reservation could not be
+   * granted, or `Future(Right(value))` on success.
+   *
+   * {{{
+   *   val result = withReservation(token, BigInt(500)) { reservation =>
+   *     Future {
+   *       val data = callExternalApi()
+   *       (data.tokensUsed, data)
+   *     }
+   *   }
+   * }}}
+   */
   def withReservation[T](token: QuotaToken, amount: BigInt)(
     f: Reservation => Future[(BigInt, T)]
   ): Future[Either[FailedReservation, T]] =
     token.reserve(amount) match {
-      case Left(err) => Future.successful(Left(err))
+      case Left(err)          => Future.successful(Left(err))
       case Right(reservation) =>
-        f(reservation)
-          .map { case (used, value) =>
-            reservation.commit(used)
-            Right(value)
-          }
-          .recoverWith { case e: Throwable =>
-            reservation.commit(BigInt(0))
-            Future.failed(e)
-          }
+        f(reservation).map { case (used, value) =>
+          reservation.commit(used)
+          Right(value)
+        }.recoverWith { case e: Throwable =>
+          reservation.commit(BigInt(0))
+          Future.failed(e)
+        }
     }
 
   @js.native

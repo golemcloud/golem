@@ -324,13 +324,21 @@ async fn list_visible_environments_shows_owned_and_shared(
                 target_account_email: grantee.account_email.clone(),
                 name: PermissionShareName("visible-environment-access".to_string()),
                 data: PermissionShareData {
-                    lower_positive: vec![format!(
-                        "environment({}/{}) @ {} : view : {}",
-                        owner.account_email.as_str(),
-                        app_1.name.0,
-                        grantee.account_email.as_str(),
-                        env_1b.name.0,
-                    )],
+                    lower_positive: vec![
+                        format!(
+                            "application({}/{}) @ {} : view :",
+                            owner.account_email.as_str(),
+                            app_1.name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment({}/{}/{}) @ {} : view :",
+                            owner.account_email.as_str(),
+                            app_1.name.0,
+                            env_1b.name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                    ],
                     lower_negative: Vec::new(),
                     upper_positive: Vec::new(),
                     upper_negative: Vec::new(),
@@ -365,17 +373,15 @@ async fn list_visible_environments_shows_owned_and_shared(
     assert!(grantee_env_ids.contains(&env_1b.id));
     assert!(!grantee_env_ids.contains(&env_2a.id));
 
-    // A single-environment grant is not enough for the application-scoped listing endpoint.
-    // Partial listing is intentionally handled by list_visible_environments instead.
-    let list_application_result = client_grantee
+    // The application-scoped listing endpoint returns only environments visible to the caller.
+    let listed_env_ids = client_grantee
         .list_application_environments(&app_1.id.0)
-        .await;
-    assert_matches!(
-        list_application_result,
-        Err(golem_client::Error::Item(
-            RegistryServiceListApplicationEnvironmentsError::Error404(_)
-        ))
-    );
+        .await?
+        .values
+        .into_iter()
+        .map(|env| env.id)
+        .collect::<HashSet<_>>();
+    assert_eq!(listed_env_ids, HashSet::from_iter([env_1b.id]));
 
     Ok(())
 }
@@ -470,11 +476,11 @@ async fn deleted_account_hides_shared_environments_from_grantee(
                 name: PermissionShareName("deleted-account-shared-environment".to_string()),
                 data: PermissionShareData {
                     lower_positive: vec![format!(
-                        "environment({}/{}) @ {} : view : {}",
+                        "environment({}/{}/{}) @ {} : view :",
                         owner.account_email.as_str(),
                         env.application_name.0,
-                        grantee.account_email.as_str(),
                         env.name.0,
+                        grantee.account_email.as_str(),
                     )],
                     lower_negative: Vec::new(),
                     upper_positive: Vec::new(),

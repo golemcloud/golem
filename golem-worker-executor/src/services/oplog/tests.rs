@@ -22,7 +22,7 @@ use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
+use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
@@ -32,9 +32,9 @@ use golem_common::model::{
 };
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
+use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
 use nonempty_collections::nev;
 use std::collections::HashSet;
 use std::sync::RwLock;
@@ -804,8 +804,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let (start_idx, end_idx) = oplog
         .add_completed_host_call(
             HostFunctionName::Custom("f1".to_string()),
-            &HostRequest::Custom("request".into_value_and_type()),
-            &HostResponse::Custom("response".into_value_and_type()),
+            &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
+            &HostResponse::Custom("response".to_string().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
             None,
         )
@@ -817,9 +817,9 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .add_agent_invocation_started(AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
             method_name: "f2".to_string(),
-            input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                "request".into_value(),
-            )]),
+            input: SchemaValue::Record {
+                fields: vec![SchemaValue::String("request".to_string())],
+            },
             invocation_context: InvocationContextStack::fresh_rounded(),
             principal: Principal::anonymous(),
         })
@@ -829,10 +829,11 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry3 = oplog
         .add_agent_invocation_finished(
             &AgentInvocationResult::AgentMethod {
-                output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    "response".into_value(),
-                )]),
+                output: SchemaValue::Record {
+                    fields: vec![SchemaValue::String("response".to_string())],
+                },
             },
+            Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
         )
@@ -910,7 +911,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 .await
                 .unwrap();
             match response {
-                HostResponse::Custom(vnt) => String::from_value_and_type(vnt).unwrap(),
+                HostResponse::Custom(vnt) => String::from_value(vnt.value()).unwrap(),
                 _ => panic!("unexpected response"),
             }
         }
@@ -924,10 +925,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 .unwrap();
             match payload {
                 AgentInvocationPayload::AgentMethod { input, .. } => match input {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            String::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -945,10 +944,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 .unwrap();
             match result {
                 AgentInvocationResult::AgentMethod { output } => match output {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            String::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -1011,8 +1008,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let (start_idx, end_idx) = oplog
         .add_completed_host_call(
             HostFunctionName::Custom("f1".to_string()),
-            &HostRequest::Custom("request".into_value_and_type()),
-            &HostResponse::Custom(large_payload1.clone().into_value_and_type()),
+            &HostRequest::Custom("request".to_string().into_typed_schema_value().unwrap()),
+            &HostResponse::Custom(large_payload1.clone().into_typed_schema_value().unwrap()),
             DurableFunctionType::ReadRemote,
             None,
         )
@@ -1024,9 +1021,12 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .add_agent_invocation_started(AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
             method_name: "f2".to_string(),
-            input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                large_payload2.clone().into_value(),
-            )]),
+            input: SchemaValue::Record {
+                fields: vec![SchemaValue::Binary(BinaryValuePayload {
+                    bytes: large_payload2.clone(),
+                    mime_type: None,
+                })],
+            },
             invocation_context: InvocationContextStack::fresh_rounded(),
             principal: Principal::anonymous(),
         })
@@ -1036,10 +1036,14 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry3 = oplog
         .add_agent_invocation_finished(
             &AgentInvocationResult::AgentMethod {
-                output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    large_payload3.clone().into_value(),
-                )]),
+                output: SchemaValue::Record {
+                    fields: vec![SchemaValue::Binary(BinaryValuePayload {
+                        bytes: large_payload3.clone(),
+                        mime_type: None,
+                    })],
+                },
             },
+            Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
         )
@@ -1117,7 +1121,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 .await
                 .unwrap();
             match response {
-                HostResponse::Custom(vnt) => Vec::<u8>::from_value_and_type(vnt).unwrap(),
+                HostResponse::Custom(vnt) => Vec::<u8>::from_value(vnt.value()).unwrap(),
                 _ => panic!("unexpected response"),
             }
         }
@@ -1131,10 +1135,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 .unwrap();
             match payload {
                 AgentInvocationPayload::AgentMethod { input, .. } => match input {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            Vec::<u8>::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -1152,10 +1154,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 .unwrap();
             match result {
                 AgentInvocationResult::AgentMethod { output } => match output {
-                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
-                        Some(UntypedElementValue::ComponentModel(value)) => {
-                            Vec::<u8>::from_value(value).unwrap()
-                        }
+                    SchemaValue::Record { fields } => match fields.into_iter().next() {
+                        Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
                     },
                     _ => panic!("unexpected data value"),
@@ -1286,7 +1286,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         // One simple Start entry per iteration; the test only cares about
         // per-entry layer transfer behaviour, not the Start/End pairing.
         let request = oplog
-            .upload_payload(&HostRequest::Custom(i.into_value_and_type()))
+            .upload_payload(&HostRequest::Custom(i.into_typed_schema_value().unwrap()))
             .await
             .unwrap();
         let entry = OplogEntry::Start {
@@ -3201,7 +3201,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
         .await;
 
     let large_payload = vec![7u8; 1024 * 1024];
-    let request = HostRequest::Custom(large_payload.clone().into_value_and_type());
+    let request = HostRequest::Custom(large_payload.clone().into_typed_schema_value().unwrap());
 
     let last_oplog_idx = oplog.current_oplog_index().await;
     // Deliberately drop the returned `PendingUpload` without awaiting it: the commit barrier in
@@ -3247,7 +3247,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
         .unwrap();
     match downloaded {
         HostRequest::Custom(vnt) => {
-            assert_eq!(Vec::<u8>::from_value_and_type(vnt).unwrap(), large_payload);
+            assert_eq!(Vec::<u8>::from_value(vnt.value()).unwrap(), large_payload);
         }
         other => panic!("unexpected request: {other:?}"),
     }
@@ -3286,7 +3286,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
         )
         .await;
 
-    let request = HostRequest::Custom("request".into_value_and_type());
+    let request = HostRequest::Custom("request".into_typed_schema_value().unwrap());
 
     let last_oplog_idx = oplog.current_oplog_index().await;
     let (start_idx, pending) = oplog
@@ -3329,7 +3329,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
         .unwrap();
     match downloaded {
         HostRequest::Custom(vnt) => {
-            assert_eq!(String::from_value_and_type(vnt).unwrap(), "request");
+            assert_eq!(String::from_value(vnt.value()).unwrap(), "request");
         }
         other => panic!("unexpected request: {other:?}"),
     }

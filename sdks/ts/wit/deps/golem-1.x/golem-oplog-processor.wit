@@ -2,7 +2,7 @@ package golem:api@1.5.0;
 
 interface oplog-processor {
     use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
-    use golem:core/types@1.5.0.{wit-value, account-id, component-id, agent-id};
+    use golem:core/types@2.0.0.{account-id, component-id, agent-id};
 
     use host.{oplog-index, agent-metadata};
     use oplog.{oplog-entry};

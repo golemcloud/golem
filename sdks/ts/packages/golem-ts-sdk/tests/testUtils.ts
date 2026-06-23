@@ -13,11 +13,15 @@
 // limitations under the License.
 
 import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { AnalysedType, NameTypePair } from '../src/internal/mapping/types/analysedType';
 import { AgentClassName } from '../src';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
+import {
+  ResolvedField,
+  ResolvedGraph,
+  ResolvedType,
+} from '../src/internal/mapping/types/resolvedType';
 
 export const FooAgentClassName = new AgentClassName('FooAgent');
 export const BarAgentClassName = new AgentClassName('BarAgent');
@@ -33,104 +37,115 @@ export const SnapshottingEveryNAgentClassName = new AgentClassName('Snapshotting
 export const ConstructorUnionOrderAgentClassName = new AgentClassName('ConstructorUnionOrderAgent');
 export const ReadOnlyAgentClassName = new AgentClassName('ReadOnlyAgent');
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getTestInterfaceType(): [AnalysedType, Type.Type] {
+/**
+ * The pair returned by the `getXxxType()` helpers: the schema-native
+ * {@link ResolvedGraph} produced by the production mapper (as stored in the
+ * registry by the `@agent` decorator) plus the original reflected `Type.Type`.
+ */
+export type TypePair = [ResolvedGraph, Type.Type];
+
+export function getTestInterfaceType(): TypePair {
   return fetchTypeFromBarAgent('TestInterfaceType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getTestMapType(): [AnalysedType, Type.Type] {
+export function getTestMapType(): TypePair {
   return fetchTypeFromBarAgent('MapType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getTestObjectType(): [AnalysedType, Type.Type] {
+export function getTestObjectType(): TypePair {
   return fetchTypeFromBarAgent('ObjectType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getTestListOfObjectType(): [AnalysedType, Type.Type] {
+export function getTestListOfObjectType(): TypePair {
   return fetchTypeFromBarAgent('ListComplexType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getUnionType(): [AnalysedType, Type.Type] {
+export function getUnionType(): TypePair {
   return fetchTypeFromBarAgent('UnionType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getResultTypeExact(): [AnalysedType, Type.Type] {
+export function getResultTypeExact(): TypePair {
   return fetchTypeFromBarAgent('ResultTypeExactBoth');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getUnionComplexType(): [AnalysedType, Type.Type] {
+export function getUnionComplexType(): TypePair {
   return fetchTypeFromBarAgent('UnionComplexType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getTupleType(): [AnalysedType, Type.Type] {
+export function getTupleType(): TypePair {
   return fetchTypeFromBarAgent('TupleType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getTupleComplexType(): [AnalysedType, Type.Type] {
+export function getTupleComplexType(): TypePair {
   return fetchTypeFromBarAgent('TupleComplexType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getBooleanType(): [AnalysedType, Type.Type] {
+export function getBooleanType(): TypePair {
   return fetchTypeFromBarAgent('boolean');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getStringType(): [AnalysedType, Type.Type] {
+export function getStringType(): TypePair {
   return fetchTypeFromBarAgent('string');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getNumberType(): [AnalysedType, Type.Type] {
+export function getNumberType(): TypePair {
   return fetchTypeFromBarAgent('number');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getPromiseType(): [AnalysedType, Type.Type] {
+export function getPromiseType(): TypePair {
   return fetchTypeFromBarAgent('PromiseType');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getUnionWithLiterals(): [AnalysedType, Type.Type] {
+export function getUnionWithLiterals(): TypePair {
   return fetchTypeFromBarAgent('UnionWithLiterals');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getUnionWithBooleanInMiddle(): [AnalysedType, Type.Type] {
+export function getUnionWithBooleanInMiddle(): TypePair {
   return fetchTypeFromBarAgent('UnionWithBooleanInMiddle');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getImportedSourceOrderedUnion(): [AnalysedType, Type.Type] {
+export function getImportedSourceOrderedUnion(): TypePair {
   return fetchTypeFromBarAgent('ImportedSourceOrderedUnion');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getObjectOrBooleanOrUndefined(): [AnalysedType, Type.Type] {
+export function getObjectOrBooleanOrUndefined(): TypePair {
   return fetchTypeFromBarAgent('ObjectOrBooleanOrUndefined');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getUnionWithOnlyLiterals(): [AnalysedType, Type.Type] {
+export function getUnionWithOnlyLiterals(): TypePair {
   return fetchTypeFromBarAgent('UnionWithOnlyLiterals');
 }
 
-// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
-export function getRecordFieldsFromAnalysedType(
-  analysedType: AnalysedType,
-): NameTypePair[] | undefined {
-  return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
+/** Resolve a graph's root to its underlying composite, following a top-level `ref`. */
+export function resolveRoot(graph: ResolvedGraph): ResolvedType {
+  const root = graph.root;
+  if (root.body.tag === 'ref') {
+    const def = graph.defs.get(root.body.id);
+    if (!def) throw new Error(`Test failure: unresolved ref ${root.body.id}`);
+    return def;
+  }
+  return root;
 }
 
-export function fetchTypeFromBarAgent(typeNameInTestData: string): [AnalysedType, Type.Type] {
+/** The record fields of a graph whose (possibly ref'd) root is a record. */
+export function getRecordFields(graph: ResolvedGraph): ResolvedField[] | undefined {
+  const root = resolveRoot(graph);
+  return root.body.tag === 'record' ? root.body.fields : undefined;
+}
+
+/**
+ * Build a sub-graph rooted at a named field of a record graph, preserving the
+ * original `defs` so any `ref`s in the field type still resolve.
+ */
+export function pickField(graph: ResolvedGraph, fieldName: string): ResolvedGraph {
+  const fields = getRecordFields(graph);
+  if (!fields) throw new Error('Test failure: expected a record graph');
+  const field = fields.find((f) => f.name === fieldName);
+  if (!field) throw new Error(`Test failure: missing field ${fieldName}`);
+  return { defs: graph.defs, root: field.type };
+}
+
+export function fetchTypeFromBarAgent(typeNameInTestData: string): TypePair {
   const complexAgentMetadata = TypeMetadata.get(BarAgentClassName.value);
 
   if (!complexAgentMetadata) {
@@ -145,13 +160,13 @@ export function fetchTypeFromBarAgent(typeNameInTestData: string): [AnalysedType
   if (constructorArg) {
     const typeInfo = AgentConstructorParamRegistry.getParamType('BarAgent', constructorArg.name);
 
-    if (!typeInfo || typeInfo.tag !== 'analysed') {
+    if (!typeInfo || typeInfo.tag !== 'schema') {
       throw new Error(
         `Test failure: Unsupported type for constructor parameter ${constructorArg.name}`,
       );
     }
 
-    return [typeInfo.val, constructorArg.type];
+    return [typeInfo.graph, constructorArg.type];
   }
 
   const methods = Array.from(complexAgentMetadata.methods);
@@ -160,11 +175,11 @@ export function fetchTypeFromBarAgent(typeNameInTestData: string): [AnalysedType
     if (method.returnType && Type.getTypeName(method.returnType) === typeNameInTestData) {
       const returnType = AgentMethodRegistry.getReturnType('BarAgent', name);
 
-      if (!returnType || returnType.tag !== 'analysed') {
+      if (!returnType || returnType.tag !== 'single' || returnType.type.tag !== 'schema') {
         throw new Error(`Return type ${returnType?.tag} not supported in test data`);
       }
 
-      return [returnType.val, method.returnType];
+      return [returnType.type.graph, method.returnType];
     }
 
     const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
@@ -175,13 +190,13 @@ export function fetchTypeFromBarAgent(typeNameInTestData: string): [AnalysedType
     if (param) {
       const typeInfo = AgentMethodParamRegistry.getParamType('BarAgent', name, param[0]);
 
-      if (!typeInfo || typeInfo.tag !== 'analysed') {
+      if (!typeInfo || typeInfo.tag !== 'schema') {
         throw new Error(
           `Test failure: Unsupported type for parameter ${param[0]} in method ${name}`,
         );
       }
 
-      return [typeInfo.val, param[1]];
+      return [typeInfo.graph, param[1]];
     }
   }
   throw new Error(

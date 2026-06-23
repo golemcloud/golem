@@ -160,9 +160,9 @@ pub fn get_remote_client(
     quote! {
         pub struct #remote_client_type_name {
             agent_type_name: String,
-            constructor_data: golem_rust::golem_agentic::golem::agent::common::DataValue,
+            constructor_data: golem_rust::schema::wit::wire::SchemaValueTree,
             phantom_id: Option<golem_rust::Uuid>,
-            component_id: golem_rust::golem_wasm::ComponentId,
+            component_id: golem_rust::schema::wit::wire::ComponentId,
             wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
         }
 
@@ -277,23 +277,13 @@ mod tests {
 fn generate_constructor_data_value_params_encoding(
     param_idents: &[proc_macro2::Ident],
 ) -> proc_macro2::TokenStream {
-    match param_idents.len() {
-        0 => quote! {
-            let data_value = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]);
-        },
-        1 => {
-            let single_ident = &param_idents[0];
-            quote! {
-                let data_value = golem_rust::agentic::Schema::to_data_value(#single_ident)
-                    .expect("Failed to convert constructor parameter");
-            }
-        }
-        _ => quote! {
-            let data_value = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![
-                #(golem_rust::agentic::Schema::to_element_value(#param_idents)
+    quote! {
+        let data_value = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
+            fields: vec![
+                #(<_ as golem_rust::agentic::Schema>::to_schema_value(#param_idents)
                     .expect("Failed to convert constructor parameter")),*
-            ]);
-        },
+            ],
+        });
     }
 }
 
@@ -323,6 +313,7 @@ fn get_remote_agent_methods_info(
 
             let input_defs = collect_input_defs_without_principal(&method.sig);
             let input_idents = collect_input_idents_without_principal(&method.sig);
+            let input_types = collect_input_types_without_principal(&method.sig);
 
             let method_name = &method.sig.ident;
             let trigger_name = format_ident!("trigger_{}", method_name);
@@ -343,6 +334,7 @@ fn get_remote_agent_methods_info(
                 &schedule_cancelable_name,
                 &input_defs,
                 &input_idents,
+                &input_types,
                 &method.sig,
             ))
         })
@@ -436,23 +428,52 @@ fn collect_input_idents_without_principal(sig: &syn::Signature) -> Vec<syn::Iden
         .collect()
 }
 
-fn generate_input_encoding(input_idents: &[syn::Ident]) -> proc_macro2::TokenStream {
-    match input_idents.len() {
-        0 => quote! {
-            let input = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]);
-        },
-        1 => {
-            let ident = &input_idents[0];
-            quote! {
-                let input = golem_rust::agentic::Schema::to_data_value(#ident)
-                    .expect("Failed to encode parameter");
+fn collect_input_types_without_principal(sig: &syn::Signature) -> Vec<syn::Type> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pat_type) => {
+                if let Type::Path(type_path) = &*pat_type.ty
+                    && type_path
+                        .path
+                        .segments
+                        .last()
+                        .is_some_and(|seg| seg.ident == "Principal")
+                {
+                    None
+                } else {
+                    Some((*pat_type.ty).clone())
+                }
             }
-        }
+            FnArg::Receiver(_) => None,
+        })
+        .collect()
+}
+
+fn generate_input_encoding(
+    input_idents: &[syn::Ident],
+    input_types: &[syn::Type],
+) -> proc_macro2::TokenStream {
+    match (input_idents, input_types) {
+        ([], []) => quote! {
+            let input = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
+                fields: vec![],
+            });
+        },
+        ([ident], [ty]) => quote! {
+            let __input_value = <#ty as golem_rust::agentic::Schema>::to_schema_value(#ident)
+                .expect("Failed to encode parameter");
+            let input = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
+                fields: vec![__input_value],
+            });
+        },
         _ => quote! {
-            let input = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![
-                #(golem_rust::agentic::Schema::to_element_value(#input_idents)
-                    .expect("Failed to encode parameter")),*
-            ]);
+            let input = golem_rust::encode_schema_value(&golem_rust::SchemaValue::Record {
+                fields: vec![
+                    #(<_ as golem_rust::agentic::Schema>::to_schema_value(#input_idents)
+                        .expect("Failed to encode parameter")),*
+                ],
+            });
         },
     }
 }
@@ -464,6 +485,7 @@ fn generate_method_code(
     schedule_cancelable_name: &syn::Ident,
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
+    input_types: &[syn::Type],
     sig: &syn::Signature,
 ) -> proc_macro2::TokenStream {
     let remote_method_name = method_name.to_string();
@@ -476,14 +498,18 @@ fn generate_method_code(
     let process_invoke_result = match &sig.output {
         syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => {
             quote! {
-                <#ty as golem_rust::agentic::Schema>::from_data_value(rpc_result_ok)
+                let output_schema = <#ty as golem_rust::agentic::Schema>::get_type();
+                <#ty as golem_rust::agentic::Schema>::from_schema_value(
+                    rpc_result_ok.expect("remote method returned no value"),
+                    output_schema
+                )
                     .expect("Failed to deserialize rpc result to return type")
             }
         }
         _ => quote! {},
     };
 
-    let encode_input = generate_input_encoding(input_idents);
+    let encode_input = generate_input_encoding(input_idents, input_types);
 
     quote! {
         pub async fn #method_name(#(#input_defs),*) -> #return_type {
@@ -494,8 +520,8 @@ fn generate_method_code(
                 &input
             );
 
-            let rpc_result: Result<golem_rust::golem_agentic::golem::agent::common::DataValue, golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                golem_rust::agentic::await_invoke_result(rpc_result_future).await;
+            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
+                golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await;
 
             let rpc_result_ok =
                 rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));

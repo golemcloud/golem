@@ -29,10 +29,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
     revert_worker_response, search_oplog_response, update_worker_response,
 };
-use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId, UntypedDataValue};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
@@ -46,19 +46,20 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
+use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::render::from_json_value;
+use golem_common::schema::validation::validate_value;
+use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream};
+use golem_test_framework::dsl::{AgentResult, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::Streaming;
-use tracing::debug;
 use uuid::Uuid;
 
 #[async_trait::async_trait]
@@ -360,7 +361,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
@@ -402,13 +403,17 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
         let agent_id = AgentId::from_agent_id(component.id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+
+        let (_graph, value) = params.into_parts();
+        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+            value.into();
 
         let result = self
             .client
@@ -416,7 +421,7 @@ impl TestDsl for TestWorkerExecutor {
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(agent_id.clone().into()),
                 method_name: Some(method_name.to_string()),
-                method_parameters: Some(UntypedDataValue::from(params).into()),
+                method_parameters: Some(proto_method_parameters),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
                 schedule_at: None,
                 idempotency_key: Some(idempotency_key.clone().into()),
@@ -445,18 +450,22 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         _deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
         let key = idempotency_key
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
+
+        let (_graph, value) = params.into_parts();
+        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+            value.into();
 
         let result = self
             .client
@@ -464,7 +473,7 @@ impl TestDsl for TestWorkerExecutor {
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(worker_agent_id.clone().into()),
                 method_name: Some(method_name.to_string()),
-                method_parameters: Some(UntypedDataValue::from(params).into()),
+                method_parameters: Some(proto_method_parameters),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: Some(key.into()),
@@ -483,50 +492,14 @@ impl TestDsl for TestWorkerExecutor {
                 "No response from golem-worker-executor invoke_agent call"
             )),
             Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => {
-                match success.result {
-                    Some(proto_val) => {
-                        let untyped_data_value = UntypedDataValue::try_from(proto_val)
-                            .map_err(|err| anyhow!("UntypedDataValue conversion error: {err}"))?;
-
-                        let component_revision = success
-                            .component_revision
-                            .ok_or_else(|| {
-                                anyhow!("Missing component_revision in invoke_agent response")
-                            })
-                            .and_then(ComponentRevision::new)?;
-                        let component_at_rev = self
-                            .get_component_at_revision(&component.id, component_revision)
-                            .await?;
-                        let agent_type = component_at_rev
-                            .metadata
-                            .find_agent_type_by_name(&agent_id.agent_type)
-                            .ok_or_else(|| {
-                                anyhow!("Agent type not found: {}", agent_id.agent_type)
-                            })?;
-                        let agent_method = agent_type
-                            .methods
-                            .iter()
-                            .find(|method| method.name == method_name)
-                            .ok_or_else(|| {
-                                debug!("Agent method not found: {}", method_name);
-                                debug!("In agent type: {:#?}", agent_type);
-                                debug!(
-                                    "Got for worker-id: {agent_id} with component revision {}",
-                                    component_revision
-                                );
-                                anyhow!("Agent method not found: {}", method_name)
-                            })?;
-
-                        DataValue::try_from_untyped(
-                            untyped_data_value,
-                            agent_method.output_schema.clone(),
-                        )
-                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))
-                    }
-                    None => Ok(DataValue::Tuple(
-                        golem_common::base_model::agent::ElementValues { elements: vec![] },
-                    )),
-                }
+                let value = match success.result {
+                    Some(proto_val) => Some(
+                        SchemaValue::try_from(proto_val)
+                            .map_err(|err| anyhow!("SchemaValue conversion error: {err}"))?,
+                    ),
+                    None => None,
+                };
+                Ok(AgentResult::new(value))
             }
             Some(workerexecutor::v1::invoke_agent_response::Result::Failure(error)) => {
                 Err(anyhow!("Agent invocation failed: {error:?}"))
@@ -1188,7 +1161,7 @@ fn parse_provision_config_from_cached_analysis(
         .find(|agent_type| &agent_type.type_name == agent_type_name)
         .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in cached analysis"))?;
 
-    parse_provision_config_from_agent_type(agent_type, agent_type_name, config)
+    parse_provision_config_from_agent_type_schema(agent_type, agent_type_name, config)
 }
 
 fn parse_provision_config_from_component_metadata(
@@ -1197,14 +1170,14 @@ fn parse_provision_config_from_component_metadata(
     config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
     let agent_type = component_metadata
-        .find_agent_type_by_name(agent_type_name)
+        .find_agent_type_by_name_ref(agent_type_name)
         .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
 
-    parse_provision_config_from_agent_type(&agent_type, agent_type_name, config)
+    parse_provision_config_from_agent_type_schema(agent_type, agent_type_name, config)
 }
 
-fn parse_provision_config_from_agent_type(
-    agent_type: &golem_common::model::agent::AgentType,
+fn parse_provision_config_from_agent_type_schema(
+    agent_type: &AgentTypeSchema,
     agent_type_name: &AgentTypeName,
     config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
@@ -1222,20 +1195,34 @@ fn parse_provision_config_from_agent_type(
                     )
                 })?;
 
-            let parsed_value =
-                ValueAndType::parse_with_type(&entry.value.0, &declaration.value_type).map_err(
-                    |err| {
-                        anyhow!(
-                            "config value for path {} does not match expected schema: [{}]",
-                            entry.path.join("."),
-                            err.join(", ")
-                        )
-                    },
-                )?;
+            let graph = SchemaGraph {
+                defs: agent_type.schema.defs.clone(),
+                root: declaration.value_type.clone(),
+            };
+
+            let schema_value: SchemaValue = from_json_value(&graph, &graph.root, &entry.value.0)
+                .map_err(|err| {
+                    anyhow!(
+                        "config value for path {} is not a valid schema value: {err}",
+                        entry.path.join(".")
+                    )
+                })?;
+
+            validate_value(&graph, &graph.root, &schema_value).map_err(|errors| {
+                anyhow!(
+                    "config value for path {} does not match expected schema: [{}]",
+                    entry.path.join("."),
+                    errors
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
 
             Ok(TypedAgentConfigEntry {
                 path: entry.path,
-                value: parsed_value,
+                value: TypedSchemaValue::new(graph, schema_value),
             })
         })
         .collect()

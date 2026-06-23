@@ -2,7 +2,7 @@
 
 ///|
 /// this defines the `container` resource
-pub(all) struct Container(Int) derive(Debug, Eq)
+pub(all) struct Container(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -13,7 +13,7 @@ pub fn Container::drop(self : Container) -> Unit {
 
 ///|
 /// this defines the `stream-object-names` resource which is a representation of stream<object-name>
-pub(all) struct StreamObjectNames(Int) derive(Debug, Eq)
+pub(all) struct StreamObjectNames(Int) derive(Show, Eq)
 
 ///|
 /// Drops a resource handle.

@@ -10,6 +10,7 @@ import "golem/common/revert_worker_response.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
+import "golem/schema/schema.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/cursor.proto";
@@ -446,7 +447,7 @@ message CancelInvocationResponse {
 message InvokeAgentRequest {
   golem.worker.AgentId agent_id = 1;
   optional string method_name = 5;
-  optional golem.component.UntypedDataValue method_parameters = 6;
+  optional golem.schema.SchemaValue method_parameters = 6;
   golem.worker.AgentInvocationMode mode = 7;
   optional google.protobuf.Timestamp schedule_at = 8;
   optional golem.worker.IdempotencyKey idempotency_key = 9;
@@ -465,7 +466,7 @@ message InvokeAgentResponse {
 }
 
 message InvokeAgentSuccess {
-  optional golem.component.UntypedDataValue result = 1;
+  optional golem.schema.SchemaValue result = 1;
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;

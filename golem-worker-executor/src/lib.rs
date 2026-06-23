@@ -16,6 +16,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub mod grpc;
+pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod preview2;
@@ -47,6 +48,7 @@ use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
+use crate::services::card::{CardService, CardServiceDefault};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
@@ -76,7 +78,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasComponentService, HasConfig,
+    All, HasActiveWorkers, HasAgentTypesService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService, rdbms,
 };
 use crate::storage::indexed::IndexedStorage;
@@ -161,6 +163,24 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Creates the [`ActiveWorkers`] service, including the measured-headroom
+    /// admission gate. The default builds the memory probe from the config
+    /// (cgroup/process/override). The in-process test harness overrides this to
+    /// inject a probe with a pinned limit and usage so the gate is deterministic
+    /// and isolated from the shared test process's RSS.
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<ActiveWorkers<Ctx>> {
+        Arc::new(ActiveWorkers::<Ctx>::new(
+            &golem_config.memory,
+            &golem_config.filesystem_storage,
+            &golem_config.agent_status_flush,
+            shutdown_token,
+        ))
+    }
+
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -281,6 +301,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
@@ -319,6 +340,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
+            card_service.clone(),
             component_service.clone(),
             shard_manager_service.clone(),
             quota_service.clone(),
@@ -359,6 +381,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
+            card_service.clone(),
             component_service.clone(),
             worker_fork.clone(),
             worker_service.clone(),
@@ -394,6 +417,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_workers,
             agent_types_service,
             agent_webhooks_service,
+            card_service,
             engine,
             linker,
             runtime.clone(),
@@ -481,7 +505,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
@@ -684,6 +708,8 @@ pub async fn create_worker_executor_impl<
         registry_service.clone(),
         blob_storage.clone(),
     );
+    let card_service: Arc<dyn CardService> =
+        Arc::new(CardServiceDefault::new(registry_service.clone()));
 
     let environment_state_service = bootstrap.create_environment_state_service(
         &golem_config.environment_state_service,
@@ -774,12 +800,7 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = Arc::new(ActiveWorkers::<Ctx>::new(
-        &golem_config.memory,
-        &golem_config.filesystem_storage,
-        &golem_config.agent_status_flush,
-        shutdown_token.clone(),
-    ));
+    let active_workers = bootstrap.create_active_workers(&golem_config, shutdown_token.clone());
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
@@ -910,6 +931,7 @@ pub async fn create_worker_executor_impl<
             engine,
             linker,
             runtime.clone(),
+            card_service,
             component_service,
             shard_manager_service,
             worker_service,
@@ -1007,13 +1029,18 @@ pub async fn bootstrap_and_run_worker_executor<
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
 
-    let total_system_memory = golem_config.memory.total_system_memory();
-    let system_memory = golem_config.memory.system_memory();
-    let worker_memory = golem_config.memory.worker_memory();
+    let memory_snapshot = crate::services::active_workers::memory_probe::default_probe(
+        golem_config.memory.system_memory_override,
+    )
+    .snapshot();
+    let total_system_memory = memory_snapshot.limit_bytes;
+    let used_system_memory = memory_snapshot.current_bytes;
+    let worker_memory =
+        (total_system_memory as f64 * golem_config.memory.worker_memory_ratio) as u64;
     info!(
-        "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
+        "Measured memory limit: {}, Currently used: {}, Usable for workers: {}",
         ISizeFormatter::new(total_system_memory, BINARY),
-        ISizeFormatter::new(system_memory, BINARY),
+        ISizeFormatter::new(used_system_memory, BINARY),
         ISizeFormatter::new(worker_memory, BINARY)
     );
 
@@ -1034,6 +1061,7 @@ pub async fn bootstrap_and_run_worker_executor<
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
         let active_workers = worker_executor_impl.active_workers();
+        let card_service = worker_executor_impl.card_service();
         let component_service = worker_executor_impl.component_service();
         let environment_state_service = worker_executor_impl.environment_state_service();
         let agent_types_service = worker_executor_impl.agent_types();
@@ -1042,6 +1070,7 @@ pub async fn bootstrap_and_run_worker_executor<
             WorkerExecutorRegistryInvalidationHandler::run(
                 registry_service,
                 active_workers,
+                card_service,
                 component_service,
                 environment_state_service,
                 agent_types_service,
@@ -1054,11 +1083,18 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
 
+    crate::metrics::runtime::install_runtime_metrics(
+        runtime.clone(),
+        golem_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
+
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         golem_config.http_addr()?,
         prometheus_registry,
+        golem_config.runtime_metrics_sampling_interval,
         "Worker executor is running",
         join_set,
     )

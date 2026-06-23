@@ -17,7 +17,7 @@
 package golem.runtime.macros
 
 import golem.config.ConfigSchema
-import golem.data.GolemSchema
+import golem.schema.IntoSchema
 import golem.runtime.{AgentMetadata, CachePolicy, Snapshotting, SnapshottingConfig}
 import golem.runtime.http.{
   HeaderVariable,
@@ -37,7 +37,7 @@ object AgentDefinitionMacro {
 
 object AgentDefinitionMacroImpl {
   private val schemaHint: String =
-    "\nHint: GolemSchema is derived from zio.blocks.schema.Schema.\n" +
+    "\nHint: IntoSchema/FromSchema are derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
       "Scala 3: `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n" +
       "Scala 2: `implicit val schema: zio.blocks.schema.Schema[T] = zio.blocks.schema.Schema.derived`.\n"
@@ -113,7 +113,8 @@ object AgentDefinitionMacroImpl {
         methodMetadata(c)(method, descriptionType, promptType, endpointType, headerType, readOnlyType, agentTypeName, hasMount)
     }.toList
 
-    val idSchema = inferIdSchema(c)(tpe)
+    val ctorDescription = traitDescription.getOrElse(agentTypeName)
+    val idSchema        = inferIdSchema(c)(tpe, ctorDescription)
 
     // --- Mount-level Principal validation ---
     if (hasMount) {
@@ -276,57 +277,62 @@ object AgentDefinitionMacroImpl {
       case param if param.isTerm => (param.name.toString, param.typeSignature)
     }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != principalFullName }
 
-    if (params.isEmpty) {
-      q"_root_.golem.data.StructuredSchema.Tuple(Nil)"
-    } else if (params.length == 1) {
-      val (_, paramType) = params.head
-      structuredSchemaExpr(c)(paramType)
-    } else {
-      val elements = params.map { case (name, tpe) =>
-        val schemaExpr = elementSchemaExpr(c)(name, tpe)
-        q"_root_.golem.data.NamedElementSchema($name, $schemaExpr)"
-      }
-      q"_root_.golem.data.StructuredSchema.Tuple(List(..$elements))"
+    inputMetadataExpr(c)(params)
+  }
+
+  /**
+   * Build an `InputMetadata` from a list of user-supplied `(name, type)`
+   * parameters: one `ParameterMetadata` per parameter carrying its
+   * self-contained schema graph (the v2 `input-schema = parameters`).
+   */
+  private def inputMetadataExpr(
+    c: blackbox.Context
+  )(params: List[(String, c.universe.Type)]): c.Tree = {
+    import c.universe._
+    val elements = params.map { case (name, tpe) =>
+      val graphExpr = paramGraphExpr(c)(tpe)
+      q"_root_.golem.runtime.ParameterMetadata($name, _root_.golem.runtime.FieldSource.UserSupplied, $graphExpr)"
     }
+    q"_root_.golem.runtime.InputMetadata(_root_.scala.List(..$elements))"
   }
 
   private def methodOutputSchema(c: blackbox.Context)(method: c.universe.MethodSymbol): c.Tree = {
     val outputType = unwrapAsyncType(c)(method.returnType)
-    structuredSchemaExpr(c)(outputType)
+    outputMetadataExpr(c)(outputType)
   }
 
-  private def structuredSchemaExpr(c: blackbox.Context)(tpe: c.universe.Type): c.Tree = {
+  /**
+   * `Unit` output => `OutputMetadata.Unit` (the host returns `none`); any other
+   * type => `OutputMetadata.Single` carrying its schema graph.
+   */
+  private def outputMetadataExpr(c: blackbox.Context)(tpe: c.universe.Type): c.Tree = {
+    import c.universe._
+    if (tpe =:= typeOf[Unit]) q"_root_.golem.runtime.OutputMetadata.Unit"
+    else {
+      val graphExpr = paramGraphExpr(c)(tpe)
+      q"_root_.golem.runtime.OutputMetadata.Single($graphExpr)"
+    }
+  }
+
+  /** Summon `IntoSchema[t]` for `tpe` and produce its self-contained graph. */
+  private def paramGraphExpr(c: blackbox.Context)(tpe: c.universe.Type): c.Tree = {
     import c.universe._
 
-    val golemSchemaType = appliedType(typeOf[GolemSchema[_]].typeConstructor, tpe)
-    val schemaInstance  = c.inferImplicitValue(golemSchemaType)
+    val intoSchemaType = appliedType(typeOf[IntoSchema[_]].typeConstructor, tpe)
+    val intoInstance   = c.inferImplicitValue(intoSchemaType)
 
-    if (schemaInstance.isEmpty) {
-      c.abort(c.enclosingPosition, s"No implicit GolemSchema available for type $tpe.$schemaHint")
+    if (intoInstance.isEmpty) {
+      c.abort(c.enclosingPosition, s"No implicit IntoSchema available for type $tpe.$schemaHint")
     }
 
-    q"$schemaInstance.schema"
+    q"$intoInstance.graph"
   }
 
-  private def elementSchemaExpr(
-    c: blackbox.Context
-  )(@annotation.unused paramName: String, tpe: c.universe.Type): c.Tree = {
+  private def inferIdSchema(c: blackbox.Context)(tpe: c.universe.Type, description: String): c.Tree = {
     import c.universe._
 
-    val golemSchemaType = appliedType(typeOf[GolemSchema[_]].typeConstructor, tpe)
-    val schemaInstance  = c.inferImplicitValue(golemSchemaType)
-
-    if (schemaInstance.isEmpty) {
-      c.abort(c.enclosingPosition, s"No implicit GolemSchema available for type $tpe.$schemaHint")
-    }
-
-    q"$schemaInstance.elementSchema"
-  }
-
-  private def inferIdSchema(c: blackbox.Context)(tpe: c.universe.Type): c.Tree = {
-    import c.universe._
-
-    val idAnnotationType = typeOf[golem.runtime.annotations.id]
+    val idAnnotationType  = typeOf[golem.runtime.annotations.id]
+    val principalFullName = "golem.Principal"
 
     val annotatedClass = tpe.members.collectFirst {
       case sym
@@ -347,16 +353,18 @@ object AgentDefinitionMacroImpl {
     }
 
     val primaryCtor = constructorClass.asClass.primaryConstructor.asMethod
-    val params      = primaryCtor.paramLists.flatten.filter(_.isTerm).map(p => (p.name.toString, p.typeSignature))
+    val params      = primaryCtor.paramLists.flatten
+      .filter(_.isTerm)
+      .map(p => (p.name.toString, p.typeSignature))
+      .filter { case (_, paramTpe) => paramTpe.dealias.typeSymbol.fullName != principalFullName }
 
-    if (params.isEmpty) q"_root_.golem.data.StructuredSchema.Tuple(Nil)"
-    else {
-      val elements = params.map { case (name, paramTpe) =>
-        val schemaExpr = elementSchemaExpr(c)(name, paramTpe)
-        q"_root_.golem.data.NamedElementSchema($name, $schemaExpr)"
-      }
-      q"_root_.golem.data.StructuredSchema.Tuple(List(..$elements))"
-    }
+    val inputMeta = inputMetadataExpr(c)(params)
+    q"""_root_.golem.runtime.ConstructorMetadata(
+      name = _root_.scala.None,
+      description = $description,
+      promptHint = _root_.scala.None,
+      input = $inputMeta
+    )"""
   }
 
   /**

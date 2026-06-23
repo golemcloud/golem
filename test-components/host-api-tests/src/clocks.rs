@@ -1,11 +1,11 @@
-use golem_rust::{Schema, agent_definition, agent_implementation};
+use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-#[derive(Clone, Schema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct StdTimeApisResult {
     pub elapsed1: f64,
     pub elapsed2: f64,

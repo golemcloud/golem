@@ -18,7 +18,7 @@ use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
@@ -50,16 +50,7 @@ pub trait DebugService: Send + Sync {
         &self,
         authentication_context: &AuthCtx,
         source_agent_id: &AgentId,
-    ) -> Result<
-        (
-            ConnectResult,
-            AccountId,
-            AccountEmail,
-            OwnedAgentId,
-            WorkerEventReceiver,
-        ),
-        DebugServiceError,
-    >;
+    ) -> Result<(ConnectResult, AccountId, OwnedAgentId, WorkerEventReceiver), DebugServiceError>;
 
     async fn playback(
         &self,
@@ -79,10 +70,10 @@ pub trait DebugService: Send + Sync {
     async fn fork(
         &self,
         account_id: AccountId,
-        account_email: AccountEmail,
         source_owned_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        auth_ctx: &AuthCtx,
     ) -> Result<ForkResult, DebugServiceError>;
 
     async fn current_oplog_index(
@@ -310,16 +301,8 @@ impl DebugService for DebugServiceDefault {
         &self,
         auth_ctx: &AuthCtx,
         agent_id: &AgentId,
-    ) -> Result<
-        (
-            ConnectResult,
-            AccountId,
-            AccountEmail,
-            OwnedAgentId,
-            WorkerEventReceiver,
-        ),
-        DebugServiceError,
-    > {
+    ) -> Result<(ConnectResult, AccountId, OwnedAgentId, WorkerEventReceiver), DebugServiceError>
+    {
         let component = self
             .component_service
             .get_metadata(agent_id.component_id, None)
@@ -364,7 +347,6 @@ impl DebugService for DebugServiceDefault {
         Ok((
             connect_result,
             component.account_id,
-            component.account_email,
             owned_agent_id,
             worker_event_receiver,
         ))
@@ -591,17 +573,15 @@ impl DebugService for DebugServiceDefault {
     async fn fork(
         &self,
         account_id: AccountId,
-        account_email: AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        auth_ctx: &AuthCtx,
     ) -> Result<ForkResult, DebugServiceError> {
         info!(
             "Forking worker {} to new worker {}",
             source_agent_id.agent_id, target_agent_id
         );
-
-        // TODO: authorize here
 
         // Fork internally proxies the resume of worker using worker-proxy
         // making sure the worker is initiated in the regular worker executor, and not
@@ -610,10 +590,10 @@ impl DebugService for DebugServiceDefault {
             .worker_fork_service()
             .fork(
                 account_id,
-                &account_email,
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cut_off,
+                auth_ctx,
             )
             .await
             .map_err(|e| {
@@ -792,6 +772,7 @@ mod tests {
                     result: OplogPayload::Inline(Box::new(
                         AgentInvocationResult::AgentInitialization,
                     )),
+                    method_name: None,
                     consumed_fuel: 0,
                     component_revision: ComponentRevision::INITIAL,
                 }

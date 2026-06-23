@@ -58,6 +58,47 @@ cd test-components
 
 If any component fails to build, fix the issue and re-run `./build-components.sh`. The script will rebuild all components. Repeat until all components build successfully.
 
+## Rebuilding Only a Subset
+
+`./build-components.sh` accepts optional arguments to limit the work to a language group or a single chunk. Prefer these over a full rebuild when only some components changed.
+
+### Build a single language group
+
+```shell
+cd test-components
+./build-components.sh rust         # Rust test apps only
+./build-components.sh ts           # TypeScript test apps only
+./build-components.sh benchmarks   # Benchmark apps only
+```
+
+The `rust` group does not require Node/the TS SDK. The `ts` and `benchmarks` groups need the TS SDK and agent template built first (step 2 above).
+
+### Build a single chunk of a group
+
+The script splits Rust and TS apps into chunks for parallel CI builds. To build just one chunk:
+
+```shell
+cd test-components
+./build-components.sh rust-1       # Nth chunk of the rust group (1..RUST_CHUNKS)
+./build-components.sh ts-1         # Nth chunk of the ts group (1..TS_CHUNKS)
+```
+
+Chunk counts are defined by `RUST_CHUNKS` / `TS_CHUNKS` near the top of `build-components.sh`. Use `./build-components.sh list-groups` to print the available group names as JSON (used for CI matrix generation).
+
+### Other modifiers
+
+These can be combined with a group/chunk argument (e.g. `./build-components.sh clean rust`):
+
+```shell
+./build-components.sh clean        # Clean only, do not build
+./build-components.sh rebuild      # Clean, then build
+./build-components.sh check        # Run only `golem-cli build --step check` (no artifacts produced)
+```
+
+`check` cannot be combined with `clean` or `rebuild`.
+
+> For rebuilding one specific component (not a whole group), use the `modifying-test-components` skill instead.
+
 ### 5. Verify
 
 After rebuilding, the `.wasm` files in `test-components/` should be present. Note: these files are gitignored and must be built before tests that use them.

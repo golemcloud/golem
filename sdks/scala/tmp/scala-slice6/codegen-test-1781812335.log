@@ -1,0 +1,87 @@
+[info] welcome to sbt 1.12.8 (Azul Systems, Inc. Java 21.0.7)
+[info] loading settings for project root from build.sbt, plugins.sbt...
+[info] loading project definition from /Users/vigoo/projects/golem/golem-2/sdks/scala/project
+[info] loading settings for project root from build.sbt...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+[info] Setting Scala version to 3.8.2 on 8 projects.
+[info] Excluded 1 projects, run ++ 3.8.2 -v for more details.
+[info] Reapplying settings...
+[info] set current project to golem-scala (in build file:/Users/vigoo/projects/golem/golem-2/sdks/scala/)
+golem.codegen.ir.AgentSurfaceIRCodecSpec:
+  + roundtrip encode/decode 0.014s
+  + encode produces valid JSON with expected keys 0.001s
+  + decode rejects invalid JSON 0.001s
+  + roundtrip with empty agents list 0.0s
+  + roundtrip with empty constructor params 0.0s
+  + handles special characters in strings 0.001s
+  + decode handles whitespace in JSON 0.0s
+  + roundtrip with methods 0.001s
+  + decode backward compat - missing methods field defaults to Nil 0.0s
+golem.codegen.rpc.RpcCodegenSpec:
+  + generates client object with package and AgentCompanionBase 0.005s
+  + skips generation when client object already exists 0.003s
+  + does not skip when only handwritten trait companion exists 0.0s
+  + generates multiple companions 0.065s
+  + file path uses package dirs with Client suffix 0.0s
+  + Constructor and bindRemote are private 0.001s
+  + no public connect/connectRemote methods 0.001s
+  + generates XRemote trait with per-method classes 0.002s
+  + no-param method generates apply/trigger/scheduleAt with no args 0.001s
+  + single-param method packs arg directly 0.001s
+  + multi-param method packs args as Vector 0.001s
+  + principal params are filtered out from remote methods 0.0s
+  + all-principal method generates no-arg apply 0.001s
+  + unwrapFutureType handles various Future forms 0.007s
+  + generated method classes extend AbstractRemoteMethod and delegate via helpers 0.002s
+  + no remote trait generated when methods list is empty 0.0s
+  + method with mismatched principalParams length is skipped 0.001s
+  + method lookup uses method name string 0.0s
+  + durable agent without config generates get and phantom but no WithConfig 0.001s
+  + durable agent with config fields generates typed WithConfig constructors 0.002s
+  + WithConfig constructors build ConfigOverride list internally 0.001s
+  + ephemeral agent without config generates getPhantom and newPhantom only 0.001s
+  + ephemeral agent with config fields generates phantom WithConfig variants 0.001s
+  + durable agent with constructor params generates get and phantom with unpacked params 0.001s
+  + durable agent with constructor params and config fields generates WithConfig with both 0.001s
+  + ephemeral agent with constructor params generates getPhantom and newPhantom with unpacked params 0.0s
+  + durable agent with unit constructor generates no-param get and phantom constructors 0.0s
+  + mode-aware constructors use correct resolve methods 0.001s
+  + ephemeral mode-aware constructors use correct resolve methods 0.001s
+  + no mode-aware constructors when no methods 0.0s
+golem.codegen.discovery.SourceDiscoverySpec:
+  + discover @agentDefinition trait with no arguments 0.11s
+  + discover @agentDefinition trait with typeName 0.007s
+  + discover @agentDefinition trait with multi-param constructor 0.006s
+  + discover @agentImplementation class 0.003s
+  + discover top-level objects 0.007s
+  + discover multiple items from single file 0.004s
+  + discover from multiple source files 0.003s
+  + results are sorted by package and name 0.004s
+  + unparseable source produces a warning 0.002s
+  + @agentImplementation class without a package produces no impl 0.002s
+  + trait without @agentDefinition is not discovered 0.001s
+  + class without @agentImplementation is not discovered 0.001s
+  + description without value 0.001s
+  + discover trait with fully qualified annotation 0.002s
+  + extract mode from @agentDefinition named argument 0.001s
+  + extract mode durable from @agentDefinition named argument 0.001s
+  + mode defaults to None when not specified 0.001s
+  + extract mode from imported enum value (Ident) 0.001s
+  + extract methods from trait 0.003s
+  + Constructor class members are excluded from methods list 0.002s
+  + detect Principal param type 0.002s
+  + detect golem.Principal param type 0.001s
+  + extract config fields from AgentConfig trait parent 0.005s
+  + agent without AgentConfig has no config fields 0.002s
+  + config fields from multiple source files 0.003s
+  + concrete methods with explicit return type are discovered 0.004s
+golem.codegen.pipeline.CodegenPipelineSpec:
+  + pipeline with both auto-register and rpc enabled 0.167s
+  + pipeline with only auto-register 0.007s
+  + pipeline with only rpc enabled 0.003s
+  + pipeline with nothing enabled 0.002s
+  + pipeline converts discovery methods to IR with principalParams 0.001s
+  + pipeline converts mode to IR 0.002s
+  + auto-register source changes when agent trait surface changes 0.012s
+[info] Passed: Total 72, Failed 0, Errors 0, Passed 72
+[success] Total time: 1 s, completed Jun 18, 2026, 9:52:19 PM

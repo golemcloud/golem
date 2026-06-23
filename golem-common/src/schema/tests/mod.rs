@@ -17,4 +17,6 @@ mod binary_codec_tests;
 #[cfg(feature = "full")]
 mod protobuf_tests;
 #[cfg(feature = "full")]
+mod schema_derive_tests;
+#[cfg(feature = "full")]
 mod wit_tests;

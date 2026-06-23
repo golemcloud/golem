@@ -677,6 +677,7 @@ pub trait OplogOps: Oplog {
     async fn add_agent_invocation_finished(
         &self,
         result: &AgentInvocationResult,
+        method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
     ) -> Result<OplogEntry, String> {
@@ -690,6 +691,7 @@ pub trait OplogOps: Oplog {
         let entry = OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
             result: payload,
+            method_name,
             consumed_fuel,
             component_revision,
         };

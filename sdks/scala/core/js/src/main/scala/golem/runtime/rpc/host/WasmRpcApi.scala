@@ -17,17 +17,41 @@
 package golem.runtime.rpc.host
 
 import golem.Datetime
-import golem.host.js._
+import golem.host.js.{JsDatetime, JsResult}
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
 import golem.runtime.rpc.{CancellationToken, RawCancellationToken}
 
 import scala.annotation.unused
 import scala.scalajs.js
-import scala.scalajs.js.annotation.JSImport
+import scala.scalajs.js.annotation.{JSImport, JSName}
+
+// ---------------------------------------------------------------------------
+// `golem:agent/host@2.0.0` `rpc-error` JS facade (schema-native variant).
+//
+// The `remote-agent-error` payload carries the schema `JsAgentError` (whose
+// `custom-error` is a `JsTypedSchemaValue`); the string-carrying cases follow
+// the wasm-rquickjs `{ tag, val }` shape.
+// ---------------------------------------------------------------------------
+
+@js.native
+sealed trait JsRpcError extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsRpcErrorString extends JsRpcError {
+  @JSName("val") def value: String = js.native
+}
+
+@js.native
+sealed trait JsRpcErrorRemoteAgent extends JsRpcError {
+  @JSName("val") def value: JsAgentError = js.native
+}
 
 private[golem] object WasmRpcApi {
   def newClient(
     agentTypeName: String,
-    constructorPayload: JsDataValue,
+    constructorPayload: JsSchemaValueTree,
     phantomId: js.UndefOr[JsUuid],
     agentConfig: js.Array[JsTypedAgentConfigValue]
   ): WasmRpcClient = {
@@ -42,10 +66,17 @@ private[golem] object WasmRpcApi {
     JsDatetime(seconds, nanos)
   }
 
-  private def decodeRpcError(thrown: Any): RpcError =
-    try {
+  private[rpc] def decodeRpcError(thrown: Any): RpcError = {
+    // Read the discriminator defensively: a thrown value that is not the
+    // expected `{ tag, val }` JS object (e.g. a bare string or a foreign error)
+    // must degrade to `unknown` rather than triggering a hard cast failure.
+    val rawTag =
+      try thrown.asInstanceOf[js.Dynamic].selectDynamic("tag")
+      catch { case _: Throwable => (js.undefined: js.Any) }
+
+    if (js.typeOf(rawTag) == "string") {
       val value = thrown.asInstanceOf[JsRpcError]
-      value.tag match {
+      rawTag.asInstanceOf[String] match {
         case "protocol-error" =>
           RpcError("protocol-error", Some(value.asInstanceOf[JsRpcErrorString].value))
         case "denied" =>
@@ -59,20 +90,23 @@ private[golem] object WasmRpcApi {
         case other =>
           RpcError(other, None)
       }
-    } catch {
-      case _: Exception =>
-        RpcError("unknown", Some(String.valueOf(thrown)))
+    } else {
+      RpcError("unknown", Some(String.valueOf(thrown)))
     }
+  }
 
   final class WasmRpcClient private[host] (private val underlying: js.Object) {
-    def invokeAndAwait(functionName: String, input: JsDataValue): Either[RpcError, JsDataValue] =
+    def invokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[RpcError, js.UndefOr[JsSchemaValueTree]] =
       try Right(raw.invokeAndAwait(functionName, input))
       catch {
         case js.JavaScriptException(e) =>
           Left(decodeRpcError(e))
       }
 
-    def invoke(functionName: String, input: JsDataValue): Either[RpcError, Unit] =
+    def invoke(functionName: String, input: JsSchemaValueTree): Either[RpcError, Unit] =
       try {
         raw.invoke(functionName, input)
         Right(())
@@ -81,7 +115,7 @@ private[golem] object WasmRpcApi {
           Left(decodeRpcError(e))
       }
 
-    def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Either[RpcError, RawFutureInvokeResult] =
+    def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[RpcError, RawFutureInvokeResult] =
       try Right(raw.asyncInvokeAndAwait(functionName, input))
       catch {
         case js.JavaScriptException(e) =>
@@ -91,7 +125,7 @@ private[golem] object WasmRpcApi {
     def scheduleInvocation(
       datetime: Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[RpcError, Unit] =
       try {
         raw.scheduleInvocation(datetimeToJs(datetime), functionName, input)
@@ -104,9 +138,16 @@ private[golem] object WasmRpcApi {
     def scheduleCancelableInvocation(
       datetime: Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[RpcError, CancellationToken] =
-      try Right(CancellationToken(raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input).asInstanceOf[RawCancellationToken]))
+      try
+        Right(
+          CancellationToken(
+            raw
+              .scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input)
+              .asInstanceOf[RawCancellationToken]
+          )
+        )
       catch {
         case js.JavaScriptException(e) =>
           Left(decodeRpcError(e))
@@ -123,32 +164,36 @@ private[golem] object WasmRpcApi {
   ) {
     override def toString: String =
       agentError match {
-        case Some(err) => s"$kind: ${js.JSON.stringify(err.asInstanceOf[js.Any])}"
-        case None      => message.fold(kind)(text => s"$kind: $text")
+        case Some(err) =>
+          val rendered =
+            try js.JSON.stringify(err.asInstanceOf[js.Any])
+            catch { case _: Throwable => String.valueOf(err) }
+          s"$kind: $rendered"
+        case None => message.fold(kind)(text => s"$kind: $text")
       }
   }
 
   @js.native
-  @JSImport("golem:agent/host@1.5.0", "FutureInvokeResult")
+  @JSImport("golem:agent/host@2.0.0", "FutureInvokeResult")
   private[rpc] class RawFutureInvokeResult extends js.Object {
-    def subscribe(): AgentHostApi.Pollable                      = js.native
-    def get(): js.UndefOr[JsResult[JsDataValue, JsRpcError]]   = js.native
-    def cancel(): Unit                                          = js.native
+    def subscribe(): AgentHostApi.Pollable                                     = js.native
+    def get(): js.UndefOr[JsResult[js.UndefOr[JsSchemaValueTree], JsRpcError]] = js.native
+    def cancel(): Unit                                                         = js.native
   }
 
   @js.native
-  @JSImport("golem:agent/host@1.5.0", "WasmRpc")
+  @JSImport("golem:agent/host@2.0.0", "WasmRpc")
   private final class RawWasmRpc(
     @unused agentTypeName: String,
-    @unused constructor_ : JsDataValue,
+    @unused constructor_ : JsSchemaValueTree,
     @unused phantomId: js.Any,
     @unused agentConfig: js.Array[JsTypedAgentConfigValue]
   ) extends js.Object {
-    def invokeAndAwait(methodName: String, input: JsDataValue): JsDataValue                                     = js.native
-    def invoke(methodName: String, input: JsDataValue): Unit                                                    = js.native
-    def asyncInvokeAndAwait(methodName: String, input: JsDataValue): RawFutureInvokeResult                      = js.native
-    def scheduleInvocation(scheduledTime: JsDatetime, methodName: String, input: JsDataValue): Unit             = js.native
-    def scheduleCancelableInvocation(scheduledTime: JsDatetime, methodName: String, input: JsDataValue): js.Any =
+    def invokeAndAwait(methodName: String, input: JsSchemaValueTree): js.UndefOr[JsSchemaValueTree]                   = js.native
+    def invoke(methodName: String, input: JsSchemaValueTree): Unit                                                    = js.native
+    def asyncInvokeAndAwait(methodName: String, input: JsSchemaValueTree): RawFutureInvokeResult                      = js.native
+    def scheduleInvocation(scheduledTime: JsDatetime, methodName: String, input: JsSchemaValueTree): Unit             = js.native
+    def scheduleCancelableInvocation(scheduledTime: JsDatetime, methodName: String, input: JsSchemaValueTree): js.Any =
       js.native
   }
 }

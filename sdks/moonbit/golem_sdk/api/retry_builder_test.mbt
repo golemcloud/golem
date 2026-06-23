@@ -7,7 +7,7 @@ fn[T] expect_retry_builder_error(
   guard result is Err(RetryBuilderError(message)) else {
     fail("Expected RetryBuilderError")
   }
-  @debug.assert_eq(message, expected)
+  assert_eq(message, expected)
 }
 
 ///|
@@ -33,7 +33,7 @@ test "predicate builder flattens nested tree" {
     ],
   }
 
-  @debug.assert_eq(raw, expected)
+  assert_eq(raw, expected)
 }
 
 ///|
@@ -63,7 +63,7 @@ test "policy builder flattens validated unary chain" {
     ],
   }
 
-  @debug.assert_eq(raw, expected)
+  assert_eq(raw, expected)
 }
 
 ///|
@@ -82,7 +82,7 @@ test "policy builder flattens binary chain" {
     ],
   }
 
-  @debug.assert_eq(raw, expected)
+  assert_eq(raw, expected)
 }
 
 ///|
@@ -95,7 +95,7 @@ test "named policy builder defaults and overrides" {
     predicate: { nodes: [@retry.PredicateNode::PredTrue] },
     policy: { nodes: [@retry.PolicyNode::Never] },
   }
-  @debug.assert_eq(default_raw, default_expected)
+  assert_eq(default_raw, default_expected)
 
   let custom_rule = NamedPolicy::named(
       "timeouts",
@@ -118,7 +118,7 @@ test "named policy builder defaults and overrides" {
     },
     policy: { nodes: [@retry.PolicyNode::Periodic(1000000000UL)] },
   }
-  @debug.assert_eq(custom_raw, custom_expected)
+  assert_eq(custom_raw, custom_expected)
 }
 
 ///|
@@ -175,10 +175,10 @@ test "builder validation rejects non-finite factors" {
 ///|
 test "builder boundary values convert successfully" {
   let raw_value = try! Value::uint64(9223372036854775807UL).to_raw()
-  @debug.assert_eq(raw_value, PredicateValue::Integer(9223372036854775807L))
+  assert_eq(raw_value, PredicateValue::Integer(9223372036854775807L))
 
   let nanos = try! Duration::seconds(18446744073UL).to_nanos()
-  @debug.assert_eq(nanos, 18446744073000000000UL)
+  assert_eq(nanos, 18446744073000000000UL)
 
   let raw_policy = try! Policy::immediate()
     .clamp(Duration::millis(250), Duration::millis(250))
@@ -193,5 +193,5 @@ test "builder boundary values convert successfully" {
       @retry.PolicyNode::Immediate,
     ],
   }
-  @debug.assert_eq(raw_policy, expected)
+  assert_eq(raw_policy, expected)
 }

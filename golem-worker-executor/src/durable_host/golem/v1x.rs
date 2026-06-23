@@ -21,14 +21,13 @@ use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
-    AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
-    HostGetPromiseResultWithStore,
+    AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult, HostGetPromiseResultWithStore,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
+use crate::preview2::{Pollable, golem_api_1_x};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -36,13 +35,14 @@ use crate::services::{HasOplogService, HasWorker};
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
-use golem_common::model::agent::LegacyParsedAgentId;
+use async_trait::async_trait;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
-    GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetSelfMetadata,
-    GolemApiResolveAgentIdStrict, GolemApiResolveComponentId, GolemApiRevertWorker,
-    GolemApiUpdateWorker,
+    GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
+    GolemApiGetSelfMetadata, GolemApiResolveAgentIdStrict, GolemApiResolveComponentId,
+    GolemApiRevertWorker, GolemApiUpdateWorker,
 };
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
@@ -52,7 +52,8 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseGolemApiAgentId, HostResponseGolemApiAgentMetadata,
     HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
     HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
-    HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
+    HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
+    HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
@@ -64,7 +65,7 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Accessor, HasSelf, Resource};
-use wasmtime_wasi::IoView;
+use wasmtime_wasi::{IoView, subscribe};
 
 fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
     match err {
@@ -265,12 +266,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match self
                     .state
                     .worker_proxy
-                    .complete_promise(
-                        promise_id.clone(),
-                        data,
-                        self.created_by(),
-                        self.created_by_email(),
-                    )
+                    .complete_promise(promise_id.clone(), data, &self.agent_auth_ctx())
                     .await
                 {
                     Ok(completed) => completed,
@@ -465,16 +461,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
-        let begin_index = OplogIndex::from_u64(begin);
         if self.state.is_live() {
-            if self.state.atomic_region_has_in_flight_calls(begin_index) {
-                return Err(anyhow::anyhow!(
-                    "cannot end atomic region {begin_index} while durable calls initiated in it are still in flight"
-                ));
-            }
             self.state
                 .oplog
-                .add(OplogEntry::end_atomic_region(begin_index))
+                .add(OplogEntry::end_atomic_region(OplogIndex::from_u64(begin)))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
@@ -482,7 +472,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         self.state
             .active_atomic_regions
-            .retain(|region| region.begin_index != begin_index);
+            .retain(|region| region.begin_index != OplogIndex::from_u64(begin));
 
         Ok(())
     }
@@ -644,8 +634,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         target_revision,
                         mode,
                         false,
-                        self.created_by(),
-                        self.created_by_email(),
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -779,8 +768,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        self.created_by(),
-                        self.created_by_email(),
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -835,12 +823,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = loop {
                 let result = self
                     .worker_proxy()
-                    .revert(
-                        &agent_id,
-                        target.clone(),
-                        self.created_by(),
-                        self.created_by_email(),
-                    )
+                    .revert(&agent_id, target.clone(), &self.agent_auth_ctx())
                     .await;
                 match handle
                     .try_trigger_retry_or_loop_with_properties(
@@ -1010,7 +993,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                match LegacyParsedAgentId::new(
+                match ParsedAgentId::try_new(
                     agent_id.agent_type.clone(),
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),
@@ -1046,19 +1029,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await;
 
             let created_by = self.created_by();
-            let created_by_email = self.created_by_email().clone();
             let fork_result = loop {
                 let fork_result = self
                     .state
                     .worker_fork
                     .fork_and_write_fork_result(
                         created_by,
-                        &created_by_email,
                         &self.owned_agent_id,
                         &target_agent_id,
                         oplog_index_cut_off,
                         copied_scope_start,
                         forked_phantom_id,
+                        &self.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -1143,8 +1125,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
         let agent_type =
-            LegacyParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id)
-                .ok();
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1193,6 +1174,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
+
     async fn drop(&mut self, resource: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::promise-result", "drop");
         let resource_rep = resource.rep();
@@ -1223,18 +1205,12 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
     }
 }
 
+
 impl<Ctx: WorkerCtx> HostGetPromiseResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn get<T: Send>(
         _accessor: &Accessor<T, Self>,
         _resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Vec<u8>> {
-        // TODO(p3): port the durable get-promise-result implementation to the
-        // `Accessor`-based async pattern. The previous `&mut self` based logic
-        // (which used `Durability::<GolemApiGetPromiseResult>::new`,
-        // `entry.get_handle().await.get().await`, and `durability.persist(...)`)
-        // does not translate directly because the new bindgen `get` lives on
-        // `HostGetPromiseResultWithStore` and only exposes an `Accessor` rather
-        // than `&mut self`.
         unimplemented!("HostGetPromiseResultWithStore::get (p3 migration)")
     }
 }
@@ -1319,8 +1295,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
         let agent_type =
-            LegacyParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id)
-                .ok();
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1463,7 +1438,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             Uuid::from_u64_pair(environment_id.uuid.high_bits, environment_id.uuid.low_bits),
         );
         let agent_id: AgentId = agent_id.into();
-        let agent_type = LegacyParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
         let mut current_revision = match ComponentRevision::try_from(component_revision) {
@@ -1785,4 +1760,13 @@ impl GetPromiseResultEntry {
     }
 }
 
-// TODO(p3) Blocker 1: re-implement async access via p3 accessor pattern
+#[async_trait]
+impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
+    async fn ready(&mut self) {
+        // A cached error is treated as immediately ready so that the pollable
+        // resolves and the subsequent `get` surfaces the error to the agent.
+        if let Ok(handle) = self.get_handle().await {
+            handle.await_ready().await;
+        }
+    }
+}

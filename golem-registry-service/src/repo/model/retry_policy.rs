@@ -116,6 +116,16 @@ pub struct RetryPolicyExtRevisionRecord {
     pub revision: RetryPolicyRevisionRecord,
 }
 
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct RetryPolicyAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub retry_policy: RetryPolicyExtRevisionRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<RetryPolicyExtRevisionRecord> for StoredRetryPolicy {
     type Error = RetryPolicyRepoError;
     fn try_from(value: RetryPolicyExtRevisionRecord) -> Result<Self, Self::Error> {

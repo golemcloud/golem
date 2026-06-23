@@ -3,8 +3,7 @@ package golem:api@1.5.0;
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use golem:core/types@1.5.0.{component-id, uuid, value-and-type, agent-id, promise-id, oplog-index};
-
+    use golem:core/types@2.0.0.{component-id, uuid, agent-id, promise-id, oplog-index};
     /// Represents a Golem component's version
     type component-revision = u64;
 

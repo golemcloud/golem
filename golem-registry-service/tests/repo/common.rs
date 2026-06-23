@@ -17,14 +17,12 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
+use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::agent::{
-    AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
-    Snapshotting,
-};
 use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_registry_service::repo::environment::{
     EnvironmentRevisionRecord, EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
 };
@@ -195,7 +193,9 @@ pub async fn test_application_create(deps: &Deps) {
         .unwrap();
     let_assert!(Some(app_2) = app_2);
 
-    check!(app == app_2);
+    check!(app.account_id == app_2.account_id);
+    check!(app.entity_created_at == app_2.entity_created_at);
+    check!(app.revision == app_2.revision);
 }
 
 pub async fn test_application_create_concurrent(deps: &Deps) {
@@ -298,11 +298,7 @@ pub async fn test_environment_create(deps: &Deps) {
 
     assert!(
         deps.environment_repo
-            .get_by_name(
-                app.revision.application_id,
-                env_name,
-                user.revision.account_id,
-            )
+            .get_by_name(app.revision.application_id, env_name)
             .await
             .unwrap()
             .is_none()
@@ -332,23 +328,21 @@ pub async fn test_environment_create(deps: &Deps) {
 
     let env_by_name = deps
         .environment_repo
-        .get_by_name(
-            app.revision.application_id,
-            env_name,
-            user.revision.account_id,
-        )
+        .get_by_name(app.revision.application_id, env_name)
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
-    check!(env == env_by_name);
+    check!(env.application_id == env_by_name.application_id);
+    check!(env.revision == env_by_name.revision);
 
     let env_by_id = deps
         .environment_repo
-        .get_by_id(env.revision.environment_id, user.revision.account_id, false)
+        .get_by_id(env.revision.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
-    check!(env == env_by_id);
+    check!(env.application_id == env_by_id.application_id);
+    check!(env.revision == env_by_id.revision);
 }
 
 pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
@@ -538,11 +532,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_name = deps
         .environment_repo
-        .get_by_name(
-            env_rev_0.application_id,
-            &env_rev_0.revision.name,
-            user.revision.account_id,
-        )
+        .get_by_name(env_rev_0.application_id, &env_rev_0.revision.name)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_name) = rev_1_by_name);
@@ -552,7 +542,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(env_rev_1.environment_id, user.revision.account_id, false)
+        .get_by_id(env_rev_1.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -591,11 +581,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_name = deps
         .environment_repo
-        .get_by_name(
-            env_rev_0.application_id,
-            &env_rev_0.revision.name,
-            user.revision.account_id,
-        )
+        .get_by_name(env_rev_0.application_id, &env_rev_0.revision.name)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_name) = rev_2_by_name);
@@ -605,7 +591,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(env_rev_2.environment_id, user.revision.account_id, false)
+        .get_by_id(env_rev_2.environment_id, false)
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
@@ -760,9 +746,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.name == component_name);
+    assert!(revision_0 == get_revision_0.component.revision);
+    assert!(get_revision_0.component.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.component.name == component_name);
 
     let get_revision_0 = deps
         .component_repo
@@ -935,9 +921,9 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.domain == domain);
+    assert!(revision_0 == get_revision_0.deployment.revision);
+    assert!(get_revision_0.deployment.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.deployment.domain == domain);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
@@ -1247,16 +1233,17 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
 
 // resolve_agent_type_by_names tests ---------------------------------------------------------------
 
-fn make_test_agent_type(name: &str) -> AgentType {
-    AgentType {
+fn make_test_agent_type(name: &str) -> AgentTypeSchema {
+    AgentTypeSchema {
         type_name: AgentTypeName(name.to_string()),
         description: format!("Test agent {name}"),
         source_language: String::new(),
-        constructor: AgentConstructor {
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
             name: None,
             description: "constructor".to_string(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            input_schema: InputSchema::Parameters(vec![]),
         },
         methods: vec![],
         dependencies: vec![],
@@ -1554,8 +1541,8 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(fetched_deployment) = fetched_deployment);
-    assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
-    assert!(fetched_deployment.domain == domain);
+    assert!(fetched_deployment.deployment.revision.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.deployment.domain == domain);
 
     let fetched_by_domain = deps
         .mcp_deployment_repo

@@ -1,15 +1,25 @@
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
-use golem_rust::{agent_definition, agent_implementation, PromiseId, Schema, Uuid};
-use golem_rust::agentic::Schema as SchemaOps;
+use golem_rust::{
+    FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition, agent_implementation,
+    encode_schema_value,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Schema)]
+fn encode_single_parameter<T: IntoSchema>(
+    value: T,
+) -> golem_rust::schema::wit::wire::SchemaValueTree {
+    encode_schema_value(&SchemaValue::Record {
+        fields: vec![value.to_value()],
+    })
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub enum State {
     Initial,
     Ongoing,
 }
 
-#[derive(Debug, Clone, Schema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub struct Payload {
     pub field1: String,
     pub field2: Uuid,
@@ -254,7 +264,7 @@ impl RpcCounter for RpcCounterImpl {
     }
 }
 
-#[derive(Debug, Clone, Schema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub enum TimelineNode {
     Leaf,
 }
@@ -472,9 +482,9 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
 
 // -- RPC auth parity test agent --
 
-/// Mirror of the WIT `rpc-error` variant with `Schema` so it can be returned
-/// from an agent method and pattern-matched in integration tests.
-#[derive(Debug, Clone, Schema)]
+/// Mirror of the WIT `rpc-error` variant so it can be returned from an agent
+/// method and pattern-matched in integration tests.
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub enum RpcCallOutcome {
     Ok,
     Denied { details: String },
@@ -537,19 +547,13 @@ impl RpcAuthTester for RpcAuthTesterImpl {
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
-        use golem_rust::agentic::Schema;
-
-        // Build the constructor data value: RpcCounter::new(counter_name: String)
-        let constructor = Schema::to_data_value(counter_name)
-            .expect("Failed to encode constructor parameter");
+        let constructor = encode_single_parameter(counter_name);
 
         // Connect to the RpcCounter agent in the same component.
         // WasmRpc::new resolves the component_id from the registered agent type.
         let rpc = WasmRpc::new("RpcCounter", &constructor, None, &[]);
 
-        // Invoke inc-by(1u64)
-        let arg = Schema::to_data_value(1u64)
-            .expect("Failed to encode method parameter");
+        let arg = encode_single_parameter(1u64);
 
         match rpc.invoke_and_await("inc_by", &arg) {
             Ok(_) => RpcCallOutcome::Ok,
@@ -565,12 +569,10 @@ impl CancelTester for CancelTesterImpl {
     }
 
     fn test_cancel_before_await(&self, counter_name: String) {
-        let constructor_data = counter_name.to_data_value()
-            .expect("Failed to encode constructor");
+        let constructor_data = encode_single_parameter(counter_name);
         let wasm_rpc = WasmRpc::new("RpcCounter", &constructor_data, None, &[]);
 
-        let input = 1u64.to_data_value()
-            .expect("Failed to encode input");
+        let input = encode_single_parameter(1u64);
         let future = wasm_rpc.async_invoke_and_await("inc_by", &input);
 
         // Cancel immediately before polling/awaiting
@@ -580,13 +582,11 @@ impl CancelTester for CancelTesterImpl {
     }
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {
-        let constructor_data = counter_name.clone().to_data_value()
-            .expect("Failed to encode constructor");
+        let constructor_data = encode_single_parameter(counter_name.clone());
         let wasm_rpc = WasmRpc::new("RpcCounter", &constructor_data, None, &[]);
 
         // First, call inc_by to increment the counter
-        let input = 5u64.to_data_value()
-            .expect("Failed to encode input");
+        let input = encode_single_parameter(5u64);
         let future = wasm_rpc.async_invoke_and_await("inc_by", &input);
 
         // Wait for completion

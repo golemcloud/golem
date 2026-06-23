@@ -153,6 +153,16 @@ pub struct AgentSecretExtRevisionRecord {
     pub revision: AgentSecretRevisionRecord,
 }
 
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct AgentSecretAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub agent_secret: AgentSecretExtRevisionRecord,
+
+    pub environment_name: String,
+    pub application_name: String,
+    pub owner_account_email: String,
+}
+
 impl TryFrom<AgentSecretExtRevisionRecord> for AgentSecret {
     type Error = AgentSecretRepoError;
     fn try_from(value: AgentSecretExtRevisionRecord) -> Result<Self, Self::Error> {

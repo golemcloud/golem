@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Result } from 'golem:agent/host@1.5.0';
-import { AgentError, AgentType, DataValue, Principal } from 'golem:agent/common@1.5.0';
+import { Result } from 'golem:agent/host@2.0.0';
+import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
+import { SchemaValue } from './schema-model';
 import { ParsedAgentId } from '../agentId';
 import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
@@ -21,14 +22,10 @@ import {
   AgentMethodParamMetadata,
   AgentMethodParamRegistry,
 } from './registry/agentMethodParamRegistry';
-import {
-  deserializeDataValue,
-  ParameterDetail,
-  serializeToDataValue,
-} from './mapping/values/dataValue';
+import { decodeInputRecord, encodeOutput } from './mapping/values/boundaryValue';
 import { AgentMethodMetadata, AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { createCustomError, invalidInput, invalidMethod, invalidType } from './agentError';
-import { TypeInfoInternal } from './typeInfoInternal';
+import { RuntimeOutput, RuntimeParam } from './typeInfoInternal';
 import { Uuid } from '../uuid';
 
 /**
@@ -39,7 +36,7 @@ export class ResolvedAgent {
   private readonly agentInstance: BaseAgent;
   private readonly agentClassName: AgentClassName;
   private readonly uniqueAgentId: ParsedAgentId;
-  private readonly constructorInput: DataValue;
+  private readonly constructorInput: SchemaValue;
 
   private parameterMetadata: Map<string, Map<string, AgentMethodParamMetadata>> | undefined =
     undefined;
@@ -50,7 +47,7 @@ export class ResolvedAgent {
     agentInstance: BaseAgent,
     agentClassName: AgentClassName,
     uniqueAgentId: ParsedAgentId,
-    constructorInput: DataValue,
+    constructorInput: SchemaValue,
   ) {
     this.agentInstance = agentInstance;
     this.agentClassName = agentClassName;
@@ -67,7 +64,7 @@ export class ResolvedAgent {
     return phantomId;
   }
 
-  getParameters(): DataValue {
+  getParameters(): SchemaValue {
     return this.constructorInput;
   }
 
@@ -102,9 +99,9 @@ export class ResolvedAgent {
 
   async invoke(
     methodName: string,
-    methodArgs: DataValue,
+    methodArgs: SchemaValue,
     principal: Principal,
-  ): Promise<Result<DataValue, AgentError>> {
+  ): Promise<Result<SchemaValue | undefined, AgentError>> {
     const methodInfoResult = this.getCachedMethodInfo(methodName);
     if (methodInfoResult.tag === 'err') {
       return methodInfoResult;
@@ -113,7 +110,7 @@ export class ResolvedAgent {
 
     let deserializedArgs: any[];
     try {
-      deserializedArgs = deserializeDataValue(methodArgs, methodInfo.paramTypes, principal);
+      deserializedArgs = decodeInputRecord(methodArgs, methodInfo.params, principal);
     } catch (e) {
       return {
         tag: 'err',
@@ -125,11 +122,11 @@ export class ResolvedAgent {
 
     const methodResult = await methodInfo.method.apply(this.agentInstance, deserializedArgs);
 
-    // Converting the result from the method back to data-value
+    // Converting the result from the method back to a schema value (or `undefined` for unit output)
     try {
       return {
         tag: 'ok',
-        val: serializeToDataValue(methodResult, methodInfo.returnType),
+        val: encodeOutput(methodResult, methodInfo.returnType),
       };
     } catch (e) {
       return {
@@ -200,7 +197,7 @@ export class ResolvedAgent {
         return parameterMetadata;
       }
 
-      const paramTypes = [];
+      const params: RuntimeParam[] = [];
       for (const [paramName, paramMeta] of parameterMetadata.val) {
         if (!paramMeta.typeInfo) {
           return {
@@ -210,7 +207,7 @@ export class ResolvedAgent {
             ),
           };
         }
-        paramTypes.push({
+        params.push({
           name: paramName,
           type: paramMeta.typeInfo,
         });
@@ -234,7 +231,7 @@ export class ResolvedAgent {
       }
 
       const methodInfo = {
-        paramTypes,
+        params,
         returnType,
         method: agentMethod,
       };
@@ -249,7 +246,7 @@ export class ResolvedAgent {
 }
 
 type CachedMethodInfo = {
-  paramTypes: ParameterDetail[];
-  returnType: TypeInfoInternal;
+  params: RuntimeParam[];
+  returnType: RuntimeOutput;
   method: any;
 };

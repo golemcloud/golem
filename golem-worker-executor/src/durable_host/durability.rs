@@ -40,7 +40,6 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm::{FromValue, IntoValueAndType};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -239,17 +238,20 @@ pub trait InFunctionRetryHost {
 }
 
 pub(crate) fn collect_named_retry_policies(
-    config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    config: &HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 ) -> Vec<NamedRetryPolicy> {
+    use golem_common::schema::FromSchema;
+
     let mut policies = Vec::new();
 
-    for value_and_type in config.values() {
-        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value_and_type.value.clone()) {
+    for typed in config.values() {
+        let value = typed.value();
+        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value) {
             policies.append(&mut parsed);
             continue;
         }
 
-        if let Ok(parsed) = NamedRetryPolicy::from_value(value_and_type.value.clone()) {
+        if let Ok(parsed) = NamedRetryPolicy::from_value(value) {
             policies.push(parsed);
         }
     }
@@ -745,15 +747,25 @@ impl From<OplogEntryVersion> for durability::OplogEntryVersion {
     }
 }
 
-impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFunctionInvocation {
-    fn from(value: PersistedDurableFunctionInvocation) -> Self {
-        durability::PersistedDurableFunctionInvocation {
+impl TryFrom<PersistedDurableFunctionInvocation>
+    for durability::PersistedDurableFunctionInvocation
+{
+    type Error = anyhow::Error;
+
+    fn try_from(value: PersistedDurableFunctionInvocation) -> Result<Self, Self::Error> {
+        let response = value.response.into_typed_schema_value().map_err(|e| {
+            anyhow::anyhow!("Failed to render persisted durable function response: {e}")
+        })?;
+        let response = golem_common::schema::wit::encode_typed(&response).map_err(|e| {
+            anyhow::anyhow!("Failed to encode persisted durable function response: {e}")
+        })?;
+        Ok(durability::PersistedDurableFunctionInvocation {
             timestamp: value.timestamp.into(),
             function_name: value.function_name,
-            response: value.response.into_value_and_type().into(),
+            response,
             function_type: value.function_type.into(),
             entry_version: value.oplog_entry_version.into(),
-        }
+        })
     }
 }
 
@@ -819,15 +831,21 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn persist_durable_function_invocation(
         &mut self,
         function_name: String,
-        request: durability::ValueAndType,
-        response: durability::ValueAndType,
+        request: golem_common::schema::wit::wire::TypedSchemaValue,
+        response: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
+        let request_typed = golem_common::schema::wit::decode_typed(&request).map_err(|e| {
+            anyhow::anyhow!("Failed to decode durable function request schema value: {e}")
+        })?;
+        let response_typed = golem_common::schema::wit::decode_typed(&response).map_err(|e| {
+            anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
+        })?;
         DurabilityHost::persist_durable_function_invocation(
             self,
             HostFunctionName::Custom(function_name),
-            &HostRequest::Custom(request.into()),
-            &HostResponse::Custom(response.into()),
+            &HostRequest::Custom(request_typed),
+            &HostResponse::Custom(response_typed),
             function_type.into(),
         )
         .await;
@@ -838,7 +856,7 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         &mut self,
     ) -> anyhow::Result<durability::PersistedDurableFunctionInvocation> {
         let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
-        Ok(invocation.into())
+        invocation.try_into()
     }
 }
 

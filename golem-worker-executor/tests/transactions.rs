@@ -13,17 +13,16 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::anyhow;
 use axum::Router;
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use bytes::Bytes;
 use golem_common::model::IdempotencyKey;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{
     TestDsl, drain_connection, stdout_event_starting_with, stdout_events,
 };
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -172,8 +171,7 @@ async fn golem_rust_jump(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "jump", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -195,7 +193,7 @@ async fn golem_rust_jump(
 
     info!("events: {:?}", events);
 
-    assert_eq!(result, Value::U64(5));
+    assert_eq!(result, 5);
     assert_eq!(
         stdout_events(events.into_iter().flatten()),
         vec![
@@ -244,8 +242,7 @@ async fn golem_rust_checkpoint(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "checkpoint_test", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -274,7 +271,7 @@ async fn golem_rust_checkpoint(
     //         On replay from checkpoint: state=2 again, remote_call(2) returns false, state=3,
     //         remote_call(3) returns false, so we continue.
     // Step 4: state=4, done.
-    assert_eq!(result, Value::U64(4));
+    assert_eq!(result, 4);
     assert_eq!(
         stdout_events(events.into_iter().flatten()),
         vec![
@@ -693,8 +690,7 @@ async fn golem_rust_infallible_transaction(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     let events = http_server.get_events();
 
@@ -703,7 +699,7 @@ async fn golem_rust_infallible_transaction(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, Value::U64(11));
+    assert_eq!(result, 11);
     assert_eq!(
         events,
         vec![
@@ -854,8 +850,7 @@ async fn golem_rust_checkpoint_async(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -877,7 +872,7 @@ async fn golem_rust_checkpoint_async(
 
     info!("events: {:?}", events);
 
-    assert_eq!(result, Value::U64(4));
+    assert_eq!(result, 4);
     assert_eq!(
         stdout_events(events.into_iter().flatten()),
         vec![
@@ -989,8 +984,8 @@ async fn idempotency_keys_in_ephemeral_workers(
         .into_return_value()
         .expect("Expected a return value");
 
-    fn returned_keys_are_different(value: &Value) -> bool {
-        if let Value::Tuple(items) = value {
+    fn returned_keys_are_different(value: &SchemaValue) -> bool {
+        if let SchemaValue::Tuple { elements: items } = value {
             if items.len() == 2 {
                 items[0] != items[1]
             } else {

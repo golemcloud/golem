@@ -20,40 +20,33 @@ use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::declare_structs;
-use crate::model::agent::{DataSchema, DataValue, UntypedDataValue};
-use golem_wasm_derive::{FromValue, IntoValue};
+use crate::schema::TypedSchemaValue;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "typed-data-value", owner = "golem:api@1.5.0/oplog")
-)]
-pub struct TypedDataValue {
-    pub value: UntypedDataValue,
-    pub schema: DataSchema,
+/// Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
+/// schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
+/// (poem/serde shape) and is produced at the public-oplog render edge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicTypedAgentConfigEntry {
+    pub path: Vec<String>,
+    pub value: TypedSchemaValue,
 }
 
 #[cfg(feature = "full")]
-impl From<DataValue> for TypedDataValue {
-    fn from(value: DataValue) -> Self {
-        let schema = value.extract_schema();
-        Self {
-            value: value.into(),
-            schema,
-        }
-    }
-}
-
-#[cfg(feature = "full")]
-impl TryFrom<TypedDataValue> for DataValue {
+impl TryFrom<PublicTypedAgentConfigEntry> for crate::base_model::worker::UntypedAgentConfigEntry {
     type Error = String;
 
-    fn try_from(td: TypedDataValue) -> Result<Self, Self::Error> {
-        DataValue::try_from_untyped(td.value, td.schema)
+    fn try_from(value: PublicTypedAgentConfigEntry) -> Result<Self, Self::Error> {
+        let (_graph, schema_value) = value.value.into_parts();
+        Ok(Self {
+            path: value.path,
+            value: schema_value,
+        })
     }
 }
 
@@ -83,16 +76,10 @@ declare_structs! {
     }
 }
 
-#[derive(
-    Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize, IntoValue, FromValue,
-)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(
-    name = "plugin-installation-description",
-    owner = "golem:api@1.5.0/oplog"
-)]
 pub struct PluginInstallationDescription {
     pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     pub plugin_priority: PluginPriority,
@@ -101,42 +88,35 @@ pub struct PluginInstallationDescription {
     pub parameters: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit_transparent]
 pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit_transparent]
 pub struct WriteRemoteTransactionParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[wit(name = "wrapped-function-type", owner = "golem:api@1.5.0/oplog")]
 pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
-    #[unit_case]
     ReadLocal(Empty),
     /// The side-effect writes to the worker's local state (for example local file system)
-    #[unit_case]
     WriteLocal(Empty),
     /// The side-effect reads from external state (for example a key-value store)
-    #[unit_case]
     ReadRemote(Empty),
     /// The side-effect manipulates external state (for example an RPC call)
-    #[unit_case]
     WriteRemote(Empty),
     /// The side-effect manipulates external state through multiple invoked functions (for example
     /// a HTTP request where reading the response involves multiple host function calls)
@@ -149,20 +129,19 @@ pub enum PublicDurableFunctionType {
     WriteRemoteTransaction(WriteRemoteTransactionParameters),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit_transparent]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct StringAttributeValue {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -170,12 +149,11 @@ pub struct StringAttributeValue {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "attribute-value", owner = "golem:api@1.5.0/context")]
 pub enum PublicAttributeValue {
     String(StringAttributeValue),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -183,18 +161,16 @@ pub enum PublicAttributeValue {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "local-span-data", owner = "golem:api@1.5.0/oplog")]
 pub struct PublicLocalSpanData {
     pub span_id: SpanId,
     pub start: Timestamp,
-    #[wit_field(rename = "parent")]
     pub parent_id: Option<SpanId>,
     pub linked_context: Option<u64>,
     pub attributes: Vec<PublicAttribute>,
     pub inherited: bool,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -202,13 +178,12 @@ pub struct PublicLocalSpanData {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "attribute", owner = "golem:api@1.5.0/context")]
 pub struct PublicAttribute {
     pub key: String,
     pub value: PublicAttributeValue,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -216,12 +191,11 @@ pub struct PublicAttribute {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "external-span-data", owner = "golem:api@1.5.0/oplog")]
 pub struct PublicExternalSpanData {
     pub span_id: SpanId,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -229,7 +203,6 @@ pub struct PublicExternalSpanData {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "span-data", owner = "golem:api@1.5.0/oplog")]
 pub enum PublicSpanData {
     LocalSpan(PublicLocalSpanData),
     ExternalSpan(PublicExternalSpanData),
@@ -246,13 +219,9 @@ impl PublicSpanData {
 
 /// API-facing representation of a named retry policy for public oplog entries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "named-retry-policy", owner = "golem:api@1.5.0/retry")
-)]
 pub struct PublicNamedRetryPolicy {
     /// Human-readable identifier for this policy.
     pub name: String,
@@ -289,98 +258,62 @@ impl From<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPoli
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "agent-initialization-parameters",
-        owner = "golem:api@1.5.0/oplog"
-    )
-)]
 pub struct AgentInitializationParameters {
     pub idempotency_key: IdempotencyKey,
-    #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
-    pub constructor_parameters: DataValue,
+    pub constructor_parameters: TypedSchemaValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "agent-method-invocation-parameters",
-        owner = "golem:api@1.5.0/oplog"
-    )
-)]
 pub struct AgentMethodInvocationParameters {
     pub idempotency_key: IdempotencyKey,
     pub method_name: String,
-    #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
-    pub function_input: DataValue,
+    pub function_input: TypedSchemaValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "load-snapshot-parameters", owner = "golem:api@1.5.0/oplog")
-)]
 pub struct LoadSnapshotParameters {
     pub snapshot: PublicSnapshotData,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "process-oplog-entries-parameters",
-        owner = "golem:api@1.5.0/oplog"
-    )
-)]
 pub struct ProcessOplogEntriesParameters {
     pub idempotency_key: IdempotencyKey,
     // TODO
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "manual-update-parameters", owner = "golem:api@1.5.0/oplog")
-)]
 pub struct ManualUpdateParameters {
     pub target_revision: ComponentRevision,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "agent-invocation", owner = "golem:api@1.5.0/oplog")
-)]
 pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
-    #[cfg_attr(feature = "full", unit_case)]
     SaveSnapshot(Empty),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
@@ -388,120 +321,74 @@ pub enum PublicAgentInvocation {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "agent-invocation-output-parameters",
-        owner = "golem:api@1.5.0/oplog"
-    )
-)]
 pub struct AgentInvocationOutputParameters {
-    #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
-    pub output: DataValue,
+    pub output: TypedSchemaValue,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "fallible-result-parameters", owner = "golem:api@1.5.0/oplog")
-)]
 pub struct FallibleResultParameters {
     pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "save-snapshot-result-parameters",
-        owner = "golem:api@1.5.0/oplog"
-    )
-)]
 pub struct SaveSnapshotResultParameters {
     pub snapshot: PublicSnapshotData,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "fallible-result-parameters", owner = "golem:api@1.5.0/oplog")
-)]
 pub struct ProcessOplogEntriesResultParameters {
     pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "agent-invocation-result", owner = "golem:api@1.5.0/oplog")
-)]
 pub enum PublicAgentInvocationResult {
     AgentInitialization(AgentInvocationOutputParameters),
     AgentMethod(AgentInvocationOutputParameters),
-    #[cfg_attr(feature = "full", unit_case)]
     ManualUpdate(Empty),
     LoadSnapshot(FallibleResultParameters),
     SaveSnapshot(SaveSnapshotResultParameters),
     ProcessOplogEntries(ProcessOplogEntriesResultParameters),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "snapshot", owner = "golem:api@1.5.0/host")]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
     pub mime_type: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-#[wit(name = "update-description", owner = "golem:api@1.5.0/oplog")]
 pub enum PublicUpdateDescription {
-    #[unit_case]
-    #[wit_case(rename = "auto-update")]
     Automatic(Empty),
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialOrd,
-    Ord,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    IntoValue,
-    FromValue,
-)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
 )]
 #[cfg_attr(feature = "full", desert(transparent))]
-#[wit(name = "agent-resource-id", owner = "golem:api@1.5.0/oplog")]
 pub struct AgentResourceId(pub u64);
 
 impl AgentResourceId {
@@ -519,9 +406,8 @@ impl Display for AgentResourceId {
 }
 
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
-#[wit(name = "log-level", owner = "golem:api@1.5.0/oplog")]
 #[repr(u8)]
 pub enum LogLevel {
     #[cfg_attr(feature = "full", desert(transparent))]
@@ -542,18 +428,15 @@ pub enum LogLevel {
     Critical,
 }
 
-#[derive(
-    Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize, IntoValue, FromValue,
-)]
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
-#[wit(name = "persistence-level", owner = "golem:api@1.5.0/host", as_variant)]
 pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,
     Smart,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -573,40 +456,6 @@ pub struct JsonSnapshotData {
     pub data: serde_json::Value,
 }
 
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for JsonSnapshotData {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![golem_wasm::Value::String(self.data.to_string())])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::record(vec![
-            golem_wasm::analysis::analysed_type::field(
-                "data",
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-        ])
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for JsonSnapshotData {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Record(mut fields) if fields.len() == 1 => {
-                let data_str = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
-                let data: serde_json::Value = serde_json::from_str(&data_str)
-                    .map_err(|e| format!("Failed to parse JSON: {e}"))?;
-                Ok(JsonSnapshotData { data })
-            }
-            _ => Err(format!(
-                "Expected Record with 1 field for JsonSnapshotData, got {:?}",
-                value
-            )),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
@@ -614,59 +463,6 @@ impl golem_wasm::FromValue for JsonSnapshotData {
 pub enum MultipartPartData {
     Json(JsonSnapshotData),
     Raw(RawSnapshotData),
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for MultipartPartData {
-    fn into_value(self) -> golem_wasm::Value {
-        match self {
-            MultipartPartData::Json(json) => golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(json.into_value())),
-            },
-            MultipartPartData::Raw(raw) => golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(raw.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::variant(vec![
-            golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
-            golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
-        ])
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for MultipartPartData {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value,
-            } => {
-                let inner = case_value.ok_or("Missing case value for Json")?;
-                Ok(MultipartPartData::Json(
-                    <JsonSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
-                ))
-            }
-            golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value,
-            } => {
-                let inner = case_value.ok_or("Missing case value for Raw")?;
-                Ok(MultipartPartData::Raw(
-                    <RawSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
-                ))
-            }
-            _ => Err(format!(
-                "Expected Variant for MultipartPartData, got {:?}",
-                value
-            )),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -679,53 +475,6 @@ pub struct MultipartSnapshotPart {
     pub data: MultipartPartData,
 }
 
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for MultipartSnapshotPart {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![
-            golem_wasm::Value::String(self.name),
-            golem_wasm::Value::String(self.content_type),
-            self.data.into_value(),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::record(vec![
-            golem_wasm::analysis::analysed_type::field(
-                "name",
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-            golem_wasm::analysis::analysed_type::field(
-                "content-type",
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-            golem_wasm::analysis::analysed_type::field("data", MultipartPartData::get_type()),
-        ])
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for MultipartSnapshotPart {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Record(mut fields) if fields.len() == 3 => {
-                let data = MultipartPartData::from_value(fields.remove(2))?;
-                let content_type = <String as golem_wasm::FromValue>::from_value(fields.remove(1))?;
-                let name = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
-                Ok(MultipartSnapshotPart {
-                    name,
-                    content_type,
-                    data,
-                })
-            }
-            _ => Err(format!(
-                "Expected Record with 3 fields for MultipartSnapshotPart, got {:?}",
-                value
-            )),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -733,52 +482,6 @@ impl golem_wasm::FromValue for MultipartSnapshotPart {
 pub struct MultipartSnapshotData {
     pub mime_type: String,
     pub parts: Vec<MultipartSnapshotPart>,
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for MultipartSnapshotData {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![
-            golem_wasm::Value::String(self.mime_type),
-            golem_wasm::Value::List(self.parts.into_iter().map(|p| p.into_value()).collect()),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::record(vec![
-            golem_wasm::analysis::analysed_type::field(
-                "mime-type",
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-            golem_wasm::analysis::analysed_type::field(
-                "parts",
-                golem_wasm::analysis::analysed_type::list(MultipartSnapshotPart::get_type()),
-            ),
-        ])
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for MultipartSnapshotData {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
-                let parts = match fields.remove(1) {
-                    golem_wasm::Value::List(items) => items
-                        .into_iter()
-                        .map(MultipartSnapshotPart::from_value)
-                        .collect::<Result<Vec<_>, String>>()?,
-                    other => return Err(format!("Expected List for parts, got {:?}", other)),
-                };
-                let mime_type = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
-                Ok(MultipartSnapshotData { mime_type, parts })
-            }
-            _ => Err(format!(
-                "Expected Record with 2 fields for MultipartSnapshotData, got {:?}",
-                value
-            )),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -791,111 +494,9 @@ pub enum PublicSnapshotData {
     Multipart(MultipartSnapshotData),
 }
 
-#[cfg(feature = "full")]
-fn multipart_to_raw_bytes(multipart: MultipartSnapshotData) -> (Vec<u8>, String) {
-    use crate::base_model::oplog::multipart::extract_boundary;
-
-    let boundary = extract_boundary(&multipart.mime_type)
-        .unwrap_or("boundary")
-        .to_string();
-
-    let mut output = Vec::new();
-    for part in &multipart.parts {
-        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        output.extend_from_slice(format!("Content-Type: {}\r\n", part.content_type).as_bytes());
-        output.extend_from_slice(
-            format!(
-                "Content-Disposition: attachment; name=\"{}\"\r\n",
-                part.name
-            )
-            .as_bytes(),
-        );
-        output.extend_from_slice(b"\r\n");
-        match &part.data {
-            MultipartPartData::Json(json) => {
-                output.extend_from_slice(
-                    serde_json::to_vec(&json.data)
-                        .unwrap_or_default()
-                        .as_slice(),
-                );
-            }
-            MultipartPartData::Raw(raw) => {
-                output.extend_from_slice(&raw.data);
-            }
-        }
-        output.extend_from_slice(b"\r\n");
-    }
-    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    (output, multipart.mime_type)
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for PublicSnapshotData {
-    fn into_value(self) -> golem_wasm::Value {
-        let (data, mime_type) = match self {
-            PublicSnapshotData::Raw(raw) => (raw.data, raw.mime_type),
-            PublicSnapshotData::Json(json) => (
-                serde_json::to_vec(&json.data).unwrap_or_default(),
-                "application/json".to_string(),
-            ),
-            PublicSnapshotData::Multipart(multipart) => multipart_to_raw_bytes(multipart),
-        };
-        golem_wasm::Value::Record(vec![
-            golem_wasm::Value::List(data.into_iter().map(golem_wasm::Value::U8).collect()),
-            golem_wasm::Value::String(mime_type),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::record(vec![
-            golem_wasm::analysis::analysed_type::field(
-                "data",
-                golem_wasm::analysis::analysed_type::list(
-                    golem_wasm::analysis::analysed_type::u8(),
-                ),
-            ),
-            golem_wasm::analysis::analysed_type::field(
-                "mime-type",
-                golem_wasm::analysis::analysed_type::str(),
-            ),
-        ])
-        .named("snapshot-data")
-        .owned("golem:api@1.5.0/oplog")
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for PublicSnapshotData {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
-                let mime_type = <String as golem_wasm::FromValue>::from_value(fields.remove(1))?;
-                let data = match fields.remove(0) {
-                    golem_wasm::Value::List(items) => items
-                        .into_iter()
-                        .map(|v| match v {
-                            golem_wasm::Value::U8(b) => Ok(b),
-                            other => Err(format!("Expected U8, got {:?}", other)),
-                        })
-                        .collect::<Result<Vec<u8>, String>>()?,
-                    other => return Err(format!("Expected List for data, got {:?}", other)),
-                };
-                Ok(PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }))
-            }
-            _ => Err(format!(
-                "Expected Record with 2 fields for PublicSnapshotData, got {:?}",
-                value
-            )),
-        }
-    }
-}
-
 /// API-facing counter state for a retry policy.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
-)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateCounter {
     /// Number of retry attempts recorded so far.
@@ -904,10 +505,7 @@ pub struct PublicRetryPolicyStateCounter {
 
 /// API-facing wrapper state that delegates to an inner retry policy state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
-)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateWrapper {
     /// The wrapped inner retry policy state.
@@ -1032,25 +630,5 @@ impl From<PublicRetryPolicyState> for crate::model::retry_policy::RetryPolicySta
                 RetryPolicyState::Pair(Box::new((*p.first).into()), Box::new((*p.second).into()))
             }
         }
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for PublicRetryPolicyState {
-    fn into_value(self) -> golem_wasm::Value {
-        let internal: crate::model::retry_policy::RetryPolicyState = self.into();
-        internal.into_value()
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        crate::model::retry_policy::RetryPolicyState::get_type()
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for PublicRetryPolicyState {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        let internal = crate::model::retry_policy::RetryPolicyState::from_value(value)?;
-        Ok(internal.into())
     }
 }

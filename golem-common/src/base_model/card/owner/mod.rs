@@ -85,24 +85,6 @@ pub trait OwnerPattern:
     fn subsumes(&self, other: &Self) -> bool;
 }
 
-pub(super) enum PrefixOwnerSlot<T> {
-    Concrete(T),
-    Env,
-    Self_,
-}
-
-pub(super) fn parse_prefix_owner_slot<T>(
-    value: &str,
-    parse_concrete: impl Fn(&str) -> Result<T, String>,
-) -> Result<PrefixOwnerSlot<T>, String> {
-    match split_leftmost_owner_slot(value)? {
-        Some(("?env", rest)) if rest.is_empty() => Ok(PrefixOwnerSlot::Env),
-        Some(("?self", rest)) if rest.is_empty() => Ok(PrefixOwnerSlot::Self_),
-        Some(_) => Err(value.to_string()),
-        None => parse_concrete(value).map(PrefixOwnerSlot::Concrete),
-    }
-}
-
 pub(super) fn split_leftmost_owner_slot(value: &str) -> Result<Option<(&str, Vec<&str>)>, String> {
     if value.is_empty() {
         return Err(value.to_string());
@@ -114,7 +96,11 @@ pub(super) fn split_leftmost_owner_slot(value: &str) -> Result<Option<(&str, Vec
     };
 
     if first.starts_with('?') {
-        if !matches!(*first, "?env" | "?self") || rest.iter().any(|segment| segment.contains('?')) {
+        if !matches!(
+            *first,
+            "?account" | "?app" | "?env" | "?component" | "?agent"
+        ) || rest.iter().any(|segment| segment.contains('?'))
+        {
             Err(value.to_string())
         } else {
             Ok(Some((*first, rest.to_vec())))

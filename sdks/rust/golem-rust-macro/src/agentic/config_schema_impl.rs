@@ -98,10 +98,11 @@ fn generate_config_schema_impl(
                 {
                     let mut field_path = path.to_vec();
                     field_path.push(#field_name_str.to_string());
-                    let config_entry = #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigDeclaration {
+                    let config_entry = #golem_rust_crate_ident::agentic::ExtendedAgentConfigDeclaration {
                         source: #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigSource::Secret,
                         path: field_path,
-                        value_type: <<#field_ty as #golem_rust_crate_ident::agentic::InnerTypeHelper>::Type as #golem_rust_crate_ident::value_and_type::IntoValue>::get_type(),
+                        value_type: #golem_rust_crate_ident::schema::try_into_schema_graph::<<#field_ty as #golem_rust_crate_ident::agentic::InnerTypeHelper>::Type>()
+                            .expect("failed to build config schema graph"),
                     };
                     config_entries.push(config_entry);
                 }
@@ -118,10 +119,11 @@ fn generate_config_schema_impl(
                 {
                     let mut field_path = path.to_vec();
                     field_path.push(#field_name_str.to_string());
-                    let config_entry = #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigDeclaration {
+                    let config_entry = #golem_rust_crate_ident::agentic::ExtendedAgentConfigDeclaration {
                         source: #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigSource::Local,
                         path: field_path,
-                        value_type: <#field_ty as #golem_rust_crate_ident::value_and_type::IntoValue>::get_type(),
+                        value_type: #golem_rust_crate_ident::schema::try_into_schema_graph::<#field_ty>()
+                            .expect("failed to build config schema graph"),
                     };
                     config_entries.push(config_entry);
                 }
@@ -130,10 +132,15 @@ fn generate_config_schema_impl(
                 #field_ident: {
                     let mut field_path = path.to_vec();
                     field_path.push(#field_name_str.to_string());
-                    let typ = <#field_ty as #golem_rust_crate_ident::value_and_type::IntoValue>::get_type();
-                    let value = #golem_rust_crate_ident::golem_agentic::golem::agent::host::get_config_value(&field_path, &typ);
-                    let value_and_type = golem_rust::golem_wasm::golem_core_1_5_x::types::ValueAndType { value, typ };
-                    #golem_rust_crate_ident::value_and_type::FromValueAndType::from_value_and_type(value_and_type)
+                    let graph = #golem_rust_crate_ident::schema::try_into_schema_graph::<#field_ty>()
+                        .expect("failed to build config schema graph");
+                    let value = #golem_rust_crate_ident::golem_agentic::golem::agent::host::get_config_value(
+                        &field_path,
+                        &#golem_rust_crate_ident::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
+                    );
+                    let value = #golem_rust_crate_ident::decode_schema_value(&value)
+                        .expect("failed to decode config schema value");
+                    #golem_rust_crate_ident::schema::FromSchema::from_value(&value)
                         .expect("failed deserializing config value")
                 }
             });
@@ -144,7 +151,7 @@ fn generate_config_schema_impl(
         impl #golem_rust_crate_ident::agentic::ConfigSchema for #struct_name {
             type RpcType = #rpc_struct_name;
 
-            fn describe_config(path: &[String]) -> Vec<#golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigDeclaration> {
+            fn describe_config(path: &[String]) -> Vec<#golem_rust_crate_ident::agentic::ExtendedAgentConfigDeclaration> {
                 let mut config_entries = Vec::new();
                 #(#append_config_entries)*
                 config_entries
@@ -201,7 +208,6 @@ fn generate_into_rpc_config_param_impl(
     for field in fields {
         let field_ident = field.ident.as_ref().unwrap();
         let field_name_str = field_ident.to_string();
-        let field_ty = &field.ty;
 
         if has_secret_attr(field) {
             continue; // secrets omitted
@@ -222,12 +228,12 @@ fn generate_into_rpc_config_param_impl(
                         let mut field_path = path.to_vec();
                         field_path.push(#field_name_str.to_string());
 
-                        let value = #golem_rust_crate_ident::value_and_type::IntoValue::into_value(value);
-                        let typ = <#field_ty as #golem_rust_crate_ident::value_and_type::IntoValue>::get_type();
-                        let value_and_type = golem_rust::golem_wasm::golem_core_1_5_x::types::ValueAndType { value, typ };
+                        let typed = #golem_rust_crate_ident::schema::IntoTypedSchemaValue::into_typed_schema_value(&value)
+                            .expect("failed to build config value");
                         result.push(#golem_rust_crate_ident::golem_agentic::golem::agent::common::TypedAgentConfigValue {
                             path: field_path,
-                            value: value_and_type,
+                            value: #golem_rust_crate_ident::encode_typed_schema_value(&typed)
+                                .expect("failed to encode config value"),
                         });
                     }
                 }

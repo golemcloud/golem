@@ -1,9 +1,9 @@
-package golem:agent@1.5.0;
+package golem:agent@2.0.0;
 
 interface host {
-    use golem:core/types@1.5.0.{component-id, uuid, promise-id, wit-value, wit-type};
+    use golem:core/types@2.0.0.{component-id, uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value};
     use wasi:clocks/system-clock@0.3.0-rc-2026-03-15.{instant as datetime};
-    use common.{agent-error, agent-type, data-value, registered-agent-type, typed-agent-config-value};
+    use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
 
     /// Gets all the registered agent types
     get-all-agent-types: func() -> list<registered-agent-type>;
@@ -12,12 +12,18 @@ interface host {
     get-agent-type: func(agent-type-name: string) -> option<registered-agent-type>;
 
     /// Constructs a string agent-id from the agent type and its constructor parameters
-    /// and an optional phantom ID
-    make-agent-id: func(agent-type-name: string, input: data-value, phantom-id: option<uuid>) -> result<string, agent-error>;
+    /// and an optional phantom ID.
+    ///
+    /// `input` is a value tree whose root encodes the constructor's parameter list.
+    make-agent-id: func(agent-type-name: string, input: schema-value-tree, phantom-id: option<uuid>) -> result<string, agent-error>;
 
     /// Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
-    /// and an optional phantom ID
-    parse-agent-id: func(agent-id: string) -> result<tuple<string, data-value, option<uuid>>, agent-error>;
+    /// and an optional phantom ID.
+    ///
+    /// The constructor parameters are returned as a self-contained typed value
+    /// (graph + value tree) so the receiver can interpret them without an
+    /// external schema registry.
+    parse-agent-id: func(agent-id: string) -> result<tuple<string, typed-schema-value, option<uuid>>, agent-error>;
 
     /// Creates a webhook that can be used to integrate with webhook driven apis.
     /// When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
@@ -44,32 +50,38 @@ interface host {
 
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
-      /// Constructs the RPC client connecting to the given target agent
-      constructor(agent-type-name: string, %constructor: data-value, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
+      /// Constructs the RPC client connecting to the given target agent.
+      ///
+      /// `constructor` is a value tree whose root encodes the target agent
+      /// constructor's parameter list.
+      constructor(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
 
-      /// Invokes a remote method with the given parameters, and awaits the result
-      invoke-and-await: func(method-name: string, input: data-value) -> result<data-value, rpc-error>;
+      /// Invokes a remote method with the given parameters, and awaits the result.
+      ///
+      /// `input` encodes the method's parameter list; the result is `none` for
+      /// a `unit` output and `some(value)` for a `single` output.
+      invoke-and-await: func(method-name: string, input: schema-value-tree) -> result<option<schema-value-tree>, rpc-error>;
 
       /// Triggers the invocation of a remote method with the given parameters, and returns immediately.
-      invoke: func(method-name: string, input: data-value) -> result<_, rpc-error>;
+      invoke: func(method-name: string, input: schema-value-tree) -> result<_, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
       /// be polled for the result.
       ///
       /// With this function it is possible to call multiple (different) agents simultaneously.
-      async-invoke-and-await: func(method-name: string, input: data-value) -> future-invoke-result;
+      async-invoke-and-await: func(method-name: string, input: schema-value-tree) -> future-invoke-result;
 
       /// Schedule invocation for later
-      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: data-value);
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree);
 
       /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
-      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: data-value) -> cancellation-token;
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> cancellation-token;
     }
 
     /// Represents an asynchronous invocation result
     resource future-invoke-result {
       /// Awaits the result of the invocation.
-      get: async func() -> result<data-value, rpc-error>;
+      get: async func() -> result<option<schema-value-tree>, rpc-error>;
       /// Best-effort attempt to cancel the remote invocation by idempotency key.
       /// If the invocation has already started or completed, this is a no-op.
       cancel: func();
@@ -83,7 +95,7 @@ interface host {
 
     /// Get the current value of the config key.
     ///
-    /// The expected type is a hint to the host what type of value is expected by the guest and can be used
+    /// The expected schema is a hint to the host what type of value is expected by the guest and can be used
     /// by the host to automatically migrate config values to fit the expected schema.
     ///
     /// Only keys that are declared by the agent-type are allowed to be accessed. Trying
@@ -94,5 +106,5 @@ interface host {
     /// component revision + overrides declared during agent creation.
     ///
     /// Getting a shared key will get the current value of the key in the environment.
-    get-config-value: func(key: list<string>, expected-type: wit-type) -> wit-value;
+    get-config-value: func(key: list<string>, expected: schema-graph) -> schema-value-tree;
 }

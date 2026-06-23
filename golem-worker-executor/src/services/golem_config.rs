@@ -79,6 +79,11 @@ pub struct GolemConfig {
     pub max_websocket_connections: usize,
     pub http_address: String,
     pub http_port: u16,
+    /// How often runtime/allocator metrics are sampled and refreshed into the
+    /// gauges exposed on `/metrics`. Prometheus scrapes the rendered values
+    /// independently; this is the in-process resolution.
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
 }
 
 impl SafeDisplay for GolemConfig {
@@ -312,6 +317,7 @@ impl Default for GolemConfig {
             max_websocket_connections: 100,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
     }
 }
@@ -1067,28 +1073,31 @@ pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
     pub worker_estimate_coefficient: f64,
+    /// Multiplier applied to a component's `component_size` when reserving its
+    /// compiled-module memory with the admission gate, charged once per resident
+    /// component (shared across all its workers) rather than per worker.
+    pub component_size_coefficient: f64,
+    /// Whether the measured-headroom admission gate is active. Requires the
+    /// executor to own its memory environment (its own cgroup/process), as in a
+    /// production pod. Disable in shared environments — such as the in-process
+    /// test harness — where the probe cannot isolate this executor's footprint
+    /// from co-resident processes.
+    pub enable_measured_admission: bool,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
     pub oom_retry_config: RetryConfig,
 }
 
 impl MemoryConfig {
-    pub fn total_system_memory(&self) -> u64 {
-        self.system_memory_override.unwrap_or_else(|| {
-            let mut sysinfo = sysinfo::System::new();
-            sysinfo.refresh_memory();
-            sysinfo.total_memory()
-        })
-    }
-
-    pub fn system_memory(&self) -> u64 {
-        let mut sysinfo = sysinfo::System::new();
-        sysinfo.refresh_memory();
-        sysinfo.available_memory()
-    }
-
-    pub fn worker_memory(&self) -> usize {
-        (self.total_system_memory() as f64 * self.worker_memory_ratio) as usize
+    /// The admission policy for the measured-headroom gate. Reuses
+    /// `worker_memory_ratio` as the usable fraction of the measured limit (the
+    /// host keeps the remainder).
+    pub(crate) fn admission_policy(
+        &self,
+    ) -> crate::services::active_workers::admission::AdmissionPolicy {
+        crate::services::active_workers::admission::AdmissionPolicy {
+            usable_ratio: self.worker_memory_ratio,
+        }
     }
 }
 
@@ -1107,6 +1116,16 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "worker estimate coefficient: {}",
             self.worker_estimate_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "component size coefficient: {}",
+            self.component_size_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "measured admission enabled: {}",
+            self.enable_measured_admission
         );
         let _ = writeln!(
             &mut result,
@@ -1669,6 +1688,8 @@ impl Default for MemoryConfig {
             system_memory_override: None,
             worker_memory_ratio: 0.8,
             worker_estimate_coefficient: 1.1,
+            component_size_coefficient: 2.0,
+            enable_measured_admission: true,
             acquire_retry_delay: Duration::from_millis(500),
             oom_retry_config: RetryConfig {
                 max_attempts: u32::MAX,

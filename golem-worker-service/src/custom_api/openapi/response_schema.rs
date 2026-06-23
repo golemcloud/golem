@@ -26,7 +26,8 @@ use super::schema_mapping::{
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::HttpMethod;
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType, TextRestrictions};
+use golem_common::schema::unstructured::{UnstructuredKind, unstructured_kind};
 use golem_service_base::custom_api::OpenApiSpecFormat;
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -173,6 +174,22 @@ fn classify_single_response(
     responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
     headers: &mut IndexMap<String, ResponseHeaderSchema>,
 ) -> Result<(), String> {
+    // A canonical unstructured text/binary output (`variant { inline, url }`)
+    // describes its `inline` 200 body exactly like a bare `Text` / `Binary`
+    // rich scalar; the `url` alternative is a 307 redirect applied at runtime
+    // (see `response_mapping.rs`) and is not described here.
+    match unstructured_kind(graph, ty).map_err(|err| err.to_string())? {
+        Some(UnstructuredKind::Binary(restrictions)) => {
+            insert_binary_response(restrictions, responses);
+            return Ok(());
+        }
+        Some(UnstructuredKind::Text(restrictions)) => {
+            insert_text_response(restrictions, responses, headers);
+            return Ok(());
+        }
+        None => {}
+    }
+
     match resolve_top_ref(graph, ty) {
         SchemaType::Option { inner, .. } => {
             let schema = render_schema(graph, inner, components)?;
@@ -222,36 +239,10 @@ fn classify_single_response(
             }
         }
         SchemaType::Binary { restrictions, .. } => {
-            let content_type = restrictions
-                .mime_types
-                .as_ref()
-                .and_then(|types| types.first())
-                .cloned()
-                .unwrap_or_else(|| "application/octet-stream".to_string());
-            responses.insert(
-                200,
-                ResponseBodyOpenApiSchema::Known {
-                    schema: arbitrary_binary_schema(),
-                    content_type,
-                },
-            );
+            insert_binary_response(restrictions, responses);
         }
         SchemaType::Text { restrictions, .. } => {
-            responses.insert(
-                200,
-                ResponseBodyOpenApiSchema::Known {
-                    schema: string_schema(),
-                    content_type: "text/plain".to_string(),
-                },
-            );
-            let languages = restrictions.languages.clone().unwrap_or_default();
-            headers.insert(
-                "Content-Language".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_enum_schema(&languages),
-                    required: false,
-                },
-            );
+            insert_text_response(restrictions, responses, headers);
         }
         _ => {
             // Render the original `ty` (not the ref-resolved body) so a named
@@ -267,6 +258,55 @@ fn classify_single_response(
         }
     }
     Ok(())
+}
+
+/// Describe a `binary` 200 response: the first allowed MIME type (or
+/// `application/octet-stream` when unrestricted) carrying an arbitrary binary
+/// body. Shared by bare `Binary` outputs and the inline case of the canonical
+/// unstructured-binary wrapper.
+fn insert_binary_response(
+    restrictions: &BinaryRestrictions,
+    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
+) {
+    let content_type = restrictions
+        .mime_types
+        .as_ref()
+        .and_then(|types| types.first())
+        .cloned()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    responses.insert(
+        200,
+        ResponseBodyOpenApiSchema::Known {
+            schema: arbitrary_binary_schema(),
+            content_type,
+        },
+    );
+}
+
+/// Describe a `text` 200 response: a `text/plain` body plus an optional
+/// `Content-Language` header enumerating the allowed languages. Shared by bare
+/// `Text` outputs and the inline case of the canonical unstructured-text
+/// wrapper.
+fn insert_text_response(
+    restrictions: &TextRestrictions,
+    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
+    headers: &mut IndexMap<String, ResponseHeaderSchema>,
+) {
+    responses.insert(
+        200,
+        ResponseBodyOpenApiSchema::Known {
+            schema: string_schema(),
+            content_type: "text/plain".to_string(),
+        },
+    );
+    let languages = restrictions.languages.clone().unwrap_or_default();
+    headers.insert(
+        "Content-Language".to_string(),
+        ResponseHeaderSchema {
+            schema: string_enum_schema(&languages),
+            required: false,
+        },
+    );
 }
 
 /// Follow a chain of `Ref`s against `graph` and return the first non-`Ref`

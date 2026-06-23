@@ -30,7 +30,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -164,14 +163,21 @@ impl ComponentRevisionRecord {
                                 .map(|e| {
                                     Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
-                                            |reason| diff::DiffError::TypedConfigJsonConversion {
-                                                operation:
-                                                    "component revision to_diffable config entry conversion",
-                                                path: e.path.join("."),
-                                                reason,
-                                            },
-                                        )?),
+                                        NormalizedJsonValue::new(
+                                            golem_common::schema::render::to_json_value(
+                                                e.value.graph(),
+                                                e.value.root_type(),
+                                                e.value.value(),
+                                            )
+                                            .map_err(|reason| {
+                                                diff::DiffError::TypedConfigJsonConversion {
+                                                    operation:
+                                                        "component revision to_diffable config entry conversion",
+                                                    path: e.path.join("."),
+                                                    reason: reason.to_string(),
+                                                }
+                                            })?,
+                                        ),
                                     ))
                                 })
                                 .collect::<Result<_, _>>()?,
@@ -238,6 +244,44 @@ pub struct ComponentExtRevisionRecord {
     pub environment_id: Uuid,
     #[sqlx(flatten)]
     pub revision: ComponentRevisionRecord,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ComponentAuthExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub component: ComponentExtRevisionRecord,
+
+    pub application_id: Uuid,
+    pub application_name: String,
+    pub owner_account_id: Uuid,
+    pub owner_account_email: String,
+    pub environment_name: String,
+    pub environment_revision_id: i64,
+    pub environment_compatibility_check: bool,
+    pub environment_version_check: bool,
+    pub environment_security_overrides: bool,
+}
+
+impl ComponentAuthExtRevisionRecord {
+    pub fn try_into_model(self) -> Result<Component, RepoError> {
+        let Self {
+            component,
+            application_id,
+            application_name,
+            owner_account_id,
+            owner_account_email,
+            environment_name,
+            ..
+        } = self;
+
+        component.try_into_model(
+            ApplicationId(application_id),
+            AccountId(owner_account_id),
+            AccountEmail::new(owner_account_email),
+            ApplicationName(application_name),
+            EnvironmentName(environment_name),
+        )
+    }
 }
 
 impl ComponentExtRevisionRecord {

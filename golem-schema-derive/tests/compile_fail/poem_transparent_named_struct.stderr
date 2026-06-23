@@ -1,0 +1,5 @@
+error: PoemSchema only supports `#[serde(transparent)]` on single-field tuple structs (e.g. `struct TypeId(String)`)
+  --> tests/compile_fail/poem_transparent_named_struct.rs:19:8
+   |
+19 | struct Bad {
+   |        ^^^

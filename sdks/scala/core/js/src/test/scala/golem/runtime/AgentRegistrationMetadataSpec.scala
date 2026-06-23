@@ -159,20 +159,20 @@ object AgentRegistrationMetadataSpec extends ZIOSpecDefault {
     test("explicit durable agent has Durable mode") {
       assertTrue(durDefn.mode == AgentMode.Durable)
     },
-    test("echo method inputSchema has tuple tag") {
-      val echo  = defn.methodMetadata.find(_.metadata.name == "echo").get
-      val input = echo.inputSchema
-      assertTrue(input.tag == "tuple")
+    test("echo method input has one user-supplied parameter") {
+      val echo = defn.methodMetadata.find(_.metadata.name == "echo").get
+      assertTrue(echo.metadata.input.userSupplied.size == 1)
     },
-    test("echo method outputSchema has tuple tag") {
-      val echo   = defn.methodMetadata.find(_.metadata.name == "echo").get
-      val output = echo.outputSchema
-      assertTrue(output.tag == "tuple")
+    test("echo method output is a single value") {
+      val echo = defn.methodMetadata.find(_.metadata.name == "echo").get
+      assertTrue(echo.metadata.output match {
+        case OutputMetadata.Single(_) => true
+        case OutputMetadata.Unit      => false
+      })
     },
-    test("add method inputSchema has tuple tag with elements") {
-      val add   = defn.methodMetadata.find(_.metadata.name == "add").get
-      val input = add.inputSchema
-      assertTrue(input.tag == "tuple")
+    test("add method input has two user-supplied parameters") {
+      val add = defn.methodMetadata.find(_.metadata.name == "add").get
+      assertTrue(add.metadata.input.userSupplied.size == 2)
     },
     test("multiple methods can have different descriptions") {
       val echo = defn.methodMetadata.find(_.metadata.name == "echo").get

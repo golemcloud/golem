@@ -9,13 +9,15 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::OplogIndex;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentInvocationMode, Principal};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId,
 };
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -73,10 +75,9 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_agent_id: &AgentId,
         _caller_env: HashMap<String, String>,
         _caller_stack: InvocationContextStack,
-        _caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
-        _agent_config: Vec<AgentConfigEntryDto>,
+        _config: Vec<AgentConfigEntryDto>,
         _principal: Principal,
+        _auth_ctx: &AuthCtx,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -89,17 +90,16 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _agent_id: &AgentId,
         _method_name: String,
-        _method_parameters: UntypedDataValue,
+        _method_parameters: SchemaValue,
         _mode: AgentInvocationMode,
         _schedule_at: Option<DateTime<Utc>>,
         _idempotency_key: Option<IdempotencyKey>,
         _caller_agent_id: AgentId,
         _caller_env: HashMap<String, String>,
         _caller_stack: InvocationContextStack,
-        _caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
         _principal: Principal,
-        _environment_id: golem_common::model::environment::EnvironmentId,
+        _environment_id: EnvironmentId,
+        _auth_ctx: &AuthCtx,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -112,8 +112,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _agent_id: &AgentId,
         _idempotency_key: IdempotencyKey,
-        _caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -128,8 +127,7 @@ impl WorkerProxy for TestWorkerProxy {
         _target_revision: ComponentRevision,
         _mode: UpdateMode,
         _disable_wakeup: bool,
-        _caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -140,20 +138,17 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn resume(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &AgentId,
         force: bool,
-        caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         let mut retry_count = Self::RETRY_COUNT;
 
         let component = self
             .component_service
-            .get_latest_component_metadata(&agent_id.component_id)
+            .get_latest_component_metadata(&owned_agent_id.component_id)
             .await
             .unwrap();
-
-        assert!(caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
@@ -172,7 +167,7 @@ impl WorkerProxy for TestWorkerProxy {
                 .client
                 .clone()
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some(owned_agent_id.clone().into()),
                     environment_id: Some(component.environment_id.into()),
                     force: Some(force),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -206,16 +201,13 @@ impl WorkerProxy for TestWorkerProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
-        caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
             .get_latest_component_metadata(&source_agent_id.component_id)
             .await
             .unwrap();
-
-        assert!(caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
@@ -261,16 +253,13 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
-        caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
             .get_latest_component_metadata(&agent_id.component_id)
             .await
             .unwrap();
-
-        assert!(caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
@@ -313,8 +302,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _promise_id: PromiseId,
         _data: Vec<u8>,
-        _caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         unimplemented!()
     }
@@ -323,9 +311,8 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _agent_id: &AgentId,
         _idempotency_key: IdempotencyKey,
-        _caller_account_id: AccountId,
-        _caller_account_email: &golem_common::model::account::AccountEmail,
-        _environment_id: Option<golem_common::base_model::environment::EnvironmentId>,
+        _environment_id: Option<EnvironmentId>,
+        _auth_ctx: &AuthCtx,
     ) -> Result<InvocationStatus, WorkerProxyError> {
         Ok(InvocationStatus::Unknown)
     }
@@ -341,7 +328,7 @@ impl WorkerProxy for TestWorkerProxy {
         _metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
         _first_entry_index: golem_common::base_model::OplogIndex,
         _entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
-        _account_email: &golem_common::model::account::AccountEmail,
+        _auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         unimplemented!()
     }
