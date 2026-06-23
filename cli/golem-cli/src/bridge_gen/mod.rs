@@ -28,6 +28,7 @@
 
 pub mod parameter_naming;
 pub mod rust;
+pub mod scala;
 pub mod type_naming;
 pub mod typescript;
 

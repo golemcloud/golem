@@ -15,7 +15,7 @@ use golem_cli::versions;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -73,6 +73,108 @@ async fn test_rust_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+}
+
+/// End-to-end test for the Scala bridge generator: deploys the Rust counter
+/// agent, generates a Scala bridge SDK for it, then compiles and runs a small
+/// Scala program that invokes the live agent through the generated, future-based
+/// client and verifies the returned values.
+///
+/// Requires `sbt` on the PATH (same as the Scala bridge cross-compile tests).
+#[test]
+#[timeout("15 minutes")]
+async fn test_scala_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // Generate the Scala bridge SDK for the counter agent into a known directory.
+    let bridge_root = ctx.cwd_path_join("scala-bridge");
+    let bridge_root_str = bridge_root.to_str().unwrap().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "scala",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            &bridge_root_str,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("build.sbt").exists(),
+        "generated Scala bridge project is missing at {}",
+        client_dir.display()
+    );
+
+    // Write a small Scala program that drives the generated client against the
+    // live local server, mirroring the TS REPL e2e check above.
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    let main_scala = formatdoc! {r#"
+        import golem.bridge.client.CounterAgentClient
+        import golem.bridge.runtime.GolemServer
+
+        import scala.concurrent.Await
+        import scala.concurrent.duration._
+
+        object Main {{
+          def main(args: Array[String]): Unit = {{
+            CounterAgentClient.configure(
+              GolemServer.Custom("{server_url}", "{token}"),
+              "{app_name}",
+              "local"
+            )
+            val timeout = 60.seconds
+            val remote  = Await.result(CounterAgentClient.get("scala-e2e-counter"), timeout)
+            val first   = Await.result(remote.increment(), timeout)
+            val second  = Await.result(remote.increment(), timeout)
+            if (first.value != 1L || second.value != 2L) {{
+              sys.error(s"Unexpected counter values: first=${{first.value}} second=${{second.value}}")
+            }}
+            println("SCALA_BRIDGE_E2E_OK first=" + first.value + " second=" + second.value)
+          }}
+        }}
+        "#
+    };
+    let scala_main_dir = client_dir.join("src").join("main").join("scala");
+    std::fs::create_dir_all(&scala_main_dir).unwrap();
+    std::fs::write(scala_main_dir.join("Main.scala"), main_scala).unwrap();
+
+    // Compile and run the generated client + driver with sbt.
+    let output = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("runMain Main")
+        .current_dir(&client_dir)
+        .output()
+        .expect("failed to run sbt; is it installed?");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "sbt run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        client_dir.display()
+    );
+    assert!(
+        stdout.contains("SCALA_BRIDGE_E2E_OK first=1 second=2"),
+        "Scala bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
 }
 
 #[test]

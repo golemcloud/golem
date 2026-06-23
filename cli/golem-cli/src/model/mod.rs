@@ -111,8 +111,8 @@ impl GuestLanguage {
 
     pub fn supports_bridge_generation(&self) -> bool {
         match self {
-            GuestLanguage::Rust | GuestLanguage::TypeScript => true,
-            GuestLanguage::Scala | GuestLanguage::MoonBit => false,
+            GuestLanguage::Rust | GuestLanguage::TypeScript | GuestLanguage::Scala => true,
+            GuestLanguage::MoonBit => false,
         }
     }
 
