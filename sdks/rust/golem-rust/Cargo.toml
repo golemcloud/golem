@@ -58,7 +58,7 @@ uuid = { version = "1.19.0", features = ["v4"] }
 wasip2 = { version = "1.0.2" }
 wstd = { version = "=0.6.5" }
 wasi-logger = { version = "0.1.2", features = ["kv"] }
-wit-bindgen = { version = "=0.53.1" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0" }
 
 [features]
 default = ["durability", "json", "macro"]
