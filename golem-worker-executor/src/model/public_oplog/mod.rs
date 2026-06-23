@@ -820,6 +820,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 data,
                 mime_type,
+                ..
             } => {
                 let bytes: Vec<u8> = oplog_service
                     .download_payload(owned_agent_id, agent_mode, data)

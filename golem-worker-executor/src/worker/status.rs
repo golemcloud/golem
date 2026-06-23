@@ -2217,6 +2217,7 @@ mod test {
                     timestamp,
                     data: OplogPayload::Inline(Box::new(vec![])),
                     mime_type: "application/octet-stream".to_string(),
+                    active_cards: Vec::new(),
                 },
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);

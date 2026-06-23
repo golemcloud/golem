@@ -2719,6 +2719,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     timestamp: p.timestamp,
                     data: OplogPayload::Inline(Box::new(data)),
                     mime_type,
+                    active_cards: Vec::new(),
                 })
             }
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
@@ -3444,10 +3445,17 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 })
             }
             OplogEntry::Snapshot {
-                data, mime_type, ..
+                data,
+                mime_type,
+                active_cards,
+                ..
             } => Entry::Snapshot(RawSnapshotParameters {
                 data: Some(oplog_payload_to_proto(data)?),
                 mime_type,
+                active_cards: active_cards
+                    .into_iter()
+                    .map(|card| crate::serialization::serialize(&card))
+                    .collect::<Result<Vec<_>, _>>()?,
             }),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
@@ -3893,6 +3901,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     data,
                     mime_type: p.mime_type,
+                    active_cards: p
+                        .active_cards
+                        .into_iter()
+                        .map(|card| crate::serialization::deserialize(&card))
+                        .collect::<Result<Vec<_>, _>>()?,
                 })
             }
             Entry::OplogProcessorCheckpoint(p) => {

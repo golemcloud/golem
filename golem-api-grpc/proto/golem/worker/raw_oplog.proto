@@ -297,6 +297,7 @@ message RawRemoteTransactionParameters {
 message RawSnapshotParameters {
   RawOplogPayload data = 1;
   string mime_type = 2;
+  repeated bytes active_cards = 3;
 }
 
 message RawOplogProcessorCheckpointParameters {

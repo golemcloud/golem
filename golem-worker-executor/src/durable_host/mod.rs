@@ -699,6 +699,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.agent_effective_surface(),
         )
     }
+
+    pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
+        self.state.agent_wallet_cards.values().cloned().collect()
+    }
+
     fn rederive_agent_effective_surface_from_wallet(&mut self) {
         self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
             let context = agent_monomorphization_context(
@@ -4817,7 +4822,7 @@ impl PrivateDurableWorkerState {
         component_metadata: Component,
         total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
-        agent_effective_surface: golem_common::model::card::EffectiveSurface,
+        _agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
@@ -4850,13 +4855,39 @@ impl PrivateDurableWorkerState {
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
-        let agent_wallet_cards = match agent_id.as_ref() {
-            Some(agent_id) => {
-                let card =
-                    agent_initial_card_from_component_metadata(&component_metadata, agent_id)?;
-                HashMap::from([(card.card_id(), card)])
+        let initial_agent_wallet_cards =
+            || -> Result<HashMap<CardId, StoredCard>, WorkerExecutorError> {
+                match agent_id.as_ref() {
+                    Some(agent_id) => {
+                        let card = agent_initial_card_from_component_metadata(
+                            &component_metadata,
+                            agent_id,
+                        )?;
+                        Ok(HashMap::from([(card.card_id(), card)]))
+                    }
+                    None => Ok(HashMap::new()),
+                }
+            };
+        let agent_wallet_cards = if let Some(snapshot_idx) = last_snapshot_index {
+            match oplog.read(snapshot_idx).await {
+                OplogEntry::Snapshot { active_cards, .. } => active_cards
+                    .into_iter()
+                    .map(|card| (card.card_id(), card))
+                    .collect(),
+                _ => initial_agent_wallet_cards()?,
             }
-            None => HashMap::new(),
+        } else {
+            initial_agent_wallet_cards()?
+        };
+        let agent_effective_surface = if let Some(agent_id) = agent_id.as_ref() {
+            let context =
+                agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
+            golem_common::model::card::agent_effective_surface_from_wallet(
+                &context,
+                &agent_wallet_cards,
+            )
+        } else {
+            golem_common::model::card::EffectiveSurface::default()
         };
         Ok(Self {
             oplog_service,

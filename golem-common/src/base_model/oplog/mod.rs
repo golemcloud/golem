@@ -622,6 +622,7 @@ oplog_entry! {
         raw {
             data: payload::OplogPayload<Vec<u8>>,
             mime_type: String,
+            active_cards: Vec<StoredCard>,
         }
         public {
             data: PublicSnapshotData
