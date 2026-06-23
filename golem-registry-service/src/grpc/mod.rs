@@ -70,6 +70,7 @@ pub async fn start_grpc_server(
                 RegistryServiceServer::new(RegistryServiceGrpcApi::new(
                     services.auth_service.clone(),
                     services.account_usage_service.clone(),
+                    services.card_service.clone(),
                     services.component_service.clone(),
                     services.component_resolver_service.clone(),
                     services.deployment_service.clone(),

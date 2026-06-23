@@ -16,6 +16,7 @@ pub mod active_workers;
 pub mod agent_types;
 pub mod agent_webhooks;
 pub mod blob_store;
+pub mod card;
 pub mod compilation_limiter;
 pub mod component;
 pub mod direct_invocation_auth;
@@ -85,6 +86,10 @@ pub trait HasAgentWebhooksService {
 
 pub trait HasComponentService {
     fn component_service(&self) -> Arc<dyn component::ComponentService>;
+}
+
+pub trait HasCardService {
+    fn card_service(&self) -> Arc<dyn card::CardService>;
 }
 
 pub trait HasShardManagerService {
@@ -216,6 +221,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
     + HasAgentTypesService
     + HasAgentWebhooksService
+    + HasCardService
     + HasComponentService
     + HasConfig
     + HasWorkerForkService
@@ -255,6 +261,7 @@ impl<
     T: HasActiveWorkers<Ctx>
         + HasAgentTypesService
         + HasAgentWebhooksService
+        + HasCardService
         + HasComponentService
         + HasConfig
         + HasWorkerForkService
@@ -296,6 +303,7 @@ pub struct All<Ctx: WorkerCtx> {
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     agent_types: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks: Arc<AgentWebhooksService>,
+    card_service: Arc<dyn card::CardService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
@@ -339,6 +347,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             active_workers: self.active_workers.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
+            card_service: self.card_service.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -380,6 +389,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
+        card_service: Arc<dyn card::CardService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -418,6 +428,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             active_workers,
             agent_types,
             agent_webhooks,
+            card_service,
             engine,
             linker,
             runtime,
@@ -459,11 +470,12 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         Arc::downgrade(&self.leak_sentinel)
     }
 
-    pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
+    pub fn from_other<T: HasAll<Ctx> + HasCardService>(this: &T) -> All<Ctx> {
         All::new(
             this.active_workers(),
             this.agent_types(),
             this.agent_webhooks(),
+            this.card_service(),
             this.engine(),
             this.linker(),
             this.runtime(),
@@ -528,6 +540,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentWebhooksService for T {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.all().agent_webhooks.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasCardService for T {
+    fn card_service(&self) -> Arc<dyn card::CardService> {
+        self.all().card_service.clone()
     }
 }
 

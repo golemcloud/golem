@@ -21,6 +21,7 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::FileLoader;
@@ -137,6 +138,7 @@ pub trait WorkerCtx:
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -199,6 +201,8 @@ pub trait WorkerCtx:
     /// Gets an interface to the worker-proxy which can direct calls to other worker executors
     /// in the cluster
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy>;
+
+    fn card_service(&self) -> Arc<dyn CardService>;
 
     fn component_service(&self) -> Arc<dyn ComponentService>;
 

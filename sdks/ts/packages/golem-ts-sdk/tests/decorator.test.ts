@@ -31,7 +31,7 @@ import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorR
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from '../src/uuid';
 import { AgentClassName, BaseAgent, ParsedAgentId } from '../src';
-import { v, schemaValueToWit } from '../src/internal/schema-model';
+import { v, schemaValueFromWit, schemaValueToWit } from '../src/internal/schema-model';
 import { paramNames, paramRoleTag, paramShape } from './agentTypeHelpers';
 
 // Shared structural shapes (in the compact `normalizeSchema` form produced by
@@ -750,9 +750,14 @@ describe('Annotated SingletonAgent class', () => {
     const foo = singleton.val as ResolvedAgent;
     expect(foo.phantomId()).toBeUndefined();
 
-    const result = await foo.invoke('test', v.record([]), { tag: 'anonymous' });
+    const result = await foo.invoke('test', schemaValueToWit(v.record([])), { tag: 'anonymous' });
 
-    expect(result.tag).toEqual('ok');
-    expect(result.val).toEqual({ tag: 'string', value: 'test' });
+    if (result.tag !== 'ok') {
+      throw new Error(`Invocation failed: ${JSON.stringify(result.val)}`);
+    }
+    expect(result.val !== undefined ? schemaValueFromWit(result.val) : undefined).toEqual({
+      tag: 'string',
+      value: 'test',
+    });
   });
 });

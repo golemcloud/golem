@@ -18,7 +18,7 @@
 // measure the round-trip between the in-memory `SchemaValue` and its flat,
 // index-based WIT wire form (`schemaValueToWit` / `schemaValueFromWit`).
 
-import { bench, describe } from 'vitest';
+import { bench, describe } from './harness';
 import {
   SchemaValue,
   v,

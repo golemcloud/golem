@@ -24,8 +24,8 @@ import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { RuntimeOutput, RuntimeParam } from './typeInfoInternal';
-import { decodeOutput, encodeInputRecord } from './mapping/values/boundaryValue';
-import { schemaValueFromWit, schemaValueToWit, typedSchemaValueToWit } from './schema-model';
+import { decodeOutputFromWit, encodeInputRecordToWit } from './mapping/values/boundaryValue';
+import { typedSchemaValueToWit } from './schema-model';
 import { cachedConfigSchema } from './mapping/types/configSchemaCache';
 import { serializeGraph } from './mapping/values/schemaValue';
 import { TypeScope } from './mapping/types/scope';
@@ -174,8 +174,7 @@ class WasmRpcProxyHandlerShared {
     }
 
     const userArgs = args.slice(0, userParams.length);
-    const constructorInput = encodeInputRecord(userArgs, userParams);
-    const constructorTree = schemaValueToWit(constructorInput);
+    const constructorTree = encodeInputRecordToWit(userArgs, userParams);
 
     const agentConfigEntries: TypedAgentConfigValue[] = [];
     if (configIncludedInArgs) {
@@ -402,12 +401,11 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
 /** Encode an ordered list of user-supplied method arguments into a `schema-value-tree`. */
 function serializeArgs(userParams: RuntimeParam[], fnArgs: any[]): SchemaValueTree {
-  return schemaValueToWit(encodeInputRecord(fnArgs, userParams));
+  return encodeInputRecordToWit(fnArgs, userParams);
 }
 
 function deserializeRpcResult(resultTree: SchemaValueTree | undefined, output: RuntimeOutput): any {
-  const value = resultTree === undefined ? undefined : schemaValueFromWit(resultTree);
-  return decodeOutput(value, output);
+  return decodeOutputFromWit(resultTree, output);
 }
 
 function serializeRpcConfigObject(

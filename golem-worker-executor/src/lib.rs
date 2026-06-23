@@ -48,6 +48,7 @@ use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
+use crate::services::card::{CardService, CardServiceDefault};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
@@ -170,12 +171,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
+        card_service: Arc<dyn CardService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<ActiveWorkers<Ctx>> {
         Arc::new(ActiveWorkers::<Ctx>::new(
             &golem_config.memory,
             &golem_config.filesystem_storage,
             &golem_config.agent_status_flush,
+            card_service.clone(),
             shutdown_token,
         ))
     }
@@ -300,6 +303,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
@@ -338,6 +342,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
+            card_service.clone(),
             component_service.clone(),
             shard_manager_service.clone(),
             quota_service.clone(),
@@ -378,6 +383,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             engine.clone(),
             linker.clone(),
             runtime.clone(),
+            card_service.clone(),
             component_service.clone(),
             worker_fork.clone(),
             worker_service.clone(),
@@ -413,6 +419,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_workers,
             agent_types_service,
             agent_webhooks_service,
+            card_service,
             engine,
             linker,
             runtime.clone(),
@@ -698,6 +705,8 @@ pub async fn create_worker_executor_impl<
         registry_service.clone(),
         blob_storage.clone(),
     );
+    let card_service: Arc<dyn CardService> =
+        Arc::new(CardServiceDefault::new(registry_service.clone()));
 
     let environment_state_service = bootstrap.create_environment_state_service(
         &golem_config.environment_state_service,
@@ -788,7 +797,11 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = bootstrap.create_active_workers(&golem_config, shutdown_token.clone());
+    let active_workers = bootstrap.create_active_workers(
+        &golem_config,
+        card_service.clone(),
+        shutdown_token.clone(),
+    );
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
@@ -919,6 +932,7 @@ pub async fn create_worker_executor_impl<
             engine,
             linker,
             runtime.clone(),
+            card_service,
             component_service,
             shard_manager_service,
             worker_service,
