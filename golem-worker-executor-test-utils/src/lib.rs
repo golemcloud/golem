@@ -137,7 +137,7 @@ use golem_worker_executor::workerctx::{
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -151,15 +151,16 @@ use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
-use uuid::Uuid;
+use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
+pub use golem_test_framework::dsl::PrecompiledComponent;
+use golem_common::model::card::{Card, StoredCard, CardId};
+use chrono::DateTime;
 
 #[cfg(test)]
 test_r::enable!();
-
-pub use golem_test_framework::dsl::PrecompiledComponent;
 
 /// A handle to either an owned `TempDir` (parent process) or a borrowed
 /// on-disk path (worker process).
@@ -1928,7 +1929,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn CardService> {
-        Arc::new(NoopCardService)
+        Arc::new(TestCardService)
     }
 
     fn create_additional_deps(
@@ -3355,5 +3356,60 @@ impl Rpc for FailingRpc {
                 auth_ctx,
             )
             .await
+    }
+}
+
+pub const TEST_CARD_ID: CardId = CardId(uuid!("b7f515b3-eabb-4a39-8d94-fe6078ed441e"));
+
+pub struct TestCardService;
+
+#[async_trait]
+impl CardService for TestCardService {
+    async fn register_agent(&self, _agent_id: OwnedAgentId) {}
+
+    async fn register_agent_cards(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
+
+    async fn remove_revoked_agent_cards(&self, _agent_id: &OwnedAgentId, _card_ids: &[CardId]) {}
+
+    async fn unregister_agent(&self, _agent_id: &OwnedAgentId) {}
+
+    async fn record_revoked_cards(
+        &self,
+        _card_ids: &[CardId],
+    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
+        HashMap::new()
+    }
+
+    async fn check_cards(
+        &self,
+        _card_ids: Vec<CardId>,
+    ) -> Result<HashSet<CardId>, WorkerExecutorError> {
+        Ok(HashSet::new())
+    }
+
+    async fn get_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
+        if card_ids.contains(&TEST_CARD_ID) {
+            Ok(vec![
+                StoredCard::Concrete(
+                    Card {
+                        card_id: TEST_CARD_ID,
+                        parent_ids: Vec::new(),
+                        lower_positive: Vec::new(),
+                        lower_negative: Vec::new(),
+                        upper_positive: Vec::new(),
+                        upper_negative: Vec::new(),
+                        created_at: DateTime::from_timestamp_nanos(0),
+                        expires_at: None,
+                        system_card: false,
+                        managed_by: None,
+                    }
+                )
+            ])
+        } else {
+            Ok(Vec::new())
+        }
     }
 }

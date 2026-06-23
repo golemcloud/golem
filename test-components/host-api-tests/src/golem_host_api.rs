@@ -31,7 +31,7 @@ pub struct CardApiResult {
     pub self_card_found_after_install: bool,
 }
 
-#[agent_definition]
+#[agent_definition()]
 pub trait GolemHostApi {
     fn new(name: String) -> Self;
 
@@ -464,7 +464,7 @@ impl GolemHostApi for GolemHostApiImpl {
     fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
         install_card(Card {
             card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits).into(),
+                uuid: Uuid::from_u64_pair(high_bits, low_bits),
             },
         })
         .is_ok()
@@ -473,7 +473,7 @@ impl GolemHostApi for GolemHostApiImpl {
     fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
         derive_card(Card {
             card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits).into(),
+                uuid: Uuid::from_u64_pair(high_bits, low_bits),
             },
         })
         .is_ok()
