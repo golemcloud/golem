@@ -241,6 +241,13 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     name: string;
   };
+  /**
+   * Parameters for a card-revoked oplog entry.
+   */
+  export type CardRevokedParameters = {
+    timestamp: Datetime;
+    cardId: Uuid;
+  };
   export type EndAtomicRegionParameters = {
     timestamp: Datetime;
     beginIndex: OplogIndex;
@@ -925,6 +932,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'remove-retry-policy'
     val: RemoveRetryPolicyParameters
+  } |
+  /** Records that a permission card used by the agent has been revoked */
+  {
+    tag: 'card-revoked'
+    val: CardRevokedParameters
   };
   export type PublicOplogEntry = 
   /** The initial agent oplog entry */
@@ -1152,6 +1164,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'remove-retry-policy'
     val: RemoveRetryPolicyParameters
+  } |
+  /** Records that a permission card used by the agent has been revoked */
+  {
+    tag: 'card-revoked'
+    val: CardRevokedParameters
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

@@ -18,6 +18,7 @@ pub mod agent_secret;
 pub mod application;
 pub mod auth;
 pub mod builtin_plugin_provisioner;
+pub mod card;
 pub mod component;
 pub mod component_compilation;
 pub mod component_object_store;

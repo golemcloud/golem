@@ -39,6 +39,7 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::card::CardService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
@@ -132,6 +133,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
         runtime: Handle,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
@@ -167,6 +169,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             engine,
             linker,
             runtime,
+            card_service,
             component_service,
             shard_manager_service,
             worker_service,
@@ -211,6 +214,7 @@ pub async fn create_debugging_service_services(
     engine: Arc<Engine>,
     linker: Arc<Linker<DebugContext>>,
     runtime: Handle,
+    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     shard_manager_service: Arc<dyn ShardManagerService>,
     worker_service: Arc<dyn WorkerService>,
@@ -255,6 +259,7 @@ pub async fn create_debugging_service_services(
         engine.clone(),
         linker.clone(),
         runtime.clone(),
+        card_service.clone(),
         component_service.clone(),
         shard_manager_service.clone(),
         quota_service.clone(),
@@ -297,6 +302,7 @@ pub async fn create_debugging_service_services(
         engine.clone(),
         linker.clone(),
         runtime.clone(),
+        card_service.clone(),
         component_service.clone(),
         worker_fork.clone(),
         worker_service.clone(),
@@ -331,6 +337,7 @@ pub async fn create_debugging_service_services(
         active_workers,
         agent_types_service,
         agent_webhooks_service,
+        card_service,
         engine,
         linker,
         runtime,

@@ -41,11 +41,11 @@ use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
-use crate::services::HasAll;
 use crate::services::golem_config::{
     AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
+use crate::services::{HasAll, HasCardService};
 use crate::worker::Worker;
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::workerctx::WorkerCtx;
@@ -203,7 +203,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+        T: HasAll<Ctx> + HasCardService + Clone + Send + Sync + 'static,
     {
         let agent_id = owned_agent_id.agent_id();
 

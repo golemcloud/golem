@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::card::CardRepoError;
 use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
@@ -107,6 +108,16 @@ impl From<LimitExceededError> for GrpcApiError {
             error: value.to_string(),
             code: api::error_code::LIMIT_EXCEEDED.to_string(),
             cause: None,
+        })
+    }
+}
+
+impl From<CardRepoError> for GrpcApiError {
+    fn from(value: CardRepoError) -> Self {
+        Self::InternalError(ErrorBody {
+            error: value.to_string(),
+            code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+            cause: Some(value.into_anyhow()),
         })
     }
 }
