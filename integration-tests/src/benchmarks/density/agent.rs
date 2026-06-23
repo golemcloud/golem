@@ -1123,7 +1123,7 @@ async fn run_resume_cell(
         let pod_restart_count = probe.pod_restart_count().await;
         outcome
             .invoke_latencies
-            .entry(index + 1)
+            .entry(prefill)
             .or_default()
             .push(attempt.latency);
         let sample = Sample {
