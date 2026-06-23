@@ -38,9 +38,7 @@ function useForkedWitBindgen(cargoTomlPath) {
     );
   }
 
-  const updated = original
-    .replace(`${witBindgenRtLine}\n`, '')
-    .replace(witBindgenLine, forkedLine);
+  const updated = original.replace(`${witBindgenRtLine}\n`, '').replace(witBindgenLine, forkedLine);
 
   if (!updated.includes(WIT_BINDGEN_GIT) || updated.includes(witBindgenRtLine)) {
     throw new Error(`Failed to rewrite the wit-bindgen dependency in ${cargoTomlPath}.`);
