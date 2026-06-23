@@ -39,6 +39,7 @@ import {
   TypeId,
 } from '../types/resolvedType';
 import { SchemaValue, v } from '../../schema-model';
+import { QUOTA_INTERNAL } from '../../schema-model/quotaInternal';
 import { Result } from '../../../host/result';
 import { QuotaToken } from '../../../host/quota';
 
@@ -263,7 +264,7 @@ export function serialize(tsValue: any, rt: ResolvedType, defs: Defs = EMPTY_DEF
 
     case 'quota-token':
       if (!(tsValue instanceof QuotaToken)) throw typeMismatch(tsValue, 'QuotaToken');
-      return tsValue._toSchemaValue();
+      return tsValue._toSchemaValue(QUOTA_INTERNAL);
 
     case 'flags':
       throw new Error(`Serializing 'flags' values is not supported`);
@@ -490,7 +491,7 @@ export function deserialize(value: SchemaValue, rt: ResolvedType, defs: Defs = E
 
     case 'quota-token':
       if (value.tag !== 'quota-token') throw deserializeMismatch(value, 'QuotaToken');
-      return QuotaToken._fromSchemaValue(value);
+      return QuotaToken._fromSchemaValue(QUOTA_INTERNAL, value);
 
     case 'flags':
       throw new Error(`Deserializing 'flags' values is not supported`);

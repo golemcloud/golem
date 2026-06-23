@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import type {
   SchemaGraph as WitSchemaGraph,
   SchemaValueTree as WitSchemaValueTree,
+  SchemaValueNode as WitSchemaValueNode,
 } from 'golem:core/types@2.0.0';
 
 import {
@@ -34,6 +35,11 @@ import {
   v,
   variantCase,
 } from '../../src/internal/schema-model';
+// `QUOTA_INTERNAL` is deliberately not re-exported from the public/barrel API
+// (only SDK-internal code may move or re-wrap an owned quota-token handle). These
+// are whitebox tests of the schema-model internals, so they import the
+// capability key directly to stand in for that SDK-internal caller.
+import { QUOTA_INTERNAL } from '../../src/internal/schema-model/quotaInternal';
 
 function roundtripValue(value: SchemaValue): void {
   expect(schemaValueFromWit(schemaValueToWit(value))).toEqual(value);
@@ -262,7 +268,7 @@ describe('rich semantic and capability values', () => {
     // `own<quota-token>` is opaque; a plain sentinel object stands in for the
     // generated resource handle.
     const raw = { id: 'opaque-quota-token' } as never;
-    const handle = GuestQuotaTokenHandle.fromRaw(raw);
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw);
     expect(handle.isPresent()).toBe(true);
 
     const wit = schemaValueToWit(v.quotaToken(handle));
@@ -280,13 +286,13 @@ describe('rich semantic and capability values', () => {
   });
 
   it('encoding an already-transferred quota-token handle is rejected', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw({} as never);
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
     schemaValueToWit(v.quotaToken(handle));
     expect(() => schemaValueToWit(v.quotaToken(handle))).toThrow(/already transferred/);
   });
 
   it('aliasing one quota-token handle twice in a tree is rejected without transferring it', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw({} as never);
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
     const aliased: SchemaValue = {
       tag: 'record',
       fields: [v.quotaToken(handle), v.quotaToken(handle)],
@@ -294,6 +300,39 @@ describe('rich semantic and capability values', () => {
     expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
     // The preflight rejects before any handle is moved out (atomic lowering).
     expect(handle.isPresent()).toBe(true);
+  });
+
+  it('encoding a tree where a sibling fails leaves the quota-token handle untransferred', () => {
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    // Tuple([quota-token, datetime-with-invalid-nanoseconds]): the datetime would
+    // be rejected by the boundary, so the encode preflight must fail before the
+    // affine handle is moved out of its cell.
+    const tree: SchemaValue = {
+      tag: 'tuple',
+      elements: [
+        v.quotaToken(handle),
+        { tag: 'datetime', value: { seconds: 0n, nanoseconds: -1 } },
+      ],
+    };
+    expect(() => schemaValueToWit(tree)).toThrow(/datetime/);
+    expect(handle.isPresent()).toBe(true);
+  });
+
+  it('decoding a tree where a later node is invalid neither lifts nor leaks the quota-token handle', () => {
+    const raw = { id: 'opaque-quota-token' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'quota-token-handle', val: raw },
+        // A child index out of range is rejected by the decode preflight, which
+        // runs before any handle is lifted.
+        { tag: 'list-value', val: [99] },
+      ],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(wit)).toThrow(/out of range/);
+    // The owned handle was released (drained), not lifted into a discarded value.
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
   });
 
   it('decoding a tree with an unreferenced quota-token handle node is rejected', () => {
@@ -308,8 +347,54 @@ describe('rich semantic and capability values', () => {
     expect(() => schemaValueFromWit(wit)).toThrow(/not referenced from the root/);
   });
 
+  it('encoding a tree with an unknown sibling tag leaves the quota-token handle untransferred', () => {
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    // Tuple([quota-token, {tag:'bogus'}]): the unknown tag is rejected by the
+    // encode preflight before the affine handle is moved out of its cell, rather
+    // than later in `emitNode` after the take.
+    const tree = {
+      tag: 'tuple',
+      elements: [v.quotaToken(handle), { tag: 'bogus' }],
+    } as unknown as SchemaValue;
+    expect(() => schemaValueToWit(tree)).toThrow(/unknown schema value tag/);
+    expect(handle.isPresent()).toBe(true);
+  });
+
+  it('decoding a tree with two nodes carrying the same raw quota resource is rejected', () => {
+    const raw = { id: 'opaque-quota-token' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'quota-token-handle', val: raw },
+        // A second, distinct node that aliases the same underlying owned resource
+        // must be rejected: an owned `own<quota-token>` is affine and can never
+        // appear twice.
+        { tag: 'quota-token-handle', val: raw },
+      ],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(wit)).toThrow(/more than once/);
+    // Rejected during preflight: the owned resource was released (drained), not
+    // lifted into a discarded value.
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+    expect((wit.valueNodes[2] as { val: unknown }).val).toBeUndefined();
+  });
+
+  it('decoding a tree whose quota-token node was already drained is rejected', () => {
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1] },
+        // `val: undefined` models a handle node whose owned resource was already
+        // taken out; the preflight rejects it instead of throwing mid-lift.
+        { tag: 'quota-token-handle', val: undefined } as unknown as WitSchemaValueNode,
+      ],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(wit)).toThrow(/already transferred/);
+  });
+
   it('quota-token handles cannot be serialized to JSON', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw({} as never);
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
     expect(() => JSON.stringify(handle)).toThrow(/cannot be serialized/);
   });
 

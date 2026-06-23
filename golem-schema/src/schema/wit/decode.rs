@@ -198,9 +198,14 @@ pub fn decode_value(wire_tree: wire::SchemaValueTree) -> Result<SchemaValue, Dec
     let root = wire_tree.root;
     let mut slots: Vec<Option<wire::SchemaValueNode>> =
         wire_tree.value_nodes.into_iter().map(Some).collect();
-    let result = decode_owned_at(&mut slots, root, &mut |handle| {
-        Ok(super::GuestQuotaTokenHandle::new(handle))
-    });
+    // Validate the whole tree before lifting any owned handle, so a malformed
+    // sibling cannot cause an already-lifted token to be discarded.
+    let result = match preflight_owned_value_tree(&slots, root) {
+        Ok(()) => decode_owned_at(&mut slots, root, &mut |handle| {
+            Ok(super::GuestQuotaTokenHandle::new(handle))
+        }),
+        Err(e) => Err(e),
+    };
 
     // Drop every handle that was not consumed while walking the tree, regardless
     // of success or failure, so no owned resource leaks. On the guest the
@@ -654,11 +659,18 @@ pub fn decode_value_with<R: super::QuotaTokenResolver>(
     let root = wire_tree.root;
     let mut slots: Vec<Option<wire::SchemaValueNode>> =
         wire_tree.value_nodes.into_iter().map(Some).collect();
-    let result = decode_owned_at(&mut slots, root, &mut |handle| {
-        resolver
-            .snapshot_handle(handle)
-            .map_err(|e| DecodeError::QuotaResolver(e.to_string()))
-    });
+    // Validate the whole tree before snapshotting any owned handle, so a
+    // malformed sibling cannot cause an already-snapshotted token to be
+    // discarded. After a successful preflight the only fallible step left is the
+    // snapshot itself.
+    let result = match preflight_owned_value_tree(&slots, root) {
+        Ok(()) => decode_owned_at(&mut slots, root, &mut |handle| {
+            resolver
+                .snapshot_handle(handle)
+                .map_err(|e| DecodeError::QuotaResolver(e.to_string()))
+        }),
+        Err(e) => Err(e),
+    };
 
     // Drop every handle that was not consumed while walking the tree, regardless
     // of success or failure, so no owned resource leaks from the table.
@@ -747,11 +759,119 @@ pub fn decode_typed_rejecting_quota_with<D: super::QuotaTokenHandleDropper>(
     Ok(TypedSchemaValue::new(graph, value))
 }
 
+/// Validate an owned value tree by reference *before* any affine
+/// `quota-token` handle is moved out of it.
+///
+/// [`decode_owned_at`] lifts each handle (snapshotting and deleting it from the
+/// host table, or moving the owned guest resource out) as soon as it reaches
+/// the node, but later sibling nodes can still fail validation. Without this
+/// pass a malformed sibling — e.g. `tuple([quota-token-handle, invalid-datetime])`
+/// — would cause an already-lifted token to be discarded. Running this first
+/// guarantees that the only fallible step left in [`decode_owned_at`] is the
+/// quota lift itself, so a token is never consumed because of an unrelated
+/// failure elsewhere in the tree.
+///
+/// It checks, without consuming anything, that:
+/// - every reachable index is in range;
+/// - the reachable nodes form a strict tree — no node is referenced more than
+///   once and there are no cycles — since owned handles are affine and each
+///   slot may be moved out exactly once;
+/// - every `datetime` node is a valid timestamp;
+/// - every `quota-token-handle` node in the list is reachable from the root,
+///   since an unreferenced owned handle is malformed (it would otherwise be
+///   silently dropped).
+fn preflight_owned_value_tree(
+    slots: &[Option<wire::SchemaValueNode>],
+    root: wire::ValueNodeIndex,
+) -> Result<(), DecodeError> {
+    let mut reached = vec![false; slots.len()];
+    preflight_owned_at(slots, root, &mut reached)?;
+    for (i, slot) in slots.iter().enumerate() {
+        if matches!(slot, Some(wire::SchemaValueNode::QuotaTokenHandle(_))) && !reached[i] {
+            return Err(DecodeError::UnconsumedQuotaTokenHandle(
+                i as wire::ValueNodeIndex,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn preflight_owned_at(
+    slots: &[Option<wire::SchemaValueNode>],
+    idx: wire::ValueNodeIndex,
+    reached: &mut [bool],
+) -> Result<(), DecodeError> {
+    let pos = usize_index_v(idx)?;
+    let node = slots
+        .get(pos)
+        .ok_or(DecodeError::ValueNodeIndexOutOfRange(idx))?
+        .as_ref()
+        // Every slot is populated during preflight, so a missing one can only be
+        // a node that was already reached, i.e. an aliasing violation.
+        .ok_or(DecodeError::AliasedValueNode(idx))?;
+    if reached[pos] {
+        return Err(DecodeError::AliasedValueNode(idx));
+    }
+    reached[pos] = true;
+    match node {
+        wire::SchemaValueNode::RecordValue(fields) => {
+            for i in fields {
+                preflight_owned_at(slots, *i, reached)?;
+            }
+        }
+        wire::SchemaValueNode::VariantValue(p) => {
+            if let Some(i) = p.payload {
+                preflight_owned_at(slots, i, reached)?;
+            }
+        }
+        wire::SchemaValueNode::TupleValue(elements)
+        | wire::SchemaValueNode::ListValue(elements)
+        | wire::SchemaValueNode::FixedListValue(elements) => {
+            for i in elements {
+                preflight_owned_at(slots, *i, reached)?;
+            }
+        }
+        wire::SchemaValueNode::MapValue(entries) => {
+            for e in entries {
+                preflight_owned_at(slots, e.key, reached)?;
+                preflight_owned_at(slots, e.value, reached)?;
+            }
+        }
+        wire::SchemaValueNode::OptionValue(inner) => {
+            if let Some(i) = inner {
+                preflight_owned_at(slots, *i, reached)?;
+            }
+        }
+        wire::SchemaValueNode::ResultValue(p) => match p {
+            wire::ResultValuePayload::OkValue(opt) | wire::ResultValuePayload::ErrValue(opt) => {
+                if let Some(i) = opt {
+                    preflight_owned_at(slots, *i, reached)?;
+                }
+            }
+        },
+        wire::SchemaValueNode::UnionValue(p) => {
+            preflight_owned_at(slots, p.body, reached)?;
+        }
+        wire::SchemaValueNode::DatetimeValue(d) => {
+            datetime_from_wire(d)?;
+        }
+        // All remaining node kinds are leaves with no child indices and no
+        // extra decode-time validation. Quota handles are leaves too; their
+        // reachability is checked by the caller after the walk.
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Decode an owned value tree node-by-node, taking each slot exactly once so
 /// affine owned handles can be moved out. Each `quota-token-handle` node's owned
 /// handle is passed to `lift_quota`, which converts it into the build-specific
 /// [`QuotaTokenVariantValue`] (a trusted snapshot on the host, an opaque owned
 /// handle on a guest).
+///
+/// Callers must run [`preflight_owned_value_tree`] first so that the only
+/// fallible step here is `lift_quota`; otherwise a later validation failure
+/// could discard an already-lifted token.
 fn decode_owned_at(
     slots: &mut [Option<wire::SchemaValueNode>],
     idx: wire::ValueNodeIndex,

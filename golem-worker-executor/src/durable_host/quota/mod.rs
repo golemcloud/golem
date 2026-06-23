@@ -367,6 +367,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<()> {
         DurabilityHost::observe_function_call(self, "golem::quota::quota-token", "merge");
 
+        // Reject merging a token into itself before deleting any entry: `self_`
+        // is borrowed and `other` is owned, but a caller can pass the same
+        // underlying resource as both. Without this guard `delete(other)` would
+        // remove the entry and the subsequent `token_entry_mut(self_)` would
+        // fail, losing the token on a malformed call.
+        if self_.rep() == other.rep() {
+            anyhow::bail!("cannot merge a quota token with itself");
+        }
+
         // Validate that both tokens refer to the same resource before consuming `other`.
         let (self_env, self_rn) = {
             let e = token_entry(self, &self_)?;

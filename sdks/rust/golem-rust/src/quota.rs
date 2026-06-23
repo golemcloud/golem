@@ -171,6 +171,17 @@ impl QuotaToken {
     /// Traps if the tokens refer to different resources, or if either token has
     /// already been transferred.
     pub fn merge(&mut self, other: QuotaToken) {
+        // Reject merging a token into itself before taking any handle, so a
+        // shared handle is not consumed as `other` and then read again as the
+        // receiver.
+        if self.handle.cell_id() == other.handle.cell_id() {
+            panic!("cannot merge a quota token with itself");
+        }
+        // Check the receiver first so an already-transferred receiver does not
+        // consume `other`.
+        if !self.handle.is_present() {
+            panic!("{TOKEN_CONSUMED}");
+        }
         let other_raw = other
             .handle
             .take()

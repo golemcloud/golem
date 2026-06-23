@@ -254,6 +254,23 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
           case other => assertTrue(false).label(s"expected QuotaTokenHandle, got $other")
         }
       },
+      test("quota-token handle: encode is atomic — a sibling that fails leaves the handle untouched") {
+        val raw    = js.Dynamic.literal(marker = 99).asInstanceOf[js.Any]
+        val handle = GuestQuotaTokenHandle.fromRaw(raw)
+        // Tuple([quota-token-handle, datetime-with-invalid-nanoseconds]): the
+        // datetime would be rejected by the boundary, so the preflight must fail
+        // before the affine handle is moved out of its cell.
+        val tree = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2)),
+            QuotaTokenHandle(handle),
+            DatetimeValue(Datetime(0L, -1))
+          ),
+          0
+        )
+        val result = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree))
+        assertTrue(result.isFailure, handle.isPresent)
+      },
       // The round-trip tests above only prove encode/decode self-consistency. These
       // smoke tests assert the *raw* emitted JS shape against the wasm-rquickjs d.ts
       // quirks directly, so a consistently-wrong tag/field on both sides cannot hide.

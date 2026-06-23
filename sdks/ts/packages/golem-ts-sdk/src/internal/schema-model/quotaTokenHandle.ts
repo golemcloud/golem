@@ -25,6 +25,7 @@
 // is an alias — both are rejected by the encoder's preflight pass.
 
 import type { QuotaToken as RawQuotaToken } from 'golem:core/types@2.0.0';
+import { QUOTA_INTERNAL, type QuotaInternal } from './quotaInternal';
 
 export class GuestQuotaTokenHandle {
   // A true ECMAScript private field, not a TypeScript-only `private`: the owned
@@ -36,8 +37,19 @@ export class GuestQuotaTokenHandle {
     this.#raw = raw;
   }
 
-  /** Wrap a freshly received owned handle in a take-once cell. */
-  static fromRaw(raw: RawQuotaToken): GuestQuotaTokenHandle {
+  /**
+   * Wrap a freshly received owned handle in a take-once cell.
+   *
+   * Wrapping a raw owned resource is a privileged operation: it is the
+   * primitive a guest would use to forge or duplicate a capability. It requires
+   * the unexported {@link QUOTA_INTERNAL} key so only SDK-internal code can call
+   * it. (`GuestQuotaTokenHandle` is itself not part of the package's public API,
+   * so this is defense in depth.)
+   */
+  static fromRaw(key: QuotaInternal, raw: RawQuotaToken): GuestQuotaTokenHandle {
+    if (key !== QUOTA_INTERNAL) {
+      throw new Error('GuestQuotaTokenHandle.fromRaw is an internal SDK operation');
+    }
     return new GuestQuotaTokenHandle(raw);
   }
 

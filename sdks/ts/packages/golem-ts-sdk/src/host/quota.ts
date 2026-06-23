@@ -21,6 +21,7 @@ import {
   Reservation as RawReservation,
 } from 'golem:quota/types@1.5.0';
 import { GuestQuotaTokenHandle, type SchemaValue, v } from '../internal/schema-model';
+import { QUOTA_INTERNAL, type QuotaInternal } from '../internal/schema-model/quotaInternal';
 import { isPromiseLike } from './guard';
 import { Result } from './result';
 
@@ -118,7 +119,7 @@ export class QuotaToken {
     if (raw === undefined) {
       throw new Error(TOKEN_CONSUMED);
     }
-    return new QuotaToken(GuestQuotaTokenHandle.fromRaw(raw));
+    return new QuotaToken(GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw));
   }
 
   /**
@@ -148,24 +149,39 @@ export class QuotaToken {
   }
 
   /**
-   * @internal Lower the token into a schema value by sharing its opaque owned
-   * handle. The handle is not transferred here; it is moved out of the cell only
-   * when the resulting `SchemaValue` is encoded into a WIT `schema-value-tree`.
+   * Lower the token into a schema value by sharing its opaque owned handle. The
+   * handle is not transferred here; it is moved out of the cell only when the
+   * resulting `SchemaValue` is encoded into a WIT `schema-value-tree`.
+   *
+   * This exposes the opaque handle, so it is gated behind the unexported
+   * {@link QUOTA_INTERNAL} key: only SDK-internal code (the value mapping layer)
+   * may extract a token's handle. A guest cannot, so it cannot reach the raw
+   * owned resource to forge or duplicate the capability.
    */
-  _toSchemaValue(): SchemaValue {
+  _toSchemaValue(key: QuotaInternal): SchemaValue {
+    requireQuotaInternal(key);
     return v.quotaToken(this.#handle);
   }
 
-  /** @internal Reconstruct a token from a decoded schema value's opaque handle. */
-  static _fromSchemaValue(value: SchemaValue): QuotaToken {
+  /**
+   * Reconstruct a token from a decoded schema value's opaque handle. Gated
+   * behind {@link QUOTA_INTERNAL} so only SDK-internal code can wrap a handle
+   * back into a token.
+   */
+  static _fromSchemaValue(key: QuotaInternal, value: SchemaValue): QuotaToken {
+    requireQuotaInternal(key);
     if (value.tag !== 'quota-token') {
       throw new Error(`Expected a quota-token schema value, got '${value.tag}'`);
     }
     return new QuotaToken(value.handle);
   }
 
-  /** @internal Wrap a freshly acquired owned handle. */
-  static _fromHandle(handle: GuestQuotaTokenHandle): QuotaToken {
+  /**
+   * Wrap a freshly acquired owned handle. Gated behind {@link QUOTA_INTERNAL} so
+   * only SDK-internal code can construct a token from a raw handle.
+   */
+  static _fromHandle(key: QuotaInternal, handle: GuestQuotaTokenHandle): QuotaToken {
+    requireQuotaInternal(key);
     return new QuotaToken(handle);
   }
 
@@ -181,6 +197,12 @@ export class QuotaToken {
   }
 }
 
+function requireQuotaInternal(key: QuotaInternal): void {
+  if (key !== QUOTA_INTERNAL) {
+    throw new Error('this is an internal SDK operation on a quota token');
+  }
+}
+
 const TOKEN_CONSUMED =
   'quota token has already been transferred and can no longer be used; split the token first if ' +
   'you need to both keep and send a capability';
@@ -193,7 +215,10 @@ const TOKEN_CONSUMED =
  *                       credit rate and max-credit for fair scheduling.
  */
 export function acquireQuotaToken(resourceName: string, expectedUse: bigint): QuotaToken {
-  return QuotaToken._fromHandle(GuestQuotaTokenHandle.fromRaw(newToken(resourceName, expectedUse)));
+  return QuotaToken._fromHandle(
+    QUOTA_INTERNAL,
+    GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, newToken(resourceName, expectedUse)),
+  );
 }
 
 export function withReservation<R>(

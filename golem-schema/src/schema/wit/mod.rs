@@ -199,8 +199,19 @@ mod guest_support {
         inner: Rc<RefCell<Option<wire::QuotaToken>>>,
     }
 
+    // The methods below expose the affine owned handle so the codec (this
+    // crate) and the SDK wrappers (`golem-rust`, a separate crate) can move it
+    // through encode/decode and call borrowing quota operations on it. They have
+    // to stay `pub` because they cross that crate boundary, but they are not a
+    // supported guest API: a guest that calls `take`/`new`/`with_handle` could
+    // move the underlying `wire::QuotaToken` resource around outside the
+    // take-once cell and defeat the affine/unforgeable guarantee. They are
+    // hidden from the documented surface (`#[doc(hidden)]`) to discourage that;
+    // genuine forgery is only possible through wit-bindgen's own hidden resource
+    // handle accessors, which are outside this crate's control.
     impl GuestQuotaTokenHandle {
         /// Wrap a freshly received owned handle in a take-once cell.
+        #[doc(hidden)]
         pub fn new(handle: wire::QuotaToken) -> Self {
             Self {
                 inner: Rc::new(RefCell::new(Some(handle))),
@@ -209,11 +220,13 @@ mod guest_support {
 
         /// Take the owned handle out of the cell. Returns `None` if it was
         /// already transferred (consumed) by a previous encode.
+        #[doc(hidden)]
         pub fn take(&self) -> Option<wire::QuotaToken> {
             self.inner.borrow_mut().take()
         }
 
         /// Whether the handle is still present (not yet transferred).
+        #[doc(hidden)]
         pub fn is_present(&self) -> bool {
             self.inner.borrow().is_some()
         }
@@ -225,12 +238,14 @@ mod guest_support {
         /// Used by SDK wrappers to invoke borrowing quota operations
         /// (`reserve`, `split`) on the underlying resource without taking
         /// ownership of it.
+        #[doc(hidden)]
         pub fn with_handle<R>(&self, f: impl FnOnce(&wire::QuotaToken) -> R) -> Option<R> {
             self.inner.borrow().as_ref().map(f)
         }
 
         /// Identity of the shared cell, used to detect the same token appearing
         /// more than once in a single value tree.
+        #[doc(hidden)]
         pub fn cell_id(&self) -> *const () {
             Rc::as_ptr(&self.inner).cast()
         }

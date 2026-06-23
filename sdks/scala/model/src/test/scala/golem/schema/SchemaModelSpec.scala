@@ -412,6 +412,22 @@ object SchemaModelSpec extends ZIOSpecDefault {
           val res = Try(SchemaWire.schemaValueFromWit(bad))
           assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
           assertTrue(!reachable.isPresent, !unreachable.isPresent)
+        },
+        test("decoding fails atomically when a sibling is invalid, draining an already-reached handle") {
+          // Tuple([quota-handle, list-with-out-of-range-child]): the handle is
+          // reached first, then the sibling's child index is rejected. The handle
+          // must be released, not left live in a discarded partial value.
+          val h   = GuestQuotaTokenHandle.fromRaw("raw-1")
+          val bad = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.QuotaTokenHandle(h),
+              WitSchemaValueNode.ListValue(Vector(99))
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
         }
       ),
       suite("GraphEncoder multi-root (agent carrier use case)")(

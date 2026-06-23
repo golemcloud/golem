@@ -220,6 +220,9 @@ struct TableResolver {
     live: i64,
     /// Number of `handle_from_snapshot` calls so far.
     created: usize,
+    /// Number of `snapshot_handle` calls so far (handles lifted into a trusted
+    /// snapshot, as opposed to merely dropped).
+    snapshotted: usize,
     /// If set, `handle_from_snapshot` fails once this many handles have already
     /// been created, simulating a mid-encode resolver failure.
     fail_create_after: Option<usize>,
@@ -231,6 +234,7 @@ impl TableResolver {
             table: ResourceTable::new(),
             live: 0,
             created: 0,
+            snapshotted: 0,
             fail_create_after: None,
         }
     }
@@ -252,6 +256,7 @@ impl QuotaTokenResolver for TableResolver {
     ) -> Result<QuotaTokenValuePayload, Self::Error> {
         let rep = self.table.delete(handle)?;
         self.live -= 1;
+        self.snapshotted += 1;
         rep.downcast_ref::<QuotaTokenValuePayload>()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("handle payload was not a snapshot"))
@@ -366,6 +371,35 @@ fn unreferenced_quota_handle_is_dropped_and_rejected() {
         decode_value_with(tree, &mut resolver).expect_err("unreferenced handle must be rejected");
     assert!(matches!(err, DecodeError::UnconsumedQuotaTokenHandle(0)));
     // The unreachable handle was dropped, not leaked.
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn decode_does_not_snapshot_quota_handle_when_a_later_node_is_invalid() {
+    // Atomicity regression: a tree `tuple([quota-token-handle, invalid-datetime])`
+    // must be rejected for the invalid datetime *without* snapshotting (and thus
+    // consuming) the quota token first. The handle is instead released cleanly
+    // via `drop_handle`, so it neither leaks nor is silently turned into a
+    // discarded snapshot.
+    let mut resolver = TableResolver::new();
+    let handle = resolver.handle_from_snapshot(&sample_snapshot()).unwrap();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![
+            wire::SchemaValueNode::QuotaTokenHandle(handle),
+            wire::SchemaValueNode::DatetimeValue(wire::Datetime {
+                seconds: i64::MAX,
+                nanoseconds: 999_999_999,
+            }),
+            wire::SchemaValueNode::TupleValue(vec![0, 1]),
+        ],
+        root: 2,
+    };
+    let err = decode_value_with(tree, &mut resolver)
+        .expect_err("an invalid sibling must reject the whole tree");
+    assert!(matches!(err, DecodeError::InvalidDatetime { .. }));
+    // The token was never lifted into a snapshot, only dropped, and nothing
+    // leaks from the table.
+    assert_eq!(resolver.snapshotted, 0);
     assert_eq!(resolver.live, 0);
 }
 
