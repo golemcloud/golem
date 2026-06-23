@@ -21,8 +21,6 @@ pub mod graph;
 pub mod metadata;
 pub mod multimodal;
 #[cfg(feature = "full")]
-pub mod poem;
-#[cfg(feature = "full")]
 pub mod protobuf;
 pub mod schema_type;
 pub mod schema_value;

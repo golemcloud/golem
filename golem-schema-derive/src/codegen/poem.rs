@@ -156,12 +156,7 @@ fn expand_enum(
 
     match (&serde.tag, &serde.content) {
         (Some(tag), Some(content)) => expand_adjacent_enum(ident, name, serde, data, tag, content),
-        (Some(_), None) => Err(syn::Error::new_spanned(
-            ident,
-            "PoemSchema does not support internally-tagged enums \
-             (`#[serde(tag = ...)]` without `content`); add `content = \"...\"` for an \
-             adjacently-tagged enum",
-        )),
+        (Some(tag), None) => expand_internal_enum(ident, name, serde, data, tag),
         (None, Some(_)) => Err(syn::Error::new_spanned(
             ident,
             "`#[serde(content = ...)]` requires `tag = ...`",
@@ -266,10 +261,10 @@ fn expand_adjacent_enum(
                     ));
                 }
                 let inner = &unnamed.unnamed[0].ty;
-                reject_tuple_type(inner)?;
-                let content_ref = type_schema_ref_expr(inner);
+                let content_register = register_expr(inner);
+                let content_ref = schema_ref_expr(inner);
                 quote! {{
-                    <#inner as ::poem_openapi::types::Type>::register(registry);
+                    #content_register
                     let mut __vprops: ::std::vec::Vec<(
                         &'static str,
                         ::poem_openapi::registry::MetaSchemaRef,
@@ -333,6 +328,105 @@ fn expand_adjacent_enum(
     Ok(emit_registered(ident, name, &schema_body, true))
 }
 
+/// Internally-tagged enum (`#[serde(tag = "...")]` without `content`): each
+/// variant serializes as an object that carries the tag property inline
+/// alongside the variant's own fields (`{ "tag": "<case>", ...fields }`).
+/// serde only supports struct and unit variants in this representation, so
+/// newtype/tuple variants are rejected.
+fn expand_internal_enum(
+    ident: &Ident,
+    name: &str,
+    serde: &SerdeTypeAttrs,
+    data: &DataEnum,
+    tag: &str,
+) -> syn::Result<TokenStream> {
+    let tag_lit = LitStr::new(tag, Span::call_site());
+
+    let mut variant_blocks = Vec::new();
+    for variant in &data.variants {
+        let vattrs = parse_serde_variant_attrs(&variant.attrs)?;
+        let case = resolve_variant_name(&variant.ident, &vattrs, serde.rename_all);
+        let case_lit = LitStr::new(&case, variant.ident.span());
+
+        let tag_prop = quote! {
+            __props.push((
+                #tag_lit,
+                ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
+                    ::poem_openapi::registry::MetaSchema {
+                        enum_items: ::std::vec![
+                            ::serde_json::Value::String(::std::string::String::from(#case_lit))
+                        ],
+                        ..::poem_openapi::registry::MetaSchema::new("string")
+                    }
+                )),
+            ));
+        };
+
+        let block = match &variant.fields {
+            Fields::Unit => quote! {{
+                let mut __props: ::std::vec::Vec<(
+                    &'static str,
+                    ::poem_openapi::registry::MetaSchemaRef,
+                )> = ::std::vec::Vec::new();
+                #tag_prop
+                __one_of.push(::poem_openapi::registry::MetaSchemaRef::Inline(
+                    ::std::boxed::Box::new(::poem_openapi::registry::MetaSchema {
+                        required: ::std::vec![#tag_lit],
+                        properties: __props,
+                        ..::poem_openapi::registry::MetaSchema::new("object")
+                    }),
+                ));
+            }},
+            Fields::Named(named) => {
+                // As with adjacently-tagged struct variants, the enum's
+                // `rename_all` never applies to struct-variant field names.
+                let (registers, prop_pushes, req_pushes) =
+                    field_schema_parts(&named.named, None)?;
+                quote! {{
+                    #(#registers)*
+                    let mut __props: ::std::vec::Vec<(
+                        &'static str,
+                        ::poem_openapi::registry::MetaSchemaRef,
+                    )> = ::std::vec::Vec::new();
+                    #tag_prop
+                    #(#prop_pushes)*
+                    let mut __required: ::std::vec::Vec<&'static str> =
+                        ::std::vec![#tag_lit];
+                    #(#req_pushes)*
+                    __one_of.push(::poem_openapi::registry::MetaSchemaRef::Inline(
+                        ::std::boxed::Box::new(::poem_openapi::registry::MetaSchema {
+                            required: __required,
+                            properties: __props,
+                            ..::poem_openapi::registry::MetaSchema::new("object")
+                        }),
+                    ));
+                }}
+            }
+            Fields::Unnamed(_) => {
+                return Err(syn::Error::new_spanned(
+                    &variant.ident,
+                    "PoemSchema does not support newtype/tuple variants in \
+                     internally-tagged enums; serde requires struct or unit variants",
+                ));
+            }
+        };
+        variant_blocks.push(block);
+    }
+
+    let schema_body = quote! {
+        let mut __one_of: ::std::vec::Vec<::poem_openapi::registry::MetaSchemaRef> =
+            ::std::vec::Vec::new();
+        #(#variant_blocks)*
+        ::poem_openapi::registry::MetaSchema {
+            ty: "object",
+            one_of: __one_of,
+            ..::poem_openapi::registry::MetaSchema::ANY
+        }
+    };
+
+    Ok(emit_registered(ident, name, &schema_body, true))
+}
+
 // --- shared codegen ------------------------------------------------------
 
 /// Build a block expression that registers every field type and evaluates to
@@ -341,34 +435,7 @@ fn object_schema_block(
     fields: &Punctuated<Field, Comma>,
     rename_all: Option<RenameRule>,
 ) -> syn::Result<TokenStream> {
-    let mut registers = Vec::new();
-    let mut prop_pushes = Vec::new();
-    let mut req_pushes = Vec::new();
-
-    for field in fields {
-        let ident = field
-            .ident
-            .as_ref()
-            .ok_or_else(|| syn::Error::new_spanned(field, "expected a named field"))?;
-        let ty = &field.ty;
-        reject_tuple_type(ty)?;
-
-        let fattrs = parse_serde_field_attrs(&field.attrs)?;
-        let name = resolve_field_name(ident, &fattrs, rename_all);
-        let name_lit = LitStr::new(&name, ident.span());
-        let is_opt = is_option_type(ty);
-
-        registers.push(quote! {
-            <#ty as ::poem_openapi::types::Type>::register(registry);
-        });
-
-        let prop_ref = type_schema_ref_expr(ty);
-        prop_pushes.push(quote! { __props.push((#name_lit, #prop_ref)); });
-
-        if !is_opt && !fattrs.has_default {
-            req_pushes.push(quote! { __required.push(#name_lit); });
-        }
-    }
+    let (registers, prop_pushes, req_pushes) = field_schema_parts(fields, rename_all)?;
 
     Ok(quote! {{
         #(#registers)*
@@ -385,6 +452,48 @@ fn object_schema_block(
             ..::poem_openapi::registry::MetaSchema::new("object")
         }
     }})
+}
+
+/// Build, for a set of named fields, the per-field token fragments shared by
+/// struct schemas and tagged struct-variant schemas:
+///
+/// - `registers`: statements that register each field type's component;
+/// - `prop_pushes`: statements that push `(name, schema_ref)` into `__props`;
+/// - `req_pushes`: statements that push required field names into `__required`.
+///
+/// Both `__props` and `__required` must be in scope where these fragments are
+/// emitted.
+fn field_schema_parts(
+    fields: &Punctuated<Field, Comma>,
+    rename_all: Option<RenameRule>,
+) -> syn::Result<(Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>)> {
+    let mut registers = Vec::new();
+    let mut prop_pushes = Vec::new();
+    let mut req_pushes = Vec::new();
+
+    for field in fields {
+        let ident = field
+            .ident
+            .as_ref()
+            .ok_or_else(|| syn::Error::new_spanned(field, "expected a named field"))?;
+        let ty = &field.ty;
+
+        let fattrs = parse_serde_field_attrs(&field.attrs)?;
+        let name = resolve_field_name(ident, &fattrs, rename_all);
+        let name_lit = LitStr::new(&name, ident.span());
+        let is_opt = is_option_type(ty);
+
+        registers.push(register_expr(ty));
+
+        let prop_ref = schema_ref_expr(ty);
+        prop_pushes.push(quote! { __props.push((#name_lit, #prop_ref)); });
+
+        if !is_opt && !fattrs.has_default {
+            req_pushes.push(quote! { __required.push(#name_lit); });
+        }
+    }
+
+    Ok((registers, prop_pushes, req_pushes))
 }
 
 /// Emit `Type` (registering a named component built from `schema_body`),
@@ -522,6 +631,178 @@ fn type_schema_ref_expr(ty: &Type) -> TokenStream {
     } else {
         quote! { <#ty as ::poem_openapi::types::Type>::schema_ref() }
     }
+}
+
+/// Register statement(s) for a field/variant-content type. Types that contain
+/// a tuple (which has no `poem_openapi::types::Type` impl) are walked
+/// structurally so each leaf component is still registered; all other types
+/// delegate to `<T as Type>::register`.
+fn register_expr(ty: &Type) -> TokenStream {
+    if type_contains_tuple(ty) {
+        synth_register(ty)
+    } else {
+        quote! { <#ty as ::poem_openapi::types::Type>::register(registry); }
+    }
+}
+
+/// `MetaSchemaRef` expression for a field/variant-content type. Tuple-bearing
+/// types are synthesized as array schemas (serde serializes tuples as JSON
+/// arrays); all other types delegate to their own `Type::schema_ref` (with the
+/// `Option<T>` → nullable rule applied by [`type_schema_ref_expr`]).
+fn schema_ref_expr(ty: &Type) -> TokenStream {
+    if type_contains_tuple(ty) {
+        synth_schema_ref(ty)
+    } else {
+        type_schema_ref_expr(ty)
+    }
+}
+
+/// Whether `ty` is, or structurally contains, a (non-empty) tuple — looking
+/// through the `Vec<_>` / `Option<_>` / `Box<_>` / slice / array wrappers this
+/// derive knows how to synthesize.
+fn type_contains_tuple(ty: &Type) -> bool {
+    match ty {
+        Type::Tuple(t) => !t.elems.is_empty(),
+        Type::Slice(s) => type_contains_tuple(&s.elem),
+        Type::Array(a) => type_contains_tuple(&a.elem),
+        Type::Paren(p) => type_contains_tuple(&p.elem),
+        Type::Group(g) => type_contains_tuple(&g.elem),
+        _ => container_inner(ty).is_some_and(type_contains_tuple),
+    }
+}
+
+/// Recursively register the leaf component types reachable through tuples and
+/// the known wrapper types.
+fn synth_register(ty: &Type) -> TokenStream {
+    match ty {
+        Type::Tuple(t) => {
+            let regs = t.elems.iter().map(synth_register);
+            quote! { #(#regs)* }
+        }
+        Type::Slice(s) => synth_register(&s.elem),
+        Type::Array(a) => synth_register(&a.elem),
+        Type::Paren(p) => synth_register(&p.elem),
+        Type::Group(g) => synth_register(&g.elem),
+        _ => match container_inner(ty) {
+            Some(inner) => synth_register(inner),
+            None => quote! { <#ty as ::poem_openapi::types::Type>::register(registry); },
+        },
+    }
+}
+
+/// Synthesize a `MetaSchemaRef` for a tuple-bearing type. Tuples become array
+/// schemas with `min_items`/`max_items` fixed to the arity; `Vec`/slice become
+/// arrays; `Option` adds `nullable`; `Box` is transparent; everything else
+/// delegates to the type's own `schema_ref`.
+fn synth_schema_ref(ty: &Type) -> TokenStream {
+    match ty {
+        Type::Tuple(t) => {
+            let arity = t.elems.len();
+            let arity_lit = proc_macro2::Literal::usize_unsuffixed(arity);
+            let homogeneous = {
+                let mut iter = t.elems.iter();
+                match iter.next() {
+                    Some(first) => {
+                        let first_str = quote! { #first }.to_string();
+                        iter.all(|e| quote! { #e }.to_string() == first_str)
+                    }
+                    None => true,
+                }
+            };
+            let items_ref = if homogeneous {
+                synth_schema_ref(&t.elems[0])
+            } else {
+                let elem_refs = t.elems.iter().map(synth_schema_ref);
+                quote! {
+                    ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
+                        ::poem_openapi::registry::MetaSchema {
+                            one_of: ::std::vec![ #(#elem_refs),* ],
+                            ..::poem_openapi::registry::MetaSchema::ANY
+                        }
+                    ))
+                }
+            };
+            quote! {
+                ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
+                    ::poem_openapi::registry::MetaSchema {
+                        items: ::core::option::Option::Some(::std::boxed::Box::new(#items_ref)),
+                        min_items: ::core::option::Option::Some(#arity_lit),
+                        max_items: ::core::option::Option::Some(#arity_lit),
+                        ..::poem_openapi::registry::MetaSchema::new("array")
+                    }
+                ))
+            }
+        }
+        Type::Slice(s) => array_ref(synth_schema_ref(&s.elem)),
+        Type::Array(a) => array_ref(synth_schema_ref(&a.elem)),
+        Type::Paren(p) => synth_schema_ref(&p.elem),
+        Type::Group(g) => synth_schema_ref(&g.elem),
+        _ => match container_kind(ty) {
+            Some((Container::Vec, inner)) => array_ref(synth_schema_ref(inner)),
+            Some((Container::Box, inner)) => synth_schema_ref(inner),
+            Some((Container::Option, inner)) => {
+                let inner_ref = synth_schema_ref(inner);
+                quote! {
+                    ::poem_openapi::registry::MetaSchemaRef::merge(
+                        #inner_ref,
+                        ::poem_openapi::registry::MetaSchema {
+                            nullable: true,
+                            ..::poem_openapi::registry::MetaSchema::ANY
+                        },
+                    )
+                }
+            }
+            None => quote! { <#ty as ::poem_openapi::types::Type>::schema_ref() },
+        },
+    }
+}
+
+/// An inline `array` `MetaSchemaRef` whose items are `inner_ref`.
+fn array_ref(inner_ref: TokenStream) -> TokenStream {
+    quote! {
+        ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
+            ::poem_openapi::registry::MetaSchema {
+                items: ::core::option::Option::Some(::std::boxed::Box::new(#inner_ref)),
+                ..::poem_openapi::registry::MetaSchema::new("array")
+            }
+        ))
+    }
+}
+
+/// The wrapper kinds whose schema this derive can synthesize structurally.
+#[derive(Clone, Copy)]
+enum Container {
+    Vec,
+    Option,
+    Box,
+}
+
+/// If `ty` is a `Vec<T>` / `Option<T>` / `Box<T>`, return its kind and `T`.
+fn container_kind(ty: &Type) -> Option<(Container, &Type)> {
+    let Type::Path(tp) = ty else { return None };
+    if tp.qself.is_some() {
+        return None;
+    }
+    let seg = tp.path.segments.last()?;
+    let kind = match seg.ident.to_string().as_str() {
+        "Vec" => Container::Vec,
+        "Option" => Container::Option,
+        "Box" => Container::Box,
+        _ => return None,
+    };
+    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+        for arg in &args.args {
+            if let syn::GenericArgument::Type(inner) = arg {
+                return Some((kind, inner));
+            }
+        }
+    }
+    None
+}
+
+/// The single inner type of a `Vec<T>` / `Option<T>` / `Box<T>`, if any.
+fn container_inner(ty: &Type) -> Option<&Type> {
+    container_kind(ty).map(|(_, inner)| inner)
 }
 
 fn is_option_type(ty: &Type) -> bool {

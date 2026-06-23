@@ -39,6 +39,7 @@ pub type Datetime = chrono::DateTime<chrono::Utc>;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.EnvironmentId")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct EnvironmentId {
     pub uuid: Uuid,
 }
