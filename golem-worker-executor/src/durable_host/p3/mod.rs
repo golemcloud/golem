@@ -33,10 +33,15 @@
 //! below.
 
 use std::any::{Any, type_name};
+use std::future::Future;
 use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, drain_dropped_call_events_access,
+};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
 use wasmtime::component::{HasData, Linker};
 
 use wasmtime_wasi::cli::{WasiCliCtxView, WasiCliView};
@@ -85,6 +90,62 @@ fn expect_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut Ctx {
                 type_name::<U>(),
             )
         })
+}
+
+fn durable_worker_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut DurableWorkerCtx<Ctx> {
+    expect_ctx::<Ctx, U>(u).durable_ctx_mut()
+}
+
+async fn run_read_access<T, D, Ctx, Pair, F, Fut>(
+    store: &wasmtime::component::Accessor<T, D>,
+    request: Pair::Req,
+    function_type: DurableFunctionType,
+    live: F,
+) -> wasmtime::Result<Pair::Resp>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
+{
+    drain_dropped_call_events_access(store, durable_worker_ctx::<Ctx, T>)
+        .await
+        .map_err(wasmtime::Error::from)?;
+
+    let mut handle = CallHandle::<Pair, Cancellable>::start_access(
+        store,
+        durable_worker_ctx::<Ctx, T>,
+        request,
+        function_type,
+    )
+    .await
+    .map_err(wasmtime::Error::from)?;
+
+    if !handle.is_live() {
+        match handle
+            .replay_access(store, durable_worker_ctx::<Ctx, T>)
+            .await
+            .map_err(wasmtime::Error::from)?
+        {
+            CallReplayOutcome::Replayed(response) => return Ok(response),
+            CallReplayOutcome::Incomplete(live_handle) => handle = live_handle,
+        }
+    }
+
+    let response = match live().await {
+        Ok(response) => response,
+        Err(err) => {
+            handle.abandon_for_trap();
+            return Err(err);
+        }
+    };
+
+    handle
+        .complete_access(store, durable_worker_ctx::<Ctx, T>, response)
+        .await
+        .map_err(wasmtime::Error::from)
 }
 
 fn wasi_clocks_view<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> WasiClocksCtxView<'_> {

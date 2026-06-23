@@ -57,9 +57,7 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
             "keyvalue::types::outgoing_value",
             "outgoing_value_write_body_async",
         );
-        unimplemented!(
-            "outgoing_value_write_body_async is not yet implemented for WASI p3 streams"
-        )
+        unimplemented!("outgoing_value_write_body_async is not yet implemented for WASI p3 streams")
     }
 
     async fn outgoing_value_write_body_sync(

@@ -16,8 +16,8 @@ use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancella
 use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
-    CancellationToken, DataValue, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
-    HostFutureInvokeResultWithStore, HostWasmRpc, RpcError,
+    CancellationToken, DataValue, FutureInvokeResult, HostCancellationToken,
+    HostFutureInvokeResult, HostFutureInvokeResultWithStore, HostWasmRpc, RpcError,
 };
 use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
@@ -93,8 +93,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-        let mut env =
-            self.get_environment()?;
+        let mut env = self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
@@ -196,8 +195,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.check_read_only_allows("golem::rpc::wasm-rpc::invoke-and-await")
             .map_err(wasmtime::Error::from)?;
 
-        let mut env =
-            self.get_environment()?;
+        let mut env = self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let own_agent_id = self.owned_agent_id().clone();
@@ -403,8 +401,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.check_read_only_allows("golem::rpc::wasm-rpc::invoke")
             .map_err(wasmtime::Error::from)?;
 
-        let mut env =
-            self.get_environment()?;
+        let mut env = self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let own_agent_id = self.owned_agent_id().clone();
@@ -533,8 +530,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.check_read_only_allows("golem::rpc::wasm-rpc::async-invoke-and-await")
             .map_err(wasmtime::Error::from)?;
 
-        let mut env =
-            self.get_environment()?;
+        let mut env = self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let own_agent_id = self.owned_agent_id().clone();
@@ -893,7 +889,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCt
 }
 
 impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
-
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "cancel");
 

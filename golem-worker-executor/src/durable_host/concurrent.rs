@@ -25,24 +25,32 @@
 //! methods still take `&mut self`, two calls cannot truly overlap yet, so the resolver's
 //! out-of-order behaviour is proven by synthetic unit tests rather than a concurrent runtime test.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::Arc;
 
+use anyhow::Error;
+use async_trait::async_trait;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
-    OplogPayload, PersistenceLevel,
+    OplogPayload, PersistenceLevel, host_functions::HostFunctionName,
 };
 use golem_common::model::{RetryProperties, Timestamp};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-
-use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::durability::{
-    DurabilityHost, HostFailureKind, InFunctionRetryController, InFunctionRetryHost,
-    InternalRetryResult,
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use crate::services::oplog::{OplogOps, PendingUpload};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
+use wasmtime::component::{Accessor, HasData};
+
+use crate::durable_host::durability::{
+    DurabilityHost, DurableExecutionState, HostFailureKind, InFunctionRetryController,
+    InFunctionRetryHost, InternalRetryResult, try_trigger_host_trap_retry,
+};
+use crate::durable_host::{DurableWorkerCtx, PrivateDurableWorkerState};
+use crate::services::oplog::{Oplog, OplogOps, PendingUpload};
 use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
 
@@ -240,32 +248,403 @@ impl ReplayCallHandle {
     }
 }
 
+/// Call-owned facts available to a cancellation recorder when a live persisted handle is dropped.
+///
+/// `Drop` cannot use wasmtime's `Accessor`, cannot borrow worker state, and cannot `.await`; any
+/// production recorder must receive everything it needs from the handle itself and do the async
+/// oplog/state work later.
+#[derive(Debug, Clone)]
+pub struct DroppedCall {
+    start_idx: OplogIndex,
+    request_upload: PendingUpload,
+    atomic_region_registration: Option<OplogIndex>,
+}
+
+impl DroppedCall {
+    pub fn start_idx(&self) -> OplogIndex {
+        self.start_idx
+    }
+
+    pub fn request_upload(&self) -> &PendingUpload {
+        &self.request_upload
+    }
+
+    pub fn atomic_region_registration(&self) -> Option<OplogIndex> {
+        self.atomic_region_registration
+    }
+
+    async fn wait_request_upload(&self) -> Result<(), WorkerExecutorError> {
+        self.request_upload.wait().await.map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to serialize and store durable call request: {err}"
+            ))
+        })
+    }
+
+    async fn append_cancelled<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        partial: Option<OplogPayload<HostResponse>>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.append_cancelled_with_oplog(ctx.state.oplog.clone(), partial)
+            .await?;
+        if let Some(begin_index) = self.atomic_region_registration {
+            ctx.state.unregister_atomic_region_call(begin_index);
+        }
+        Ok(())
+    }
+
+    async fn append_cancelled_with_oplog(
+        &self,
+        oplog: std::sync::Arc<dyn crate::services::oplog::Oplog>,
+        partial: Option<OplogPayload<HostResponse>>,
+    ) -> Result<(), WorkerExecutorError> {
+        let cancelled = OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: self.start_idx,
+            partial,
+        };
+        oplog.add(cancelled).await;
+        Ok(())
+    }
+}
+
 /// Event emitted when a [`CallHandle`] is dropped without being finished or cancelled.
 ///
 /// There is no recorder actor in production yet, so an unfinished drop only logs. The drop policy
 /// is exercised in unit tests by attaching a sink that records these events.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum DropEvent {
-    /// A `Cancellable` handle was dropped unfinished; a real recorder would enqueue a `Cancelled`.
-    UnfinishedCancellable { start_idx: OplogIndex },
+    /// A `Cancellable` handle was dropped unfinished; a real recorder would enqueue a `Cancelled`
+    /// from this call-owned snapshot.
+    UnfinishedCancellable { call: DroppedCall },
     /// A `NotCancellable` handle was dropped unfinished; this is a programming error.
-    UnfinishedNotCancellable { start_idx: OplogIndex },
+    UnfinishedNotCancellable { call: DroppedCall },
+    /// A terminal was already being recorded when the future was dropped; only in-memory atomic
+    /// membership cleanup is needed, not another durable terminal entry.
+    CleanupAtomicRegion { begin_index: OplogIndex },
+    /// A terminal append was handed to an owned task; wait for it before in-memory cleanup.
+    CleanupAfterTerminal {
+        begin_index: OplogIndex,
+        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+    },
+}
+
+struct AccessDropEventDrainGuard {
+    sink: UnboundedSender<DropEvent>,
+    pending: VecDeque<DropEvent>,
+    current: Option<DropEvent>,
+    disarmed: bool,
+}
+
+impl AccessDropEventDrainGuard {
+    fn new(sink: UnboundedSender<DropEvent>, events: Vec<DropEvent>) -> Self {
+        Self {
+            sink,
+            pending: events.into(),
+            current: None,
+            disarmed: false,
+        }
+    }
+
+    fn start_next(&mut self) -> bool {
+        debug_assert!(self.current.is_none());
+        self.current = self.pending.pop_front();
+        self.current.is_some()
+    }
+
+    fn current_mut(&mut self) -> &mut DropEvent {
+        self.current
+            .as_mut()
+            .expect("access dropped-call drain has an active event")
+    }
+
+    fn replace_current(&mut self, event: DropEvent) {
+        self.current = Some(event);
+    }
+
+    fn finish_current(&mut self) {
+        self.current = None;
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for AccessDropEventDrainGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        if let Some(event) = self.current.take() {
+            let _ = self.sink.send(event);
+        }
+        while let Some(event) = self.pending.pop_front() {
+            let _ = self.sink.send(event);
+        }
+    }
+}
+
+enum AccessTerminalGuardState {
+    BeforeTerminal {
+        call: DroppedCall,
+    },
+    CleanupAfterTerminal {
+        begin_index: Option<OplogIndex>,
+        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    },
+    Disarmed,
+}
+
+struct AccessTerminalGuard<P: DropPolicy> {
+    state: AccessTerminalGuardState,
+    sink: Option<UnboundedSender<DropEvent>>,
+    _phantom: PhantomData<P>,
+}
+
+impl<P: DropPolicy> AccessTerminalGuard<P> {
+    fn new(call: DroppedCall, sink: Option<UnboundedSender<DropEvent>>) -> Self {
+        Self {
+            state: AccessTerminalGuardState::BeforeTerminal { call },
+            sink,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn atomic_region_registration(&self) -> Option<OplogIndex> {
+        match &self.state {
+            AccessTerminalGuardState::BeforeTerminal { call } => call.atomic_region_registration(),
+            AccessTerminalGuardState::CleanupAfterTerminal { begin_index, .. } => *begin_index,
+            AccessTerminalGuardState::Disarmed => None,
+        }
+    }
+
+    fn call(&self) -> Option<&DroppedCall> {
+        match &self.state {
+            AccessTerminalGuardState::BeforeTerminal { call } => Some(call),
+            _ => None,
+        }
+    }
+
+    fn cleanup_after_terminal(
+        &mut self,
+        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+    ) {
+        let begin_index = self.atomic_region_registration();
+        self.state = AccessTerminalGuardState::CleanupAfterTerminal {
+            begin_index,
+            terminal: Some(terminal),
+        };
+    }
+
+    async fn wait_terminal(&mut self) -> Result<(), WorkerExecutorError> {
+        if let AccessTerminalGuardState::CleanupAfterTerminal { terminal, .. } = &mut self.state {
+            if let Some(handle) = terminal {
+                handle.await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "durable call terminal recorder task failed: {err}"
+                    ))
+                })??;
+            }
+            *terminal = None;
+        }
+        Ok(())
+    }
+
+    fn disarm(&mut self) {
+        self.state = AccessTerminalGuardState::Disarmed;
+    }
+}
+
+impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
+    fn drop(&mut self) {
+        match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
+            AccessTerminalGuardState::BeforeTerminal { call } => {
+                P::unfinished_drop(call, self.sink.as_ref());
+            }
+            AccessTerminalGuardState::CleanupAfterTerminal {
+                begin_index: Some(begin_index),
+                terminal: Some(terminal),
+            } => {
+                if let Some(sink) = &self.sink {
+                    let _ = sink.send(DropEvent::CleanupAfterTerminal {
+                        begin_index,
+                        terminal,
+                    });
+                }
+            }
+            AccessTerminalGuardState::CleanupAfterTerminal { terminal, .. } => {
+                drop(terminal);
+            }
+            AccessTerminalGuardState::Disarmed => {}
+        }
+    }
+}
+
+/// Drains currently queued dropped-call events and records cancellable drops as `Cancelled`.
+///
+/// A future p3 wrapper can enqueue from `Drop` and call this from the next safe worker-access window.
+/// The helper deliberately drains only currently available events; callers decide where to wait for
+/// more work.
+#[expect(
+    dead_code,
+    reason = "p3 cancellable host wrappers will drain this queue once they are wired"
+)]
+pub async fn drain_dropped_call_events<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    receiver: &mut UnboundedReceiver<DropEvent>,
+) -> Result<usize, WorkerExecutorError> {
+    let mut recorded = 0;
+    while let Ok(event) = receiver.try_recv() {
+        match event {
+            DropEvent::UnfinishedCancellable { call } => {
+                call.wait_request_upload().await?;
+                call.append_cancelled(ctx, None).await?;
+                recorded += 1;
+            }
+            DropEvent::UnfinishedNotCancellable { call } => {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "non-cancellable durable call {} dropped without finish/cancel",
+                    call.start_idx()
+                )));
+            }
+            DropEvent::CleanupAtomicRegion { begin_index } => {
+                ctx.state.unregister_atomic_region_call(begin_index);
+                recorded += 1;
+            }
+            DropEvent::CleanupAfterTerminal {
+                begin_index,
+                terminal,
+            } => {
+                terminal.await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "durable call terminal recorder task failed: {err}"
+                    ))
+                })??;
+                ctx.state.unregister_atomic_region_call(begin_index);
+                recorded += 1;
+            }
+        }
+    }
+    Ok(recorded)
+}
+
+/// Accessor-window variant of [`drain_dropped_call_events`]. It drains the queue from a short
+/// worker-state window, records `Cancelled` entries using owned oplog handles outside the window,
+/// then re-enters only to unregister atomic-region membership.
+pub async fn drain_dropped_call_events_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<usize, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (oplog, sink, events) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.state.oplog.clone(),
+            ctx.state
+                .dropped_call_event_sender()
+                .expect("dropped-call event sender is always available"),
+            ctx.state.take_dropped_call_events(),
+        )
+    });
+    let mut drain = AccessDropEventDrainGuard::new(sink, events);
+    let mut recorded = 0;
+    let mut first_error = None;
+    while drain.start_next() {
+        match drain.current_mut() {
+            DropEvent::UnfinishedCancellable { call } => {
+                let begin_index = call.atomic_region_registration();
+                let result = async {
+                    call.wait_request_upload().await?;
+                    call.append_cancelled_with_oplog(oplog.clone(), None).await
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        if let Some(begin_index) = begin_index {
+                            drain.replace_current(DropEvent::CleanupAtomicRegion { begin_index });
+                            store.with(|mut access| {
+                                let ctx = get_ctx(access.data_mut());
+                                ctx.state.unregister_atomic_region_call(begin_index);
+                            });
+                        }
+                        recorded += 1;
+                    }
+                    Err(err) => {
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
+                    }
+                }
+            }
+            DropEvent::UnfinishedNotCancellable { call } => {
+                first_error.get_or_insert_with(|| {
+                    WorkerExecutorError::runtime(format!(
+                        "non-cancellable durable call {} dropped without finish/cancel",
+                        call.start_idx()
+                    ))
+                });
+            }
+            DropEvent::CleanupAtomicRegion { begin_index } => {
+                let begin_index = *begin_index;
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    ctx.state.unregister_atomic_region_call(begin_index);
+                });
+                recorded += 1;
+            }
+            DropEvent::CleanupAfterTerminal {
+                begin_index,
+                terminal,
+            } => {
+                let begin_index = *begin_index;
+                match terminal.await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "durable call terminal recorder task failed: {err}"
+                    ))
+                }) {
+                    Ok(Ok(())) => recorded += 1,
+                    Ok(Err(err)) | Err(err) => {
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
+                    }
+                }
+                drain.replace_current(DropEvent::CleanupAtomicRegion { begin_index });
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    ctx.state.unregister_atomic_region_call(begin_index);
+                });
+            }
+        }
+        drain.finish_current();
+    }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    drain.disarm();
+    Ok(recorded)
 }
 
 /// Compile-time policy describing what happens when a [`CallHandle`] is dropped without being
 /// explicitly finished or cancelled.
 pub trait DropPolicy {
-    fn unfinished_drop(start_idx: OplogIndex, sink: Option<&UnboundedSender<DropEvent>>);
+    fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>);
+
+    fn production_drop_sink(
+        sink: Option<UnboundedSender<DropEvent>>,
+    ) -> Option<UnboundedSender<DropEvent>> {
+        let _ = sink;
+        None
+    }
 }
 
 /// Drop policy for calls that may legitimately be cancelled (dropped from a `select!`, etc.).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "p3 async host calls need cancellable durable handles"
-    )
-)]
 pub struct Cancellable;
 
 /// Drop policy for calls that must always be finished or explicitly cancelled. Dropping one
@@ -273,10 +652,17 @@ pub struct Cancellable;
 pub struct NotCancellable;
 
 impl DropPolicy for Cancellable {
-    fn unfinished_drop(start_idx: OplogIndex, sink: Option<&UnboundedSender<DropEvent>>) {
+    fn production_drop_sink(
+        sink: Option<UnboundedSender<DropEvent>>,
+    ) -> Option<UnboundedSender<DropEvent>> {
+        sink
+    }
+
+    fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>) {
         if let Some(sink) = sink {
-            let _ = sink.send(DropEvent::UnfinishedCancellable { start_idx });
+            let _ = sink.send(DropEvent::UnfinishedCancellable { call });
         } else {
+            let start_idx = call.start_idx;
             tracing::warn!(
                 "durable call {start_idx} dropped unfinished; no production cancellation recorder yet"
             );
@@ -285,12 +671,14 @@ impl DropPolicy for Cancellable {
 }
 
 impl DropPolicy for NotCancellable {
-    fn unfinished_drop(start_idx: OplogIndex, sink: Option<&UnboundedSender<DropEvent>>) {
+    fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>) {
         if let Some(sink) = sink {
-            let _ = sink.send(DropEvent::UnfinishedNotCancellable { start_idx });
+            let _ = sink.send(DropEvent::UnfinishedNotCancellable { call });
         } else if cfg!(debug_assertions) && !std::thread::panicking() {
+            let start_idx = call.start_idx;
             panic!("non-cancellable durable call {start_idx} dropped without finish/cancel");
         } else {
+            let start_idx = call.start_idx;
             tracing::error!(
                 "non-cancellable durable call {start_idx} dropped without finish/cancel"
             );
@@ -325,14 +713,288 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// Replay-side resolver receiver; `Some` only for replay handles.
     replay: Option<ReplayCallHandle>,
     finished: bool,
-    /// The `current_retry_point` value to restore when the call finishes.
-    saved_retry_point: OplogIndex,
+    /// Initiation-time execution metadata owned by this call. Later phases still mirror selected
+    /// fields into `PrivateDurableWorkerState` for compatibility, but the call-owned copy is the
+    /// source we can move retry/atomic decisions onto as the Accessor reshape proceeds.
+    execution_scope: CallExecutionScope,
+    /// Atomic region membership registered while this live call is in flight. `Drop` deliberately
+    /// does not clear it because drop-only cancellation cannot access the worker store; successful
+    /// `complete`/`cancel` terminals clear it explicitly.
+    atomic_region_registration: Option<OplogIndex>,
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     retry: InFunctionRetryController,
     /// Optional sink used by unit tests to observe unfinished-drop behaviour. `None` in production.
     drop_sink: Option<UnboundedSender<DropEvent>>,
     _phantom: PhantomData<(Pair, P)>,
+}
+
+#[derive(Debug, Clone)]
+struct BegunCallExecutionScope {
+    /// The global fallback retry point that was active before this call began. Kept so the current
+    /// serial path can restore the old worker state after a normal terminal.
+    restore_retry_point: OplogIndex,
+    /// The durable scope this host-call `Start` will be nested under, if any. This is derived from
+    /// the call's own function type / begin index, never from temporally-open sibling scopes.
+    parent_start_index: Option<OplogIndex>,
+    /// Atomic region active when the durable call was initiated. This is captured now so later
+    /// completion/error handling can move from completion-time state to initiation-time membership.
+    #[allow(dead_code)]
+    atomic_region: Option<OplogIndex>,
+    /// Persistence level active when the call was initiated. Kept with the call so p3 Accessor
+    /// windows can snapshot all execution facts before async work resumes elsewhere.
+    #[allow(dead_code)]
+    persistence_level: PersistenceLevel,
+}
+
+impl BegunCallExecutionScope {
+    fn finish(self, start_idx: OplogIndex) -> CallExecutionScope {
+        CallExecutionScope {
+            restore_retry_point: self.restore_retry_point,
+            retry_from: self.parent_start_index.unwrap_or(start_idx),
+            durable_scope: self.parent_start_index,
+            atomic_region: self.atomic_region,
+            persistence_level: self.persistence_level,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CallExecutionScope {
+    /// The retry point that was active before this call changed the worker fallback state.
+    restore_retry_point: OplogIndex,
+    /// The retry point owned by this in-flight call: the enclosing durable scope `Start` if present,
+    /// otherwise the host-call `Start` itself.
+    retry_from: OplogIndex,
+    /// The enclosing durable scope, if this call belongs to one.
+    #[allow(dead_code)]
+    durable_scope: Option<OplogIndex>,
+    /// Atomic region active when this call was initiated.
+    #[allow(dead_code)]
+    atomic_region: Option<OplogIndex>,
+    /// Persistence level active when this call was initiated.
+    #[allow(dead_code)]
+    persistence_level: PersistenceLevel,
+}
+
+impl CallExecutionScope {
+    fn atomic_region(&self) -> Option<OplogIndex> {
+        self.atomic_region
+    }
+
+    /// Compatibility bridge for the current serial host-call path: mirror this call's retry point
+    /// into the ambient worker fallback while the call is in flight. Real retry decisions for the
+    /// call itself already use [`ScopedRetryHost`] and this call-owned scope; this mirror only keeps
+    /// legacy trap plumbing grouped correctly until the p3 Accessor path has per-task retry state.
+    fn mirror_into_ambient_retry_point(&self, state: &mut PrivateDurableWorkerState) {
+        state.mirror_call_retry_point(self.retry_from);
+    }
+
+    /// Undo [`Self::mirror_into_ambient_retry_point`] after an explicit terminal. Trap-abandoned
+    /// calls intentionally do not restore so the outer trap path still sees the call/scope retry
+    /// point.
+    fn restore_ambient_retry_point(&self, state: &mut PrivateDurableWorkerState) {
+        state.restore_call_retry_point(self.restore_retry_point);
+    }
+}
+
+struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
+    is_live: bool,
+    snapshotting: bool,
+    oplog: Arc<dyn Oplog>,
+    replay_state: crate::durable_host::replay_state::ReplayState,
+    execution_scope: BegunCallExecutionScope,
+    retry: InFunctionRetryController,
+    atomic_region_registration: Option<OplogIndex>,
+    drop_sink: Option<UnboundedSender<DropEvent>>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    _phantom: PhantomData<(Pair, P)>,
+}
+
+struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
+    begin_index: OplogIndex,
+    start_idx: OplogIndex,
+    persisted: bool,
+    request_upload: PendingUpload,
+    replay: Option<ReplayCallHandle>,
+    execution_scope: CallExecutionScope,
+    retry: InFunctionRetryController,
+    atomic_region_registration: Option<OplogIndex>,
+    drop_sink: Option<UnboundedSender<DropEvent>>,
+    _phantom: PhantomData<(Pair, P)>,
+}
+
+struct AccessStartCleanup {
+    atomic_region_registration: Option<OplogIndex>,
+}
+
+struct AccessStartAtomicGuard {
+    atomic_region_registration: Option<OplogIndex>,
+    sink: Option<UnboundedSender<DropEvent>>,
+}
+
+impl AccessStartAtomicGuard {
+    fn new(
+        atomic_region_registration: Option<OplogIndex>,
+        sink: Option<UnboundedSender<DropEvent>>,
+    ) -> Self {
+        Self {
+            atomic_region_registration,
+            sink,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.atomic_region_registration = None;
+    }
+}
+
+impl Drop for AccessStartAtomicGuard {
+    fn drop(&mut self) {
+        if let Some(begin_index) = self.atomic_region_registration.take()
+            && let Some(sink) = &self.sink
+        {
+            let _ = sink.send(DropEvent::CleanupAtomicRegion { begin_index });
+        }
+    }
+}
+
+fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool {
+    matches!(
+        function_type,
+        DurableFunctionType::WriteRemote
+            | DurableFunctionType::WriteRemoteBatched(_)
+            | DurableFunctionType::WriteRemoteTransaction(_)
+    )
+}
+
+struct ScopedRetryHost<'a, H> {
+    inner: &'a mut H,
+    execution_scope: &'a CallExecutionScope,
+}
+
+impl<'a, H> ScopedRetryHost<'a, H> {
+    fn new(inner: &'a mut H, execution_scope: &'a CallExecutionScope) -> Self {
+        Self {
+            inner,
+            execution_scope,
+        }
+    }
+
+    fn retry_point(&self) -> OplogIndex {
+        self.execution_scope
+            .atomic_region
+            .unwrap_or(self.execution_scope.retry_from)
+    }
+}
+
+#[async_trait]
+impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHost<'_, H> {
+    fn in_atomic_region(&self) -> bool {
+        self.execution_scope.atomic_region.is_some()
+    }
+
+    fn current_retry_point(&self) -> OplogIndex {
+        self.retry_point()
+    }
+
+    async fn named_retry_policies(&mut self) -> Vec<golem_common::model::NamedRetryPolicy> {
+        self.inner.named_retry_policies().await
+    }
+
+    async fn current_retry_state_for(
+        &self,
+        retry_from: OplogIndex,
+    ) -> Option<golem_common::model::RetryPolicyState> {
+        self.inner.current_retry_state_for(retry_from).await
+    }
+
+    fn durable_execution_state(&self) -> DurableExecutionState {
+        let mut state = self.inner.durable_execution_state();
+        state.persistence_level = self.execution_scope.persistence_level;
+        state
+    }
+
+    async fn append_retry_error_entry(
+        &mut self,
+        retry_from: OplogIndex,
+        retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+    ) {
+        self.inner
+            .append_retry_error_entry(retry_from, retry_policy_state)
+            .await;
+    }
+}
+
+#[async_trait]
+impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> {
+    fn observe_function_call(&self, interface: &str, function: &str) {
+        self.inner.observe_function_call(interface, function);
+    }
+
+    async fn begin_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.inner
+            .begin_durable_function(function_type, host_function)
+            .await
+    }
+
+    async fn end_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        forced_commit: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        self.inner
+            .end_durable_function(function_type, begin_index, forced_commit)
+            .await
+    }
+
+    async fn persist_durable_function_invocation(
+        &self,
+        function_name: HostFunctionName,
+        request: &HostRequest,
+        response: &HostResponse,
+        function_type: DurableFunctionType,
+    ) {
+        self.inner
+            .persist_durable_function_invocation(function_name, request, response, function_type)
+            .await;
+    }
+
+    async fn read_persisted_durable_function_invocation(
+        &mut self,
+    ) -> Result<
+        crate::durable_host::durability::PersistedDurableFunctionInvocation,
+        WorkerExecutorError,
+    > {
+        self.inner
+            .read_persisted_durable_function_invocation()
+            .await
+    }
+
+    async fn try_trigger_retry(
+        &mut self,
+        failure: Error,
+        properties: RetryProperties,
+    ) -> anyhow::Result<()> {
+        try_trigger_host_trap_retry(self, failure, properties).await
+    }
+
+    fn mark_atomic_region_side_effect(&mut self) {
+        self.inner.mark_atomic_region_side_effect();
+    }
+
+    fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+        self.inner.create_interrupt_signal()
+    }
+
+    fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
+        self.inner.check_read_only_allows(host_function)
+    }
 }
 
 impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
@@ -360,6 +1022,263 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         }
     }
 
+    /// Accessor-window entry point for p3 host functions whose durable function type does not open
+    /// a durable scope. The method uses short synchronous store windows only for worker-state
+    /// snapshots and in-memory bookkeeping; oplog/replay awaits run on owned handles outside those
+    /// windows.
+    ///
+    /// Scope-opening calls (non-idempotent writes, batched writes, transactions) still use the legacy
+    /// `&mut DurableWorkerCtx` path until `begin_function` / `end_function` are fully split into
+    /// accessor-safe phases.
+    pub async fn start_access<T, D, Ctx>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+    ) -> Result<Self, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        if !is_accessor_supported_function_type(&function_type) {
+            return Err(WorkerExecutorError::runtime(format!(
+                "p3 accessor durable call path currently supports only ReadLocal/ReadRemote, got {function_type:?}"
+            )));
+        }
+        process_pending_replay_events_access(store, get_ctx).await?;
+        let prepared = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            Self::prepare_access_start(ctx, function_type)
+        })?;
+        let mut start_guard = AccessStartAtomicGuard::new(
+            prepared.atomic_region_registration,
+            prepared.cleanup_sink.clone(),
+        );
+
+        match Self::execute_access_start(prepared, request).await {
+            Ok(executed) => {
+                let result = store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    Self::finish_access_start(ctx, executed)
+                });
+                if result.is_ok() {
+                    start_guard.disarm();
+                }
+                result
+            }
+            Err((err, cleanup)) => {
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    Self::cleanup_access_start(ctx, cleanup);
+                });
+                start_guard.disarm();
+                Err(err)
+            }
+        }
+    }
+
+    fn prepare_access_start<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+    ) -> Result<PreparedAccessStart<Pair, P>, WorkerExecutorError> {
+        DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
+        if !is_accessor_supported_function_type(&function_type) {
+            return Err(WorkerExecutorError::runtime(format!(
+                "p3 accessor durable call path currently supports only ReadLocal/ReadRemote, got {function_type:?}"
+            )));
+        }
+        if is_write_side_effect_for_access(&function_type)
+            && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                method,
+                host_function,
+            }) = DurableWorkerCtx::check_read_only_allows(ctx, Pair::FQFN)
+        {
+            return Err(WorkerExecutorError::ReadOnlyViolation {
+                method,
+                host_function,
+            });
+        }
+
+        let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
+        let atomic_region = ctx
+            .state
+            .active_atomic_regions
+            .last()
+            .map(|region| region.begin_index);
+        if durable_execution_state.is_live
+            && durable_execution_state.snapshotting_mode.is_none()
+            && let Some(begin_index) = atomic_region
+            && !ctx.state.register_atomic_region_call(begin_index)
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "durable call started in atomic region {begin_index}, but the region is not open"
+            )));
+        }
+
+        let parent_start_index = ctx
+            .state
+            .child_parent_start_index(&function_type, OplogIndex::INITIAL);
+        let execution_scope = BegunCallExecutionScope {
+            restore_retry_point: ctx.state.ambient_retry_point(),
+            parent_start_index,
+            atomic_region,
+            persistence_level: ctx.state.persistence_level,
+        };
+        let is_live = durable_execution_state.is_live;
+        let snapshotting = durable_execution_state.snapshotting_mode.is_some();
+        let retry =
+            InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
+        let cleanup_sink = ctx.state.dropped_call_event_sender();
+        Ok(PreparedAccessStart {
+            is_live,
+            snapshotting,
+            oplog: ctx.state.oplog.clone(),
+            replay_state: ctx.state.replay_state.clone(),
+            execution_scope,
+            retry,
+            atomic_region_registration: if is_live && !snapshotting {
+                atomic_region
+            } else {
+                None
+            },
+            drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
+            cleanup_sink,
+            _phantom: PhantomData,
+        })
+    }
+
+    async fn execute_access_start(
+        prepared: PreparedAccessStart<Pair, P>,
+        request: Pair::Req,
+    ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)> {
+        if prepared.is_live {
+            if prepared.snapshotting {
+                let start_idx = prepared.oplog.current_oplog_index().await;
+                Ok(ExecutedAccessStart {
+                    begin_index: start_idx,
+                    start_idx,
+                    persisted: false,
+                    request_upload: PendingUpload::already_durable(),
+                    replay: None,
+                    execution_scope: prepared.execution_scope.finish(start_idx),
+                    retry: prepared.retry,
+                    atomic_region_registration: None,
+                    drop_sink: prepared.drop_sink,
+                    _phantom: PhantomData,
+                })
+            } else {
+                let request: HostRequest = request.into();
+                let function_type = prepared.retry.function_type().clone();
+                let parent_start_index = prepared.execution_scope.parent_start_index;
+                let (start_idx, request_upload) = prepared
+                    .oplog
+                    .add_start_with_reserved_payload(request, move |request_payload| {
+                        OplogEntry::Start {
+                            timestamp: Timestamp::now_utc(),
+                            parent_start_index,
+                            function_name: Pair::HOST_FUNCTION_NAME,
+                            request: Some(request_payload),
+                            durable_function_type: function_type,
+                        }
+                    })
+                    .await
+                    .map_err(|err| {
+                        (
+                            WorkerExecutorError::runtime(format!(
+                                "failed to serialize and store durable call request: {err}"
+                            )),
+                            AccessStartCleanup {
+                                atomic_region_registration: prepared.atomic_region_registration,
+                            },
+                        )
+                    })?;
+                Ok(ExecutedAccessStart {
+                    begin_index: start_idx,
+                    start_idx,
+                    persisted: true,
+                    request_upload,
+                    replay: None,
+                    execution_scope: prepared.execution_scope.finish(start_idx),
+                    retry: prepared.retry,
+                    atomic_region_registration: prepared.atomic_region_registration,
+                    drop_sink: prepared.drop_sink,
+                    _phantom: PhantomData,
+                })
+            }
+        } else {
+            if prepared.retry.durable_execution_state().persistence_level
+                == PersistenceLevel::PersistNothing
+            {
+                return Err((
+                    WorkerExecutorError::runtime(
+                        "Trying to replay a durable invocation in a PersistNothing block",
+                    ),
+                    AccessStartCleanup {
+                        atomic_region_registration: prepared.atomic_region_registration,
+                    },
+                ));
+            }
+            let replay = prepared
+                .replay_state
+                .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, prepared.retry.function_type())
+                .await
+                .map_err(|err| {
+                    (
+                        err,
+                        AccessStartCleanup {
+                            atomic_region_registration: prepared.atomic_region_registration,
+                        },
+                    )
+                })?;
+            let start_idx = replay.start_idx();
+            Ok(ExecutedAccessStart {
+                begin_index: start_idx,
+                start_idx,
+                persisted: false,
+                request_upload: PendingUpload::already_durable(),
+                replay: Some(replay),
+                execution_scope: prepared.execution_scope.finish(start_idx),
+                retry: prepared.retry,
+                atomic_region_registration: None,
+                drop_sink: prepared.drop_sink,
+                _phantom: PhantomData,
+            })
+        }
+    }
+
+    fn finish_access_start<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        executed: ExecutedAccessStart<Pair, P>,
+    ) -> Result<Self, WorkerExecutorError> {
+        executed
+            .execution_scope
+            .mirror_into_ambient_retry_point(&mut ctx.state);
+        Ok(CallHandle {
+            start_idx: executed.start_idx,
+            begin_index: executed.begin_index,
+            is_live: executed.replay.is_none(),
+            persisted: executed.persisted,
+            request_upload: executed.request_upload,
+            replay: executed.replay,
+            finished: false,
+            execution_scope: executed.execution_scope,
+            atomic_region_registration: executed.atomic_region_registration,
+            retry: executed.retry,
+            drop_sink: executed.drop_sink,
+            _phantom: PhantomData,
+        })
+    }
+
+    fn cleanup_access_start<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        cleanup: AccessStartCleanup,
+    ) {
+        if let Some(begin_index) = cleanup.atomic_region_registration {
+            ctx.state.unregister_atomic_region_call(begin_index);
+        }
+    }
+
     /// First phase of a durable call: run `begin_durable_function` (read-only guard, pending replay
     /// events, durable-scope open + recovery) and capture the retry state, *without* yet writing
     /// the host-call `Start` or claiming it on replay.
@@ -381,13 +1300,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .begin_durable_function(&function_type, Pair::FQFN)
             .await?;
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
-        let saved_retry_point = ctx.state.current_retry_point;
+        let execution_scope = BegunCallExecutionScope {
+            restore_retry_point: ctx.state.ambient_retry_point(),
+            parent_start_index: ctx
+                .state
+                .child_parent_start_index(&function_type, begin_index),
+            atomic_region: ctx
+                .state
+                .active_atomic_regions
+                .last()
+                .map(|region| region.begin_index),
+            persistence_level: ctx.state.persistence_level,
+        };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
 
         Ok(BegunCall {
             begin_index,
-            saved_retry_point,
+            execution_scope,
             retry,
             _phantom: PhantomData,
         })
@@ -415,9 +1345,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// `Cancelled`. The incomplete `Start` is resolved on the next replay/retry (see
     /// [`CallReplayOutcome::Incomplete`]).
     ///
-    /// It deliberately does **not** restore `current_retry_point`, so the failure stays grouped
-    /// against this call's `Start` (or the active durable scope, via `effective_retry_point`) for
-    /// the trap-recovery decision.
+    /// It deliberately does **not** restore `ambient_retry_point`: unmarked legacy trap plumbing
+    /// still uses that compatibility fallback, while semantic host traps carry this call's retry
+    /// point in the error marker itself.
     pub fn abandon_for_trap(&mut self) {
         self.finished = true;
     }
@@ -428,11 +1358,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// hitting the `NotCancellable` unfinished-drop guard.
     pub async fn try_trigger_retry<Ok, Err: Display>(
         &mut self,
-        ctx: &mut impl DurabilityHost,
+        ctx: &mut (impl DurabilityHost + Send + Sync),
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<()> {
-        let outcome = self.retry.try_trigger_retry(ctx, result, classify).await;
+        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
+        let outcome = self
+            .retry
+            .try_trigger_retry(&mut retry_host, result, classify)
+            .await;
         if outcome.is_err() {
             self.abandon_for_trap();
         }
@@ -441,14 +1375,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
     pub async fn try_trigger_retry_with_properties<Ok, Err: Display>(
         &mut self,
-        ctx: &mut impl DurabilityHost,
+        ctx: &mut (impl DurabilityHost + Send + Sync),
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
     ) -> anyhow::Result<()> {
+        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
         let outcome = self
             .retry
-            .try_trigger_retry_with_properties(ctx, result, classify, properties)
+            .try_trigger_retry_with_properties(&mut retry_host, result, classify, properties)
             .await;
         if outcome.is_err() {
             self.abandon_for_trap();
@@ -458,13 +1393,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
     pub async fn try_trigger_retry_or_loop<Ok, Err: Display>(
         &mut self,
-        ctx: &mut (impl DurabilityHost + Sync),
+        ctx: &mut (impl DurabilityHost + Send + Sync),
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<InternalRetryResult> {
+        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
         let outcome = self
             .retry
-            .try_trigger_retry_or_loop(ctx, result, classify)
+            .try_trigger_retry_or_loop(&mut retry_host, result, classify)
             .await;
         if outcome.is_err() {
             self.abandon_for_trap();
@@ -474,14 +1410,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
     pub async fn try_trigger_retry_or_loop_with_properties<Ok, Err: Display>(
         &mut self,
-        ctx: &mut (impl DurabilityHost + Sync),
+        ctx: &mut (impl DurabilityHost + Send + Sync),
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
     ) -> anyhow::Result<InternalRetryResult> {
+        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
         let outcome = self
             .retry
-            .try_trigger_retry_or_loop_with_properties(ctx, result, classify, properties)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut retry_host,
+                result,
+                classify,
+                properties,
+            )
             .await;
         if outcome.is_err() {
             self.abandon_for_trap();
@@ -568,37 +1510,165 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             // `End` that references the request. The leaf oplog's commit barrier is the backstop, but
             // awaiting here turns an upload failure into a graceful error instead of a commit-time
             // panic. A no-op when the request was inline or eagerly uploaded.
-            self.request_upload.wait().await.map_err(|err| {
+            let oplog = ctx.state.oplog.clone();
+            if let Err(err) = self.request_upload.wait().await.map_err(|err| {
                 WorkerExecutorError::runtime(format!(
                     "failed to serialize and store durable call request: {err}"
                 ))
-            })?;
+            }) {
+                if let Some(begin_index) = self.atomic_region_registration.take() {
+                    ctx.state.unregister_atomic_region_call(begin_index);
+                }
+                return Err(err);
+            }
             let host_response: HostResponse = response.clone().into();
-            let response_payload = ctx
-                .state
-                .oplog
-                .upload_payload(&host_response)
-                .await
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to serialize and store durable call response: {err}"
-                    ))
-                })?;
-            ctx.state.mark_atomic_region_has_side_effects();
+            let response_payload = match oplog.upload_payload(&host_response).await.map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to serialize and store durable call response: {err}"
+                ))
+            }) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    if let Some(begin_index) = self.atomic_region_registration.take() {
+                        ctx.state.unregister_atomic_region_call(begin_index);
+                    }
+                    return Err(err);
+                }
+            };
+            if let Some(begin_index) = self.execution_scope.atomic_region() {
+                if !ctx
+                    .state
+                    .mark_atomic_region_has_side_effects_for(begin_index)
+                {
+                    if let Some(begin_index) = self.atomic_region_registration.take() {
+                        ctx.state.unregister_atomic_region_call(begin_index);
+                    }
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "durable call {} completed after its atomic region {begin_index} was closed",
+                        self.start_idx
+                    )));
+                }
+            }
             let end = OplogEntry::End {
                 timestamp: Timestamp::now_utc(),
                 start_index: self.start_idx,
                 response: Some(response_payload),
                 forced_commit: false,
             };
-            ctx.state.oplog.add(end).await;
+            oplog.add(end).await;
+            if let Some(begin_index) = self.atomic_region_registration.take() {
+                ctx.state.unregister_atomic_region_call(begin_index);
+            }
             // Close the durable scope (if one was opened), commit at the right boundary, and run the
             // mid-invocation checkpoint, all via `end_durable_function`.
             ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                 .await?;
         }
-        ctx.state.current_retry_point = self.saved_retry_point;
+        self.execution_scope
+            .restore_ambient_retry_point(&mut ctx.state);
         Ok(response)
+    }
+
+    /// Accessor-window completion for non-scope-opening p3 durable calls.
+    pub async fn complete_access<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_read_remote_access("complete_access")?;
+        if !self.is_live {
+            return Err(WorkerExecutorError::runtime(
+                "complete_access called on a replay handle; use replay_access first",
+            ));
+        }
+        {
+            let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+            let mut guard = AccessTerminalGuard::<P>::new(
+                DroppedCall {
+                    start_idx: self.start_idx,
+                    request_upload: self.request_upload.clone(),
+                    atomic_region_registration: self.atomic_region_registration.take(),
+                },
+                self.drop_sink.clone(),
+            );
+            self.finished = true;
+            let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
+                async {
+                    guard
+                        .call()
+                        .expect("terminal guard is armed")
+                        .wait_request_upload()
+                        .await
+                        .map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to serialize and store durable call request: {err}"
+                            ))
+                        })?;
+                    let host_response: HostResponse = response.clone().into();
+                    let response_payload =
+                        oplog.upload_payload(&host_response).await.map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to serialize and store durable call response: {err}"
+                            ))
+                        })?;
+                    let end = OplogEntry::End {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: self.start_idx,
+                        response: Some(response_payload),
+                        forced_commit: false,
+                    };
+                    let terminal_oplog = oplog.clone();
+                    let terminal = tokio::spawn(async move {
+                        terminal_oplog.add(end).await;
+                        Ok(())
+                    });
+                    guard.cleanup_after_terminal(terminal);
+                    guard.wait_terminal().await?;
+                    Ok(())
+                }
+                .await
+            } else {
+                Ok(())
+            };
+
+            let atomic_region = self.execution_scope.atomic_region();
+            let registration = guard.atomic_region_registration();
+            let finish_result = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                let mut result = Ok(());
+                if let Some(begin_index) = atomic_region
+                    && persist_result.is_ok()
+                    && !ctx.state.mark_atomic_region_has_side_effects_for(begin_index)
+                {
+                        result = Err(WorkerExecutorError::runtime(format!(
+                            "durable call {} completed after its atomic region {begin_index} was closed",
+                            self.start_idx
+                        )));
+                }
+                if let Some(begin_index) = registration {
+                    ctx.state.unregister_atomic_region_call(begin_index);
+                }
+                if persist_result.is_ok() && result.is_ok() {
+                    self.execution_scope
+                        .restore_ambient_retry_point(&mut ctx.state);
+                }
+                result
+            });
+
+            finish_result?;
+            if let Err(err) = persist_result {
+                guard.disarm();
+                return Err(err);
+            }
+            guard.disarm();
+            Ok(response)
+        }
     }
 
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
@@ -636,22 +1706,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         "End { response: None }".to_string(),
                     )
                 })?;
-                let host_response =
-                    ctx.state
-                        .oplog
-                        .download_payload(payload)
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "End payload cannot be downloaded: {err}"
-                            ))
-                        })?;
+                let oplog = ctx.state.oplog.clone();
+                let host_response = oplog.download_payload(payload).await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
+                })?;
                 let response: Pair::Resp = host_response
                     .try_into()
                     .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
                 ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                     .await?;
-                ctx.state.current_retry_point = self.saved_retry_point;
+                self.execution_scope
+                    .restore_ambient_retry_point(&mut ctx.state);
                 Ok(CallReplayOutcome::Replayed(response))
             }
             ResolutionOutcome::Resolved(Resolution::Cancelled { cancelled_idx, .. }) => {
@@ -665,8 +1730,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 if self.retry.can_reexecute_on_incomplete_replay() {
                     // Switch the handle to live completion of the existing, committed `Start`: the
                     // caller re-runs the side effect and `complete`s, appending the missing `End`.
-                    // `current_retry_point` is intentionally left at this `Start` (set in `start`),
-                    // so a failure during re-execution stays grouped here.
+                    // The ambient retry mirror is intentionally left at this call's retry point, so
+                    // a failure during re-execution stays grouped here.
                     self.is_live = true;
                     self.persisted = true;
                     Ok(CallReplayOutcome::Incomplete(self))
@@ -674,6 +1739,75 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     // Re-executing a non-idempotent / batched / transaction write could duplicate an
                     // external side effect. Reaching here means the surrounding scope recovery did
                     // not already resolve it; fail hard, as before.
+                    self.finished = true;
+                    Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "End or Cancelled",
+                        format!(
+                            "incomplete non-idempotent durable call Start at {start_idx} cannot be safely re-executed"
+                        ),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Accessor-window replay for non-scope-opening p3 durable calls.
+    pub async fn replay_access<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_read_remote_access("replay_access")?;
+        let (replay_state, oplog) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (ctx.state.replay_state.clone(), ctx.state.oplog.clone())
+        });
+        let replay = self
+            .replay
+            .take()
+            .expect("replay_access() called on a live handle");
+        let start_idx = self.start_idx;
+        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        match outcome {
+            ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+                self.finished = true;
+                let payload = response.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "End { response: Some(..) }",
+                        "End { response: None }".to_string(),
+                    )
+                })?;
+                let host_response = oplog.download_payload(payload).await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
+                })?;
+                let response: Pair::Resp = host_response
+                    .try_into()
+                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    self.execution_scope
+                        .restore_ambient_retry_point(&mut ctx.state);
+                });
+                Ok(CallReplayOutcome::Replayed(response))
+            }
+            ResolutionOutcome::Resolved(Resolution::Cancelled { cancelled_idx, .. }) => {
+                self.finished = true;
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "End",
+                    format!("Cancelled at {cancelled_idx}"),
+                ))
+            }
+            ResolutionOutcome::Incomplete => {
+                if self.retry.can_reexecute_on_incomplete_replay() {
+                    self.is_live = true;
+                    self.persisted = true;
+                    Ok(CallReplayOutcome::Incomplete(self))
+                } else {
                     self.finished = true;
                     Err(WorkerExecutorError::unexpected_oplog_entry(
                         "End or Cancelled",
@@ -728,33 +1862,47 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.finished = true;
         if self.is_live {
             if self.persisted {
+                let oplog = ctx.state.oplog.clone();
+                let dropped_call = DroppedCall {
+                    start_idx: self.start_idx,
+                    request_upload: self.request_upload.clone(),
+                    atomic_region_registration: self.atomic_region_registration.take(),
+                };
                 // As in `complete`: surface a deferred request-upload failure at the call site before
                 // recording the `Cancelled` that references the request. A no-op when the request was
                 // inline or eagerly uploaded.
-                self.request_upload.wait().await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to serialize and store durable call request: {err}"
-                    ))
-                })?;
+                if let Err(err) = dropped_call.wait_request_upload().await {
+                    if let Some(begin_index) = dropped_call.atomic_region_registration() {
+                        ctx.state.unregister_atomic_region_call(begin_index);
+                    }
+                    return Err(err);
+                }
                 let partial_payload = match partial {
                     Some(partial) => {
                         let host_response: HostResponse = partial.into();
-                        Some(ctx.state.oplog.upload_payload(&host_response).await.map_err(
-                            |err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "failed to serialize and store partial durable call response: {err}"
-                                ))
-                            },
-                        )?)
+                        match oplog.upload_payload(&host_response).await.map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to serialize and store partial durable call response: {err}"
+                            ))
+                        }) {
+                            Ok(payload) => Some(payload),
+                            Err(err) => {
+                                if let Some(begin_index) = dropped_call.atomic_region_registration()
+                                {
+                                    ctx.state.unregister_atomic_region_call(begin_index);
+                                }
+                                return Err(err);
+                            }
+                        }
                     }
                     None => None,
                 };
-                let cancelled = OplogEntry::Cancelled {
-                    timestamp: Timestamp::now_utc(),
-                    start_index: self.start_idx,
-                    partial: partial_payload,
-                };
-                ctx.state.oplog.add(cancelled).await;
+                dropped_call
+                    .append_cancelled_with_oplog(oplog, partial_payload)
+                    .await?;
+                if let Some(begin_index) = dropped_call.atomic_region_registration() {
+                    ctx.state.unregister_atomic_region_call(begin_index);
+                }
             }
         } else {
             let replay = self
@@ -768,10 +1916,162 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     format!("End at {end_idx}"),
                 ));
             }
-            ctx.state.current_retry_point = self.saved_retry_point;
+            self.execution_scope
+                .restore_ambient_retry_point(&mut ctx.state);
         }
         Ok(())
     }
+
+    /// Accessor-window cancellation for p3 durable calls.
+    pub async fn cancel_access<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        partial: Option<Pair::Resp>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_read_remote_access("cancel_access")?;
+        if self.is_live {
+            if self.persisted {
+                let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+                let mut guard = AccessTerminalGuard::<P>::new(
+                    DroppedCall {
+                        start_idx: self.start_idx,
+                        request_upload: self.request_upload.clone(),
+                        atomic_region_registration: self.atomic_region_registration.take(),
+                    },
+                    self.drop_sink.clone(),
+                );
+                self.finished = true;
+                let result = async {
+                    guard.call().expect("terminal guard is armed").wait_request_upload().await?;
+                    let partial_payload = match partial {
+                        Some(partial) => {
+                            let host_response: HostResponse = partial.into();
+                            Some(oplog.upload_payload(&host_response).await.map_err(|err| {
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to serialize and store partial durable call response: {err}"
+                                ))
+                            })?)
+                        }
+                        None => None,
+                    };
+                    let call = guard.call().expect("terminal guard is armed").clone();
+                    let terminal = tokio::spawn(async move {
+                        call.append_cancelled_with_oplog(oplog, partial_payload)
+                            .await
+                    });
+                    guard.cleanup_after_terminal(terminal);
+                    guard.wait_terminal().await
+                }
+                .await;
+                let registration = guard.atomic_region_registration();
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    if let Some(begin_index) = registration {
+                        ctx.state.unregister_atomic_region_call(begin_index);
+                    }
+                });
+                if let Err(err) = result {
+                    guard.disarm();
+                    return Err(err);
+                }
+                guard.disarm();
+            }
+        } else {
+            self.finished = true;
+            let replay_state =
+                store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
+            let replay = self
+                .replay
+                .take()
+                .expect("cancel_access() in replay called on a live handle");
+            let resolution = replay_state.await_resolution(replay).await?;
+            if let Resolution::Completed { end_idx, .. } = resolution {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "Cancelled",
+                    format!("End at {end_idx}"),
+                ));
+            }
+            store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                self.execution_scope
+                    .restore_ambient_retry_point(&mut ctx.state);
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_read_remote_access(&self, operation: &str) -> Result<(), WorkerExecutorError> {
+        if is_accessor_supported_function_type(self.retry.function_type()) {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::runtime(format!(
+                "{operation} currently supports only ReadLocal/ReadRemote durable calls, got {:?}",
+                self.retry.function_type()
+            )))
+        }
+    }
+}
+
+fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> bool {
+    matches!(
+        function_type,
+        DurableFunctionType::ReadLocal | DurableFunctionType::ReadRemote
+    )
+}
+
+async fn process_pending_replay_events_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let replay_state =
+        store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
+    let replay_events = replay_state.take_new_replay_events().await;
+    for event in replay_events {
+        match event {
+            crate::durable_host::replay_state::ReplayEvent::ForkReplayed { new_phantom_id } => {
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    ctx.state.current_phantom_id = Some(new_phantom_id);
+                });
+            }
+            crate::durable_host::replay_state::ReplayEvent::UpdateReplayed { .. } => {
+                return Err(WorkerExecutorError::runtime(
+                    "p3 accessor durable call path cannot yet apply replayed component updates",
+                ));
+            }
+            crate::durable_host::replay_state::ReplayEvent::ReplayFinished => {
+                let has_pending_update = store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    ctx.state
+                        .pending_update
+                        .try_lock()
+                        .map(|pending| pending.is_some())
+                        .map_err(|_| {
+                            WorkerExecutorError::runtime(
+                                "p3 accessor durable call path cannot inspect pending component update state",
+                            )
+                        })
+                })?;
+                if has_pending_update {
+                    return Err(WorkerExecutorError::runtime(
+                        "p3 accessor durable call path cannot yet finalize replayed component updates",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The first phase of a two-phase durable call, produced by [`CallHandle::begin`]. The durable
@@ -780,7 +2080,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 /// (after the request has been built) or [`Self::start_replay`].
 pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     begin_index: OplogIndex,
-    saved_retry_point: OplogIndex,
+    execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
     _phantom: PhantomData<(Pair, P)>,
 }
@@ -809,31 +2109,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             .durable_execution_state()
             .snapshotting_mode
             .is_some();
-        // The host-call `Start` nests inside the enclosing durable scope (its own opened scope, or
-        // the scope encoded in the function type), derived explicitly — never from the set of
-        // temporally-open sibling scopes. `None` for a top-level unscoped call.
-        let parent_start_index = ctx
-            .state
-            .child_parent_start_index(self.retry.function_type(), self.begin_index);
+        // The host-call `Start` nests inside the enclosing durable scope captured at initiation
+        // (its own opened scope, or the scope encoded in the function type), derived explicitly —
+        // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
+        let parent_start_index = self.execution_scope.parent_start_index;
         let (start_idx, persisted, request_upload) = if snapshotting {
             // Snapshotting mode persists nothing.
+            let oplog = ctx.state.oplog.clone();
             (
-                ctx.state.oplog.current_oplog_index().await,
+                oplog.current_oplog_index().await,
                 false,
                 PendingUpload::already_durable(),
             )
         } else {
             let request: HostRequest = request.into();
             let function_type = self.retry.function_type().clone();
+            let oplog = ctx.state.oplog.clone();
             // Reserve the request payload and append the `Start` in one guarded step: a big request
             // blob's upload is *begun* but not awaited, so the `Start` is appended in initiation
             // order before the (potentially slow) upload finishes. `add_start_with_reserved_payload`
             // forbids — at compile time — any `.await` between reserving the payload and appending
             // the `Start`, which is what keeps concurrent calls' `Start` entries in initiation
             // order. The returned upload is awaited before this call's `End` / `Cancelled`.
-            let (idx, request_upload) = ctx
-                .state
-                .oplog
+            let (idx, request_upload) = oplog
                 .add_start_with_reserved_payload(request, move |request_payload| {
                     OplogEntry::Start {
                         timestamp: Timestamp::now_utc(),
@@ -851,10 +2149,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 })?;
             (idx, true, request_upload)
         };
-        // Group a trap during this call against the enclosing scope `Start` if there is one, so the
-        // failure is retried from the scope rather than from inside it; otherwise from this call's
-        // own `Start`.
-        ctx.state.current_retry_point = parent_start_index.unwrap_or(start_idx);
+        let execution_scope = self.execution_scope.finish(start_idx);
+        let atomic_region_registration = if persisted {
+            if let Some(begin_index) = execution_scope.atomic_region() {
+                if !ctx.state.register_atomic_region_call(begin_index) {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "durable call {start_idx} started in atomic region {begin_index}, but the region is not open"
+                    )));
+                }
+                Some(begin_index)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // Compatibility mirror for legacy/unmarked trap plumbing. Semantic host-trap retries use
+        // the call-owned scope directly and carry the retry point in the error marker.
+        execution_scope.mirror_into_ambient_retry_point(&mut ctx.state);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -863,7 +2175,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload,
             replay: None,
             finished: false,
-            saved_retry_point: self.saved_retry_point,
+            execution_scope,
+            atomic_region_registration,
             retry: self.retry,
             drop_sink: None,
             _phantom: PhantomData,
@@ -891,12 +2204,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
             .await?;
         let start_idx = replay.start_idx();
-        // Mirror the live path: group a trap during this call against the enclosing scope `Start`
-        // if there is one, otherwise against this call's own `Start`.
-        let parent_start_index = ctx
-            .state
-            .child_parent_start_index(self.retry.function_type(), self.begin_index);
-        ctx.state.current_retry_point = parent_start_index.unwrap_or(start_idx);
+        let execution_scope = self.execution_scope.finish(start_idx);
+        // Mirror the live path compatibility fallback. Semantic host-trap retries use the
+        // call-owned scope directly and carry the retry point in the error marker.
+        execution_scope.mirror_into_ambient_retry_point(&mut ctx.state);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -905,7 +2216,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             request_upload: PendingUpload::already_durable(),
             replay: Some(replay),
             finished: false,
-            saved_retry_point: self.saved_retry_point,
+            execution_scope,
+            atomic_region_registration: None,
             retry: self.retry,
             drop_sink: None,
             _phantom: PhantomData,
@@ -921,7 +2233,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 // A live call dropped without finish/cancel: run the compile-time drop policy.
-                P::unfinished_drop(self.start_idx, self.drop_sink.as_ref());
+                P::unfinished_drop(
+                    DroppedCall {
+                        start_idx: self.start_idx,
+                        request_upload: self.request_upload.clone(),
+                        atomic_region_registration: self.atomic_region_registration,
+                    },
+                    self.drop_sink.as_ref(),
+                );
             }
             // Not persisted (snapshotting): there is nothing on disk to reconcile.
         } else {
@@ -938,11 +2257,23 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
 mod tests {
     use super::*;
     use golem_common::model::oplog::host_functions;
+    use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy, RetryPolicyState};
+    use std::time::Duration;
     use test_r::test;
     use tokio::sync::mpsc;
 
     fn idx(n: u64) -> OplogIndex {
         OplogIndex::from_u64(n)
+    }
+
+    fn durable_execution_state() -> DurableExecutionState {
+        DurableExecutionState {
+            is_live: true,
+            persistence_level: PersistenceLevel::Smart,
+            snapshotting_mode: None,
+            assume_idempotence: true,
+            max_in_function_retry_delay: Duration::from_secs(20),
+        }
     }
 
     fn completed(end_idx: u64) -> Resolution {
@@ -1071,6 +2402,14 @@ mod tests {
         start_idx: OplogIndex,
         sink: mpsc::UnboundedSender<DropEvent>,
     ) -> CallHandle<host_functions::MonotonicClockNow, P> {
+        live_unfinished_handle_with_atomic_region(start_idx, None, sink)
+    }
+
+    fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
+        start_idx: OplogIndex,
+        atomic_region_registration: Option<OplogIndex>,
+        sink: mpsc::UnboundedSender<DropEvent>,
+    ) -> CallHandle<host_functions::MonotonicClockNow, P> {
         use crate::durable_host::durability::DurableExecutionState;
         use std::time::Duration;
         let durable_execution_state = DurableExecutionState {
@@ -1088,7 +2427,14 @@ mod tests {
             request_upload: PendingUpload::already_durable(),
             replay: None,
             finished: false,
-            saved_retry_point: OplogIndex::INITIAL,
+            execution_scope: CallExecutionScope {
+                restore_retry_point: OplogIndex::INITIAL,
+                retry_from: start_idx,
+                durable_scope: None,
+                atomic_region: None,
+                persistence_level: PersistenceLevel::Smart,
+            },
+            atomic_region_registration,
             retry: InFunctionRetryController::new(
                 DurableFunctionType::ReadLocal,
                 durable_execution_state,
@@ -1106,10 +2452,29 @@ mod tests {
             let _handle = live_unfinished_handle::<Cancellable>(idx(5), tx);
         }
         match rx.try_recv() {
-            Ok(DropEvent::UnfinishedCancellable { start_idx }) => assert_eq!(start_idx, idx(5)),
+            Ok(DropEvent::UnfinishedCancellable { call }) => {
+                assert_eq!(call.start_idx(), idx(5));
+                assert_eq!(call.atomic_region_registration(), None);
+            }
             other => panic!("expected one UnfinishedCancellable, got {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "expected exactly one drop event");
+    }
+
+    #[test]
+    fn drop_cancellable_unfinished_carries_call_owned_cancellation_state() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let _handle =
+                live_unfinished_handle_with_atomic_region::<Cancellable>(idx(5), Some(idx(2)), tx);
+        }
+        match rx.try_recv() {
+            Ok(DropEvent::UnfinishedCancellable { call }) => {
+                assert_eq!(call.start_idx(), idx(5));
+                assert_eq!(call.atomic_region_registration(), Some(idx(2)));
+            }
+            other => panic!("expected one UnfinishedCancellable, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1119,7 +2484,9 @@ mod tests {
             let _handle = live_unfinished_handle::<NotCancellable>(idx(7), tx);
         }
         match rx.try_recv() {
-            Ok(DropEvent::UnfinishedNotCancellable { start_idx }) => assert_eq!(start_idx, idx(7)),
+            Ok(DropEvent::UnfinishedNotCancellable { call }) => {
+                assert_eq!(call.start_idx(), idx(7))
+            }
             other => panic!("expected UnfinishedNotCancellable, got {other:?}"),
         }
     }
@@ -1138,6 +2505,38 @@ mod tests {
     }
 
     #[test]
+    fn seam2_unfinished_cancellable_drops_emit_independent_call_snapshots() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        let handle_a = live_unfinished_handle_with_atomic_region::<Cancellable>(
+            idx(5),
+            Some(idx(2)),
+            tx.clone(),
+        );
+        let handle_b =
+            live_unfinished_handle_with_atomic_region::<Cancellable>(idx(9), Some(idx(3)), tx);
+
+        drop(handle_a);
+        drop(handle_b);
+
+        match rx.try_recv() {
+            Ok(DropEvent::UnfinishedCancellable { call }) => {
+                assert_eq!(call.start_idx(), idx(5));
+                assert_eq!(call.atomic_region_registration(), Some(idx(2)));
+            }
+            other => panic!("expected first cancellable drop snapshot, got {other:?}"),
+        }
+        match rx.try_recv() {
+            Ok(DropEvent::UnfinishedCancellable { call }) => {
+                assert_eq!(call.start_idx(), idx(9));
+                assert_eq!(call.atomic_region_registration(), Some(idx(3)));
+            }
+            other => panic!("expected second cancellable drop snapshot, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "expected exactly two drop events");
+    }
+
+    #[test]
     fn abandon_for_trap_suppresses_unfinished_drop() {
         // A trap-abandoned NotCancellable handle must NOT trip the unfinished-drop policy: the
         // host-call Start is intentionally left incomplete for replay/retry, not cancelled.
@@ -1152,12 +2551,293 @@ mod tests {
         );
     }
 
+    // ---- call-scoped retry host ----
+
+    struct RetryHostProbe {
+        current_retry_point: OplogIndex,
+        appended_retry_from: Vec<OplogIndex>,
+    }
+
+    impl RetryHostProbe {
+        fn new(current_retry_point: OplogIndex) -> Self {
+            Self {
+                current_retry_point,
+                appended_retry_from: Vec::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl InFunctionRetryHost for RetryHostProbe {
+        fn in_atomic_region(&self) -> bool {
+            false
+        }
+
+        fn current_retry_point(&self) -> OplogIndex {
+            self.current_retry_point
+        }
+
+        async fn named_retry_policies(&mut self) -> Vec<golem_common::model::NamedRetryPolicy> {
+            vec![NamedRetryPolicy {
+                name: "test".to_string(),
+                priority: 0,
+                predicate: Predicate::True,
+                policy: RetryPolicy::CountBox {
+                    max_retries: 1,
+                    inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+                },
+            }]
+        }
+
+        async fn current_retry_state_for(
+            &self,
+            retry_from: OplogIndex,
+        ) -> Option<golem_common::model::RetryPolicyState> {
+            if retry_from == self.current_retry_point {
+                Some(RetryPolicyState::CountBox {
+                    attempts: 1,
+                    inner: Box::new(RetryPolicyState::Counter(1)),
+                })
+            } else {
+                None
+            }
+        }
+
+        fn durable_execution_state(&self) -> DurableExecutionState {
+            durable_execution_state()
+        }
+
+        async fn append_retry_error_entry(
+            &mut self,
+            retry_from: OplogIndex,
+            _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+        ) {
+            self.appended_retry_from.push(retry_from);
+        }
+    }
+
+    #[test]
+    fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
+        let mut inner = RetryHostProbe::new(idx(99));
+        let scope = CallExecutionScope {
+            restore_retry_point: idx(3),
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::PersistRemoteSideEffects,
+        };
+
+        let retry_host = ScopedRetryHost::new(&mut inner, &scope);
+
+        assert!(!retry_host.in_atomic_region());
+        assert_eq!(retry_host.current_retry_point(), idx(42));
+        assert_eq!(
+            retry_host.durable_execution_state().persistence_level,
+            PersistenceLevel::PersistRemoteSideEffects
+        );
+    }
+
+    #[test]
+    fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
+        let mut inner = RetryHostProbe::new(idx(99));
+        let scope = CallExecutionScope {
+            restore_retry_point: idx(3),
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: Some(idx(7)),
+            persistence_level: PersistenceLevel::Smart,
+        };
+
+        let retry_host = ScopedRetryHost::new(&mut inner, &scope);
+
+        assert!(retry_host.in_atomic_region());
+        assert_eq!(retry_host.current_retry_point(), idx(7));
+    }
+
+    #[test]
+    async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
+        let mut inner = RetryHostProbe::new(idx(99));
+        let scope = CallExecutionScope {
+            restore_retry_point: idx(3),
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+        let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
+
+        let outcome = try_trigger_host_trap_retry(
+            &mut retry_host,
+            Error::msg("transient failure"),
+            RetryProperties::new(),
+        )
+        .await;
+
+        assert!(
+            outcome.is_err(),
+            "empty state at the call-owned retry point should allow one retry; using the inner/global retry point would be exhausted"
+        );
+    }
+
+    #[test]
+    async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
+        let mut inner = RetryHostProbe::new(idx(99));
+        let scope_a = CallExecutionScope {
+            restore_retry_point: idx(3),
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+        let scope_b = CallExecutionScope {
+            restore_retry_point: idx(42),
+            retry_from: idx(77),
+            durable_scope: Some(idx(70)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+
+        let error_a = {
+            let mut retry_host = ScopedRetryHost::new(&mut inner, &scope_a);
+            try_trigger_host_trap_retry(
+                &mut retry_host,
+                Error::msg("transient failure a"),
+                RetryProperties::new(),
+            )
+            .await
+            .expect_err("call A should trap for oplog-level retry")
+        };
+
+        let error_b = {
+            let mut retry_host = ScopedRetryHost::new(&mut inner, &scope_b);
+            try_trigger_host_trap_retry(
+                &mut retry_host,
+                Error::msg("transient failure b"),
+                RetryProperties::new(),
+            )
+            .await
+            .expect_err("call B should trap for oplog-level retry")
+        };
+
+        let override_a =
+            crate::durable_host::durability::find_semantic_trap_retry_override(&error_a)
+                .expect("call A trap must carry a semantic retry override");
+        let override_b =
+            crate::durable_host::durability::find_semantic_trap_retry_override(&error_b)
+                .expect("call B trap must carry a semantic retry override");
+
+        assert_eq!(override_a.retry_from, idx(42));
+        assert_eq!(override_b.retry_from, idx(77));
+    }
+
+    #[test]
+    async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
+        let mut inner = RetryHostProbe::new(idx(99));
+        let scope_a = CallExecutionScope {
+            restore_retry_point: idx(3),
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: Some(idx(7)),
+            persistence_level: PersistenceLevel::Smart,
+        };
+        let scope_b = CallExecutionScope {
+            restore_retry_point: idx(42),
+            retry_from: idx(77),
+            durable_scope: Some(idx(70)),
+            atomic_region: Some(idx(8)),
+            persistence_level: PersistenceLevel::Smart,
+        };
+
+        let error_a = {
+            let mut retry_host = ScopedRetryHost::new(&mut inner, &scope_a);
+            try_trigger_host_trap_retry(
+                &mut retry_host,
+                Error::msg("transient failure a"),
+                RetryProperties::new(),
+            )
+            .await
+            .expect_err("call A should trap for oplog-level retry")
+        };
+
+        let error_b = {
+            let mut retry_host = ScopedRetryHost::new(&mut inner, &scope_b);
+            try_trigger_host_trap_retry(
+                &mut retry_host,
+                Error::msg("transient failure b"),
+                RetryProperties::new(),
+            )
+            .await
+            .expect_err("call B should trap for oplog-level retry")
+        };
+
+        let override_a =
+            crate::durable_host::durability::find_semantic_trap_retry_override(&error_a)
+                .expect("call A trap must carry a semantic retry override");
+        let override_b =
+            crate::durable_host::durability::find_semantic_trap_retry_override(&error_b)
+                .expect("call B trap must carry a semantic retry override");
+
+        assert_eq!(override_a.retry_from, idx(7));
+        assert_eq!(override_b.retry_from, idx(8));
+    }
+
+    // ---- call-owned execution scope ----
+
+    #[test]
+    fn begun_execution_scope_uses_parent_scope_as_retry_from() {
+        let begun = BegunCallExecutionScope {
+            restore_retry_point: idx(3),
+            parent_start_index: Some(idx(10)),
+            atomic_region: Some(idx(2)),
+            persistence_level: PersistenceLevel::PersistNothing,
+        };
+
+        let scope = begun.finish(idx(11));
+
+        assert_eq!(scope.restore_retry_point, idx(3));
+        assert_eq!(scope.retry_from, idx(10));
+        assert_eq!(scope.durable_scope, Some(idx(10)));
+        assert_eq!(scope.atomic_region, Some(idx(2)));
+        assert_eq!(scope.persistence_level, PersistenceLevel::PersistNothing);
+    }
+
+    #[test]
+    fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
+        let begun = BegunCallExecutionScope {
+            restore_retry_point: idx(4),
+            parent_start_index: None,
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+
+        let scope = begun.finish(idx(12));
+
+        assert_eq!(scope.restore_retry_point, idx(4));
+        assert_eq!(scope.retry_from, idx(12));
+        assert_eq!(scope.durable_scope, None);
+        assert_eq!(scope.atomic_region, None);
+        assert_eq!(scope.persistence_level, PersistenceLevel::Smart);
+    }
+
+    #[test]
+    fn call_execution_scope_owns_ambient_retry_values() {
+        let scope = CallExecutionScope {
+            restore_retry_point: idx(3),
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+
+        assert_eq!(scope.retry_from, idx(42));
+        assert_eq!(scope.restore_retry_point, idx(3));
+    }
+
     // ---- function-type re-execution policy ----
 
     #[test]
     fn can_reexecute_matches_internal_retry_eligibility() {
         use crate::durable_host::durability::{DurableExecutionState, InFunctionRetryController};
-        use std::time::Duration;
 
         fn controller(
             ft: DurableFunctionType,

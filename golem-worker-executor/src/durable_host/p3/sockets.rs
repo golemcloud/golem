@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::p3::{DurableP3, DurableP3View, wasi_sockets_view};
+use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access, wasi_sockets_view};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::host_functions::P3SocketsIpNameLookupResolveAddresses;
+use golem_common::model::oplog::types::SerializableP3IpAddresses;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestP3SocketsResolveName, HostResponseP3SocketsResolveName,
+};
 use wasmtime::AsContextMut;
 use wasmtime::component::{Access, Accessor, FutureReader, Resource, StreamReader};
 use wasmtime_wasi::p3::bindings::sockets::{ip_name_lookup, types};
@@ -366,11 +371,99 @@ impl<Ctx: WorkerCtx> types::HostUdpSocketWithStore for DurableP3<Ctx> {
 impl<Ctx: WorkerCtx> ip_name_lookup::Host for DurableP3View<'_, Ctx> {}
 
 impl<Ctx: WorkerCtx> ip_name_lookup::HostWithStore for DurableP3<Ctx> {
-    async fn resolve_addresses<U: Send>(
+    async fn resolve_addresses<U: Send + 'static>(
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
-        let store = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as ip_name_lookup::HostWithStore>::resolve_addresses(&store, name).await
+        let response = run_read_access::<_, _, Ctx, P3SocketsIpNameLookupResolveAddresses, _, _>(
+            store,
+            HostRequestP3SocketsResolveName { name: name.clone() },
+            DurableFunctionType::ReadRemote,
+            || async {
+                let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                let result = <WasiSockets as ip_name_lookup::HostWithStore>::resolve_addresses(
+                    &sockets,
+                    name.clone(),
+                )
+                .await?;
+
+                Ok(HostResponseP3SocketsResolveName {
+                    result: result
+                        .map(SerializableP3IpAddresses::from)
+                        .map_err(Into::into),
+                })
+            },
+        )
+        .await?;
+
+        Ok(response
+            .result
+            .map(Vec::<types::IpAddress>::from)
+            .map_err(Into::into))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::types::SerializableP3IpNameLookupError;
+    use test_r::test;
+
+    #[test]
+    fn p3_ip_name_lookup_address_payload_mapping_roundtrips() {
+        let ipv4 = types::IpAddress::Ipv4((127, 0, 0, 1));
+        let ipv6 = types::IpAddress::Ipv6((0, 0, 0, 0, 0, 0, 0, 1));
+
+        let serialized = SerializableP3IpAddresses::from(vec![ipv4, ipv6]);
+        let replayed = Vec::<types::IpAddress>::from(serialized);
+
+        assert_p3_ip_address_eq(replayed[0], ipv4);
+        assert_p3_ip_address_eq(replayed[1], ipv6);
+    }
+
+    #[test]
+    fn p3_ip_name_lookup_error_payload_mapping_roundtrips_named_codes() {
+        assert_p3_ip_name_lookup_error_roundtrip(ip_name_lookup::ErrorCode::AccessDenied);
+        assert_p3_ip_name_lookup_error_roundtrip(ip_name_lookup::ErrorCode::InvalidArgument);
+        assert_p3_ip_name_lookup_error_roundtrip(ip_name_lookup::ErrorCode::NameUnresolvable);
+        assert_p3_ip_name_lookup_error_roundtrip(
+            ip_name_lookup::ErrorCode::TemporaryResolverFailure,
+        );
+        assert_p3_ip_name_lookup_error_roundtrip(
+            ip_name_lookup::ErrorCode::PermanentResolverFailure,
+        );
+    }
+
+    #[test]
+    fn p3_ip_name_lookup_other_error_payload_mapping_preserves_message() {
+        let error = ip_name_lookup::ErrorCode::Other(Some("resolver said no".to_string()));
+        let serialized = SerializableP3IpNameLookupError::from(error);
+        let replayed = ip_name_lookup::ErrorCode::from(serialized);
+
+        match replayed {
+            ip_name_lookup::ErrorCode::Other(Some(message)) => {
+                assert_eq!(message, "resolver said no")
+            }
+            other => panic!("unexpected replayed error: {other:?}"),
+        }
+    }
+
+    fn assert_p3_ip_name_lookup_error_roundtrip(error: ip_name_lookup::ErrorCode) {
+        let expected = format!("{error:?}");
+        let serialized = SerializableP3IpNameLookupError::from(error);
+        let replayed = ip_name_lookup::ErrorCode::from(serialized);
+        assert_eq!(format!("{replayed:?}"), expected);
+    }
+
+    fn assert_p3_ip_address_eq(actual: types::IpAddress, expected: types::IpAddress) {
+        match (actual, expected) {
+            (types::IpAddress::Ipv4(actual), types::IpAddress::Ipv4(expected)) => {
+                assert_eq!(actual, expected)
+            }
+            (types::IpAddress::Ipv6(actual), types::IpAddress::Ipv6(expected)) => {
+                assert_eq!(actual, expected)
+            }
+            (actual, expected) => panic!("IP address mismatch: {actual:?} != {expected:?}"),
+        }
     }
 }

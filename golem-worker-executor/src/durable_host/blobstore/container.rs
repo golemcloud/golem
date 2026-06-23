@@ -27,7 +27,9 @@ use wasmtime::component::{Resource, StreamReader};
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::blobstore::classify_blob_store_error;
-use crate::durable_host::blobstore::types::{ContainerEntry, IncomingValueEntry, OutgoingValueEntry};
+use crate::durable_host::blobstore::types::{
+    ContainerEntry, IncomingValueEntry, OutgoingValueEntry,
+};
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{

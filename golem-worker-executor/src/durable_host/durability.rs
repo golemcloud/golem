@@ -106,6 +106,10 @@ pub enum SemanticTrapRetryVerdict {
 /// path consumes it once via `TrapType::semantic_trap_retry_override`.
 #[derive(Debug, Clone)]
 pub struct SemanticTrapRetryOverride {
+    /// Retry point owned by the host call/scope that produced this trap. The
+    /// outer invocation wrapper can use this instead of consulting the ambient
+    /// worker fallback state.
+    pub retry_from: OplogIndex,
     /// Name of the named retry policy that produced this decision.
     pub policy_name: String,
     /// Retry verdict computed from the policy.
@@ -579,6 +583,108 @@ pub trait DurabilityHost: InFunctionRetryHost {
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap>;
 }
 
+pub(crate) async fn try_trigger_host_trap_retry(
+    ctx: &mut (impl InFunctionRetryHost + Sync),
+    failure: Error,
+    properties: RetryProperties,
+) -> anyhow::Result<()> {
+    let current_retry_point = ctx.current_retry_point();
+
+    // Resolve the matching named retry policy. The synthesized
+    // default-from-config policy (with `Predicate::True`) is always
+    // present in `named_retry_policies()`, so resolution finds at least
+    // one match for every property set; there is no legacy `RetryConfig`
+    // path any more.
+    let policies = ctx.named_retry_policies().await;
+    let named_policy =
+        match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+            &policies,
+            &properties,
+        ) {
+            Ok(Some(named_policy)) => named_policy,
+            Ok(None) => {
+                warn!(
+                    retry_path = "host-trap",
+                    "No named retry policy matched (including the synthesized default); giving up"
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                warn!(
+                    ?error,
+                    retry_path = "host-trap",
+                    "Failed resolving semantic host-trap retry policy; giving up"
+                );
+                return Ok(());
+            }
+        };
+
+    let current_state = ctx.current_retry_state_for(current_retry_point).await;
+    let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
+
+    match evaluate_named_policy_step_resetting_on_invalid_state(
+        named_policy,
+        &properties,
+        current_state.as_ref(),
+    ) {
+        Ok((new_state, RetryVerdict::Retry(delay))) => {
+            debug!(
+                retry_policy = %named_policy.name,
+                retry_path = "host-trap",
+                retry_policy_source = "worker-local",
+                retry_decision = "retry",
+                attempt = total_attempts + 1,
+                delay_ms = delay.as_millis() as u64,
+                "Semantic host-trap retry: triggering retry"
+            );
+            // Attach the resolved verdict to the failure so the post-trap recovery path can honour
+            // it directly without re-resolving from an impoverished trap context (e.g. missing HTTP
+            // `status-code`).
+            let payload = SemanticTrapRetryOverride {
+                retry_from: current_retry_point,
+                policy_name: named_policy.name.clone(),
+                verdict: SemanticTrapRetryVerdict::Retry(delay),
+                retry_policy_state: new_state,
+            };
+            Err(anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+                payload,
+                inner: failure,
+            }))
+        }
+        Ok((_new_state, RetryVerdict::GiveUp)) => {
+            debug!(
+                retry_policy = %named_policy.name,
+                retry_path = "host-trap",
+                retry_policy_source = "worker-local",
+                retry_decision = "give-up",
+                attempt = total_attempts + 1,
+                "Semantic host-trap retry: exhausted"
+            );
+            Ok(())
+        }
+        Ok((_new_state, RetryVerdict::Error(error))) => {
+            warn!(
+                retry_policy = %named_policy.name,
+                ?error,
+                retry_path = "host-trap",
+                fallback_reason = "eval-error",
+                "Semantic host-trap retry evaluation returned an error verdict; giving up"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            warn!(
+                retry_policy = %named_policy.name,
+                ?error,
+                retry_path = "host-trap",
+                fallback_reason = "eval-error",
+                "Failed evaluating semantic host-trap retry policy; giving up"
+            );
+            Ok(())
+        }
+    }
+}
+
 /// Returns `true` when the given durable function type represents a write side-effect of any
 /// kind (local or remote, single, batched, or transactional). These are exactly the function
 /// types that must be refused when the current invocation is in read-only strictness mode.
@@ -948,109 +1054,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         failure: Error,
         properties: RetryProperties,
     ) -> anyhow::Result<()> {
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
-        let current_retry_point = self.state.effective_retry_point();
-
-        // Resolve the matching named retry policy. The synthesized
-        // default-from-config policy (with `Predicate::True`) is always
-        // present in `named_retry_policies()`, so resolution finds at least
-        // one match for every property set; there is no legacy `RetryConfig`
-        // path any more.
-        let policies = self.state.named_retry_policies().await;
-        let named_policy =
-            match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
-                &policies,
-                &properties,
-            ) {
-                Ok(Some(named_policy)) => named_policy,
-                Ok(None) => {
-                    warn!(
-                        retry_path = "host-trap",
-                        "No named retry policy matched (including the synthesized default); giving up"
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        retry_path = "host-trap",
-                        "Failed resolving semantic host-trap retry policy; giving up"
-                    );
-                    return Ok(());
-                }
-            };
-
-        let current_state = latest_status
-            .current_retry_state
-            .get(&current_retry_point)
-            .cloned();
-        let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
-
-        match evaluate_named_policy_step_resetting_on_invalid_state(
-            named_policy,
-            &properties,
-            current_state.as_ref(),
-        ) {
-            Ok((new_state, RetryVerdict::Retry(delay))) => {
-                debug!(
-                    retry_policy = %named_policy.name,
-                    retry_path = "host-trap",
-                    retry_policy_source = "worker-local",
-                    retry_decision = "retry",
-                    attempt = total_attempts + 1,
-                    delay_ms = delay.as_millis() as u64,
-                    "Semantic host-trap retry: triggering retry"
-                );
-                // Attach the resolved verdict to the failure so the
-                // post-trap recovery path can honour it directly without
-                // re-resolving from an impoverished trap context (e.g.
-                // missing HTTP `status-code`).
-                let payload = SemanticTrapRetryOverride {
-                    policy_name: named_policy.name.clone(),
-                    verdict: SemanticTrapRetryVerdict::Retry(delay),
-                    retry_policy_state: new_state,
-                };
-                Err(anyhow::Error::new(SemanticTrapRetryOverrideMarker {
-                    payload,
-                    inner: failure,
-                }))
-            }
-            Ok((_new_state, RetryVerdict::GiveUp)) => {
-                debug!(
-                    retry_policy = %named_policy.name,
-                    retry_path = "host-trap",
-                    retry_policy_source = "worker-local",
-                    retry_decision = "give-up",
-                    attempt = total_attempts + 1,
-                    "Semantic host-trap retry: exhausted"
-                );
-                Ok(())
-            }
-            Ok((_new_state, RetryVerdict::Error(error))) => {
-                warn!(
-                    retry_policy = %named_policy.name,
-                    ?error,
-                    retry_path = "host-trap",
-                    fallback_reason = "eval-error",
-                    "Semantic host-trap retry evaluation returned an error verdict; giving up"
-                );
-                Ok(())
-            }
-            Err(error) => {
-                warn!(
-                    retry_policy = %named_policy.name,
-                    ?error,
-                    retry_path = "host-trap",
-                    fallback_reason = "eval-error",
-                    "Failed evaluating semantic host-trap retry policy; giving up"
-                );
-                Ok(())
-            }
-        }
+        try_trigger_host_trap_retry(self, failure, properties).await
     }
 
     fn mark_atomic_region_side_effect(&mut self) {
@@ -2534,6 +2538,7 @@ mod tests {
         // (which would clobber jitter) easy to spot.
         let jittered_delay = Duration::from_millis(1873);
         let payload = SemanticTrapRetryOverride {
+            retry_from: OplogIndex::from_u64(17),
             policy_name: "manifest-5xx-retry".to_string(),
             verdict: SemanticTrapRetryVerdict::Retry(jittered_delay),
             retry_policy_state: RetryPolicyState::CountBox {
@@ -2555,6 +2560,7 @@ mod tests {
         // (1) Marker is found verbatim.
         let extracted = find_semantic_trap_retry_override(&with_marker)
             .expect("override marker must round-trip through anyhow chain");
+        assert_eq!(extracted.retry_from, payload.retry_from);
         assert_eq!(extracted.policy_name, payload.policy_name);
         assert_eq!(extracted.verdict, payload.verdict);
         assert_eq!(
@@ -2586,6 +2592,7 @@ mod tests {
     #[test]
     fn semantic_trap_retry_override_survives_anyhow_context_wrapper() {
         let payload = SemanticTrapRetryOverride {
+            retry_from: OplogIndex::from_u64(23),
             policy_name: "manifest-5xx-retry".to_string(),
             verdict: SemanticTrapRetryVerdict::Retry(Duration::from_secs(2)),
             retry_policy_state: RetryPolicyState::CountBox {
@@ -2609,6 +2616,7 @@ mod tests {
 
         let extracted = find_semantic_trap_retry_override(&wrapped)
             .expect("override marker must survive an outer context wrapper");
+        assert_eq!(extracted.retry_from, payload.retry_from);
         assert_eq!(extracted.policy_name, payload.policy_name);
         assert_eq!(extracted.verdict, payload.verdict);
     }

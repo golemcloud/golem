@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::p3::{DurableP3, DurableP3View, wasi_clocks_view};
+use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access, wasi_clocks_view};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::host_functions::P3MonotonicClockWaitFor;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestMonotonicClockDuration, HostResponseP3MonotonicClockUnit,
+};
 use wasmtime::component::Accessor;
 use wasmtime_wasi::clocks::{WasiClocks, WasiClocksView};
 use wasmtime_wasi::p3::bindings::clocks::{monotonic_clock, system_clock, types};
@@ -49,11 +53,23 @@ impl<Ctx: WorkerCtx> monotonic_clock::HostWithStore for DurableP3<Ctx> {
         <WasiClocks as monotonic_clock::HostWithStore>::wait_until(&store, when).await
     }
 
-    async fn wait_for<U: Send>(
+    async fn wait_for<U: Send + 'static>(
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let store = store.with_getter::<WasiClocks>(wasi_clocks_view::<Ctx, U>);
-        <WasiClocks as monotonic_clock::HostWithStore>::wait_for(&store, how_long).await
+        run_read_access::<_, _, Ctx, P3MonotonicClockWaitFor, _, _>(
+            store,
+            HostRequestMonotonicClockDuration {
+                duration_in_nanos: how_long,
+            },
+            DurableFunctionType::ReadLocal,
+            || async {
+                let clocks = store.with_getter::<WasiClocks>(wasi_clocks_view::<Ctx, U>);
+                <WasiClocks as monotonic_clock::HostWithStore>::wait_for(&clocks, how_long).await?;
+                Ok(HostResponseP3MonotonicClockUnit {})
+            },
+        )
+        .await
+        .map(|_| ())
     }
 }

@@ -28,9 +28,9 @@ use crate::model::oplog::payload::types::{
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
-    SerializableInvokeResult, SerializableIpAddresses, SerializableRdbmsError,
-    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
-    SerializableStreamError,
+    SerializableInvokeResult, SerializableIpAddresses, SerializableP3IpAddresses,
+    SerializableP3IpNameLookupError, SerializableRdbmsError, SerializableRdbmsRequest,
+    SerializableRpcError, SerializableScheduleId, SerializableStreamError,
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
@@ -186,6 +186,9 @@ oplog_payload! {
             length: u64
         },
         SocketsResolveName {
+            name: String
+        },
+        P3SocketsResolveName {
             name: String
         },
         WebsocketConnect {
@@ -365,8 +368,12 @@ oplog_payload! {
             lo: u64,
             hi: u64
         },
+        P3MonotonicClockUnit {},
         SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableSocketError>
+        },
+        P3SocketsResolveName {
+            result: Result<SerializableP3IpAddresses, SerializableP3IpNameLookupError>
         },
         WebsocketConnectResponse {
             result: Result<(), SerializableWebsocketError>,
@@ -518,6 +525,7 @@ pub mod host_functions {
         (MonotonicClockNow => "monotonic_clock", "now", NoInput, MonotonicClockTimestamp),
         (MonotonicClockResolution => "monotonic_clock", "resolution", NoInput, MonotonicClockTimestamp),
         (MonotonicClockSubscribeDuration => "monotonic_clock", "subscribe_duration", MonotonicClockDuration, MonotonicClockTimestamp),
+        (P3MonotonicClockWaitFor => "clocks::monotonic-clock", "wait-for", MonotonicClockDuration, P3MonotonicClockUnit),
         (BlobstoreBlobstoreCreateContainer => "blobstore::blobstore", "create_container", BlobStoreContainer, BlobStoreTimestamp),
         (BlobstoreBlobstoreGetContainer => "blobstore::blobstore", "get_container", BlobStoreContainer, BlobStoreOptionalTimestamp),
         (BlobstoreBlobstoreDeleteContainer => "blobstore::blobstore", "delete_container", BlobStoreContainer, BlobStoreUnit),
@@ -535,6 +543,7 @@ pub mod host_functions {
         (FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat", FileSystemPath, FileSystemStat),
         (FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat_at", FileSystemPath, FileSystemStat),
         (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName),
+        (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),

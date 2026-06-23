@@ -1756,7 +1756,7 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
     }
 
     // The retry decision must land error entries on the request's begin index.
-    ctx.state.current_retry_point = request_state.begin_index;
+    ctx.state.set_ambient_retry_point(request_state.begin_index);
 
     // Drive the retry decision against the *exact* matched policy. We cannot call
     // `decide_retry_with_properties`, because that function re-resolves through

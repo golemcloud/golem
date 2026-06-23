@@ -52,6 +52,9 @@ use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 use wasmtime_wasi::p2::{FsError, SocketError};
+use wasmtime_wasi::p3::bindings::sockets::{
+    ip_name_lookup as p3_ip_name_lookup, types as p3_socket_types,
+};
 use wasmtime_wasi_http::FieldMap;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
@@ -1310,6 +1313,133 @@ impl From<Vec<IpAddress>> for SerializableIpAddresses {
 impl From<SerializableIpAddresses> for Vec<IpAddress> {
     fn from(value: SerializableIpAddresses) -> Self {
         value.0.into_iter().map(|v| v.into()).collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SerializableP3IpAddress {
+    IPv4 { address: [u8; 4] },
+    IPv6 { address: [u16; 8] },
+}
+
+impl From<p3_socket_types::IpAddress> for SerializableP3IpAddress {
+    fn from(value: p3_socket_types::IpAddress) -> Self {
+        match value {
+            p3_socket_types::IpAddress::Ipv4(address) => SerializableP3IpAddress::IPv4 {
+                address: [address.0, address.1, address.2, address.3],
+            },
+            p3_socket_types::IpAddress::Ipv6(address) => SerializableP3IpAddress::IPv6 {
+                address: [
+                    address.0, address.1, address.2, address.3, address.4, address.5, address.6,
+                    address.7,
+                ],
+            },
+        }
+    }
+}
+
+impl From<SerializableP3IpAddress> for p3_socket_types::IpAddress {
+    fn from(value: SerializableP3IpAddress) -> Self {
+        match value {
+            SerializableP3IpAddress::IPv4 { address } => {
+                p3_socket_types::IpAddress::Ipv4((address[0], address[1], address[2], address[3]))
+            }
+            SerializableP3IpAddress::IPv6 { address } => p3_socket_types::IpAddress::Ipv6((
+                address[0], address[1], address[2], address[3], address[4], address[5], address[6],
+                address[7],
+            )),
+        }
+    }
+}
+
+impl IntoValue for SerializableP3IpAddress {
+    fn into_value(self) -> Value {
+        let addr = match self {
+            SerializableP3IpAddress::IPv4 { address } => IpAddr::V4(address.into()),
+            SerializableP3IpAddress::IPv6 { address } => IpAddr::V6(address.into()),
+        };
+        Value::String(addr.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
+    }
+}
+
+impl FromValue for SerializableP3IpAddress {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let str = String::from_value(value)?;
+        let ipaddr = IpAddr::from_str(&str).map_err(|err| err.to_string())?;
+        match ipaddr {
+            IpAddr::V4(addr) => Ok(SerializableP3IpAddress::IPv4 {
+                address: addr.octets(),
+            }),
+            IpAddr::V6(addr) => Ok(SerializableP3IpAddress::IPv6 {
+                address: addr.segments(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(transparent)]
+pub struct SerializableP3IpAddresses(pub Vec<SerializableP3IpAddress>);
+
+impl From<Vec<p3_socket_types::IpAddress>> for SerializableP3IpAddresses {
+    fn from(value: Vec<p3_socket_types::IpAddress>) -> Self {
+        SerializableP3IpAddresses(value.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+impl From<SerializableP3IpAddresses> for Vec<p3_socket_types::IpAddress> {
+    fn from(value: SerializableP3IpAddresses) -> Self {
+        value.0.into_iter().map(|v| v.into()).collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableP3IpNameLookupError {
+    AccessDenied,
+    InvalidArgument,
+    NameUnresolvable,
+    TemporaryResolverFailure,
+    PermanentResolverFailure,
+    Other(Option<String>),
+}
+
+impl From<p3_ip_name_lookup::ErrorCode> for SerializableP3IpNameLookupError {
+    fn from(value: p3_ip_name_lookup::ErrorCode) -> Self {
+        match value {
+            p3_ip_name_lookup::ErrorCode::AccessDenied => Self::AccessDenied,
+            p3_ip_name_lookup::ErrorCode::InvalidArgument => Self::InvalidArgument,
+            p3_ip_name_lookup::ErrorCode::NameUnresolvable => Self::NameUnresolvable,
+            p3_ip_name_lookup::ErrorCode::TemporaryResolverFailure => {
+                Self::TemporaryResolverFailure
+            }
+            p3_ip_name_lookup::ErrorCode::PermanentResolverFailure => {
+                Self::PermanentResolverFailure
+            }
+            p3_ip_name_lookup::ErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+impl From<SerializableP3IpNameLookupError> for p3_ip_name_lookup::ErrorCode {
+    fn from(value: SerializableP3IpNameLookupError) -> Self {
+        match value {
+            SerializableP3IpNameLookupError::AccessDenied => Self::AccessDenied,
+            SerializableP3IpNameLookupError::InvalidArgument => Self::InvalidArgument,
+            SerializableP3IpNameLookupError::NameUnresolvable => Self::NameUnresolvable,
+            SerializableP3IpNameLookupError::TemporaryResolverFailure => {
+                Self::TemporaryResolverFailure
+            }
+            SerializableP3IpNameLookupError::PermanentResolverFailure => {
+                Self::PermanentResolverFailure
+            }
+            SerializableP3IpNameLookupError::Other(error) => Self::Other(error),
+        }
     }
 }
 

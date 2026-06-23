@@ -21,6 +21,7 @@ use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
+use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
     HostGetPromiseResultWithStore,
@@ -28,7 +29,6 @@ use crate::preview2::golem_api_1_x::host::{
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
-use crate::preview2::golem_api_1_x;
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -404,6 +404,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 begin_index,
                 next_idempotency_key_oplog_index,
                 has_side_effects: false,
+                in_flight_call_count: 0,
             });
             Ok(begin_index.into())
         } else {
@@ -453,6 +454,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 begin_index,
                 next_idempotency_key_oplog_index: begin_index.next(),
                 has_side_effects: false,
+                in_flight_call_count: 0,
             });
             Ok(begin_index.into())
         }
@@ -463,10 +465,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
+        let begin_index = OplogIndex::from_u64(begin);
         if self.state.is_live() {
+            if self.state.atomic_region_has_in_flight_calls(begin_index) {
+                return Err(anyhow::anyhow!(
+                    "cannot end atomic region {begin_index} while durable calls initiated in it are still in flight"
+                ));
+            }
             self.state
                 .oplog
-                .add(OplogEntry::end_atomic_region(OplogIndex::from_u64(begin)))
+                .add(OplogEntry::end_atomic_region(begin_index))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
@@ -474,7 +482,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         self.state
             .active_atomic_regions
-            .retain(|region| region.begin_index != OplogIndex::from_u64(begin));
+            .retain(|region| region.begin_index != begin_index);
 
         Ok(())
     }

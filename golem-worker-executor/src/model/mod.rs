@@ -279,6 +279,10 @@ impl TrapType {
         // Extract any semantic-trap-retry override carried in the error chain
         // once and reuse it in every `TrapType::Error` construction below.
         let semantic_trap_retry_override = find_semantic_trap_retry_override(error);
+        let retry_from = semantic_trap_retry_override
+            .as_ref()
+            .map(|override_| override_.retry_from)
+            .unwrap_or(retry_from);
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => TrapType::Interrupt(*kind),
@@ -930,6 +934,45 @@ mod tests {
         assert!(matches!(
             trap,
             TrapType::Interrupt(InterruptKind::Suspend(_))
+        ));
+    }
+
+    #[test]
+    fn semantic_trap_retry_override_carries_retry_point() {
+        use crate::durable_host::durability::{
+            ClassifiedHostError, HostFailureKind, SemanticTrapRetryOverride,
+            SemanticTrapRetryOverrideMarker, SemanticTrapRetryVerdict,
+        };
+        use golem_common::model::RetryPolicyState;
+
+        let carried_retry_from = OplogIndex::from_u64(42);
+        let ambient_fallback_retry_from = OplogIndex::from_u64(7);
+        let error = anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+            payload: SemanticTrapRetryOverride {
+                retry_from: carried_retry_from,
+                policy_name: "manifest-5xx-retry".to_string(),
+                verdict: SemanticTrapRetryVerdict::Retry(std::time::Duration::from_secs(1)),
+                retry_policy_state: RetryPolicyState::Counter(1),
+            },
+            inner: anyhow::Error::new(ClassifiedHostError {
+                kind: HostFailureKind::Transient,
+                message: "HTTP response status 500 matched user-defined retry policy".to_string(),
+            }),
+        });
+
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &error,
+            ambient_fallback_retry_from,
+            AgentMode::Durable,
+        );
+
+        assert!(matches!(
+            trap,
+            TrapType::Error {
+                error: AgentError::TransientError(_),
+                retry_from,
+                ..
+            } if retry_from == carried_retry_from
         ));
     }
 

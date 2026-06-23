@@ -949,7 +949,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 if let Err(err) = &response
                     && let Some(error_code) = take_http_background_retry_fallback(err)
                 {
-                    self.state.current_retry_point = begin_index;
+                    self.state.set_ambient_retry_point(begin_index);
                     let failure = anyhow::Error::new(ClassifiedHostError {
                         kind: HostFailureKind::Transient,
                         message: error_code.to_string(),
@@ -1034,7 +1034,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         .get(&handle)
                         .is_some_and(|s| s.retry.has_background_retry);
                     if kind == HostFailureKind::Transient && !has_background_retry {
-                        self.state.current_retry_point = begin_index;
+                        self.state.set_ambient_retry_point(begin_index);
                         let failure = anyhow::Error::new(ClassifiedHostError {
                             kind,
                             message: err.to_string(),
@@ -1480,7 +1480,7 @@ async fn escalate_http_to_outer_retry<Ctx: WorkerCtx>(
     error_type: &'static str,
     message: String,
 ) -> wasmtime::Result<()> {
-    ctx.state.current_retry_point = request_state.begin_index;
+    ctx.state.set_ambient_retry_point(request_state.begin_index);
     let mut properties = golem_common::model::RetryContext::http_with_response(
         &request_state.request.method.to_string(),
         &request_state.request.uri,

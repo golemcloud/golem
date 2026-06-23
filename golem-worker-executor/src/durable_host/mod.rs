@@ -1355,7 +1355,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
-            self.state.current_retry_point = result;
+            self.state.set_ambient_retry_point(result);
             Ok(result)
         } else {
             // When there is no scope `Start` entry, the current retry point can only
@@ -1381,7 +1381,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .await
                     .unwrap_or(self.state.replay_state.last_replayed_non_hint_index()),
             };
-            self.state.current_retry_point = new_retry_point;
+            self.state.set_ambient_retry_point(new_retry_point);
 
             Ok(begin_index)
         }
@@ -1523,7 +1523,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The transaction scope is now open until commit/rollback; block checkpoints.
             self.state
                 .push_durable_scope(begin_index, DurableScopeKind::Transaction);
-            self.state.current_retry_point = begin_index;
+            self.state.set_ambient_retry_point(begin_index);
 
             Ok((begin_index, tx))
         } else {
@@ -1713,7 +1713,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The (possibly re-begun) transaction scope is open until commit/rollback.
             self.state
                 .push_durable_scope(result, DurableScopeKind::Transaction);
-            self.state.current_retry_point = original_begin_index;
+            self.state.set_ambient_retry_point(original_begin_index);
 
             Ok((result, tx))
         }
@@ -3751,6 +3751,71 @@ mod tests {
         );
         assert_eq!(next_idempotency_key_oplog_index, OplogIndex::from_u64(12));
     }
+
+    #[test]
+    fn atomic_region_side_effect_marking_uses_begin_index_not_position() {
+        let mut regions = vec![
+            ActiveAtomicRegion {
+                begin_index: OplogIndex::from_u64(10),
+                next_idempotency_key_oplog_index: OplogIndex::from_u64(11),
+                has_side_effects: false,
+                in_flight_call_count: 0,
+            },
+            ActiveAtomicRegion {
+                begin_index: OplogIndex::from_u64(20),
+                next_idempotency_key_oplog_index: OplogIndex::from_u64(21),
+                has_side_effects: false,
+                in_flight_call_count: 0,
+            },
+        ];
+
+        assert!(mark_atomic_region_has_side_effects_for(
+            &mut regions,
+            OplogIndex::from_u64(20)
+        ));
+
+        assert!(!regions[0].has_side_effects);
+        assert!(regions[1].has_side_effects);
+        assert!(!mark_atomic_region_has_side_effects_for(
+            &mut regions,
+            OplogIndex::from_u64(30)
+        ));
+    }
+
+    #[test]
+    fn atomic_region_in_flight_call_tracking_uses_begin_index() {
+        let mut regions = vec![
+            ActiveAtomicRegion {
+                begin_index: OplogIndex::from_u64(10),
+                next_idempotency_key_oplog_index: OplogIndex::from_u64(11),
+                has_side_effects: false,
+                in_flight_call_count: 0,
+            },
+            ActiveAtomicRegion {
+                begin_index: OplogIndex::from_u64(20),
+                next_idempotency_key_oplog_index: OplogIndex::from_u64(21),
+                has_side_effects: false,
+                in_flight_call_count: 0,
+            },
+        ];
+
+        assert!(register_atomic_region_call(
+            &mut regions,
+            OplogIndex::from_u64(20)
+        ));
+        assert_eq!(regions[0].in_flight_call_count, 0);
+        assert_eq!(regions[1].in_flight_call_count, 1);
+
+        assert!(unregister_atomic_region_call(
+            &mut regions,
+            OplogIndex::from_u64(20)
+        ));
+        assert_eq!(regions[1].in_flight_call_count, 0);
+        assert!(!unregister_atomic_region_call(
+            &mut regions,
+            OplogIndex::from_u64(20)
+        ));
+    }
 }
 
 #[async_trait]
@@ -4291,6 +4356,53 @@ struct ActiveAtomicRegion {
     begin_index: OplogIndex,
     next_idempotency_key_oplog_index: OplogIndex,
     has_side_effects: bool,
+    in_flight_call_count: u32,
+}
+
+fn mark_atomic_region_has_side_effects_for(
+    active_atomic_regions: &mut [ActiveAtomicRegion],
+    begin_index: OplogIndex,
+) -> bool {
+    if let Some(region) = active_atomic_regions
+        .iter_mut()
+        .find(|region| region.begin_index == begin_index)
+    {
+        region.has_side_effects = true;
+        true
+    } else {
+        false
+    }
+}
+
+fn register_atomic_region_call(
+    active_atomic_regions: &mut [ActiveAtomicRegion],
+    begin_index: OplogIndex,
+) -> bool {
+    if let Some(region) = active_atomic_regions
+        .iter_mut()
+        .find(|region| region.begin_index == begin_index)
+    {
+        region.in_flight_call_count += 1;
+        true
+    } else {
+        false
+    }
+}
+
+fn unregister_atomic_region_call(
+    active_atomic_regions: &mut [ActiveAtomicRegion],
+    begin_index: OplogIndex,
+) -> bool {
+    if let Some(region) = active_atomic_regions
+        .iter_mut()
+        .find(|region| region.begin_index == begin_index)
+        && region.in_flight_call_count > 0
+    {
+        region.in_flight_call_count -= 1;
+        true
+    } else {
+        false
+    }
 }
 
 /// The kind of a durable scope, identified by the `OplogIndex` of its `Start` entry.
@@ -4457,12 +4569,12 @@ struct PrivateDurableWorkerState {
     /// [`PrivateDurableWorkerState::effective_retry_point`], which layers priority on top of this
     /// field: an active atomic region (whole region retried from its begin index) wins, then an open
     /// durable scope (error grouped at the scope `Start`), and only otherwise does it fall back to
-    /// `current_retry_point`. Keep them distinct: write `current_retry_point`, read
+    /// `ambient_retry_point`. Keep them distinct: write `ambient_retry_point`, read
     /// `effective_retry_point()`.
-    current_retry_point: OplogIndex,
+    ambient_retry_point: OplogIndex,
 
-    /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
-    /// determine the effective retry point associated with an error; while `current_retry_point` is changed for each
+    /// Tracks the active atomic regions by their begin index. This is used together with `ambient_retry_point` to
+    /// determine the effective retry point associated with an error; while `ambient_retry_point` is changed for each
     /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
     /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
     /// from scratch.
@@ -4484,6 +4596,13 @@ struct PrivateDurableWorkerState {
     /// — it is threaded explicitly from the owning call/resource. A fresh state is built per worker
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
+
+    /// Queue of live durable calls dropped by cancellable p3 host futures. Drop only enqueues an
+    /// owned snapshot; later safe worker-access windows drain it and record `Cancelled` entries.
+    dropped_call_events: (
+        tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
+    ),
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
     /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
@@ -4576,6 +4695,7 @@ impl PrivateDurableWorkerState {
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
+        let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
         Ok(Self {
             oplog_service,
             oplog,
@@ -4637,9 +4757,10 @@ impl PrivateDurableWorkerState {
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
             pending_update: tokio::sync::Mutex::new(pending_update),
-            current_retry_point: OplogIndex::INITIAL,
+            ambient_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
+            dropped_call_events,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
@@ -4809,17 +4930,47 @@ impl PrivateDurableWorkerState {
         }
     }
 
+    fn dropped_call_event_sender(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>> {
+        Some(self.dropped_call_events.0.clone())
+    }
+
+    fn take_dropped_call_events(&mut self) -> Vec<concurrent::DropEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = self.dropped_call_events.1.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    fn ambient_retry_point(&self) -> OplogIndex {
+        self.ambient_retry_point
+    }
+
+    fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
+        self.ambient_retry_point = retry_point;
+    }
+
+    fn mirror_call_retry_point(&mut self, retry_from: OplogIndex) {
+        self.set_ambient_retry_point(retry_from);
+    }
+
+    fn restore_call_retry_point(&mut self, restore_retry_point: OplogIndex) {
+        self.set_ambient_retry_point(restore_retry_point);
+    }
+
     /// The retry point to associate with an error, with priority `atomic region > global`. While an
     /// atomic region is active the whole region is retried from its begin index; otherwise the error
-    /// is grouped at `current_retry_point`, which the durable-call machinery keeps pointing at the
+    /// is grouped at `ambient_retry_point`, which the durable-call machinery keeps pointing at the
     /// enclosing scope `Start` (or the call's own `Start` when unscoped). Durable scopes do **not**
     /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
-    /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
+    /// grouping is driven by the explicitly-maintained `ambient_retry_point` instead.
     fn effective_retry_point(&self) -> OplogIndex {
         if let Some(region) = self.active_atomic_regions.last() {
             region.begin_index
         } else {
-            self.current_retry_point
+            self.ambient_retry_point
         }
     }
 
@@ -4854,11 +5005,34 @@ impl PrivateDurableWorkerState {
         );
     }
 
-    /// Mark the outermost active atomic region as having side effects
+    /// Mark the outermost active atomic region as having side effects.
     pub fn mark_atomic_region_has_side_effects(&mut self) {
         if let Some(region) = self.active_atomic_regions.first_mut() {
             region.has_side_effects = true;
         }
+    }
+
+    /// Mark the atomic region identified by `begin_index` as having side effects.
+    ///
+    /// Concurrent host calls must mark the region they belonged to when initiated, not whichever
+    /// region happens to be outermost when they complete.
+    pub fn mark_atomic_region_has_side_effects_for(&mut self, begin_index: OplogIndex) -> bool {
+        mark_atomic_region_has_side_effects_for(&mut self.active_atomic_regions, begin_index)
+    }
+
+    pub fn register_atomic_region_call(&mut self, begin_index: OplogIndex) -> bool {
+        register_atomic_region_call(&mut self.active_atomic_regions, begin_index)
+    }
+
+    pub fn unregister_atomic_region_call(&mut self, begin_index: OplogIndex) -> bool {
+        unregister_atomic_region_call(&mut self.active_atomic_regions, begin_index)
+    }
+
+    pub fn atomic_region_has_in_flight_calls(&self, begin_index: OplogIndex) -> bool {
+        self.active_atomic_regions
+            .iter()
+            .find(|region| region.begin_index == begin_index)
+            .is_some_and(|region| region.in_flight_call_count > 0)
     }
 
     /// Find the open_http_requests entry key for a given outgoing body rep.

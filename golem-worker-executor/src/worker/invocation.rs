@@ -371,9 +371,9 @@ async fn invoke<Ctx: WorkerCtx>(
             }
         }
         Err(err) => {
-            let retry_from = store.data().get_current_retry_point().await;
-            let agent_mode = store.data().agent_mode();
             let err: anyhow::Error = err.into();
+            let retry_from = retry_from_for_invocation_error(&mut store, &err).await;
+            let agent_mode = store.data().agent_mode();
             Ok(InvokeResult::from_error::<Ctx>(
                 consumed_fuel,
                 &err,
@@ -437,9 +437,9 @@ async fn drop_resource<Ctx: WorkerCtx>(
         match result {
             Ok(_) => wrap_output_as_agent_result(kind, None, consumed_fuel),
             Err(err) => {
-                let retry_from = store.data().get_current_retry_point().await;
-                let agent_mode = store.data().agent_mode();
                 let err: anyhow::Error = err.into();
+                let retry_from = retry_from_for_invocation_error(&mut store, &err).await;
+                let agent_mode = store.data().agent_mode();
                 Ok(InvokeResult::from_error::<Ctx>(
                     consumed_fuel,
                     &err,
@@ -450,6 +450,19 @@ async fn drop_resource<Ctx: WorkerCtx>(
         }
     } else {
         wrap_output_as_agent_result(kind, None, 0)
+    }
+}
+
+async fn retry_from_for_invocation_error<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    error: &anyhow::Error,
+) -> OplogIndex {
+    if let Some(override_) =
+        crate::durable_host::durability::find_semantic_trap_retry_override(error)
+    {
+        override_.retry_from
+    } else {
+        store.data().get_current_retry_point().await
     }
 }
 
@@ -486,7 +499,9 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     let result = store
         .as_context_mut()
         .run_concurrent_and_drain(async |accessor| {
-            function.call_concurrent(accessor, &params, &mut results).await
+            function
+                .call_concurrent(accessor, &params, &mut results)
+                .await
         })
         .await
         .and_then(|inner| inner);
