@@ -24,7 +24,7 @@
 // the current behaviour (warm cache → all hits). Run with `vitest bench` and
 // compare the two arms within each group.
 
-import { bench, describe } from 'vitest';
+import { bench, describe } from './harness';
 import { buildTypeFromJSON, LiteTypeJSON, Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../src/newTypes/either';
 import { mapTsTypeToResolvedGraph } from '../../src/internal/mapping/types/resolvedMapper';
