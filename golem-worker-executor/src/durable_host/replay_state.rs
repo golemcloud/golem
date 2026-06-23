@@ -40,6 +40,8 @@ use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
 
+const CHUNK_SIZE: u64 = 1024;
+
 #[derive(Debug, Clone)]
 pub enum ReplayEvent {
     ReplayFinished,
@@ -124,7 +126,7 @@ impl ReplayState {
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
-        result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
+        result.move_to_start_of_replay().await;
         result.skip_forward().await?;
         Ok(result)
     }
@@ -141,7 +143,7 @@ impl ReplayState {
         }
         self.last_replayed_index.set(OplogIndex::NONE);
         self.last_replayed_non_hint_index.set(OplogIndex::NONE);
-        self.move_replay_idx(OplogIndex::INITIAL).await;
+        self.move_to_start_of_replay().await;
         self.skip_forward().await
     }
 
@@ -493,9 +495,15 @@ impl ReplayState {
         Ok(oplog_entry)
     }
 
+    // Moves to the start of the region used for replay, handling initial skipped regions applied by manual updates correctly
+    async fn move_to_start_of_replay(&mut self) {
+        self.last_replayed_index.set(OplogIndex::INITIAL);
+        self.get_out_of_skipped_region(true).await;
+    }
+
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         self.last_replayed_index.set(new_idx);
-        self.get_out_of_skipped_region().await;
+        self.get_out_of_skipped_region(false).await;
     }
 
     pub async fn lookup_oplog_entry(
@@ -538,8 +546,6 @@ impl ReplayState {
     ) -> OplogEntryLookupResult {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
-
-        const CHUNK_SIZE: u64 = 1024;
 
         let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
         let mut violation = false;
@@ -667,7 +673,7 @@ impl ReplayState {
         }
     }
 
-    async fn get_out_of_skipped_region(&mut self) {
+    async fn get_out_of_skipped_region(&mut self, initial_skip: bool) {
         if self.is_replay() {
             let skipped_region = {
                 let internal = self.internal.write().await;
@@ -688,8 +694,12 @@ impl ReplayState {
             };
 
             if let Some(skipped_region) = skipped_region {
-                self.record_card_revoked_events_in_region(&skipped_region)
-                    .await;
+                // Initial skip is used to advance the replay cursor to the beginning of the replay / index of the loaded snapshot.
+                // All card events in that region are already part of the snapshot, so no need to consider them here.
+                if !initial_skip {
+                    self.record_card_revoked_events_in_region(&skipped_region)
+                        .await;
+                }
                 let mut internal = self.internal.write().await;
                 internal.next_skipped_region = internal
                     .skipped_regions
@@ -699,13 +709,21 @@ impl ReplayState {
     }
 
     async fn record_card_revoked_events_in_region(&mut self, region: &OplogRegion) {
-        let count = region.end.as_u64() - region.start.as_u64() + 1;
-        for (_, entry) in self.read_oplog(region.start, count).await {
-            if let OplogEntry::CardRevoked { card_id, .. } = entry {
-                self.record_replay_event(ReplayEvent::CardRevoked {
-                    card_id: CardId(card_id),
-                })
-                .await;
+        let mut next = region.start;
+        let end = region.end.as_u64();
+
+        while next.as_u64() <= end {
+            let remaining = end - next.as_u64() + 1;
+            let count = remaining.min(CHUNK_SIZE);
+
+            for (entry_index, entry) in self.read_oplog(next, count).await {
+                if let OplogEntry::CardRevoked { card_id, .. } = entry {
+                    self.record_replay_event(ReplayEvent::CardRevoked {
+                        card_id: CardId(card_id),
+                    })
+                    .await;
+                }
+                next = entry_index
             }
         }
     }
