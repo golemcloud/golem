@@ -26,7 +26,8 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies, start, start_with_snapshot_policy
+    LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
+    start, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use pretty_assertions::assert_eq;

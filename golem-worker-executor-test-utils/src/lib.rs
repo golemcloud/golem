@@ -24,6 +24,7 @@ use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
+use chrono::DateTime;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
@@ -34,6 +35,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::card::{Card, CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::environment::EnvironmentId;
@@ -72,6 +74,7 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
+pub use golem_test_framework::dsl::PrecompiledComponent;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -155,9 +158,6 @@ use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
-pub use golem_test_framework::dsl::PrecompiledComponent;
-use golem_common::model::card::{Card, StoredCard, CardId};
-use chrono::DateTime;
 
 #[cfg(test)]
 test_r::enable!();
@@ -3392,22 +3392,18 @@ impl CardService for TestCardService {
         card_ids: Vec<CardId>,
     ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
         if card_ids.contains(&TEST_CARD_ID) {
-            Ok(vec![
-                StoredCard::Concrete(
-                    Card {
-                        card_id: TEST_CARD_ID,
-                        parent_ids: Vec::new(),
-                        lower_positive: Vec::new(),
-                        lower_negative: Vec::new(),
-                        upper_positive: Vec::new(),
-                        upper_negative: Vec::new(),
-                        created_at: DateTime::from_timestamp_nanos(0),
-                        expires_at: None,
-                        system_card: false,
-                        managed_by: None,
-                    }
-                )
-            ])
+            Ok(vec![StoredCard::Concrete(Card {
+                card_id: TEST_CARD_ID,
+                parent_ids: Vec::new(),
+                lower_positive: Vec::new(),
+                lower_negative: Vec::new(),
+                upper_positive: Vec::new(),
+                upper_negative: Vec::new(),
+                created_at: DateTime::from_timestamp_nanos(0),
+                expires_at: None,
+                system_card: false,
+                managed_by: None,
+            })])
         } else {
             Ok(Vec::new())
         }
