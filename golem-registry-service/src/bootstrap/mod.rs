@@ -248,6 +248,7 @@ impl Services {
         let permission_share_service = Arc::new(PermissionShareService::new(
             repos.permission_share_repo.clone(),
             account_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let auth_service = Arc::new(AuthService::new(

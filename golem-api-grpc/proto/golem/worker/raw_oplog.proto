@@ -60,6 +60,9 @@ message RawOplogEntry {
     RawEndParameters end = 44;
     RawCancelledParameters cancelled = 45;
     RawCardRevokedParameters card_revoked = 46;
+    RawCardEventQueuedParameters card_event_queued = 47;
+    RawCardInstalledParameters card_installed = 48;
+    RawCardInstallFailedParameters card_install_failed = 49;
   }
 }
 
@@ -313,7 +316,47 @@ message RawRemoveRetryPolicyParameters {
 }
 
 message RawCardRevokedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message RawQueuedCardEvent {
+  oneof event {
+    RawQueuedCardEventCard install = 1;
+    RawQueuedCardEventCard revoke = 2;
+  }
+}
+
+message RawQueuedCardEventCard {
   golem.common.UUID card_id = 1;
+  bytes card = 2;
+}
+
+enum RawCardInstallFailure {
+  RAW_CARD_INSTALL_FAILURE_UNSPECIFIED = 0;
+  RAW_CARD_INSTALL_FAILURE_CARD_REVOKED = 1;
+  RAW_CARD_INSTALL_FAILURE_NOT_FOUND = 2;
+  RAW_CARD_INSTALL_FAILURE_RECIPIENT_MISMATCH = 3;
+  RAW_CARD_INSTALL_FAILURE_NOT_PERMITTED = 4;
+}
+
+message RawCardEventQueuedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  RawQueuedCardEvent event = 2;
+}
+
+message RawCardInstalledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  optional uint64 queued_event_index = 2;
+  bytes card = 3;
+}
+
+message RawCardInstallFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+  RawCardInstallFailure reason = 4;
 }
 
 message RawOplogEntryWithIndex {

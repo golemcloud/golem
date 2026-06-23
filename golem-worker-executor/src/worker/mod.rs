@@ -55,12 +55,14 @@ use futures::FutureExt;
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::cache::SimpleCache;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
+use golem_common::model::card::CardId;
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
@@ -2118,6 +2120,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
+    pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
+        let status = self.get_last_known_status().await;
+        let revoke_already_pending = status.pending_card_events.iter().any(|pending_event| {
+            matches!(&pending_event.event, QueuedCardEvent::Revoke(event) if event.card_id == card_id)
+        });
+
+        if status.revoked_cards.contains(&card_id) || revoke_already_pending {
+            None
+        } else {
+            Some(
+                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
+                    card_id,
+                )))
+                .await,
+            )
+        }
+    }
+
     async fn add_and_commit_oplog_internal(
         &self,
         instance_guard: &MutexGuard<'_, WorkerInstance>,
@@ -3673,46 +3693,14 @@ impl RunningWorker {
                     .await?
             };
 
-        let initial_agent_card_id = parent.parsed_agent_id.as_ref().and_then(|agent_id| {
-            component_metadata_for_replay
-                .metadata
-                .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id)
-        });
-        let initial_agent_card_already_revoked = initial_agent_card_id.is_some_and(|card_id| {
-            worker_metadata
-                .last_known_status
-                .revoked_cards
-                .contains(&card_id)
-        });
         let agent_effective_surface = match &parent.parsed_agent_id {
             Some(agent_id) => agent_effective_surface_from_component_metadata(
                 &component_metadata_for_replay,
                 &parent.owned_agent_id,
                 agent_id,
-            ),
+            )?,
             None => golem_common::model::card::EffectiveSurface::default(),
         };
-
-        if let Some(card_id) = initial_agent_card_id {
-            parent
-                .card_service()
-                .register_agent_cards(parent.owned_agent_id.clone(), &[card_id])
-                .await;
-
-            if !initial_agent_card_already_revoked
-                && parent
-                    .card_service()
-                    .check_cards(vec![card_id])
-                    .await?
-                    .contains(&card_id)
-            {
-                parent
-                    .card_service()
-                    .enqueue_revoked_cards_for_agent(&parent.owned_agent_id, &[card_id])
-                    .await;
-            }
-        }
 
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata

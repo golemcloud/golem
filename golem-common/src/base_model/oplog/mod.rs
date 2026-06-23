@@ -16,13 +16,16 @@ pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
 
-use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
+use crate::model::account::AccountId;
+use crate::model::card::CardId;
+#[cfg(feature = "full")]
+use crate::model::card::StoredCard;
 use crate::oplog_entry;
 use crate::schema::TypedSchemaValue;
 pub use public_types::*;
@@ -668,16 +671,60 @@ oplog_entry! {
             name: String,
         }
     },
+    /// Durable queue entry for pending permission-card work.
+    CardEventQueued {
+        hint: true
+        wit_raw_type: "raw-card-event-queued-parameters"
+        wit_public_type: "card-event-queued-parameters"
+        raw {
+            event: QueuedCardEvent,
+        }
+        public {
+            event: PublicQueuedCardEvent,
+        }
+    },
+    /// Records successful installation of a permission card into the agent wallet.
+    CardInstalled {
+        hint: true
+        wit_raw_type: "raw-card-installed-parameters"
+        wit_public_type: "card-installed-parameters"
+        raw {
+            queued_event_index: Option<OplogIndex>,
+            card: StoredCard,
+        }
+        public {
+            queued_event_index: Option<OplogIndex>,
+            card_id: CardId,
+        }
+    },
+    /// Records failed installation of a permission card into the agent wallet.
+    CardInstallFailed {
+        hint: true
+        wit_raw_type: "card-install-failed-parameters"
+        wit_public_type: "card-install-failed-parameters"
+        raw {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+            reason: CardInstallFailure,
+        }
+        public {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+            reason: CardInstallFailure,
+        }
+    },
     /// Records that a permission card used by the agent has been revoked.
     CardRevoked {
         hint: true
         wit_raw_type: "card-revoked-parameters"
         wit_public_type: "card-revoked-parameters"
         raw {
-            card_id: Uuid,
+            queued_event_index: OplogIndex,
+            card_id: CardId,
         }
         public {
-            card_id: Uuid,
+            queued_event_index: OplogIndex,
+            card_id: CardId,
         }
     }
 }

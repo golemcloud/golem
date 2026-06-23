@@ -15,9 +15,8 @@
 use crate::repo::card::CardRepo;
 use crate::repo::model::card::{CardRecord, CardRepoError};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::card::{CardId, CardManagedBy, PolymorphicCard, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::AgentInitialPermissionTemplate;
 use std::sync::Arc;
 
 pub struct CardService {
@@ -34,19 +33,19 @@ impl CardService {
         component_id: ComponentId,
         component_revision: ComponentRevision,
         agent_type: AgentTypeName,
-        template: &AgentInitialPermissionTemplate,
+        card: &PolymorphicCard,
     ) -> Result<CardId, CardRepoError> {
-        let card_id = template.card_id;
+        let card_id = card.card_id;
         self.card_repo
             .create(CardRecord::polymorphic_creation(
                 card_id,
-                Vec::new(),
-                template.lower_positive.clone(),
-                template.lower_negative.clone(),
-                template.upper_positive.clone(),
-                template.upper_negative.clone(),
-                None,
-                false,
+                card.parent_ids.clone(),
+                card.lower_positive.clone(),
+                card.lower_negative.clone(),
+                card.upper_positive.clone(),
+                card.upper_negative.clone(),
+                card.expires_at,
+                card.system_card,
                 Some(CardManagedBy::AgentInitial {
                     component_id,
                     component_revision,
@@ -60,5 +59,17 @@ impl CardService {
 
     pub async fn existing(&self, card_ids: Vec<CardId>) -> Result<Vec<CardId>, CardRepoError> {
         self.card_repo.existing(card_ids).await.map_err(Into::into)
+    }
+
+    pub async fn get_cards(&self, card_ids: Vec<CardId>) -> Result<Vec<StoredCard>, CardRepoError> {
+        let mut result = Vec::new();
+        for card_id in card_ids {
+            if let Some(record) = self.card_repo.get(card_id).await?
+                && let Ok(card) = StoredCard::try_from(record)
+            {
+                result.push(card);
+            }
+        }
+        Ok(result)
     }
 }

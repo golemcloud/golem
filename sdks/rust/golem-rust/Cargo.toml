@@ -81,6 +81,6 @@ serde_json_types = ["dep:serde_json", "golem-schema/serde_json_types"]
 url = ["dep:url", "golem-schema/url"]
 
 [dev-dependencies]
-test-r = "2.3.1"
+test-r = "3.0.9"
 proptest = "1.4.0"
 trybuild = "1.0.116"

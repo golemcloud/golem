@@ -14,13 +14,16 @@
 
 use super::class::*;
 use super::owner::*;
-use super::{Card, CardId, PermissionPattern, PolymorphicPermissionPattern};
+use super::recipient::RecipientPattern;
+use super::{
+    Card, CardId, EffectiveSurface, PermissionPattern, PolymorphicPermissionPattern, StoredCard,
+};
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
-use chrono::Utc;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPermissionMonomorphizationContext {
@@ -32,25 +35,52 @@ pub struct AgentPermissionMonomorphizationContext {
     pub agent_type: AgentTypeName,
 }
 
-pub fn monomorphize_agent_initial_card(
-    lower_positive: &[PolymorphicPermissionPattern],
-    lower_negative: &[PolymorphicPermissionPattern],
-    upper_positive: &[PolymorphicPermissionPattern],
-    upper_negative: &[PolymorphicPermissionPattern],
+pub fn agent_effective_surface_from_wallet(
+    context: &AgentPermissionMonomorphizationContext,
+    wallet_cards: &HashMap<CardId, StoredCard>,
+) -> EffectiveSurface {
+    let holder = agent_recipient_pattern(context);
+    let cards = wallet_cards
+        .values()
+        .map(|card| match card {
+            StoredCard::Concrete(card) => Ok(card.clone()),
+            StoredCard::Polymorphic(_) => monomorphize_stored_card(card, context),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default();
+
+    EffectiveSurface::from_cards(&cards, &holder).unwrap_or_default()
+}
+
+fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> RecipientPattern {
+    RecipientPattern::Agent {
+        account: context.account.clone(),
+        application: context.application.clone(),
+        environment: context.environment.clone(),
+        component: context.component.clone(),
+        agent_type: context.agent_type.clone(),
+    }
+}
+
+fn monomorphize_stored_card(
+    card: &StoredCard,
     context: &AgentPermissionMonomorphizationContext,
 ) -> Result<Card, String> {
-    Ok(Card {
-        card_id: CardId(uuid::Uuid::nil()),
-        parent_ids: Vec::new(),
-        lower_positive: monomorphize_permissions(lower_positive, context)?,
-        lower_negative: monomorphize_permissions(lower_negative, context)?,
-        upper_positive: monomorphize_permissions(upper_positive, context)?,
-        upper_negative: monomorphize_permissions(upper_negative, context)?,
-        created_at: Utc::now(),
-        expires_at: None,
-        system_card: false,
-        managed_by: None,
-    })
+    match card {
+        StoredCard::Concrete(card) => Ok(card.clone()),
+        StoredCard::Polymorphic(card) => Ok(Card {
+            card_id: card.card_id,
+            parent_ids: card.parent_ids.clone(),
+            lower_positive: monomorphize_permissions(&card.lower_positive, context)?,
+            lower_negative: monomorphize_permissions(&card.lower_negative, context)?,
+            upper_positive: monomorphize_permissions(&card.upper_positive, context)?,
+            upper_negative: monomorphize_permissions(&card.upper_negative, context)?,
+            created_at: card.created_at,
+            expires_at: card.expires_at,
+            system_card: card.system_card,
+            managed_by: None,
+        }),
+    }
 }
 
 fn monomorphize_permissions(
@@ -555,13 +585,14 @@ mod tests {
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::card::{
         AgentClass, AgentResourcePattern, AgentVerb, ClassPermissionTarget, ComponentClass,
-        ComponentResourcePattern, ComponentVerb, EffectiveSurface, EnvironmentClass,
-        EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
-        PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
+        ComponentResourcePattern, ComponentVerb, EnvironmentClass, EnvironmentResourcePattern,
+        EnvironmentVerb, PermissionTarget, PolymorphicCard, PolymorphicClassPermissionPattern,
+        PolymorphicPermissionPattern, StoredCard,
     };
     use crate::model::component::ComponentName;
-    use crate::model::component_metadata::AgentInitialPermissionTemplate;
+    use crate::model::component_metadata::default_agent_initial_card;
     use crate::model::environment::EnvironmentName;
+    use std::collections::HashMap;
     use test_r::test;
 
     fn context() -> AgentPermissionMonomorphizationContext {
@@ -573,10 +604,6 @@ mod tests {
             agent_name: "Cart(alice)".to_string(),
             agent_type: AgentTypeName("Cart".to_string()),
         }
-    }
-
-    fn holder() -> RecipientPattern {
-        RecipientPattern::parse("owner@example.com/shop/prod/cart-svc/Cart(alice)").unwrap()
     }
 
     fn environment_view_target(owner: &str) -> PermissionTarget {
@@ -612,11 +639,14 @@ mod tests {
     }
 
     #[test]
-    fn monomorphizes_holder_relative_agent_initial_template_slots() {
+    fn monomorphizes_holder_relative_agent_initial_card_slots() {
         let context = context();
         let recipient = RecipientPattern::Any;
-        let card = monomorphize_agent_initial_card(
-            &[
+        let card_id = CardId(uuid::Uuid::from_u128(1));
+        let card = PolymorphicCard {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: vec![
                 PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
                     recipient: recipient.clone(),
@@ -636,48 +666,53 @@ mod tests {
                     resource: AgentResourcePattern::Any,
                 }),
             ],
-            &[],
-            &[],
-            &[],
-            &context,
-        )
-        .unwrap();
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        };
+        let wallet = HashMap::from([(card_id, StoredCard::Polymorphic(card))]);
+        let surface = agent_effective_surface_from_wallet(&context, &wallet);
 
-        assert_eq!(card.card_id, CardId(uuid::Uuid::nil()));
-        assert_eq!(card.lower_positive.len(), 3);
+        assert_eq!(surface.source_card_ids, vec![card_id]);
         assert!(
-            card.lower_positive[0]
-                .subsumes_target(&environment_view_target("owner@example.com/shop/prod"))
+            surface
+                .authorize(&environment_view_target("owner@example.com/shop/prod"))
+                .unwrap()
         );
         assert!(
-            card.lower_positive[1].subsumes_target(&component_view_target(
-                "owner@example.com/shop/prod/cart-svc"
-            ))
+            surface
+                .authorize(&component_view_target(
+                    "owner@example.com/shop/prod/cart-svc"
+                ))
+                .unwrap()
         );
-        assert!(card.lower_positive[2].subsumes_target(&agent_target(
-            "owner@example.com/shop/prod/cart-svc/Cart(alice)",
-            AgentVerb::View,
-        )));
-        assert!(!card.lower_positive[2].subsumes_target(&agent_target(
-            "owner@example.com/shop/prod/cart-svc/Cart(bob)",
-            AgentVerb::View,
-        )));
+        assert!(
+            surface
+                .authorize(&agent_target(
+                    "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+                    AgentVerb::View,
+                ))
+                .unwrap()
+        );
+        assert!(
+            !surface
+                .authorize(&agent_target(
+                    "owner@example.com/shop/prod/cart-svc/Cart(bob)",
+                    AgentVerb::View,
+                ))
+                .unwrap()
+        );
     }
 
     #[test]
     fn default_agent_initial_template_is_current_environment_scoped() {
         let context = context();
-        let template =
-            AgentInitialPermissionTemplate::default_for(&context.environment, &context.component);
-        let card = monomorphize_agent_initial_card(
-            &template.lower_positive,
-            &template.lower_negative,
-            &template.upper_positive,
-            &template.upper_negative,
-            &context,
-        )
-        .unwrap();
-        let surface = EffectiveSurface::from_cards(&[card], &holder()).unwrap();
+        let card = default_agent_initial_card();
+        let wallet = HashMap::from([(card.card_id, StoredCard::Polymorphic(card))]);
+        let surface = agent_effective_surface_from_wallet(&context, &wallet);
 
         assert!(
             surface
@@ -710,7 +745,7 @@ mod tests {
         assert!(
             surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/prod/cart-svc/Cart(bob)",
+                    "owner@example.com/shop/prod/cart-svc/Cart",
                     AgentVerb::Invoke,
                 ))
                 .unwrap()
@@ -726,7 +761,7 @@ mod tests {
         assert!(
             !surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/dev/cart-svc/Cart(bob)",
+                    "owner@example.com/shop/dev/cart-svc/Cart",
                     AgentVerb::Invoke,
                 ))
                 .unwrap()

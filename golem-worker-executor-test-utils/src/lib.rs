@@ -89,7 +89,7 @@ use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
-use golem_worker_executor::services::card::CardService;
+use golem_worker_executor::services::card::{CardService, NoopCardService};
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, NoOpDirectInvocationAuthService,
@@ -1924,6 +1924,13 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         ))
     }
 
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(NoopCardService)
+    }
+
     fn create_additional_deps(
         &self,
         _registry_service: Arc<dyn RegistryService>,
@@ -2041,6 +2048,13 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
         ))
+    }
+
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(NoopCardService)
     }
 
     fn create_resource_limits(
