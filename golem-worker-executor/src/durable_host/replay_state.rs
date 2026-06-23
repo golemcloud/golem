@@ -723,7 +723,7 @@ impl ReplayState {
                     })
                     .await;
                 }
-                next = entry_index
+                next = entry_index.next()
             }
         }
     }
