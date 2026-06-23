@@ -22,7 +22,7 @@ pub mod sdk {
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.6.0-dev.1"
+            "1.6.0-dev.2"
         };
     }
 }
@@ -63,6 +63,10 @@ pub mod scala_dep {
     pub const SCALA_VERSION: &str = "3.8.2";
     pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
     pub const SBT_VERSION: &str = "1.12.0";
+}
+
+pub mod moonbit_dep {
+    pub const ASYNC_VERSION: &str = "0.18.1";
 }
 
 pub mod ai {

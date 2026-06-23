@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod fixtures;
-pub mod moonbit;
-pub mod parameter_naming;
-pub mod rust;
-pub mod type_naming;
-pub mod typescript;
+///|
+/// Error raised by the generated bridge client and its runtime on a wire-shape
+/// mismatch, a failed HTTP request, or a protocol decoding failure.
+pub(all) suberror BridgeError { BridgeError(String) } derive(Debug, Eq)
