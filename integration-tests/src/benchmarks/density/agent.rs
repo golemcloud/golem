@@ -278,27 +278,69 @@ impl ExecutorProbe {
         }
     }
 
-    /// Restarts the single worker-executor deployment to force durable agents out
-    /// of memory while preserving registry, keyvalue, indexed, and oplog state.
+    /// Scales the worker-executor deployment down and back up to force durable
+    /// agents out of memory while preserving registry, keyvalue, indexed, and
+    /// oplog state.
     async fn restart_executor(&self) -> anyhow::Result<()> {
         info!(
-            "density: restarting worker-executor deployment in namespace {}",
+            "density: scaling worker-executor deployment down in namespace {}",
             self.namespace
         );
-        let restart = tokio::process::Command::new("kubectl")
+        let scale_down = tokio::process::Command::new("kubectl")
             .args([
-                "rollout",
-                "restart",
+                "scale",
                 "deployment/worker-executor",
+                "--replicas=0",
                 "-n",
                 &self.namespace,
             ])
             .output()
             .await?;
-        if !restart.status.success() {
+        if !scale_down.status.success() {
             anyhow::bail!(
-                "kubectl rollout restart failed: {}",
-                String::from_utf8_lossy(&restart.stderr)
+                "kubectl scale worker-executor down failed: {}",
+                String::from_utf8_lossy(&scale_down.stderr)
+            );
+        }
+
+        let wait_down = tokio::process::Command::new("kubectl")
+            .args([
+                "wait",
+                "--for=delete",
+                "pod",
+                "-l",
+                "app=worker-executor",
+                "-n",
+                &self.namespace,
+                "--timeout=300s",
+            ])
+            .output()
+            .await?;
+        if !wait_down.status.success() {
+            anyhow::bail!(
+                "kubectl wait for worker-executor scale-down failed: {}",
+                String::from_utf8_lossy(&wait_down.stderr)
+            );
+        }
+
+        info!(
+            "density: scaling worker-executor deployment up in namespace {}",
+            self.namespace
+        );
+        let scale_up = tokio::process::Command::new("kubectl")
+            .args([
+                "scale",
+                "deployment/worker-executor",
+                "--replicas=1",
+                "-n",
+                &self.namespace,
+            ])
+            .output()
+            .await?;
+        if !scale_up.status.success() {
+            anyhow::bail!(
+                "kubectl scale worker-executor up failed: {}",
+                String::from_utf8_lossy(&scale_up.stderr)
             );
         }
 
@@ -315,11 +357,11 @@ impl ExecutorProbe {
             .await?;
         if !status.status.success() {
             anyhow::bail!(
-                "kubectl rollout status failed: {}",
+                "kubectl rollout status failed after worker-executor scale-up: {}",
                 String::from_utf8_lossy(&status.stderr)
             );
         }
-        info!("density: worker-executor restart complete");
+        info!("density: worker-executor scale restart complete");
         Ok(())
     }
 }
