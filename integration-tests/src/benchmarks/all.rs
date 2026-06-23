@@ -22,7 +22,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
     BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityScenarioArg,
-    DensitySectionArg, DensitySharingArg, RunMetadata,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -299,6 +299,7 @@ async fn main() {
             scenario,
             agent_mode,
             sharing,
+            snapshotting,
             active_fraction,
             prefill,
             ramp,
@@ -317,6 +318,7 @@ async fn main() {
                 scenario.map(map_scenario),
                 agent_mode.map(map_agent_mode),
                 sharing.map(map_sharing),
+                map_snapshotting(*snapshotting),
                 *active_fraction,
                 *prefill,
                 ramp.clone(),
@@ -551,6 +553,13 @@ fn map_sharing(arg: DensitySharingArg) -> ComponentSharing {
     }
 }
 
+fn map_snapshotting(arg: DensitySnapshottingArg) -> bool {
+    match arg {
+        DensitySnapshottingArg::Disabled => false,
+        DensitySnapshottingArg::Enabled => true,
+    }
+}
+
 /// Runs one density action: either the one-time prep (writing the manifest) or
 /// a single cell (using a previously-written manifest).
 #[allow(clippy::too_many_arguments)]
@@ -564,6 +573,7 @@ async fn run_density(
     scenario: Option<Scenario>,
     agent_mode: Option<AgentMode>,
     sharing: Option<ComponentSharing>,
+    snapshotting: bool,
     active_fraction: Option<u32>,
     prefill: Option<u32>,
     ramp: Option<Vec<u32>>,
@@ -598,6 +608,7 @@ async fn run_density(
                 scenario: scenario.expect("--scenario required for --action cell"),
                 mode: agent_mode.expect("--agent-mode required for --action cell"),
                 sharing: sharing.expect("--sharing required for --action cell"),
+                snapshotting,
                 active_fraction,
                 prefill_n: prefill,
                 ramp,

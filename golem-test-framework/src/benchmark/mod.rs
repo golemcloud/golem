@@ -17,7 +17,7 @@ mod results;
 
 pub use config::{
     BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
-    DensityScenarioArg, DensitySectionArg, DensitySharingArg, RunConfig,
+    DensityScenarioArg, DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunConfig,
 };
 pub use results::{
     BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey, RunMetadata,

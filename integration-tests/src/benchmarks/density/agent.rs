@@ -85,6 +85,7 @@ use tracing::{debug, info, warn};
 
 /// Agent type names exported by the agent-counters component.
 const DURABLE_AGENT_TYPE: &str = "Counter";
+const SNAPSHOT_AGENT_TYPE: &str = "SnapshotCounter";
 const EPHEMERAL_AGENT_TYPE: &str = "EphemeralCounter";
 
 /// CPU busy time per `busy_for` call defining one unit of load.
@@ -153,6 +154,8 @@ pub struct CellConfig {
     pub scenario: Scenario,
     pub mode: AgentMode,
     pub sharing: ComponentSharing,
+    /// Whether this cell uses the snapshot-enabled durable counter agent.
+    pub snapshotting: bool,
     /// Percentage of agents kept active (scenario 2 only): 25 / 50 / 75.
     pub active_fraction: Option<u32>,
     /// Number of idle agents to pre-fill before measuring (scenario 4 only).
@@ -172,6 +175,13 @@ impl CellConfig {
             self.mode.as_str().to_string(),
             self.sharing.as_str().to_string(),
         ];
+        if self.scenario == Scenario::ResumeUnderSaturation {
+            parts.push(if self.snapshotting {
+                "snapshot-enabled".to_string()
+            } else {
+                "snapshot-disabled".to_string()
+            });
+        }
         if let Some(f) = self.active_fraction {
             parts.push(format!("active-{f}pct"));
         }
@@ -183,9 +193,10 @@ impl CellConfig {
 
     /// The agent type name for this cell's durability mode.
     fn agent_type(&self) -> &'static str {
-        match self.mode {
-            AgentMode::Durable => DURABLE_AGENT_TYPE,
-            AgentMode::Ephemeral => EPHEMERAL_AGENT_TYPE,
+        match (self.mode, self.snapshotting) {
+            (AgentMode::Durable, true) => SNAPSHOT_AGENT_TYPE,
+            (AgentMode::Durable, false) => DURABLE_AGENT_TYPE,
+            (AgentMode::Ephemeral, _) => EPHEMERAL_AGENT_TYPE,
         }
     }
 }
@@ -265,6 +276,51 @@ impl ExecutorProbe {
                 0
             }
         }
+    }
+
+    /// Restarts the single worker-executor deployment to force durable agents out
+    /// of memory while preserving registry, keyvalue, indexed, and oplog state.
+    async fn restart_executor(&self) -> anyhow::Result<()> {
+        info!(
+            "density: restarting worker-executor deployment in namespace {}",
+            self.namespace
+        );
+        let restart = tokio::process::Command::new("kubectl")
+            .args([
+                "rollout",
+                "restart",
+                "deployment/worker-executor",
+                "-n",
+                &self.namespace,
+            ])
+            .output()
+            .await?;
+        if !restart.status.success() {
+            anyhow::bail!(
+                "kubectl rollout restart failed: {}",
+                String::from_utf8_lossy(&restart.stderr)
+            );
+        }
+
+        let status = tokio::process::Command::new("kubectl")
+            .args([
+                "rollout",
+                "status",
+                "deployment/worker-executor",
+                "-n",
+                &self.namespace,
+                "--timeout=300s",
+            ])
+            .output()
+            .await?;
+        if !status.status.success() {
+            anyhow::bail!(
+                "kubectl rollout status failed: {}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+        }
+        info!("density: worker-executor restart complete");
+        Ok(())
     }
 }
 
@@ -551,10 +607,15 @@ impl CellOutcome {
         BenchmarkResult {
             name: format!("density-agent-{}", config.cell_name()),
             description: format!(
-                "Agent-density cell: scenario={}, mode={}, sharing={}{}{}",
+                "Agent-density cell: scenario={}, mode={}, sharing={}{}{}{}",
                 config.scenario.as_str(),
                 config.mode,
                 config.sharing,
+                if config.snapshotting {
+                    ", snapshotting=enabled".to_string()
+                } else {
+                    String::new()
+                },
                 config
                     .active_fraction
                     .map(|f| format!(", active-fraction={f}%"))
@@ -606,6 +667,10 @@ pub async fn run_cell(
     probe: &ExecutorProbe,
 ) -> anyhow::Result<BenchmarkResult> {
     info!("Density-agent: running cell {}", config.cell_name());
+
+    if config.snapshotting && config.mode != AgentMode::Durable {
+        anyhow::bail!("snapshotting is only supported for durable agent-density cells");
+    }
 
     let user = manifest.user_context(deps);
     let components = resolve_components(config, manifest, &user).await?;
@@ -1081,14 +1146,19 @@ fn coord_agents(coord: SampleCoord) -> Option<u32> {
 
 // ── Scenario 4: resume-under-saturation ──────────────────────────────────────
 
-/// Number of resume/create probe pairs taken per ramp step in scenario 4.
-const RESUME_PROBES_PER_STEP: u32 = 20;
+/// Number of warmup calls made per prepared agent in scenario 4. These calls
+/// create oplog history to replay after the executor restart.
+const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 50;
 
-/// Scenario 4 (durable-only): pre-fill `prefill_n` idle agents to push the pod
-/// into eviction, then ramp additional agents while repeatedly measuring the
-/// latency of resuming an already-evicted earlier agent versus creating a fresh
-/// one. The resume-vs-create gap quantifies the cost of eviction churn under
-/// memory pressure.
+/// Busy time for each scenario-4 warmup call. Keep it low: the goal is oplog
+/// depth, not CPU pressure during warmup.
+const RESUME_WARMUP_BUSY_MILLIS: u32 = 1;
+
+/// Scenario 4 (durable-only): warm `prefill_n` existing agents to produce oplog,
+/// restart the worker-executor to force them out of memory, then ramp cumulative
+/// resume targets over those existing agents. No fresh agents are created during
+/// measurement; each ramp step resumes only the newly-added slice
+/// `resumed_so_far..target`.
 async fn run_resume_cell(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
@@ -1104,90 +1174,132 @@ async fn run_resume_cell(
     let started = Instant::now();
 
     info!(
-        "Density-agent[{}]: pre-filling {prefill} idle agents",
-        config.cell_name()
+        "Density-agent[{}]: warming {prefill} agents with {} calls each",
+        config.cell_name(),
+        RESUME_WARMUP_CALLS_PER_AGENT
     );
-    for index in 0..prefill {
-        let (component, agent) = agent_for_index(config, index, components)?;
-        let attempt = timed_invoke(
-            user,
-            component,
-            &agent,
-            "increment",
-            data_value!(),
-            timeout.current,
-        )
+    let timeout_current = timeout.current;
+    let warmups: Vec<(u32, Vec<AttemptOutcome>)> = futures::stream::iter(0..prefill)
+        .map(|index| {
+            let (component, agent) =
+                agent_for_index(config, index, components).expect("agent_for_index within warmup");
+            let component = component.clone();
+            async move {
+                let mut attempts = Vec::with_capacity(RESUME_WARMUP_CALLS_PER_AGENT as usize);
+                for _ in 0..RESUME_WARMUP_CALLS_PER_AGENT {
+                    attempts.push(
+                        timed_invoke(
+                            user,
+                            &component,
+                            &agent,
+                            "busy_for",
+                            data_value!(RESUME_WARMUP_BUSY_MILLIS),
+                            timeout_current,
+                        )
+                        .await,
+                    );
+                }
+                (index, attempts)
+            }
+        })
+        .buffer_unordered(CREATE_CONCURRENCY)
+        .collect()
         .await;
 
+    let pod_restart_count = probe.pod_restart_count().await;
+    let mut warmed = 0u32;
+    for (index, attempts) in warmups {
+        warmed += 1;
         detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-        let pod_restart_count = probe.pod_restart_count().await;
-        outcome
-            .invoke_latencies
-            .entry(prefill)
-            .or_default()
-            .push(attempt.latency);
-        let sample = Sample {
-            latency: attempt.latency,
-            coord: SampleCoord::Agents(index + 1),
-            pod_restart_count,
-            connection_alive: !attempt.connection_lost,
-            overloaded: attempt.overloaded,
-            snapshot: CrossAxisSnapshot::default(),
-            queue_depth: None,
-        };
-        for event in detector.observe(&sample) {
-            handle_event(event, &mut outcome, &mut timeout);
+        let transport_failures = attempts.iter().filter(|a| a.connection_lost).count();
+        let connection_alive = attempts.is_empty()
+            || (transport_failures as f64) < (attempts.len() as f64 * TRANSPORT_FAILURE_RATIO);
+        for attempt in attempts {
+            let sample = Sample {
+                latency: attempt.latency,
+                coord: SampleCoord::Agents(index + 1),
+                pod_restart_count,
+                connection_alive,
+                overloaded: attempt.overloaded,
+                snapshot: CrossAxisSnapshot::default(),
+                queue_depth: None,
+            };
+            for event in detector.observe(&sample) {
+                handle_event(event, &mut outcome, &mut timeout);
+            }
+            if detector.is_terminal() {
+                outcome.max_agents_reached = index + 1;
+                return Ok(outcome);
+            }
         }
-        if detector.is_terminal() {
-            outcome.max_agents_reached = index + 1;
-            return Ok(outcome);
-        }
-        let done = index + 1;
-        if done == 1 || done % 500 == 0 || done == prefill {
+        if warmed == 1 || warmed % 500 == 0 || warmed == prefill {
             info!(
-                "Density-agent[{}]: pre-filled {done}/{prefill} idle agents",
+                "Density-agent[{}]: warmed {warmed}/{prefill} agents",
                 config.cell_name()
             );
         }
     }
     outcome.max_agents_reached = prefill;
 
-    // Now ramp additional agents on top of the prefill, taking resume/create
-    // probe pairs at each step. Fresh agents use indices above the prefill
-    // range; resumes target the earliest (most likely already-evicted) agents.
-    let ramp: Vec<u32> = config
-        .ramp
-        .iter()
-        .copied()
-        .filter(|&n| n > prefill)
-        .collect();
-    let mut next_fresh = prefill;
+    probe.restart_executor().await?;
+
+    let ramp = config.ramp.clone();
+    if let Some(max_target) = ramp.last() {
+        if *max_target > prefill {
+            anyhow::bail!(
+                "resume-under-saturation ramp target {max_target} exceeds prefill {prefill}"
+            );
+        }
+    }
+    let mut resumed = 0u32;
 
     'ramp: for &target in &ramp {
+        if target <= resumed {
+            continue;
+        }
         info!(
-            "Density-agent[{}]: resume probes at {target} total agents",
-            config.cell_name()
+            "Density-agent[{}]: resuming agents {}..{} (target {target})",
+            config.cell_name(),
+            resumed,
+            target
         );
-        for probe_index in 1..=RESUME_PROBES_PER_STEP {
-            // Resume an existing (early) agent.
-            let resume_index = (next_fresh.wrapping_mul(2_654_435_761)) % prefill;
-            let (rc, ragent) = agent_for_index(config, resume_index, components)?;
-            let resume = timed_invoke(
-                user,
-                rc,
-                &ragent,
-                "increment",
-                data_value!(),
-                timeout.current,
-            )
+        let timeout_current = timeout.current;
+        let resumed_batch: Vec<(u32, AttemptOutcome)> = futures::stream::iter(resumed..target)
+            .map(|index| {
+                let (component, agent) = agent_for_index(config, index, components)
+                    .expect("agent_for_index within resume ramp");
+                let component = component.clone();
+                async move {
+                    let outcome = timed_invoke(
+                        user,
+                        &component,
+                        &agent,
+                        "increment",
+                        data_value!(),
+                        timeout_current,
+                    )
+                    .await;
+                    (index, outcome)
+                }
+            })
+            .buffer_unordered(CREATE_CONCURRENCY)
+            .collect()
             .await;
+
+        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+        let transport_failures = resumed_batch
+            .iter()
+            .filter(|(_, a)| a.connection_lost)
+            .count();
+        let connection_alive = resumed_batch.is_empty()
+            || (transport_failures as f64) < (resumed_batch.len() as f64 * TRANSPORT_FAILURE_RATIO);
+        let mut ordered = resumed_batch;
+        ordered.sort_by_key(|(index, _)| *index);
+
+        for (_, resume) in &ordered {
             outcome
                 .resume_existing_ms
                 .push(resume.latency.as_secs_f64() * 1000.0);
-
-            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-            let pod_restart_count = probe.pod_restart_count().await;
-            let snapshot = CrossAxisSnapshot::default();
             outcome
                 .invoke_latencies
                 .entry(target)
@@ -1196,10 +1308,12 @@ async fn run_resume_cell(
             let sample = Sample {
                 latency: resume.latency,
                 coord: SampleCoord::Agents(target),
-                pod_restart_count,
-                connection_alive: !resume.connection_lost,
+                // The executor restart above is intentional; this phase relies
+                // on connection-lost and timeout signals for catastrophic state.
+                pod_restart_count: 0,
+                connection_alive,
                 overloaded: resume.overloaded,
-                snapshot: snapshot.clone(),
+                snapshot: CrossAxisSnapshot::default(),
                 queue_depth: None,
             };
             for event in detector.observe(&sample) {
@@ -1207,55 +1321,14 @@ async fn run_resume_cell(
             }
             if detector.is_terminal() {
                 break 'ramp;
-            }
-
-            // Create a fresh agent.
-            let (cc, cagent) = agent_for_index(config, next_fresh, components)?;
-            let create = timed_invoke(
-                user,
-                cc,
-                &cagent,
-                "increment",
-                data_value!(),
-                timeout.current,
-            )
-            .await;
-            outcome
-                .create_fresh_ms
-                .push(create.latency.as_secs_f64() * 1000.0);
-            next_fresh += 1;
-            outcome.max_agents_reached = next_fresh;
-
-            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-            outcome
-                .invoke_latencies
-                .entry(target)
-                .or_default()
-                .push(create.latency);
-            let sample = Sample {
-                latency: create.latency,
-                coord: SampleCoord::Agents(target),
-                pod_restart_count: probe.pod_restart_count().await,
-                connection_alive: !create.connection_lost,
-                overloaded: create.overloaded,
-                snapshot,
-                queue_depth: None,
-            };
-            for event in detector.observe(&sample) {
-                handle_event(event, &mut outcome, &mut timeout);
-            }
-            if detector.is_terminal() {
-                break 'ramp;
-            }
-            if probe_index == 1 || probe_index % 5 == 0 || probe_index == RESUME_PROBES_PER_STEP {
-                info!(
-                    "Density-agent[{}]: completed resume probe {probe_index}/{} at target {target}, total agents {}",
-                    config.cell_name(),
-                    RESUME_PROBES_PER_STEP,
-                    outcome.max_agents_reached
-                );
             }
         }
+        resumed = target;
+        outcome.max_agents_reached = target;
+        info!(
+            "Density-agent[{}]: resumed {resumed}/{prefill} prepared agents",
+            config.cell_name()
+        );
     }
 
     Ok(outcome)
@@ -1272,6 +1345,7 @@ mod tests {
             scenario: Scenario::CreateWithActiveFraction,
             mode: AgentMode::Durable,
             sharing: ComponentSharing::Shared,
+            snapshotting: false,
             active_fraction: Some(50),
             prefill_n: None,
             ramp: vec![100, 250, 500],
@@ -1285,6 +1359,7 @@ mod tests {
             scenario: Scenario::ConcurrentActive,
             mode: AgentMode::Durable,
             sharing: ComponentSharing::Shared,
+            snapshotting: false,
             active_fraction: None,
             prefill_n: None,
             ramp: vec![100, 250, 500],
@@ -1298,6 +1373,7 @@ mod tests {
             scenario: Scenario::CreateOnly,
             mode: AgentMode::Durable,
             sharing: ComponentSharing::Shared,
+            snapshotting: false,
             active_fraction: None,
             prefill_n: None,
             ramp: vec![100, 250, 500],

@@ -8,7 +8,7 @@
 # cell (via the worker-service delete API, which removes the agent from the
 # executor's running-workers set), so the next cell sees no leftover state.
 #
-# This file is the canonical, ordered list of the 26 cells. The buildspec reads
+# This file is temporarily narrowed to the 4 Scenario 4 cells. The buildspec reads
 # it (with yq) to obtain each cell's `density --action cell` arguments. Keep it
 # in sync with `all_cells()` in
 # integration-tests/src/benchmarks/density/agent.rs — the Rust matrix is the
@@ -29,6 +29,7 @@
 #     --scenario <scenario> \
 #     --agent-mode <durable|ephemeral> \
 #     --sharing <shared|per-agent> \
+#     --snapshotting <disabled|enabled> \
 #     --ramp 100,250,500,1000,... \
 #     [--active-fraction <pct>] \
 #     [--prefill <n>] \
@@ -58,160 +59,155 @@ defaultRamp: [100, 250, 500, 1000, 2000, 4000, 6000, 8000, 9000, 10000]
 cells:
   # Scenario 1 — create-only: create N idle agents, each invoked once then left
   # to drift to LoadedIdle. Measures the create path. 2 modes x 2 sharing.
-  - name: create-only-durable-shared-component
-    scenario: create-only
-    agentMode: durable
-    sharing: shared
-  - name: create-only-durable-per-agent-component
-    scenario: create-only
-    agentMode: durable
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-  - name: create-only-ephemeral-shared-component
-    scenario: create-only
-    agentMode: ephemeral
-    sharing: shared
-  - name: create-only-ephemeral-per-agent-component
-    scenario: create-only
-    agentMode: ephemeral
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
+  # Temporarily disabled while validating Scenario 4 end-to-end.
+  # - name: create-only-durable-shared-component
+  #   scenario: create-only
+  #   agentMode: durable
+  #   sharing: shared
+  # - name: create-only-durable-per-agent-component
+  #   scenario: create-only
+  #   agentMode: durable
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  # - name: create-only-ephemeral-shared-component
+  #   scenario: create-only
+  #   agentMode: ephemeral
+  #   sharing: shared
+  # - name: create-only-ephemeral-per-agent-component
+  #   scenario: create-only
+  #   agentMode: ephemeral
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
 
   # Scenario 2 — create-with-active-fraction: like scenario 1, but a fraction of
-  # the agents are kept active (one in-flight busy_for(500ms) call each,
+  # the agents are kept active (one in-flight busy_for(250ms) call each,
   # looping). 2 modes x 2 sharing x 3 fractions (25/50/75).
-  - name: create-with-active-durable-shared-component-active-25pct
-    scenario: create-with-active
-    agentMode: durable
-    sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000]
-    activeFraction: 25
-  - name: create-with-active-durable-shared-component-active-50pct
-    scenario: create-with-active
-    agentMode: durable
-    sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 5000, 6000]
-    activeFraction: 50
-  - name: create-with-active-durable-shared-component-active-75pct
-    scenario: create-with-active
-    agentMode: durable
-    sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500, 5000]
-    activeFraction: 75
-  - name: create-with-active-durable-per-agent-component-active-25pct
-    scenario: create-with-active
-    agentMode: durable
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-    activeFraction: 25
-  - name: create-with-active-durable-per-agent-component-active-50pct
-    scenario: create-with-active
-    agentMode: durable
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-    activeFraction: 50
-  - name: create-with-active-durable-per-agent-component-active-75pct
-    scenario: create-with-active
-    agentMode: durable
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-    activeFraction: 75
-  - name: create-with-active-ephemeral-shared-component-active-25pct
-    scenario: create-with-active
-    agentMode: ephemeral
-    sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000]
-    activeFraction: 25
-  - name: create-with-active-ephemeral-shared-component-active-50pct
-    scenario: create-with-active
-    agentMode: ephemeral
-    sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 5000, 6000]
-    activeFraction: 50
-  - name: create-with-active-ephemeral-shared-component-active-75pct
-    scenario: create-with-active
-    agentMode: ephemeral
-    sharing: shared
-    ramp: [100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500, 5000]
-    activeFraction: 75
-  - name: create-with-active-ephemeral-per-agent-component-active-25pct
-    scenario: create-with-active
-    agentMode: ephemeral
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-    activeFraction: 25
-  - name: create-with-active-ephemeral-per-agent-component-active-50pct
-    scenario: create-with-active
-    agentMode: ephemeral
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-    activeFraction: 50
-  - name: create-with-active-ephemeral-per-agent-component-active-75pct
-    scenario: create-with-active
-    agentMode: ephemeral
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-    activeFraction: 75
+  # Temporarily disabled while validating Scenario 4 end-to-end.
+  # - name: create-with-active-durable-shared-component-active-25pct
+  #   scenario: create-with-active
+  #   agentMode: durable
+  #   sharing: shared
+  #   ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000]
+  #   activeFraction: 25
+  # - name: create-with-active-durable-shared-component-active-50pct
+  #   scenario: create-with-active
+  #   agentMode: durable
+  #   sharing: shared
+  #   ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 5000, 6000]
+  #   activeFraction: 50
+  # - name: create-with-active-durable-shared-component-active-75pct
+  #   scenario: create-with-active
+  #   agentMode: durable
+  #   sharing: shared
+  #   ramp: [100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500, 5000]
+  #   activeFraction: 75
+  # - name: create-with-active-durable-per-agent-component-active-25pct
+  #   scenario: create-with-active
+  #   agentMode: durable
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  #   activeFraction: 25
+  # - name: create-with-active-durable-per-agent-component-active-50pct
+  #   scenario: create-with-active
+  #   agentMode: durable
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  #   activeFraction: 50
+  # - name: create-with-active-durable-per-agent-component-active-75pct
+  #   scenario: create-with-active
+  #   agentMode: durable
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  #   activeFraction: 75
+  # - name: create-with-active-ephemeral-shared-component-active-25pct
+  #   scenario: create-with-active
+  #   agentMode: ephemeral
+  #   sharing: shared
+  #   ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 6000]
+  #   activeFraction: 25
+  # - name: create-with-active-ephemeral-shared-component-active-50pct
+  #   scenario: create-with-active
+  #   agentMode: ephemeral
+  #   sharing: shared
+  #   ramp: [100, 250, 500, 1000, 2000, 3000, 4000, 5000, 6000]
+  #   activeFraction: 50
+  # - name: create-with-active-ephemeral-shared-component-active-75pct
+  #   scenario: create-with-active
+  #   agentMode: ephemeral
+  #   sharing: shared
+  #   ramp: [100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500, 5000]
+  #   activeFraction: 75
+  # - name: create-with-active-ephemeral-per-agent-component-active-25pct
+  #   scenario: create-with-active
+  #   agentMode: ephemeral
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  #   activeFraction: 25
+  # - name: create-with-active-ephemeral-per-agent-component-active-50pct
+  #   scenario: create-with-active
+  #   agentMode: ephemeral
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  #   activeFraction: 50
+  # - name: create-with-active-ephemeral-per-agent-component-active-75pct
+  #   scenario: create-with-active
+  #   agentMode: ephemeral
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  #   activeFraction: 75
 
   # Scenario 3 — concurrent-active: all N agents kept active concurrently.
   # 2 modes x 2 sharing.
-  - name: concurrent-active-durable-shared-component
-    scenario: concurrent-active
-    agentMode: durable
-    sharing: shared
-    ramp: [50, 100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500]
-  - name: concurrent-active-durable-per-agent-component
-    scenario: concurrent-active
-    agentMode: durable
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
-  - name: concurrent-active-ephemeral-shared-component
-    scenario: concurrent-active
-    agentMode: ephemeral
-    sharing: shared
-    ramp: [50, 100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500]
-  - name: concurrent-active-ephemeral-per-agent-component
-    scenario: concurrent-active
-    agentMode: ephemeral
-    sharing: per-agent
-    ramp: [50, 100, 250, 500, 750, 900, 999]
+  # Temporarily disabled while validating Scenario 4 end-to-end.
+  # - name: concurrent-active-durable-shared-component
+  #   scenario: concurrent-active
+  #   agentMode: durable
+  #   sharing: shared
+  #   ramp: [50, 100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500]
+  # - name: concurrent-active-durable-per-agent-component
+  #   scenario: concurrent-active
+  #   agentMode: durable
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
+  # - name: concurrent-active-ephemeral-shared-component
+  #   scenario: concurrent-active
+  #   agentMode: ephemeral
+  #   sharing: shared
+  #   ramp: [50, 100, 250, 500, 1000, 2000, 3000, 3500, 4000, 4500]
+  # - name: concurrent-active-ephemeral-per-agent-component
+  #   scenario: concurrent-active
+  #   agentMode: ephemeral
+  #   sharing: per-agent
+  #   ramp: [50, 100, 250, 500, 750, 900, 999]
 
-  # Scenario 4 — resume-under-saturation (durable-only): pre-fill N idle agents
-  # to force eviction, then measure resume-vs-create latency under memory
-  # pressure. durable x 2 sharing x 3 pre-fill values (3000/6000/9000).
-  - name: resume-under-saturation-durable-shared-component-prefill-3000
+  # Scenario 4 — resume-under-saturation (durable-only): warm N agents to produce
+  # oplog, restart the executor to unload them, then resume cumulative ramp
+  # targets from that prepared population. durable x 2 sharing x 2 snapshotting.
+  - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-6000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
-    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
-    prefill: 3000
-  - name: resume-under-saturation-durable-shared-component-prefill-6000
-    scenario: resume-under-saturation
-    agentMode: durable
-    sharing: shared
+    snapshotting: disabled
     ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
     prefill: 6000
-  - name: resume-under-saturation-durable-shared-component-prefill-9000
+  - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-6000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
+    snapshotting: enabled
     ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
-    prefill: 9000
-  - name: resume-under-saturation-durable-per-agent-component-prefill-250
+    prefill: 6000
+  - name: resume-under-saturation-durable-per-agent-component-snapshot-disabled-prefill-999
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
+    snapshotting: disabled
     ramp: [100, 250, 500, 750, 900, 999]
-    prefill: 250
-  - name: resume-under-saturation-durable-per-agent-component-prefill-500
+    prefill: 999
+  - name: resume-under-saturation-durable-per-agent-component-snapshot-enabled-prefill-999
     scenario: resume-under-saturation
     agentMode: durable
     sharing: per-agent
+    snapshotting: enabled
     ramp: [100, 250, 500, 750, 900, 999]
-    prefill: 500
-  - name: resume-under-saturation-durable-per-agent-component-prefill-750
-    scenario: resume-under-saturation
-    agentMode: durable
-    sharing: per-agent
-    ramp: [100, 250, 500, 750, 900, 999]
-    prefill: 750
+    prefill: 999

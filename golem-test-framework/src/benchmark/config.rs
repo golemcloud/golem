@@ -99,6 +99,10 @@ pub enum BenchmarkConfig {
         #[arg(long, value_enum)]
         sharing: Option<DensitySharingArg>,
 
+        /// Snapshotting mode for cells that support it.
+        #[arg(long, value_enum, default_value = "disabled")]
+        snapshotting: DensitySnapshottingArg,
+
         /// Active fraction percentage (scenario create-with-active only).
         #[arg(long)]
         active_fraction: Option<u32>,
@@ -167,6 +171,13 @@ pub enum DensityAgentModeArg {
 pub enum DensitySharingArg {
     Shared,
     PerAgent,
+}
+
+/// Snapshotting mode selector for density cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensitySnapshottingArg {
+    Disabled,
+    Enabled,
 }
 
 impl BenchmarkConfig {
