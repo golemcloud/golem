@@ -758,6 +758,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
+    pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
+        &self.owned_agent_id
+    }
+
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
     /// There are several interruption modes but not all of them are supported by all worker
     /// executor implementations.
@@ -3645,55 +3649,6 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let initial_agent_card_id = parent.parsed_agent_id.as_ref().and_then(|agent_id| {
-            component_metadata
-                .metadata
-                .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id)
-        });
-        let initial_agent_card_liveness = match initial_agent_card_id {
-            Some(card_id)
-                if worker_metadata
-                    .last_known_status
-                    .revoked_cards
-                    .contains(&card_id) =>
-            {
-                crate::services::card::CardLiveness::Revoked {
-                    newly_detected: false,
-                }
-            }
-            Some(card_id) => parent
-                .card_service()
-                .check_cards(vec![card_id])
-                .await?
-                .get(&card_id)
-                .copied()
-                .unwrap_or(crate::services::card::CardLiveness::Revoked {
-                    newly_detected: true,
-                }),
-            None => crate::services::card::CardLiveness::Live,
-        };
-        let agent_effective_surface = match (
-            &parent.parsed_agent_id,
-            initial_agent_card_liveness.is_live(),
-        ) {
-            (Some(agent_id), true) => agent_effective_surface_from_component_metadata(
-                &component_metadata,
-                &parent.owned_agent_id,
-                agent_id,
-            ),
-            (Some(_), false) => golem_common::model::card::EffectiveSurface::default(),
-            (None, _) => golem_common::model::card::EffectiveSurface::default(),
-        };
-
-        if let Some(card_id) = initial_agent_card_id
-            && initial_agent_card_liveness.newly_detected_revocation()
-        {
-            parent
-                .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
-                .await;
-        }
-
         let component_version_for_replay = worker_metadata
             .last_known_status
             .pending_updates
@@ -3707,6 +3662,57 @@ impl RunningWorker {
                     .last_known_status
                     .component_revision_for_replay,
             );
+
+        let component_metadata_for_replay =
+            if component_metadata.revision == component_version_for_replay {
+                component_metadata.clone()
+            } else {
+                parent
+                    .component_service()
+                    .get_metadata(component_id, Some(component_version_for_replay))
+                    .await?
+            };
+
+        let initial_agent_card_id = parent.parsed_agent_id.as_ref().and_then(|agent_id| {
+            component_metadata_for_replay
+                .metadata
+                .agent_type_initial_permission_template(&agent_id.agent_type)
+                .map(|template| template.card_id)
+        });
+        let initial_agent_card_already_revoked = initial_agent_card_id.is_some_and(|card_id| {
+            worker_metadata
+                .last_known_status
+                .revoked_cards
+                .contains(&card_id)
+        });
+        let agent_effective_surface = match &parent.parsed_agent_id {
+            Some(agent_id) => agent_effective_surface_from_component_metadata(
+                &component_metadata_for_replay,
+                &parent.owned_agent_id,
+                agent_id,
+            ),
+            None => golem_common::model::card::EffectiveSurface::default(),
+        };
+
+        if let Some(card_id) = initial_agent_card_id {
+            parent
+                .card_service()
+                .register_agent_cards(parent.owned_agent_id.clone(), &[card_id])
+                .await;
+
+            if !initial_agent_card_already_revoked
+                && parent
+                    .card_service()
+                    .check_cards(vec![card_id])
+                    .await?
+                    .contains(&card_id)
+            {
+                parent
+                    .card_service()
+                    .enqueue_revoked_cards_for_agent(&parent.owned_agent_id, &[card_id])
+                    .await;
+            }
+        }
 
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata

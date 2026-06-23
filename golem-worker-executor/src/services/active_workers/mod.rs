@@ -41,6 +41,7 @@ use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
+use crate::services::card::CardService;
 use crate::services::golem_config::{
     AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
@@ -52,6 +53,7 @@ use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
+use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -77,6 +79,7 @@ impl RegisteredConcurrentAccount {
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    card_service: Arc<dyn CardService>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     acquire_retry_delay: Duration,
@@ -107,6 +110,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
+        card_service: Arc<dyn CardService>,
         shutdown_token: CancellationToken,
     ) -> Self {
         // Build the probe once and hand it to the measured-headroom gate, which
@@ -118,6 +122,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             memory_config,
             storage_config,
             agent_status_flush_config,
+            card_service,
             shutdown_token,
         )
     }
@@ -131,6 +136,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
+        card_service: Arc<dyn CardService>,
         shutdown_token: CancellationToken,
     ) -> Self {
         let admission = memory_config.enable_measured_admission.then(|| {
@@ -150,6 +156,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         });
         let active_workers = Self {
             workers,
+            card_service,
             worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
@@ -210,24 +217,31 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let owned_agent_id = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
+        let card_service = self.card_service.clone();
         self.workers
             .get_or_insert_simple(&agent_id, || {
                 Box::pin(async move {
-                    let worker = Arc::new(
-                        Worker::new(
-                            &deps,
-                            owned_agent_id,
-                            worker_env,
-                            worker_agent_config,
-                            component_revision,
-                            parent,
-                            &invocation_context_stack,
-                            principal,
-                        )
-                        .in_current_span()
-                        .await?,
-                    );
-                    Ok(worker)
+                    card_service.register_agent(owned_agent_id.clone()).await;
+                    let worker = Worker::new(
+                        &deps,
+                        owned_agent_id.clone(),
+                        worker_env,
+                        worker_agent_config,
+                        component_revision,
+                        parent,
+                        &invocation_context_stack,
+                        principal,
+                    )
+                    .in_current_span()
+                    .await;
+
+                    match worker {
+                        Ok(worker) => Ok(Arc::new(worker)),
+                        Err(err) => {
+                            card_service.unregister_agent(&owned_agent_id).await;
+                            Err(err)
+                        }
+                    }
                 })
             })
             .await
@@ -239,7 +253,16 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     pub async fn remove(&self, agent_id: &AgentId) {
+        if let Some(worker) = self.workers.get(agent_id).await {
+            self.card_service
+                .unregister_agent(worker.owned_agent_id())
+                .await;
+        }
         self.workers.remove(agent_id).await
+    }
+
+    pub async fn record_revoked_cards(&self, card_ids: &[CardId]) {
+        let _ = self.card_service.record_revoked_cards(card_ids).await;
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {

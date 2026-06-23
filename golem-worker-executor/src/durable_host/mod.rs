@@ -51,7 +51,7 @@ use crate::model::{
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::card::CardService;
+use crate::services::card::{CardService, LiveCardEvent};
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -94,6 +94,7 @@ use futures::future::try_join_all;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::card::CardId;
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -690,6 +691,67 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.created_by_email().clone(),
             self.agent_effective_surface(),
         )
+    }
+    async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
+        if !self.state.is_live() {
+            return Ok(());
+        }
+
+        let events = self
+            .state
+            .card_service
+            .drain_live_card_events(&self.owned_agent_id)
+            .await;
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        for event in events {
+            match event {
+                LiveCardEvent::CardRevoked(card_id) => {
+                    self.apply_card_revoked(card_id, true).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn apply_card_revoked(
+        &mut self,
+        card_id: CardId,
+        is_live: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.state.agent_wallet_card_ids.remove(&card_id) {
+            return Ok(());
+        }
+
+        let current_initial_card_id = self.state.agent_id.as_ref().and_then(|agent_id| {
+            self.state
+                .component_metadata
+                .metadata
+                .agent_type_initial_permission_template(&agent_id.agent_type)
+                .map(|template| template.card_id)
+        });
+
+        if Some(card_id) == current_initial_card_id {
+            self.state.agent_effective_surface =
+                golem_common::model::card::EffectiveSurface::default();
+        }
+
+        if is_live {
+            self.state
+                .card_service
+                .remove_revoked_agent_cards(&self.owned_agent_id, &[card_id])
+                .await;
+
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
+                .await;
+        }
+
+        Ok(())
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
@@ -2426,63 +2488,93 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     debug!("Updating the replay's current phantom id to {new_phantom_id}");
                     self.update_state_to_new_phantom_id(new_phantom_id).await?;
                 }
+                ReplayEvent::CardRevoked { card_id } => {
+                    debug!(card_id = %card_id, "Applying replayed card revocation");
+                    self.apply_card_revoked(card_id, false).await?;
+                }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
                     let pending_update = self.state.pending_update.lock().await.take();
+                    if let Some(pending_update) = pending_update {
+                        match pending_update.description {
+                            UpdateDescription::Automatic { target_revision } => {
+                                debug!("Finalizing pending automatic update");
 
-                    let pending_update = if let Some(pending_update) = pending_update {
-                        pending_update
-                    } else {
-                        continue;
-                    };
+                                if let Err(error) = self
+                                    .update_state_to_new_component_revision(target_revision)
+                                    .await
+                                {
+                                    let stringified_error =
+                                        format!("Applying worker update failed: {error}");
 
-                    match pending_update.description {
-                        UpdateDescription::Automatic { target_revision } => {
-                            debug!("Finalizing pending automatic update");
+                                    self.on_worker_update_failed(
+                                        target_revision,
+                                        Some(stringified_error),
+                                    )
+                                    .await;
 
-                            if let Err(error) = self
-                                .update_state_to_new_component_revision(target_revision)
-                                .await
-                            {
-                                let stringified_error =
-                                    format!("Applying worker update failed: {error}");
+                                    Err(error)?
+                                };
 
-                                self.on_worker_update_failed(
+                                let component_metadata = self.component_metadata().clone();
+
+                                self.on_worker_update_succeeded(
                                     target_revision,
-                                    Some(stringified_error),
+                                    component_metadata.component_size,
+                                    HashSet::from_iter({
+                                        self.agent_type_provision_config()
+                                            .map(|c| c.plugins.as_slice())
+                                            .unwrap_or_default()
+                                            .iter()
+                                            .map(|installation| {
+                                                installation.environment_plugin_grant_id
+                                            })
+                                    }),
                                 )
                                 .await;
 
-                                Err(error)?
-                            };
-
-                            let component_metadata = self.component_metadata().clone();
-
-                            self.on_worker_update_succeeded(
-                                target_revision,
-                                component_metadata.component_size,
-                                HashSet::from_iter({
-                                    self.agent_type_provision_config()
-                                        .map(|c| c.plugins.as_slice())
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .map(|installation| {
-                                            installation.environment_plugin_grant_id
-                                        })
-                                }),
-                            )
-                            .await;
-
-                            debug!("Finalizing automatic update to revision {target_revision}");
-                        }
-                        _ => {
-                            return Err(WorkerExecutorError::runtime(
-                                "pending replay event finalization expected an automatic update description",
-                            ));
+                                debug!("Finalizing automatic update to revision {target_revision}");
+                            }
+                            _ => {
+                                return Err(WorkerExecutorError::runtime(
+                                    "pending replay event finalization expected an automatic update description",
+                                ));
+                            }
                         }
                     }
+
+                    self.check_post_replay_wallet_liveness().await?;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
+        let wallet_card_ids = self
+            .state
+            .agent_wallet_card_ids
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        self.state
+            .card_service
+            .register_agent_cards(self.owned_agent_id.clone(), &wallet_card_ids)
+            .await;
+
+        if wallet_card_ids.is_empty() {
+            return Ok(());
+        }
+
+        let revoked_card_ids = self.state.card_service.check_cards(wallet_card_ids).await?;
+
+        if !revoked_card_ids.is_empty() {
+            let revoked_card_ids = revoked_card_ids.into_iter().collect::<Vec<_>>();
+            self.state
+                .card_service
+                .enqueue_revoked_cards_for_agent(&self.owned_agent_id, &revoked_card_ids)
+                .await;
         }
 
         Ok(())
@@ -2541,44 +2633,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             validate_agent_config(&updated_agent_config, agent_type)?;
 
-            let liveness = match new_metadata
+            let initial_card_id = new_metadata
                 .metadata
                 .agent_type_initial_permission_template(&agent_id.agent_type)
-                .map(|template| template.card_id)
-            {
-                Some(card_id) => {
-                    let liveness = self
-                        .state
-                        .card_service
-                        .check_cards(vec![card_id])
-                        .await?
-                        .get(&card_id)
-                        .copied()
-                        .unwrap_or(crate::services::card::CardLiveness::Revoked {
-                            newly_detected: true,
-                        });
-                    if liveness.newly_detected_revocation() {
-                        self.public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
-                            .await;
-                    }
-                    liveness
-                }
-                None => crate::services::card::CardLiveness::Live,
-            };
+                .map(|template| template.card_id);
+            let agent_effective_surface = agent_effective_surface_from_component_metadata(
+                &new_metadata,
+                &self.owned_agent_id,
+                &agent_id,
+            );
 
-            let agent_effective_surface = if liveness.is_live() {
-                agent_effective_surface_from_component_metadata(
-                    &new_metadata,
-                    &self.owned_agent_id,
-                    &agent_id,
-                )
-            } else {
-                golem_common::model::card::EffectiveSurface::default()
-            };
-
-            Some((updated_agent_config, agent_effective_surface))
+            Some((
+                updated_agent_config,
+                agent_effective_surface,
+                initial_card_id,
+            ))
         } else {
             None
         };
@@ -2601,10 +2670,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             *read_only_paths = compute_read_only_paths(&current_files);
         }
 
-        if let Some((updated_agent_config, agent_effective_surface)) = updated_agent_state {
+        if let Some((updated_agent_config, agent_effective_surface, initial_card_id)) =
+            updated_agent_state
+        {
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
             self.state.agent_effective_surface = agent_effective_surface;
+            self.state.agent_wallet_card_ids = initial_card_id.into_iter().collect();
         };
 
         self.state.component_metadata = new_metadata;
@@ -4522,6 +4594,7 @@ struct PrivateDurableWorkerState {
 
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
+    agent_wallet_card_ids: HashSet<CardId>,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -4695,6 +4768,16 @@ impl PrivateDurableWorkerState {
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
+        let agent_wallet_card_ids = agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                component_metadata
+                    .metadata
+                    .agent_type_initial_permission_template(&agent_id.agent_type)
+                    .map(|template| template.card_id)
+            })
+            .into_iter()
+            .collect();
         Ok(Self {
             oplog_service,
             oplog,
@@ -4736,6 +4819,7 @@ impl PrivateDurableWorkerState {
             read_only_method_name: None,
             component_metadata,
             agent_effective_surface,
+            agent_wallet_card_ids,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,
