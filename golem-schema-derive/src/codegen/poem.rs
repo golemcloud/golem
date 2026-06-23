@@ -380,8 +380,7 @@ fn expand_internal_enum(
             Fields::Named(named) => {
                 // As with adjacently-tagged struct variants, the enum's
                 // `rename_all` never applies to struct-variant field names.
-                let (registers, prop_pushes, req_pushes) =
-                    field_schema_parts(&named.named, None)?;
+                let (registers, prop_pushes, req_pushes) = field_schema_parts(&named.named, None)?;
                 quote! {{
                     #(#registers)*
                     let mut __props: ::std::vec::Vec<(

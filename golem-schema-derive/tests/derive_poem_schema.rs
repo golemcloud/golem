@@ -351,7 +351,10 @@ fn internally_tagged_unit_variant_carries_only_tag() {
         pending.properties.iter().all(|(k, _)| *k == "tag"),
         "unit variant must carry only the tag property"
     );
-    assert_eq!(inline(prop(pending, "tag")).enum_items, vec![json!("pending")]);
+    assert_eq!(
+        inline(prop(pending, "tag")).enum_items,
+        vec![json!("pending")]
+    );
 
     let done = inline(&meta.one_of[1]);
     assert_eq!(done.required, vec!["tag", "code"]);
