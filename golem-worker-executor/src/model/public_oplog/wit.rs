@@ -17,17 +17,18 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
-    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams,
-    ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -441,6 +442,12 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 Self::RemoveRetryPolicy(oplog::RemoveRetryPolicyParameters {
                     timestamp: timestamp.into(),
                     name,
+                })
+            }
+            PublicOplogEntry::CardRevoked(CardRevokedParams { timestamp, card_id }) => {
+                Self::CardRevoked(oplog::CardRevokedParameters {
+                    timestamp: timestamp.into(),
+                    card_id: card_id.into(),
                 })
             }
         }
@@ -1187,6 +1194,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 name: params.name,
             }),
+            oplog::OplogEntry::CardRevoked(params) => Ok(Self::CardRevoked {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                card_id: params.card_id.into(),
+            }),
         }
     }
 }
@@ -1706,6 +1717,12 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     delta,
                 }),
             ),
+            M::CardRevoked { timestamp, card_id } => {
+                Ok(Self::CardRevoked(oplog::CardRevokedParameters {
+                    timestamp: timestamp.into(),
+                    card_id: card_id.into(),
+                }))
+            }
             M::CreateResource {
                 timestamp,
                 id,
