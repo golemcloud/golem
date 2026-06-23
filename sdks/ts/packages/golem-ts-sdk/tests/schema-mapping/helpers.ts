@@ -15,7 +15,12 @@
 import { expect } from 'vitest';
 import { resolvedGraphToSchemaType } from '../../src/internal/mapping/types/schemaType';
 import { ResolvedGraph } from '../../src/internal/mapping/types/resolvedType';
-import { deserializeGraph, serializeGraph } from '../../src/internal/mapping/values/schemaValue';
+import {
+  deserializeGraph,
+  deserializeGraphFromWit,
+  serializeGraph,
+  serializeGraphToWit,
+} from '../../src/internal/mapping/values/schemaValue';
 import {
   schemaGraphFromWit,
   schemaGraphToWit,
@@ -35,8 +40,15 @@ export function roundtripValue<T>(data: T, graph: ResolvedGraph): SchemaValue {
   expect(deserializeGraph(sv, graph)).toEqual(data);
 
   // Through the flat WIT schema-value-tree carrier and back.
-  const sv2 = schemaValueFromWit(schemaValueToWit(sv));
+  const wire = schemaValueToWit(sv);
+  const sv2 = schemaValueFromWit(wire);
   expect(deserializeGraph(sv2, graph)).toEqual(data);
+
+  // The fused single-pass codecs must be observationally identical to the
+  // two-step path: fused encode produces byte-identical wire, and fused decode
+  // reconstructs the original value.
+  expect(serializeGraphToWit(data, graph)).toEqual(wire);
+  expect(deserializeGraphFromWit(wire, graph)).toEqual(data);
 
   return sv;
 }

@@ -22,8 +22,16 @@
 // injected/reconstructed at decode time, exactly mirroring the Rust SDK.
 
 import { Principal as HostPrincipal } from 'golem:agent/common@2.0.0';
-import { SchemaValue, v } from '../../schema-model';
-import { deserializeGraph, serializeGraph } from './schemaValue';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
+import { SchemaValue, schemaValueFromWit, schemaValueToWit, v } from '../../schema-model';
+import {
+  createWireDecoder,
+  createWireEncoder,
+  deserializeGraph,
+  deserializeGraphFromWit,
+  serializeGraph,
+  serializeGraphToWit,
+} from './schemaValue';
 import {
   MultimodalCase,
   RuntimeOutput,
@@ -215,6 +223,80 @@ export function encodeInputRecord(args: any[], userParams: RuntimeParam[]): Sche
   );
 }
 
+/**
+ * Fused encode of an argument list directly into the flat wire
+ * `schema-value-tree`, skipping the intermediate `SchemaValue` record. Semantics
+ * match {@link encodeInputRecord} exactly. When every user parameter is a plain
+ * `schema` value the single-pass fused encoder is used; rich / multimodal
+ * parameters fall back to the two-step path (`encodeInputRecord` + wire codec).
+ */
+export function encodeInputRecordToWit(args: any[], userParams: RuntimeParam[]): SchemaValueTree {
+  if (args.length > userParams.length) {
+    throw new Error(`Expected at most ${userParams.length} arguments, got ${args.length}`);
+  }
+
+  if (!userParams.every((p) => p.type.tag === 'schema')) {
+    return schemaValueToWit(encodeInputRecord(args, userParams));
+  }
+
+  const enc = createWireEncoder();
+  const fieldIndices = userParams.map((param, i) => {
+    const type = param.type as Extract<RuntimeTypeInfo, { tag: 'schema' }>;
+    const value = i < args.length ? args[i] : undefined;
+    const toSerialize =
+      type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
+    return enc.emitGraph(toSerialize, type.graph);
+  });
+  const root = enc.pushRecord(fieldIndices);
+  return { valueNodes: enc.valueNodes, root };
+}
+
+/**
+ * Fused decode of an input record `schema-value-tree` directly into the ordered
+ * argument list, skipping the intermediate `SchemaValue`. Semantics match
+ * {@link decodeInputRecord} exactly. The fused single-pass decoder is used when
+ * every field-consuming parameter is a plain `schema` value; otherwise the
+ * two-step path (`schemaValueFromWit` + `decodeInputRecord`) is used.
+ */
+export function decodeInputRecordFromWit(
+  input: SchemaValueTree,
+  params: RuntimeParam[],
+  principal: HostPrincipal,
+): any[] {
+  const consumesField = (p: RuntimeParam) => p.type.tag !== 'principal' && p.type.tag !== 'config';
+  if (!params.filter(consumesField).every((p) => p.type.tag === 'schema')) {
+    return decodeInputRecord(schemaValueFromWit(input), params, principal);
+  }
+
+  const dec = createWireDecoder(input.valueNodes);
+  const fieldIndices = dec.recordFieldIndices(input.root);
+  let fieldIndex = 0;
+
+  const args = params.map((param) => {
+    const type = param.type;
+    if (type.tag === 'principal') {
+      return sdkPrincipalFromHost(principal);
+    }
+    if (type.tag === 'config') {
+      return new Config(type.tsType.properties, type.tsType.requiredMembers);
+    }
+    if (fieldIndex >= fieldIndices.length) {
+      throw new Error(`Missing argument for parameter '${param.name}'`);
+    }
+    const schemaType = type as Extract<RuntimeTypeInfo, { tag: 'schema' }>;
+    const result = dec.readGraph(fieldIndices[fieldIndex++], schemaType.graph);
+    return schemaType.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
+  });
+
+  if (fieldIndex !== fieldIndices.length) {
+    throw new Error(
+      `Unexpected extra arguments: expected ${fieldIndex}, got ${fieldIndices.length}`,
+    );
+  }
+
+  return args;
+}
+
 // ============================================================
 // Output (method return)
 // ============================================================
@@ -236,4 +318,50 @@ export function decodeOutput(value: SchemaValue | undefined, output: RuntimeOutp
     throw new Error('Expected a return value for a non-unit method output, got none');
   }
   return deserializeRuntimeValue('returnValue', value, output.type);
+}
+
+/**
+ * Fused encode of a method return value directly into the wire
+ * `schema-value-tree`. Semantics match {@link encodeOutput} + the wire codec.
+ * Plain `schema` outputs use the single-pass fused encoder; rich / multimodal
+ * outputs fall back to the two-step path.
+ */
+export function encodeOutputToWit(
+  returnValue: any,
+  output: RuntimeOutput,
+): SchemaValueTree | undefined {
+  if (output.tag === 'unit') {
+    return undefined;
+  }
+  const type = output.type;
+  if (type.tag === 'schema') {
+    const toSerialize =
+      type.tsType.kind === 'quota-token' ? (returnValue as QuotaToken)._toRecord() : returnValue;
+    return serializeGraphToWit(toSerialize, type.graph);
+  }
+  return schemaValueToWit(serializeRuntimeValue(returnValue, type));
+}
+
+/**
+ * Fused decode of a method return value directly from the wire
+ * `schema-value-tree`. Semantics match the wire codec + {@link decodeOutput}.
+ * Plain `schema` outputs use the single-pass fused decoder; rich / multimodal
+ * outputs fall back to the two-step path.
+ */
+export function decodeOutputFromWit(
+  value: SchemaValueTree | undefined,
+  output: RuntimeOutput,
+): any {
+  if (output.tag === 'unit') {
+    return undefined;
+  }
+  if (value === undefined) {
+    throw new Error('Expected a return value for a non-unit method output, got none');
+  }
+  const type = output.type;
+  if (type.tag === 'schema') {
+    const result = deserializeGraphFromWit(value, type.graph);
+    return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
+  }
+  return deserializeRuntimeValue('returnValue', schemaValueFromWit(value), type);
 }
