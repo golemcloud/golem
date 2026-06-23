@@ -1170,7 +1170,7 @@ mod tests {
         current.components.insert(
             "component".to_string(),
             HashOf::form_value(golem_common::model::diff::Component {
-                wasm_hash: wasm_hash.clone(),
+                wasm_hash,
                 agent_type_provision_configs: BTreeMap::from_iter([(
                     "agent".to_string(),
                     HashOf::form_value(sample_diff_provision_config(
