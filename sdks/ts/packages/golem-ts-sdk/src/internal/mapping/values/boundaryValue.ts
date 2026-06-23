@@ -276,9 +276,7 @@ export function encodeInputRecordToWit(args: any[], userParams: RuntimeParam[]):
     const toSerialize =
       type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
     const codec = getGraphCodec(type.graph);
-    return codec
-      ? codec.emit(toSerialize, enc.valueNodes)
-      : enc.emitGraph(toSerialize, type.graph);
+    return codec ? codec.emit(toSerialize, enc.valueNodes) : enc.emitGraph(toSerialize, type.graph);
   });
   const root = enc.pushRecord(fieldIndices);
   return { valueNodes: enc.valueNodes, root };

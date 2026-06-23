@@ -23,7 +23,12 @@ import {
   compileGraphEncoder,
   compileGraphDecoder,
 } from '../src/internal/mapping/values/schemaValue';
-import { r, resolvedField, ResolvedGraph, TypeId } from '../src/internal/mapping/types/resolvedType';
+import {
+  r,
+  resolvedField,
+  ResolvedGraph,
+  TypeId,
+} from '../src/internal/mapping/types/resolvedType';
 import { Result } from '../src/host/result';
 
 interface Case {
@@ -63,21 +68,37 @@ const taggedVariant = r.variant(
 // A plain union (untagged): the value itself is the payload, matched by shape.
 const plainUnion = r.variant(
   false,
-  [
-    { name: 'none' },
-    { name: 'num', payload: r.u32() },
-    { name: 'text', payload: r.string() },
-  ],
+  [{ name: 'none' }, { name: 'num', payload: r.u32() }, { name: 'text', payload: r.string() }],
   'Plain',
   'M',
 );
 
 const cases: Case[] = [
-  { label: 'u8 typed list', graph: { defs: new Map(), root: r.list(r.u8(), 'u8') }, value: new Uint8Array([1, 2, 3, 0, 255]) },
-  { label: 'u32 number list', graph: { defs: new Map(), root: r.list(r.u32()) }, value: [0, 1, 2, 65535] },
-  { label: 's64 bigint list', graph: { defs: new Map(), root: r.list(r.s64()) }, value: [1n, -2n, 3n] },
-  { label: 'string list', graph: { defs: new Map(), root: r.list(r.string()) }, value: ['a', 'bb', ''] },
-  { label: 'bool list', graph: { defs: new Map(), root: r.list(r.bool()) }, value: [true, false, true] },
+  {
+    label: 'u8 typed list',
+    graph: { defs: new Map(), root: r.list(r.u8(), 'u8') },
+    value: new Uint8Array([1, 2, 3, 0, 255]),
+  },
+  {
+    label: 'u32 number list',
+    graph: { defs: new Map(), root: r.list(r.u32()) },
+    value: [0, 1, 2, 65535],
+  },
+  {
+    label: 's64 bigint list',
+    graph: { defs: new Map(), root: r.list(r.s64()) },
+    value: [1n, -2n, 3n],
+  },
+  {
+    label: 'string list',
+    graph: { defs: new Map(), root: r.list(r.string()) },
+    value: ['a', 'bb', ''],
+  },
+  {
+    label: 'bool list',
+    graph: { defs: new Map(), root: r.list(r.bool()) },
+    value: [true, false, true],
+  },
   {
     label: 'enum list',
     graph: { defs: new Map(), root: r.list(r.enum(['red', 'green', 'blue'], 'Color', 'M')) },
@@ -102,42 +123,85 @@ const cases: Case[] = [
           resolvedField('name', r.string()),
           resolvedField(
             'items',
-            r.list(r.record([resolvedField('id', r.u32()), resolvedField('label', r.string())], 'Item', 'M')),
+            r.list(
+              r.record(
+                [resolvedField('id', r.u32()), resolvedField('label', r.string())],
+                'Item',
+                'M',
+              ),
+            ),
           ),
         ],
         'Container',
         'M',
       ),
     },
-    value: { name: 'c', items: [{ id: 1, label: 'a' }, { id: 2, label: 'b' }] },
+    value: {
+      name: 'c',
+      items: [
+        { id: 1, label: 'a' },
+        { id: 2, label: 'b' },
+      ],
+    },
   },
   {
     label: 'recursive tree',
     graph: treeGraph,
-    value: { value: 1, children: [{ value: 2, children: [] }, { value: 3, children: [{ value: 4, children: [] }] }] },
+    value: {
+      value: 1,
+      children: [
+        { value: 2, children: [] },
+        { value: 3, children: [{ value: 4, children: [] }] },
+      ],
+    },
   },
 
   // map
   {
     label: 'map<string, u32>',
     graph: { defs: new Map(), root: r.map(r.string(), r.u32()) },
-    value: new Map<string, number>([['a', 1], ['b', 2], ['c', 3]]),
+    value: new Map<string, number>([
+      ['a', 1],
+      ['b', 2],
+      ['c', 3],
+    ]),
   },
   {
     label: 'map<u32, list<string>>',
     graph: { defs: new Map(), root: r.map(r.u32(), r.list(r.string())) },
-    value: new Map<number, string[]>([[1, ['x', 'y']], [2, []]]),
+    value: new Map<number, string[]>([
+      [1, ['x', 'y']],
+      [2, []],
+    ]),
   },
   {
     label: 'list of maps',
     graph: { defs: new Map(), root: r.list(r.map(r.string(), r.u32())) },
-    value: [new Map([['a', 1]]), new Map([['b', 2], ['c', 3]])],
+    value: [
+      new Map([['a', 1]]),
+      new Map([
+        ['b', 2],
+        ['c', 3],
+      ]),
+    ],
   },
 
   // tagged variant
-  { label: 'tagged variant: empty', graph: { defs: new Map(), root: taggedVariant }, value: { tag: 'empty' } },
-  { label: 'tagged variant: num', graph: { defs: new Map(), root: taggedVariant }, value: { tag: 'num', value: 42 } },
-  { label: 'tagged variant: text', graph: { defs: new Map(), root: taggedVariant }, value: { tag: 'text', value: 'hi' } },
+  {
+    label: 'tagged variant: empty',
+    graph: { defs: new Map(), root: taggedVariant },
+    value: { tag: 'empty' },
+  },
+  {
+    label: 'tagged variant: num',
+    graph: { defs: new Map(), root: taggedVariant },
+    value: { tag: 'num', value: 42 },
+  },
+  {
+    label: 'tagged variant: text',
+    graph: { defs: new Map(), root: taggedVariant },
+    value: { tag: 'text', value: 'hi' },
+  },
   {
     label: 'tagged variant: option payload (some)',
     graph: { defs: new Map(), root: taggedVariant },
@@ -174,7 +238,11 @@ const cases: Case[] = [
     label: 'result<_, _> inbuilt absent: ok',
     graph: {
       defs: new Map(),
-      root: r.result(undefined, undefined, { tag: 'inbuilt', okAbsent: 'undefined', errAbsent: 'undefined' }),
+      root: r.result(undefined, undefined, {
+        tag: 'inbuilt',
+        okAbsent: 'undefined',
+        errAbsent: 'undefined',
+      }),
     },
     value: Result.ok(undefined),
   },
@@ -182,7 +250,11 @@ const cases: Case[] = [
     label: 'result<_, _> inbuilt absent: err',
     graph: {
       defs: new Map(),
-      root: r.result(undefined, undefined, { tag: 'inbuilt', okAbsent: 'undefined', errAbsent: 'undefined' }),
+      root: r.result(undefined, undefined, {
+        tag: 'inbuilt',
+        okAbsent: 'undefined',
+        errAbsent: 'undefined',
+      }),
     },
     value: Result.err(undefined),
   },
@@ -192,7 +264,11 @@ const cases: Case[] = [
     label: 'result custom double: ok',
     graph: {
       defs: new Map(),
-      root: r.result(r.u32(), r.string(), { tag: 'custom', okValueName: 'value', errValueName: 'error' }),
+      root: r.result(r.u32(), r.string(), {
+        tag: 'custom',
+        okValueName: 'value',
+        errValueName: 'error',
+      }),
     },
     value: { tag: 'ok', value: 7 },
   },
@@ -200,7 +276,11 @@ const cases: Case[] = [
     label: 'result custom double: err',
     graph: {
       defs: new Map(),
-      root: r.result(r.u32(), r.string(), { tag: 'custom', okValueName: 'value', errValueName: 'error' }),
+      root: r.result(r.u32(), r.string(), {
+        tag: 'custom',
+        okValueName: 'value',
+        errValueName: 'error',
+      }),
     },
     value: { tag: 'err', error: 'boom' },
   },
@@ -221,7 +301,10 @@ const cases: Case[] = [
       ),
     },
     value: {
-      counts: new Map([['a', 1], ['b', 2]]),
+      counts: new Map([
+        ['a', 1],
+        ['b', 2],
+      ]),
       choice: { tag: 'num', value: 9 },
       outcome: Result.err('nope'),
     },

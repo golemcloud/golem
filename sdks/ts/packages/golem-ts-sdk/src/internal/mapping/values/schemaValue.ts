@@ -1605,7 +1605,9 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
     case 'enum': {
       const k = ctx.consts.push(b.cases) - 1;
       const ci = ctx.fresh();
-      out.push(`let ${ci} = -1; if (typeof ${valExpr} === 'string') ${ci} = C[${k}].indexOf(${valExpr});`);
+      out.push(
+        `let ${ci} = -1; if (typeof ${valExpr} === 'string') ${ci} = C[${k}].indexOf(${valExpr});`,
+      );
       out.push(
         `if (${ci} === -1) throw new Error("Value '" + display(${valExpr}) + ` +
           `"' does not match any of the enum values: " + C[${k}].join(', '));`,
@@ -1639,7 +1641,9 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
         const i = ctx.fresh();
         const sub: string[] = [];
         const ee = genEnc(b.element, `${av}[${i}]`, sub, ctx);
-        out.push(`for (let ${i} = 0; ${i} < ${av}.length; ${i}++) { ${sub.join(' ')} ${idxs}[${i}] = ${ee}; }`);
+        out.push(
+          `for (let ${i} = 0; ${i} < ${av}.length; ${i}++) { ${sub.join(' ')} ${idxs}[${i}] = ${ee}; }`,
+        );
         return `(nodes.push({ tag: 'list-value', val: ${idxs} }) - 1)`;
       }
       const lv = ctx.fresh();
@@ -1653,7 +1657,9 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
     case 'record': {
       const rv = ctx.fresh();
       out.push(`const ${rv} = ${valExpr};`);
-      out.push(`if (typeof ${rv} !== 'object' || ${rv} === null) throw typeMismatch(${rv}, 'object');`);
+      out.push(
+        `if (typeof ${rv} !== 'object' || ${rv} === null) throw typeMismatch(${rv}, 'object');`,
+      );
       const idxVars: string[] = [];
       for (const f of b.fields) {
         const nameLit = JSON.stringify(f.name);
@@ -1786,13 +1792,17 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
       }
 
       const chain = arms.map((a) => `if (${a.cond}) { ${a.body} }`).join(' else ');
-      out.push(`${chain}${arms.length ? ' else ' : ''}{ throw unionMismatch(C[${casesK}], ${vv}); }`);
+      out.push(
+        `${chain}${arms.length ? ' else ' : ''}{ throw unionMismatch(C[${casesK}], ${vv}); }`,
+      );
       return resIdx;
     }
     case 'result': {
       const rv = ctx.fresh();
       out.push(`const ${rv} = ${valExpr};`);
-      out.push(`if (typeof ${rv} !== 'object' || ${rv} === null) throw typeMismatch(${rv}, 'object');`);
+      out.push(
+        `if (typeof ${rv} !== 'object' || ${rv} === null) throw typeMismatch(${rv}, 'object');`,
+      );
       out.push(`if (!('tag' in ${rv})) throw missingKey('tag', ${rv});`);
       const resIdx = ctx.fresh();
       out.push(`let ${resIdx};`);
@@ -1802,7 +1812,8 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
           if (b.repr.tag === 'custom' && !b.repr.okValueName) {
             return `{ throw internalError('unresolved key name for ok value'); }`;
           }
-          const accessor = b.repr.tag === 'inbuilt' ? `${rv}.val` : `${rv}[${JSON.stringify(b.repr.okValueName)}]`;
+          const accessor =
+            b.repr.tag === 'inbuilt' ? `${rv}.val` : `${rv}[${JSON.stringify(b.repr.okValueName)}]`;
           const sub: string[] = [];
           const ie = genEnc(b.ok, accessor, sub, ctx);
           const inner = ctx.fresh();
@@ -1821,7 +1832,10 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
           if (b.repr.tag === 'custom' && !b.repr.errValueName) {
             return `{ throw internalError('unresolved key name for err value'); }`;
           }
-          const accessor = b.repr.tag === 'inbuilt' ? `${rv}.val` : `${rv}[${JSON.stringify(b.repr.errValueName)}]`;
+          const accessor =
+            b.repr.tag === 'inbuilt'
+              ? `${rv}.val`
+              : `${rv}[${JSON.stringify(b.repr.errValueName)}]`;
           const sub: string[] = [];
           const ie = genEnc(b.err, accessor, sub, ctx);
           const inner = ctx.fresh();
@@ -1837,7 +1851,9 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
       };
 
       if (b.repr.tag === 'inbuilt') {
-        out.push(`if (!Object.prototype.hasOwnProperty.call(${rv}, 'val')) throw missingKey('val', ${rv});`);
+        out.push(
+          `if (!Object.prototype.hasOwnProperty.call(${rv}, 'val')) throw missingKey('val', ${rv});`,
+        );
         out.push(
           `if (${rv}.tag === 'ok') ${okBranch()} else if (${rv}.tag === 'err') ${errBranch()} else { throw typeMismatch(${rv}, 'Result'); }`,
         );
@@ -1861,7 +1877,9 @@ function genDecRange(iv: string, out: string[]): void {
 
 function genDecGuardOpen(iv: string, out: string[]): void {
   genDecRange(iv, out);
-  out.push(`if (onPath[${iv}] === 1) throw new SchemaDecodeError("cyclic value node reference at index " + ${iv});`);
+  out.push(
+    `if (onPath[${iv}] === 1) throw new SchemaDecodeError("cyclic value node reference at index " + ${iv});`,
+  );
   out.push(`onPath[${iv}] = 1;`);
 }
 
@@ -1956,7 +1974,9 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       const sub: string[] = [];
       const ie = genDec(b.element, `${nv}.val`, sub, ctx);
       const noneExpr = b.noneRepr === 'null' ? 'null' : 'undefined';
-      out.push(`if (${nv}.val === undefined) { ${rv} = ${noneExpr}; } else { ${sub.join(' ')} ${rv} = ${ie}; }`);
+      out.push(
+        `if (${nv}.val === undefined) { ${rv} = ${noneExpr}; } else { ${sub.join(' ')} ${rv} = ${ie}; }`,
+      );
       out.push(`onPath[${iv}] = 0;`);
       return rv;
     }
@@ -1969,11 +1989,15 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       out.push(`if (${nv}.tag !== 'list-value') throw wireMismatch(${nv}, 'list');`);
       if (b.typedArray) {
         const arr = ctx.fresh();
-        out.push(`const ${arr} = TYPED_ARRAYS[${JSON.stringify(b.typedArray)}].make(${nv}.val.length);`);
+        out.push(
+          `const ${arr} = TYPED_ARRAYS[${JSON.stringify(b.typedArray)}].make(${nv}.val.length);`,
+        );
         const i = ctx.fresh();
         const sub: string[] = [];
         const ee = genDec(b.element, `${nv}.val[${i}]`, sub, ctx);
-        out.push(`for (let ${i} = 0; ${i} < ${nv}.val.length; ${i}++) { ${sub.join(' ')} ${arr}[${i}] = ${ee}; }`);
+        out.push(
+          `for (let ${i} = 0; ${i} < ${nv}.val.length; ${i}++) { ${sub.join(' ')} ${arr}[${i}] = ${ee}; }`,
+        );
         out.push(`onPath[${iv}] = 0;`);
         return arr;
       }
@@ -2076,9 +2100,7 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
           const pe = genDec(c.payload, `${vv}.payload`, sub, ctx);
           const emptyTagged = `${resVar} = { tag: ${nameLit} };`;
           const undefinedCase =
-            c.payload.body.tag === 'option'
-              ? emptyTagged
-              : `throw wireMismatch(${nv}, 'variant');`;
+            c.payload.body.tag === 'option' ? emptyTagged : `throw wireMismatch(${nv}, 'variant');`;
           const presentCase =
             keyLit === undefined
               ? `throw wireMismatch(${nv}, 'variant');`
@@ -2129,7 +2151,9 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
         if (b.ok) {
           const sub: string[] = [];
           const ie = genDec(b.ok, `${rr}.val`, sub, ctx);
-          okStmts.push(`if (${hasVal}) { ${sub.join(' ')} ${resVar} = Result.ok(${ie}); ${done} = true; }`);
+          okStmts.push(
+            `if (${hasVal}) { ${sub.join(' ')} ${resVar} = Result.ok(${ie}); ${done} = true; }`,
+          );
         }
         if (b.repr.okAbsent !== undefined) {
           const absent = b.repr.okAbsent === 'null' ? 'null' : 'undefined';
@@ -2139,7 +2163,9 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
         if (b.err) {
           const sub: string[] = [];
           const ie = genDec(b.err, `${rr}.val`, sub, ctx);
-          errStmts.push(`if (${hasVal}) { ${sub.join(' ')} ${resVar} = Result.err(${ie}); ${done} = true; }`);
+          errStmts.push(
+            `if (${hasVal}) { ${sub.join(' ')} ${resVar} = Result.err(${ie}); ${done} = true; }`,
+          );
         }
         if (b.repr.errAbsent !== undefined) {
           const absent = b.repr.errAbsent === 'null' ? 'null' : 'undefined';
@@ -2235,7 +2261,13 @@ function genGraphEmitFn(
   }
   const rootBody: string[] = [];
   const rootExpr = genEnc(graph.root, 'v', rootBody, ctx);
-  lines.push(`const __root = (v, nodes) => {`, ...rootBody, `return ${rootExpr};`, `};`, `return __root;`);
+  lines.push(
+    `const __root = (v, nodes) => {`,
+    ...rootBody,
+    `return ${rootExpr};`,
+    `};`,
+    `return __root;`,
+  );
   const factory = new Function(
     'typeMismatch',
     'missingKey',
@@ -2276,7 +2308,12 @@ function genGraphReadFn(
   for (const [id, def] of graph.defs) {
     const body: string[] = [];
     const expr = genDec(def, 'idx', body, ctx);
-    lines.push(`const ${ctx.defName(id)} = (idx, nodes, onPath) => {`, ...body, `return ${expr};`, `};`);
+    lines.push(
+      `const ${ctx.defName(id)} = (idx, nodes, onPath) => {`,
+      ...body,
+      `return ${expr};`,
+      `};`,
+    );
   }
   const rootBody: string[] = [];
   const rootExpr = genDec(graph.root, 'idx', rootBody, ctx);
@@ -2294,7 +2331,9 @@ function genGraphReadFn(
     'TYPED_ARRAYS',
     'C',
     lines.join('\n'),
-  ) as (...a: any[]) => (idx: ValueNodeIndex, nodes: WitSchemaValueNode[], onPath: Uint8Array) => any;
+  ) as (
+    ...a: any[]
+  ) => (idx: ValueNodeIndex, nodes: WitSchemaValueNode[], onPath: Uint8Array) => any;
   return factory(wireMismatch, SchemaDecodeError, Result, TYPED_ARRAYS, ctx.consts);
 }
 
