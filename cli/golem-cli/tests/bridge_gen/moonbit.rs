@@ -266,7 +266,7 @@ fn generated_project_layout_is_correct(#[tagged_as("counter_agent")] pkg: &Gener
     let dir = pkg.module_dir();
 
     let mod_json = std::fs::read_to_string(dir.join("moon.mod.json")).unwrap();
-    assert!(mod_json.contains("\"name\": \"golem/bridge\""));
+    assert!(mod_json.contains("\"name\": \"counter-agent-client\""));
     assert!(mod_json.contains("\"moonbitlang/async\": \"0.18.1\""));
 
     for runtime_file in [
@@ -288,7 +288,7 @@ fn generated_project_layout_is_correct(#[tagged_as("counter_agent")] pkg: &Gener
     }
 
     let client_pkg = std::fs::read_to_string(dir.join("client/moon.pkg")).unwrap();
-    assert!(client_pkg.contains("\"golem/bridge/runtime\" @runtime"));
+    assert!(client_pkg.contains("\"counter-agent-client/runtime\" @runtime"));
 
     let client = pkg.client_source();
     assert!(client.contains("pub struct CounterAgent {"));

@@ -42,7 +42,7 @@ Avoid invoking `golem generate-bridge` manually — it exists as a low-level esc
 
 ## Step 3: Add the Generated Module as a Local Dependency
 
-The generated `my-agent-client/` directory is a self-contained `moon` module (its `moon.mod.json` declares the module name `golem/bridge`) that bundles its own runtime — it only depends on `moonbitlang/async` and the MoonBit core library, and builds for the `native` target.
+The generated `my-agent-client/` directory is a self-contained `moon` module. Its `moon.mod.json` declares an agent-derived module name matching the generated directory name (for example, `my-agent-client`), so multiple generated bridge modules can be used from the same external project. The module bundles its own runtime, only depends on `moonbitlang/async` and the MoonBit core library, and builds for the `native` target.
 
 Add it to your external MoonBit project as a local path dependency in `moon.mod.json`. Also depend on `moonbitlang/async` directly — your own `async fn main` entry point needs it imported (see the next step), and the version must match the one the generated module pins (`0.18.1`):
 
@@ -51,7 +51,7 @@ Add it to your external MoonBit project as a local path dependency in `moon.mod.
   "name": "my-org/external-client",
   "preferred-target": "native",
   "deps": {
-    "golem/bridge": {
+    "my-agent-client": {
       "path": "../golem-temp/bridge-sdk/moonbit/my-agent-client"
     },
     "moonbitlang/async": "0.18.1"
@@ -70,8 +70,8 @@ Import the generated `client` package, the bundled `runtime` package, and `moonb
 ```moonbit
 import {
   "moonbitlang/async" @async,
-  "golem/bridge/client" @client,
-  "golem/bridge/runtime" @runtime,
+  "my-agent-client/client" @client,
+  "my-agent-client/runtime" @runtime,
 }
 ```
 
@@ -203,8 +203,8 @@ client validates returned values against the allowed set and raises a
 Each agent type gets its own `moon` module directory containing:
 
 - `moon.mod.json` — module metadata, depending on `moonbitlang/async`
-- `runtime/` — the bundled runtime package (`golem/bridge/runtime`): HTTP transport, the schema-native value model, codecs, and configuration
-- `client/client.mbt` — the generated, fully typed client package (`golem/bridge/client`): the agent handle, its constructors and method wrappers, and the generated MoonBit types and codecs for all custom parameter and return types
+- `runtime/` — the bundled runtime package (`<agent-client>/runtime`): HTTP transport, the schema-native value model, codecs, and configuration
+- `client/client.mbt` — the generated, fully typed client package (`<agent-client>/client`): the agent handle, its constructors and method wrappers, and the generated MoonBit types and codecs for all custom parameter and return types
 
 ## Key Points
 

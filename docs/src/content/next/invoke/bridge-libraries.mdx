@@ -58,8 +58,8 @@ let value = c1.increment().await?;
 <Tabs.Tab>
 ```moonbit
 // In moon.pkg, import the generated client and the bundled runtime:
-//   "golem/bridge/client" @client
-//   "golem/bridge/runtime" @runtime
+//   "counter-agent-client/client" @client
+//   "counter-agent-client/runtime" @runtime
 async fn main {
   @client.CounterAgent::configure(@runtime.Local, "bridgetest", "local")
   let c1 = @client.CounterAgent::get("c1")

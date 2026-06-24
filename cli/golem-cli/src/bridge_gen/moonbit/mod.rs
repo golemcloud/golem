@@ -17,10 +17,12 @@
 //! Like the Scala generator, and unlike the Rust and TypeScript generators
 //! (which depend on an external runtime library), the MoonBit generator emits a
 //! fully self-contained `moon` module. The static runtime lives in the
-//! `golem/bridge/runtime` package (embedded from `src/bridge_gen/moonbit/runtime`)
-//! and the per-agent generated client lives in the `golem/bridge/client` package.
-//! Keeping the static code in its own package makes it straightforward to extract
-//! into a published runtime library later.
+//! `<agent-client>/runtime` package (embedded from
+//! `src/bridge_gen/moonbit/runtime`) and the per-agent generated client lives in
+//! the `<agent-client>/client` package. Deriving the module name from the agent
+//! type keeps multiple generated bridge modules usable from the same consuming
+//! MoonBit project. Keeping the static code in its own package makes it
+//! straightforward to extract into a published runtime library later.
 //!
 //! The generated module depends only on `moonbitlang/async` (for native HTTPS)
 //! and the MoonBit core library, and builds for the `native` target.
@@ -32,13 +34,13 @@ pub mod type_name;
 
 pub use type_name::MoonBitTypeName;
 
-use crate::bridge_gen::BridgeGenerator;
 use crate::bridge_gen::moonbit::mbt_writer::MoonBitWriter;
 use crate::bridge_gen::moonbit::moonbit::{
     RESERVED_TYPE_NAMES, to_moonbit_constructor_ident, to_moonbit_term_ident, unique_idents,
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
+use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use crate::fs;
 use crate::versions::moonbit_dep;
 use anyhow::{Context, bail};
@@ -62,10 +64,6 @@ use indoc::formatdoc;
 /// `runtime/`. Each file already carries its package-relative path.
 static RUNTIME_DIR: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/src/bridge_gen/moonbit/runtime");
-
-/// The `moon` module name. The runtime package is `<module>/runtime` and the
-/// generated client package is `<module>/client`.
-const MODULE_NAME: &str = "golem/bridge";
 
 /// The two `AgentInvocationMode` wire strings (server OpenAPI enum).
 const MODE_AWAIT: &str = "await";
@@ -243,6 +241,12 @@ impl MoonBitBridgeGenerator {
         agent_struct_name(&self.agent_type)
     }
 
+    /// The generated `moon` module name. The runtime package is
+    /// `<module>/runtime` and the generated client package is `<module>/client`.
+    fn module_name(&self) -> String {
+        bridge_client_directory_name(&self.agent_type.type_name)
+    }
+
     // --- Project files ------------------------------------------------------
 
     fn write_module_file(&self) -> anyhow::Result<()> {
@@ -255,7 +259,7 @@ impl MoonBitBridgeGenerator {
               }}
             }}
             "#,
-            module = MODULE_NAME,
+            module = self.module_name(),
             async_version = moonbit_dep::ASYNC_VERSION,
         };
         fs::write_str(self.target_path.join("moon.mod.json"), mod_json)?;
@@ -276,7 +280,7 @@ impl MoonBitBridgeGenerator {
               "{module}/runtime" @runtime,
             }}
             "#,
-            module = MODULE_NAME,
+            module = self.module_name(),
         };
         fs::write_str(client_dir.join("moon.pkg"), moon_pkg)?;
 
@@ -412,7 +416,7 @@ impl MoonBitBridgeGenerator {
 
     /// Emits an `encode_<Name>` / `decode_<Name>` pair for every generated named
     /// composite type. Encode functions are total; decode functions raise
-    /// [`BridgeError`](golem/bridge/runtime) on a wire-shape mismatch.
+    /// `BridgeError` from the generated runtime package on a wire-shape mismatch.
     fn write_codecs(&self, writer: &mut MoonBitWriter) -> anyhow::Result<()> {
         let types: Vec<(SchemaType, MoonBitTypeName)> = self
             .type_naming
