@@ -120,15 +120,20 @@ impl EphemeralOplog {
 
     pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(false).await)
+        Some(this.archive(false, false).await)
     }
 
     pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(true).await)
+        Some(this.archive(true, false).await)
     }
 
-    async fn archive(self: &Arc<Self>, blocking: bool) -> bool {
+    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> Option<bool> {
+        let this = downcast_oplog::<EphemeralOplog>(this)?;
+        Some(this.archive(false, true).await)
+    }
+
+    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> bool {
         // With only one lower layer there is nowhere to transfer to.
         if self.lower.len().get() <= 1 {
             return false;
@@ -163,6 +168,7 @@ impl EphemeralOplog {
                     last_transferred_idx: last_idx,
                     keep_alive: Some(keep_alive),
                     done: done_tx,
+                    drain,
                     transfer_span: Span::current(),
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
@@ -204,6 +210,7 @@ impl EphemeralOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    drain,
                     transfer_span,
                 } => {
                     async {
@@ -241,6 +248,10 @@ impl EphemeralOplog {
                             None => {
                                 warn!("No entries to transfer from ephemeral oplog layer {source}");
                             }
+                        }
+
+                        if drain && let Some(oplog) = keep_alive.as_ref() {
+                            let _ = EphemeralOplog::try_archive_background(oplog).await;
                         }
 
                         let _ = keep_alive.take();

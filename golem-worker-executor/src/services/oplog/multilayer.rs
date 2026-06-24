@@ -820,6 +820,7 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    drain: _,
                     transfer_span,
                 } => {
                     async {
@@ -909,6 +910,7 @@ impl MultiLayerOplog {
                             .await,
                         keep_alive: Some(this.clone()),
                         done: done_tx,
+                        drain: false,
                         transfer_span: Span::current(),
                     })
                     .expect("Failed to enqueue transfer of primary oplog entries");
@@ -1090,6 +1092,7 @@ pub enum BackgroundTransferMessage {
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
+        drain: bool,
         transfer_span: Span,
     },
 }
@@ -1167,6 +1170,7 @@ impl OplogArchive for WrappedOplogArchive {
                     last_transferred_idx: last_idx,
                     keep_alive: None,
                     done: None,
+                    drain: false,
                     transfer_span: Span::current(),
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes

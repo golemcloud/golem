@@ -317,10 +317,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn archive_ephemeral_oplog(&self) {
-        while matches!(
-            EphemeralOplog::try_archive_blocking(&self.parent.oplog).await,
-            Some(true)
-        ) {}
+        let _ = EphemeralOplog::try_archive_background(&self.parent.oplog).await;
     }
 
     /// Prepares the instance for running by recovering its persisted state
