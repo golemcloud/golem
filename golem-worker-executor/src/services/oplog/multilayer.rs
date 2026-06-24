@@ -748,21 +748,14 @@ impl MultiLayerOplog {
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
 
-        result.set_background_transfer(tokio::spawn(
-            Self::background_transfer(
-                owned_agent_id,
-                agent_mode,
-                Arc::downgrade(&result_oplog),
-                lower,
-                multi_layer_oplog_service,
-                rx,
-            )
-            .instrument(
-                span!(parent: None, Level::INFO, "Oplog background transfer")
-                    .follows_from(Span::current())
-                    .clone(),
-            ),
-        ));
+        result.set_background_transfer(tokio::spawn(Self::background_transfer(
+            owned_agent_id,
+            agent_mode,
+            Arc::downgrade(&result_oplog),
+            lower,
+            multi_layer_oplog_service,
+            rx,
+        )));
 
         result
     }
@@ -787,24 +780,63 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    transfer_span,
                 } => {
-                    info!(
-                        "Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer"
-                    );
-                    debug!("Reading entries from the primary oplog");
+                    async {
+                        info!(
+                            "Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer"
+                        );
+                        debug!("Reading entries from the primary oplog");
 
-                    if let Some(primary) = primary.upgrade() {
-                        let transfer = BackgroundTransferFromPrimary::new(
-                            owned_agent_id.clone(),
-                            agent_mode,
+                        if let Some(primary) = primary.upgrade() {
+                            let transfer = BackgroundTransferFromPrimary::new(
+                                owned_agent_id.clone(),
+                                agent_mode,
+                                last_transferred_idx,
+                                multi_layer_oplog_service.clone(),
+                                primary.clone(),
+                                lower.clone(),
+                            );
+                            let result = transfer.run().await;
+                            if let Err(error) = result {
+                                error!("Failed to transfer entries from the primary oplog: {error}");
+                            }
+                            let _ = keep_alive.take();
+
+                            if let Some(done) = done {
+                                done.send(()).unwrap()
+                            }
+                        }
+                    }
+                    .instrument(
+                        span!(parent: None, Level::INFO, "Oplog background transfer")
+                            .follows_from(transfer_span)
+                            .clone(),
+                    )
+                    .await;
+                }
+                TransferFromLower {
+                    source,
+                    last_transferred_idx,
+                    mut keep_alive,
+                    done,
+                    transfer_span,
+                } => {
+                    async {
+                        info!(
+                            "Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer"
+                        );
+                        debug!("Reading entries from oplog layer {source}");
+
+                        let transfer = BackgroundTransferBetweenLowers::new(
+                            source,
                             last_transferred_idx,
-                            multi_layer_oplog_service.clone(),
-                            primary.clone(),
                             lower.clone(),
                         );
                         let result = transfer.run().await;
+
                         if let Err(error) = result {
-                            error!("Failed to transfer entries from the primary oplog: {error}");
+                            error!("Failed to transfer entries from oplog layer {source}: {error}");
                         }
                         let _ = keep_alive.take();
 
@@ -812,33 +844,12 @@ impl MultiLayerOplog {
                             done.send(()).unwrap()
                         }
                     }
-                }
-                TransferFromLower {
-                    source,
-                    last_transferred_idx,
-                    mut keep_alive,
-                    done,
-                } => {
-                    info!(
-                        "Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer"
-                    );
-                    debug!("Reading entries from oplog layer {source}");
-
-                    let transfer = BackgroundTransferBetweenLowers::new(
-                        source,
-                        last_transferred_idx,
-                        lower.clone(),
-                    );
-                    let result = transfer.run().await;
-
-                    if let Err(error) = result {
-                        error!("Failed to transfer entries from oplog layer {source}: {error}");
-                    }
-                    let _ = keep_alive.take();
-
-                    if let Some(done) = done {
-                        done.send(()).unwrap()
-                    }
+                    .instrument(
+                        span!(parent: None, Level::INFO, "Oplog background transfer")
+                            .follows_from(transfer_span)
+                            .clone(),
+                    )
+                    .await;
                 }
             }
         }
@@ -868,6 +879,7 @@ impl MultiLayerOplog {
                     last_transferred_idx: this.primary.current_oplog_index().await,
                     keep_alive: Some(this.clone()),
                     done: done_tx,
+                    transfer_span: Span::current(),
                 })
                 .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -897,6 +909,7 @@ impl MultiLayerOplog {
                             .await,
                         keep_alive: Some(this.clone()),
                         done: done_tx,
+                        transfer_span: Span::current(),
                     })
                     .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -963,6 +976,7 @@ impl Oplog for MultiLayerOplog {
                 last_transferred_idx: last_committed_idx,
                 keep_alive: None,
                 done: None,
+                transfer_span: Span::current(),
             });
             self.last_transfer_point.set(last_committed_idx);
         }
@@ -1069,12 +1083,14 @@ pub enum BackgroundTransferMessage {
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
+        transfer_span: Span,
     },
     TransferFromLower {
         source: usize,
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
+        transfer_span: Span,
     },
 }
 
@@ -1151,6 +1167,7 @@ impl OplogArchive for WrappedOplogArchive {
                     last_transferred_idx: last_idx,
                     keep_alive: None,
                     done: None,
+                    transfer_span: Span::current(),
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.store(0, Ordering::Release);

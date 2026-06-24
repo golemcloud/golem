@@ -788,13 +788,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         key: &IdempotencyKey,
         output: AgentInvocationOutput,
     ) {
-        let mut map = self.invocation_results.write().await;
-        map.insert(
-            key.clone(),
-            InvocationResult::Cached {
-                result: Ok(output.clone()),
-            },
-        );
+        {
+            let mut map = self.invocation_results.write().await;
+            map.insert(
+                key.clone(),
+                InvocationResult::Cached {
+                    result: Ok(output.clone()),
+                },
+            );
+        }
+        self.external_invocation_spans.write().await.remove(key);
         debug!("Stored invocation success for {key}");
         self.events().publish(Event::InvocationCompleted {
             agent_id: self.owned_agent_id.agent_id(),
@@ -814,6 +817,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .collect(),
         ]
         .concat();
+        let mut completed_keys = Vec::new();
         let mut map = self.invocation_results.write().await;
         for key in keys_to_fail {
             let stderr = self.worker_event_service.get_last_invocation_errors();
@@ -834,6 +838,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     result: Err(golem_error),
                 });
             }
+            completed_keys.push(key.clone());
+        }
+        drop(map);
+        let mut spans_map = self.external_invocation_spans.write().await;
+        for key in completed_keys {
+            spans_map.remove(&key);
         }
     }
 
