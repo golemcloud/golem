@@ -141,7 +141,12 @@ enum InternalUnitLike {
 /// as an array of two-element arrays.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
 struct MapLike {
-    entries: Vec<(String, u32)>,
+    entries: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+struct HeterogeneousTupleLike {
+    entry: (String, u32),
 }
 
 // ----------------------------------------------------------------------
@@ -374,20 +379,39 @@ fn tuple_field_is_fixed_length_array() {
     let registry = register::<MapLike>();
     let meta = schema(&registry, "MapLike");
 
-    // `entries: Vec<(String, u32)>` -> array of two-element arrays.
+    // `entries: Vec<(String, String)>` -> array of two-element arrays.
     let entries = inline(prop(meta, "entries"));
     assert_eq!(entries.ty, "array");
     let entry = inline(entries.items.as_ref().expect("entries has items"));
     assert_eq!(entry.ty, "array");
     assert_eq!(entry.min_items, Some(2));
     assert_eq!(entry.max_items, Some(2));
+    assert_eq!(
+        inline(entry.items.as_ref().expect("tuple has items")).ty,
+        "string"
+    );
 
     let value = MapLike {
-        entries: vec![("a".to_string(), 1), ("b".to_string(), 2)],
+        entries: vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+        ],
     };
     let json = serde_json::to_value(&value).unwrap();
     validate(&registry, &MapLike::schema_ref(), &json)
         .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
+}
+
+#[test]
+#[should_panic(expected = "PoemSchema does not support heterogeneous tuple schemas yet")]
+fn heterogeneous_tuple_field_panics() {
+    let registry = register::<HeterogeneousTupleLike>();
+    let meta = schema(&registry, "HeterogeneousTupleLike");
+    let entry = inline(prop(meta, "entry"));
+    assert!(
+        entry.items.is_some(),
+        "evaluating heterogeneous tuple items must panic"
+    );
 }
 
 // ----------------------------------------------------------------------

@@ -689,10 +689,12 @@ fn synth_register(ty: &Type) -> TokenStream {
     }
 }
 
-/// Synthesize a `MetaSchemaRef` for a tuple-bearing type. Tuples become array
-/// schemas with `min_items`/`max_items` fixed to the arity; `Vec`/slice become
-/// arrays; `Option` adds `nullable`; `Box` is transparent; everything else
-/// delegates to the type's own `schema_ref`.
+/// Synthesize a `MetaSchemaRef` for a tuple-bearing type. Homogeneous tuples
+/// become fixed-length array schemas using the element schema as `items`; poem's
+/// `MetaSchema` cannot express position-specific schemas for heterogeneous
+/// tuples, so those are rejected until they are needed.
+/// `Vec`/slice become arrays; `Option` adds `nullable`; `Box` is transparent;
+/// everything else delegates to the type's own `schema_ref`.
 fn synth_schema_ref(ty: &Type) -> TokenStream {
     match ty {
         Type::Tuple(t) => {
@@ -711,14 +713,10 @@ fn synth_schema_ref(ty: &Type) -> TokenStream {
             let items_ref = if homogeneous {
                 synth_schema_ref(&t.elems[0])
             } else {
-                let elem_refs = t.elems.iter().map(synth_schema_ref);
                 quote! {
-                    ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
-                        ::poem_openapi::registry::MetaSchema {
-                            one_of: ::std::vec![ #(#elem_refs),* ],
-                            ..::poem_openapi::registry::MetaSchema::ANY
-                        }
-                    ))
+                    ::std::panic!(
+                        "PoemSchema does not support heterogeneous tuple schemas yet"
+                    )
                 }
             };
             quote! {
