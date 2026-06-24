@@ -37,6 +37,7 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
+use std::rc::Rc;
 
 const CHUNK_SIZE: u64 = 1024;
 
@@ -80,21 +81,28 @@ pub enum OplogEntryLookupResult {
 }
 
 #[derive(Debug)]
-struct CommittedState {
+struct PendingState {
     current_oplog_index: OplogIndex,
+    current_oplog_chunk_region: OplogRegion,
+    current_oplog_chunk: Rc<Vec<OplogEntry>>,
     last_read_non_hint_oplog_index: OplogIndex,
     // invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
     seen_logs: HashSet<(u64, u64)>,
+    replay_events: BTreeMap<OplogIndex, ReplayEvent>,
+    jumps: Vec<OplogRegion>
 }
 
-impl CommittedState {
-    fn current_index_is_skipped(&self) -> bool {
-        self.next_skipped_region
-            .as_ref()
-            .map(|r| r.contains(self.current_oplog_index))
-            .unwrap_or(false)
-    }
+#[derive(Debug)]
+struct CommittedState {
+    current_oplog_index: OplogIndex,
+    current_oplog_chunk_region: OplogRegion,
+    current_oplog_chunk: Rc<Vec<OplogEntry>>,
+    last_read_non_hint_oplog_index: OplogIndex,
+    // invariant: either start or end must be at or after last_read_oplog_index.
+    next_skipped_region: Option<OplogRegion>,
+    seen_logs: HashSet<(u64, u64)>,
+    replay_events: Vec<ReplayEvent>,
 }
 
 #[derive(Debug)]
@@ -104,19 +112,12 @@ pub struct ReplayState {
     // === initialization-only ===
     replay_target: OplogIndex,
     skipped_regions: DeletedRegions,
-    concurrent_resolver: ConcurrentReplayResolver,
 
     // === runtime mutable ===
-    seen_logs: HashSet<(u64, u64)>,
-    replay_events: Vec<ReplayEvent>,
-    committed_state: CommittedState,
-    current_oplog_index: OplogIndex,
-    current_oplog_chunk_region: OplogRegion,
-    current_oplog_chunk: Vec<OplogEntry>,
-    // invariant: either start or end must be at or after current_oplog_index.
-    next_skipped_region: Option<OplogRegion>,
-    last_read_non_hint_oplog_index: OplogIndex,
-    jumps_since_last_commit: Vec<OplogRegion>
+    pending: PendingState,
+    committed: CommittedState,
+    // Must only be fed committed entries
+    concurrent_resolver: ConcurrentReplayResolver,
 }
 
 impl ReplayState {
@@ -137,11 +138,11 @@ impl ReplayState {
     }
 
     pub fn last_replayed_index(&self) -> OplogIndex {
-        self.committed_state.current_oplog_index
+        self.committed.current_oplog_index
     }
 
     pub fn last_replayed_non_hint_index(&self) -> OplogIndex {
-        self.committed_state.last_read_non_hint_oplog_index
+        self.committed.last_read_non_hint_oplog_index
     }
 
     pub fn replay_target(&self) -> OplogIndex {
@@ -167,22 +168,22 @@ impl ReplayState {
     }
 
     pub async fn take_new_replay_events(&mut self) -> Vec<ReplayEvent> {
-        unimplemented!()
+        std::mem::take(&mut self.committed.replay_events)
     }
 
     /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
-        !self.seen_logs.is_empty() && {
+        !self.committed.seen_logs.is_empty() && {
             let hash = Self::hash_log_entry(level, context, message);
-            self.seen_logs.contains(&hash)
+            self.committed.seen_logs.contains(&hash)
         }
     }
 
     /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
     pub async fn remove_seen_log(&mut self, level: LogLevel, context: &str, message: &str) {
-        if !self.seen_logs.is_empty() {
+        if !self.committed.seen_logs.is_empty() {
             let hash = Self::hash_log_entry(level, context, message);
-            self.seen_logs.remove(&hash);
+            self.committed.seen_logs.remove(&hash);
         }
     }
 
@@ -210,7 +211,7 @@ impl ReplayState {
 
         if condition(&entry) {
             let entry = entry.clone();
-            self.commit();
+            self.commit().await;
             Ok(Some((index, entry)))
         } else {
             self.revert_to_last_commit();
@@ -285,7 +286,7 @@ impl ReplayState {
 
             if end_check(entry, begin_idx, &state) {
                 let entry = entry.clone();
-                self.commit();
+                self.commit().await;
                 return OplogEntryLookupResult::Found {
                     index: idx,
                     entry: Box::new(entry),
@@ -297,7 +298,7 @@ impl ReplayState {
                 violation = true;
             }
         }
-        self.commit();
+        self.commit().await;
         assert!(self.is_live());
 
         OplogEntryLookupResult::NotFound {
@@ -505,7 +506,16 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<Resolution, WorkerExecutorError> {
-        unimplemented!()
+        let start_idx = handle.start_idx();
+        match self.await_resolution_outcome(handle).await? {
+            ResolutionOutcome::Resolved(resolution) => Ok(resolution),
+            ResolutionOutcome::Incomplete => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "End or Cancelled",
+                format!(
+                    "end of replay: durable call Start at {start_idx} has no matching End/Cancelled"
+                ),
+            )),
+        }
     }
 
     /// Like [`Self::await_resolution`], but reports a lone committed `Start` (replay reached the end
@@ -516,36 +526,96 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
-        unimplemented!()
+        let (start_idx, mut receiver) = handle.into_parts();
+        loop {
+            match receiver.try_recv() {
+                Ok(resolution) => return Ok(ResolutionOutcome::Resolved(resolution)),
+                Err(oneshot::error::TryRecvError::Empty) => {}
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    // The sender was dropped without resolving (anomalous). Drop any lingering
+                    // registration so it cannot be matched by a later resolution.
+                    self.concurrent_resolver
+                        .unregister(start_idx);
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "concurrent replay resolver channel closed for Start at {start_idx}"
+                    )));
+                }
+            }
+
+            if self.is_live() {
+                // Reached the end of the oplog without ever seeing the matching End/Cancelled: a
+                // committed lone `Start` (a forced commit flushed it before its `End`, or a crash
+                // happened in between). Drop the now-stale registration and report Incomplete so the
+                // caller can re-execute the side effect and complete the existing `Start`.
+                self.concurrent_resolver
+                    .unregister(start_idx);
+                return Ok(ResolutionOutcome::Incomplete);
+            }
+
+            let consumed = self
+                .try_get_oplog_entry(|entry| {
+                    matches!(entry, OplogEntry::End { .. } | OplogEntry::Cancelled { .. })
+                })
+                .await?;
+            if consumed.is_none() {
+                // The next non-hint entry is not an End/Cancelled (e.g. an unclaimed `Start` or a
+                // scope/persistence marker). Crossing it would corrupt the cursor shared with
+                // legacy positional readers, so we refuse rather than advance past it. Drop the
+                // stale registration first so it cannot be matched by a later resolution.
+                self.concurrent_resolver
+                    .unregister(start_idx);
+                return Err(WorkerExecutorError::runtime(format!(
+                    "concurrent replay interleaving is not supported: encountered a non-End/Cancelled entry while awaiting resolution of Start at {start_idx}"
+                )));
+            }
+            // The consumed entry was an End/Cancelled; the committed-consume hook has resolved the
+            // receiver, which the next loop iteration picks up.
+        }
     }
 
     // Make current internal state visible to users and update checkpoint for reverts
-    fn commit(&mut self) {
+    async fn commit(&mut self) {
+        self.committed.current_oplog_index = self.pending.current_oplog_index;
+        self.committed.current_oplog_chunk_region = self.pending.current_oplog_chunk_region.clone();
+        self.committed.current_oplog_chunk = self.pending.current_oplog_chunk.clone();
+        self.committed.last_read_non_hint_oplog_index = self.pending.last_read_non_hint_oplog_index;
+        self.committed.next_skipped_region = self.pending.next_skipped_region.clone();
 
+
+        self.pending.seen_logs.clear();
+        self.pending.replay_events.clear();
+        self.pending.jumps.clear();
     }
 
     // Reset internal state to last commit
     fn revert_to_last_commit(&mut self) {
-
+        self.pending.current_oplog_index = self.committed.current_oplog_index;
+        self.pending.current_oplog_chunk_region = self.committed.current_oplog_chunk_region.clone();
+        self.pending.current_oplog_chunk = self.committed.current_oplog_chunk.clone();
+        self.pending.last_read_non_hint_oplog_index = self.committed.last_read_non_hint_oplog_index;
+        self.pending.next_skipped_region = self.committed.next_skipped_region.clone();
+        self.pending.seen_logs.clear();
+        self.pending.replay_events.clear();
+        self.pending.jumps.clear();
     }
 
-    fn record_replay_event(&mut self, event: ReplayEvent) {
-        unimplemented!()
+    fn record_replay_event(&mut self, oplog_index: OplogIndex, event: ReplayEvent) {
+        self.pending.replay_events.insert(oplog_index, event);
     }
-
 
     // Jump to the first oplog entry that should be replayed, discarding all read entries.
     // If the cursor is at a non-skipped entry this is a noop.
     fn jump_out_of_skipped_region(&mut self) {
         while self.is_replay()
-            && let Some(skipped_region) = &self.next_skipped_region
-            && skipped_region.contains(self.current_oplog_index)
+            && let Some(skipped_region) = &self.pending.next_skipped_region
+            && skipped_region.contains(self.pending.current_oplog_index)
         {
-            let previous_index = self.current_oplog_index;
+            let skipped_region_end = skipped_region.end;
+            let previous_index = self.pending.current_oplog_index;
 
-            self.current_oplog_index = skipped_region.end.next();
-            self.committed_state.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.committed_state.current_oplog_index);
-            self.jumps_since_last_commit.push(OplogRegion { start: previous_index, end: skipped_region.end });
+            self.pending.current_oplog_index = skipped_region_end.next();
+            self.pending.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.pending.current_oplog_index);
+            self.pending.jumps.push(OplogRegion { start: previous_index, end: skipped_region_end });
         }
     }
 
@@ -555,16 +625,17 @@ impl ReplayState {
 
         while self.is_replay() {
             self.advance_current_index();
-            match self.get_current_entry().await.1 {
+            let (idx, entry) = self.get_current_entry().await;
+            match entry {
                 OplogEntry::SuccessfulUpdate {
                     target_revision, ..
                 } => {
                     let new_revision = *target_revision;
-                    self.record_replay_event(ReplayEvent::UpdateReplayed { new_revision });
+                    self.record_replay_event(idx, ReplayEvent::UpdateReplayed { new_revision });
                 }
                 OplogEntry::CardRevoked { card_id, .. } => {
                     let card_id = CardId(*card_id);
-                    self.record_replay_event(ReplayEvent::CardRevoked { card_id });
+                    self.record_replay_event(idx, ReplayEvent::CardRevoked { card_id });
                 }
                 OplogEntry::Start { .. } => {
                     todo!()
@@ -579,24 +650,24 @@ impl ReplayState {
     }
 
     fn advance_current_index(&mut self) {
-        self.current_oplog_index = self.current_oplog_index.next();
+        self.pending.current_oplog_index = self.pending.current_oplog_index.next();
         self.jump_out_of_skipped_region();
     }
 
     async fn ensure_chunk(&mut self) {
-        let idx = self.current_oplog_index;
-        if !self.current_oplog_chunk_region.contains(self.current_oplog_index) {
+        let idx = self.pending.current_oplog_index;
+        if !self.pending.current_oplog_chunk_region.contains(self.pending.current_oplog_index) {
             let new_entries = self.oplog.read_many(idx, CHUNK_SIZE).await.into_values().collect();
-            self.current_oplog_chunk_region = OplogRegion { start: idx, end: idx.range_end(CHUNK_SIZE) };
-            self.current_oplog_chunk = new_entries;
+            self.pending.current_oplog_chunk_region = OplogRegion { start: idx, end: idx.range_end(CHUNK_SIZE) };
+            self.pending.current_oplog_chunk = Rc::new(new_entries);
         }
     }
 
     async fn get_current_entry(&mut self) -> (OplogIndex, &OplogEntry) {
         self.ensure_chunk().await;
-        let idx = self.current_oplog_index;
-        let chunk_idx = (idx.as_u64() - self.current_oplog_chunk_region.start.as_u64()) as usize;
-        (idx, &self.current_oplog_chunk[chunk_idx])
+        let idx = self.pending.current_oplog_index;
+        let chunk_idx = (idx.as_u64() - self.pending.current_oplog_chunk_region.start.as_u64()) as usize;
+        (idx, &self.pending.current_oplog_chunk[chunk_idx])
     }
 }
 
