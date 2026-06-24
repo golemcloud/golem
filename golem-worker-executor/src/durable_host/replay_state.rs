@@ -669,6 +669,33 @@ impl ReplayState {
         let chunk_idx = (idx.as_u64() - self.pending.current_oplog_chunk_region.start.as_u64()) as usize;
         (idx, &self.pending.current_oplog_chunk[chunk_idx])
     }
+
+    // Some operational oplog entries like card-revoked stay relevant even if they are skipped.
+    // The skipped chunks are guaranteed to have not been read during the prior replay, so there
+    // is nothing to but to read them here.
+    async fn extract_replay_events_from_jumped_regions(&mut self, regions: &Vec<OplogRegion>) -> BTreeMap<OplogIndex, ReplayEvent> {
+        let mut result = BTreeMap::new();
+
+        for region in regions {
+            let mut next = region.start;
+            let end = region.end.as_u64();
+
+            while next.as_u64() <= end {
+                let remaining = end - next.as_u64() + 1;
+                let count = remaining.min(CHUNK_SIZE);
+
+                for (entry_index, entry) in self.oplog.read_many(next, count).await {
+                    if let OplogEntry::CardRevoked { card_id, .. } = entry {
+                        result.insert(entry_index, ReplayEvent::CardRevoked {
+                            card_id: CardId(card_id),
+                        });
+                    }
+                    next = entry_index.next()
+                }
+            }
+        }
+        result
+    }
 }
 
 #[cfg(test)]
