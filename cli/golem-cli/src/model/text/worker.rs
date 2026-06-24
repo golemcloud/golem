@@ -14,9 +14,11 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::log::{LogColorize, logln};
+use crate::model::cli_output::StructuredOutput;
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
+use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text::fmt::*;
 use crate::model::worker::{
     AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
@@ -41,15 +43,19 @@ use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::schema::TypedSchemaValue;
 use indoc::indoc;
 use itertools::Itertools;
+use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerCreateView {
     pub component_name: ComponentName,
     pub agent_name: Option<RawAgentId>,
 }
+
+impl Masked for WorkerCreateView {}
 
 impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
@@ -79,7 +85,12 @@ impl MessageWithFields for WorkerCreateView {
     }
 }
 
+impl StructuredOutput for WorkerCreateView {
+    const KIND: &'static str = "agent.new";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerGetView {
     pub metadata: AgentMetadataView,
     pub precise: bool,
@@ -88,6 +99,13 @@ pub struct WorkerGetView {
 impl WorkerGetView {
     pub fn from_metadata(metadata: AgentMetadataView, precise: bool) -> Self {
         Self { metadata, precise }
+    }
+}
+
+impl Masked for WorkerGetView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.metadata = self.metadata.masked(config)?;
+        Ok(self)
     }
 }
 
@@ -188,13 +206,13 @@ impl MessageWithFields for WorkerGetView {
                 "Environment variables - defaults",
                 &self.metadata.default_env,
                 !self.metadata.default_env.is_empty(),
-                |env| format_env(true, &to_sorted_btree_map(env)),
+                |env| format_env(&to_sorted_btree_map(env)),
             )
             .fmt_field_optional(
                 "Environment variables - overrides",
                 &self.metadata.env,
                 !self.metadata.env.is_empty(),
-                |env| format_env(true, &to_sorted_btree_map(env)),
+                |env| format_env(&to_sorted_btree_map(env)),
             )
             .fmt_field_optional(
                 "Config - defaults",
@@ -238,7 +256,37 @@ impl MessageWithFields for WorkerGetView {
     }
 }
 
-impl TextView for AgentsMetadataResponseView {
+impl StructuredOutput for WorkerGetView {
+    const KIND: &'static str = "agent.get";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl StructuredOutput for AgentsMetadataResponseView {
+    const KIND: &'static str = "agent.list";
+
+    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.masked(config)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl StructuredOutput for TryUpdateAllWorkersResult {
+    const KIND: &'static str = "agent.update";
+}
+
+impl TextOutput for AgentsMetadataResponseView {
     fn log(&self) {
         let colorize = colored::control::SHOULD_COLORIZE.should_colorize();
         let term_width = terminal_width();
@@ -259,6 +307,11 @@ impl TextView for AgentsMetadataResponseView {
                 cursor.log_color_highlight()
             ));
         }
+    }
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        self.masked(config)?.log();
+        Ok(())
     }
 }
 
@@ -339,7 +392,7 @@ impl AgentsMetadataResponseView {
     }
 }
 
-impl TruncatableTextView for AgentsMetadataResponseView {
+impl TruncatableTextOutput for AgentsMetadataResponseView {
     fn render_truncated(&self, max_lines: usize, colorize: bool) -> String {
         let cursor_lines = if self.cursors.is_empty() {
             0
@@ -367,15 +420,27 @@ impl TruncatableTextView for AgentsMetadataResponseView {
 
         out
     }
+
+    fn render_truncated_masked(
+        &self,
+        max_lines: usize,
+        colorize: bool,
+        config: MaskingConfig,
+    ) -> anyhow::Result<String> {
+        Ok(self
+            .clone()
+            .masked(config)?
+            .render_truncated(max_lines, colorize))
+    }
 }
 
-impl TextView for TryUpdateAllWorkersResult {
+impl TextOutput for TryUpdateAllWorkersResult {
     fn log(&self) {
         // NOP
     }
 }
 
-impl TextView for InvokeResultView {
+impl TextOutput for InvokeResultView {
     fn log(&self) {
         fn log_result_format(format: Option<&str>, multiple: bool) {
             let result_label = if multiple { "results" } else { "result" };
@@ -414,16 +479,28 @@ impl TextView for InvokeResultView {
     }
 }
 
-impl TextView for Vec<(u64, PublicOplogEntry)> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOplogEntryView {
+    pub index: u64,
+    pub entry: PublicOplogEntry,
+}
+
+impl StructuredOutput for AgentOplogEntryView {
+    const KIND: &'static str = "agent.oplog";
+}
+
+impl TextOutput for AgentOplogEntryView {
     fn log(&self) {
-        for (idx, entry) in self {
-            logln(format!("{}: ", format_main_id(&format!("#{idx:0>5}"))));
-            entry.log()
-        }
+        logln(format!(
+            "{}: ",
+            format_main_id(&format!("#{:0>5}", self.index))
+        ));
+        self.entry.log()
     }
 }
 
-impl TextView for PublicOplogEntry {
+impl TextOutput for PublicOplogEntry {
     fn log(&self) {
         let pad = "          ";
         match self {
@@ -1161,11 +1238,17 @@ fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerFilesView {
     pub nodes: Vec<FileNodeView>,
 }
 
+impl StructuredOutput for WorkerFilesView {
+    const KIND: &'static str = "agent.files";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileNodeView {
     pub name: String,
     pub last_modified: String, // Human-readable timestamp
@@ -1174,7 +1257,7 @@ pub struct FileNodeView {
     pub size: u64,
 }
 
-impl TextView for WorkerFilesView {
+impl TextOutput for WorkerFilesView {
     fn log(&self) {
         if self.nodes.is_empty() {
             logln("No files found.");
