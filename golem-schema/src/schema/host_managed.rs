@@ -107,23 +107,27 @@ pub fn redact_host_managed_value(value: SchemaValue) -> SchemaValue {
                 .map(|inner| Box::new(redact_host_managed_value(*inner))),
         }),
         SchemaValue::Tuple { elements } => SchemaValue::Tuple {
-            elements: elements.into_iter().map(redact_host_managed_value).collect(),
+            elements: elements
+                .into_iter()
+                .map(redact_host_managed_value)
+                .collect(),
         },
         SchemaValue::List { elements } => SchemaValue::List {
-            elements: elements.into_iter().map(redact_host_managed_value).collect(),
+            elements: elements
+                .into_iter()
+                .map(redact_host_managed_value)
+                .collect(),
         },
         SchemaValue::FixedList { elements } => SchemaValue::FixedList {
-            elements: elements.into_iter().map(redact_host_managed_value).collect(),
+            elements: elements
+                .into_iter()
+                .map(redact_host_managed_value)
+                .collect(),
         },
         SchemaValue::Map { entries } => SchemaValue::Map {
             entries: entries
                 .into_iter()
-                .map(|(k, v)| {
-                    (
-                        redact_host_managed_value(k),
-                        redact_host_managed_value(v),
-                    )
-                })
+                .map(|(k, v)| (redact_host_managed_value(k), redact_host_managed_value(v)))
                 .collect(),
         },
         SchemaValue::Option { inner } => SchemaValue::Option {

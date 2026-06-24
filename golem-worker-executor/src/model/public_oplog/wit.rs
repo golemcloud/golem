@@ -40,11 +40,11 @@ use golem_common::model::oplog::{
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
 use golem_common::schema::{
-    redact_host_managed_typed_value, redact_host_managed_value, SchemaValue, TypedSchemaValue,
+    SchemaValue, TypedSchemaValue, redact_host_managed_typed_value, redact_host_managed_value,
 };
 use golem_schema::schema::wit::{
-    decode_value, encode_typed, encode_value, reject_quota_handles_in_value_tree,
-    QuotaTokenHandleDropper, wire,
+    QuotaTokenHandleDropper, decode_value, encode_typed, encode_value,
+    reject_quota_handles_in_value_tree, wire,
 };
 
 /// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT

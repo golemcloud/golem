@@ -521,7 +521,10 @@ pub fn typed_schema_value_strategy() -> impl Strategy<Value = TypedSchemaValue> 
 /// Like [`typed_schema_value_strategy`] but never produces a quota token in the
 /// value tree, so it round-trips through the pure (resolver-less) WIT codec.
 pub fn transportable_typed_schema_value_strategy() -> impl Strategy<Value = TypedSchemaValue> {
-    (schema_graph_strategy(), transportable_schema_value_strategy())
+    (
+        schema_graph_strategy(),
+        transportable_schema_value_strategy(),
+    )
         .prop_map(|(graph, value)| TypedSchemaValue::new(graph, value))
 }
 

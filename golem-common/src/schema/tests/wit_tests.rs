@@ -271,7 +271,9 @@ impl QuotaTokenResolver for TableResolver {
         {
             return Err(anyhow::anyhow!("resolver refused to create handle"));
         }
-        let handle = self.table.push(QuotaTokenHandleRep::new(snapshot.clone()))?;
+        let handle = self
+            .table
+            .push(QuotaTokenHandleRep::new(snapshot.clone()))?;
         self.created += 1;
         self.live += 1;
         Ok(handle)

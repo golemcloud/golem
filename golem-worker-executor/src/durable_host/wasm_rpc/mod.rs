@@ -54,7 +54,7 @@ use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
 use golem_schema::schema::wit::{
-    decode_typed_rejecting_quota_with, decode_value_with, encode_value_with, EncodeError,
+    EncodeError, decode_typed_rejecting_quota_with, decode_value_with, encode_value_with,
 };
 
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
@@ -200,17 +200,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                 value: encoded.into(),
                             }),
                             Err(err) => {
-                                config_error = Some(anyhow::anyhow!(
-                                    "Failed serializing agent config: {err}"
-                                ));
+                                config_error =
+                                    Some(anyhow::anyhow!("Failed serializing agent config: {err}"));
                             }
                         }
                     }
                 }
                 Err(err) => {
                     if config_error.is_none() {
-                        config_error =
-                            Some(anyhow::anyhow!("Invalid agent config value: {err}"));
+                        config_error = Some(anyhow::anyhow!("Invalid agent config value: {err}"));
                     }
                 }
             }

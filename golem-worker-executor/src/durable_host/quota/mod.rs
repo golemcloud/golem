@@ -258,7 +258,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         );
                         let (environment_id, resource_name) = {
                             let quota_token = token_entry(self, &self_)?;
-                            (quota_token.environment_id(), quota_token.resource_name().clone())
+                            (
+                                quota_token.environment_id(),
+                                quota_token.resource_name().clone(),
+                            )
                         };
                         if agent_mode == AgentMode::Durable
                             && let Some(estimated_wait_nanos) = estimated_wait_nanos
@@ -435,7 +438,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
-
 }
 
 /// Host side of the `golem:core/types@2.0.0` `quota-token` resource.

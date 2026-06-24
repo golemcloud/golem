@@ -333,7 +333,9 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
     let agent_error =
         decode_agent_error_rejecting_quota_with(wire_err, store.data_mut().durable_ctx_mut())
             .map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed to decode agent-error from guest: {e}"))
+                WorkerExecutorError::runtime(format!(
+                    "Failed to decode agent-error from guest: {e}"
+                ))
             })?;
     Ok(InvokeResult::Failed {
         consumed_fuel,
@@ -360,11 +362,9 @@ fn decode_invoke_output<Ctx: WorkerCtx>(
         }),
         // The output is a guest-owned value tree, so any `quota-token` handles
         // it carries are lifted into trusted snapshots (and consumed) here.
-        Some(tree) => {
-            decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
-            })
-        }
+        Some(tree) => decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
+            WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
+        }),
     }
 }
 
@@ -658,8 +658,8 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             principal,
         } => {
-            let input = encode_value_with(&input, store.data_mut().durable_ctx_mut())
-                .map_err(|e| {
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to encode agent initialization input: {e}"
                     ))
@@ -675,9 +675,11 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             principal,
         } => {
-            let input = encode_value_with(&input, store.data_mut().durable_ctx_mut())
-                .map_err(|e| {
-                    WorkerExecutorError::runtime(format!("Failed to encode agent method input: {e}"))
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to encode agent method input: {e}"
+                    ))
                 })?;
             PreparedCall::Invoke {
                 method_name,

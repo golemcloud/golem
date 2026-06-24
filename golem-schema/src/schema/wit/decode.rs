@@ -233,7 +233,11 @@ pub fn decode_typed(wire_typed: &wire::TypedSchemaValue) -> Result<TypedSchemaVa
     // used for durable-function request/response and agent errors, which never
     // carry quota tokens. Decode the value by reference so any stray handle is
     // rejected (and left for the caller's tree to drop) rather than lifted.
-    let value = decode_value_at(&wire_typed.value, wire_typed.value.root, &mut HashSet::new())?;
+    let value = decode_value_at(
+        &wire_typed.value,
+        wire_typed.value.root,
+        &mut HashSet::new(),
+    )?;
     Ok(TypedSchemaValue::new(graph, value))
 }
 
@@ -837,11 +841,10 @@ fn preflight_owned_at(
                 preflight_owned_at(slots, e.value, reached)?;
             }
         }
-        wire::SchemaValueNode::OptionValue(inner) => {
-            if let Some(i) = inner {
-                preflight_owned_at(slots, *i, reached)?;
-            }
+        wire::SchemaValueNode::OptionValue(Some(i)) => {
+            preflight_owned_at(slots, *i, reached)?;
         }
+        wire::SchemaValueNode::OptionValue(None) => {}
         wire::SchemaValueNode::ResultValue(p) => match p {
             wire::ResultValuePayload::OkValue(opt) | wire::ResultValuePayload::ErrValue(opt) => {
                 if let Some(i) = opt {
