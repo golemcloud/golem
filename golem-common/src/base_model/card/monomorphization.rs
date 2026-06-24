@@ -15,15 +15,12 @@
 use super::class::*;
 use super::owner::*;
 use super::recipient::RecipientPattern;
-use super::{
-    Card, CardId, EffectiveSurface, PermissionPattern, PolymorphicPermissionPattern, StoredCard,
-};
+use super::{Card, EffectiveSurface, PermissionPattern, PolymorphicPermissionPattern, StoredCard};
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPermissionMonomorphizationContext {
@@ -35,13 +32,13 @@ pub struct AgentPermissionMonomorphizationContext {
     pub agent_type: AgentTypeName,
 }
 
-pub fn agent_effective_surface_from_wallet(
+pub fn agent_effective_surface_from_wallet<'a>(
     context: &AgentPermissionMonomorphizationContext,
-    wallet_cards: &HashMap<CardId, StoredCard>,
+    wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
 ) -> EffectiveSurface {
     let holder = agent_recipient_pattern(context);
     let cards = wallet_cards
-        .values()
+        .into_iter()
         .map(|card| match card {
             StoredCard::Concrete(card) => card.clone(),
             StoredCard::Polymorphic(_) => monomorphize_stored_card(card, context),
@@ -570,7 +567,7 @@ mod tests {
     use crate::model::application::ApplicationName;
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::card::{
-        AgentClass, AgentResourcePattern, AgentVerb, ClassPermissionTarget, ComponentClass,
+        AgentClass, AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget, ComponentClass,
         ComponentResourcePattern, ComponentVerb, EnvironmentClass, EnvironmentResourcePattern,
         EnvironmentVerb, PermissionTarget, PolymorphicCard, PolymorphicClassPermissionPattern,
         PolymorphicPermissionPattern, StoredCard,
@@ -578,7 +575,7 @@ mod tests {
     use crate::model::component::ComponentName;
     use crate::model::component_metadata::default_agent_initial_card;
     use crate::model::environment::EnvironmentName;
-    use std::collections::HashMap;
+
     use test_r::test;
 
     fn context() -> AgentPermissionMonomorphizationContext {
@@ -659,8 +656,8 @@ mod tests {
             expires_at: None,
             system_card: false,
         };
-        let wallet = HashMap::from([(card_id, StoredCard::Polymorphic(card))]);
-        let surface = agent_effective_surface_from_wallet(&context, &wallet);
+        let surface =
+            agent_effective_surface_from_wallet(&context, [&StoredCard::Polymorphic(card)]);
 
         assert_eq!(surface.source_card_ids, vec![card_id]);
         assert!(
@@ -697,8 +694,8 @@ mod tests {
     fn default_agent_initial_template_is_current_environment_scoped() {
         let context = context();
         let card = default_agent_initial_card();
-        let wallet = HashMap::from([(card.card_id, StoredCard::Polymorphic(card))]);
-        let surface = agent_effective_surface_from_wallet(&context, &wallet);
+        let surface =
+            agent_effective_surface_from_wallet(&context, [&StoredCard::Polymorphic(card)]);
 
         assert!(
             surface

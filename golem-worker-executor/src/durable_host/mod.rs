@@ -128,7 +128,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use replay_state::ReplayEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -267,9 +267,7 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
 ) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
     let context = agent_monomorphization_context(component, owned_agent_id, agent_id);
     let card = agent_initial_card_from_component_metadata(component, agent_id)?;
-    let wallet_cards = HashMap::from([(card.card_id(), card)]);
-
-    Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, &wallet_cards))
+    Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
 }
 
 fn agent_monomorphization_context(
@@ -713,7 +711,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             );
             golem_common::model::card::agent_effective_surface_from_wallet(
                 &context,
-                &self.state.agent_wallet_cards,
+                self.state.agent_wallet_cards.values(),
             )
         } else {
             golem_common::model::card::EffectiveSurface::default()
@@ -2721,13 +2719,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let initial_card =
                 agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
-            let initial_wallet_cards = HashMap::from([(initial_card.card_id(), initial_card)]);
+            let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
             let context =
                 agent_monomorphization_context(&new_metadata, &self.owned_agent_id, &agent_id);
             let agent_effective_surface =
                 golem_common::model::card::agent_effective_surface_from_wallet(
                     &context,
-                    &initial_wallet_cards,
+                    initial_wallet_cards.values(),
                 );
 
             Some((
@@ -4681,7 +4679,7 @@ struct PrivateDurableWorkerState {
 
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
-    agent_wallet_cards: HashMap<CardId, StoredCard>,
+    agent_wallet_cards: BTreeMap<CardId, StoredCard>,
 
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -4856,16 +4854,16 @@ impl PrivateDurableWorkerState {
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let initial_agent_wallet_cards =
-            || -> Result<HashMap<CardId, StoredCard>, WorkerExecutorError> {
+            || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
                 match agent_id.as_ref() {
                     Some(agent_id) => {
                         let card = agent_initial_card_from_component_metadata(
                             &component_metadata,
                             agent_id,
                         )?;
-                        Ok(HashMap::from([(card.card_id(), card)]))
+                        Ok(BTreeMap::from([(card.card_id(), card)]))
                     }
-                    None => Ok(HashMap::new()),
+                    None => Ok(BTreeMap::new()),
                 }
             };
         let agent_wallet_cards = if let Some(snapshot_idx) = last_snapshot_index {
@@ -4884,7 +4882,7 @@ impl PrivateDurableWorkerState {
                 agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
             golem_common::model::card::agent_effective_surface_from_wallet(
                 &context,
-                &agent_wallet_cards,
+                agent_wallet_cards.values(),
             )
         } else {
             golem_common::model::card::EffectiveSurface::default()
