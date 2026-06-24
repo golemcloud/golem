@@ -21,7 +21,8 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostResponse, HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel
+    DurableFunctionType, HostResponse, HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex,
+    OplogPayload, PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -30,15 +31,12 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashSet};
 use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tracing::debug;
 use uuid::Uuid;
-use std::rc::Rc;
-use std::cmp::{Ordering, Reverse};
-use super::concurrent::CallReplayOutcome;
 
 const CHUNK_SIZE: u64 = 1024;
 
@@ -74,6 +72,7 @@ pub enum OplogEntryLookupResult {
     Found {
         index: OplogIndex,
         entry: Box<OplogEntry>,
+        #[allow(dead_code)]
         violates_for_all: bool,
     },
     NotFound {
@@ -84,14 +83,18 @@ pub enum OplogEntryLookupResult {
 #[derive(Debug, PartialEq, Eq)]
 enum InternalReplayEvent {
     ReplayFinished,
-    UpdateReplayed { new_revision: ComponentRevision },
-    CardRevoked { card_id: CardId },
+    UpdateReplayed {
+        new_revision: ComponentRevision,
+    },
+    CardRevoked {
+        card_id: CardId,
+    },
     // Must sort before DurableCallEnded
     ForkStarted,
     DurableCallEnded {
         start_index: OplogIndex,
         response: Option<OplogPayload<HostResponse>>,
-        forced_commit: bool
+        forced_commit: bool,
     },
     DurableCallCancelled {
         start_index: OplogIndex,
@@ -100,8 +103,8 @@ enum InternalReplayEvent {
     SeenLog {
         level: LogLevel,
         context: String,
-        message: String
-    }
+        message: String,
+    },
 }
 
 impl InternalReplayEvent {
@@ -113,7 +116,7 @@ impl InternalReplayEvent {
             Self::ForkStarted => 3,
             Self::DurableCallEnded { .. } => 4,
             Self::DurableCallCancelled { .. } => 5,
-            Self::SeenLog { .. } => 6
+            Self::SeenLog { .. } => 6,
         }
     }
 }
@@ -138,7 +141,7 @@ struct PendingState {
     last_read_non_hint_oplog_index: OplogIndex,
     current_oplog_chunk: Arc<Vec<OplogEntry>>,
     current_oplog_chunk_region: OplogRegion,
-    // invariant: either start or end must be at or after last_read_oplog_index.
+    // Invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
     in_persist_nothing_region: bool,
     // We are doing appends in ascending order 90%+ of the time here. A binary heap is not a great choice
@@ -153,7 +156,7 @@ struct CommittedState {
     current_oplog_chunk_region: OplogRegion,
     current_oplog_chunk: Arc<Vec<OplogEntry>>,
     last_read_non_hint_oplog_index: OplogIndex,
-    // invariant: either start or end must be at or after last_read_oplog_index.
+    // Invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
     in_persist_nothing_region: bool,
     replay_events: Vec<ReplayEvent>,
@@ -191,11 +194,14 @@ impl ReplayState {
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
-        replay_target: OplogIndex
+        replay_target: OplogIndex,
     ) -> Self {
         let (start_index, initial_skipped_region) = Self::first_non_skipped_entry(&skipped_regions);
         let initial_oplog_chunk = Arc::new(Vec::new());
-        let initial_oplog_chunk_region = OplogRegion { start: OplogIndex::NONE, end: OplogIndex::NONE };
+        let initial_oplog_chunk_region = OplogRegion {
+            start: OplogIndex::NONE,
+            end: OplogIndex::NONE,
+        };
 
         Self {
             oplog,
@@ -223,7 +229,7 @@ impl ReplayState {
                 seen_logs: HashSet::new(),
                 fork_starts: HashSet::new(),
             },
-            concurrent_resolver: ConcurrentReplayResolver::default()
+            concurrent_resolver: ConcurrentReplayResolver::default(),
         }
     }
 
@@ -318,7 +324,7 @@ impl ReplayState {
         self.advance_to_next_non_hint_entry().await;
         let (index, entry) = self.get_current_entry().await;
 
-        if condition(&entry) {
+        if condition(entry) {
             let entry = entry.clone();
             self.commit().await;
             Ok(Some((index, entry)))
@@ -418,74 +424,66 @@ impl ReplayState {
     pub async fn get_oplog_entry_agent_invocation_started(
         &mut self,
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
-        loop {
-            if self.is_replay() {
-                let (_, oplog_entry) = self.get_oplog_entry().await?;
-                match oplog_entry {
-                    OplogEntry::AgentInvocationStarted {
+        if self.is_replay() {
+            let (_, oplog_entry) = self.get_oplog_entry().await?;
+            match oplog_entry {
+                OplogEntry::AgentInvocationStarted {
+                    idempotency_key,
+                    payload,
+                    trace_id,
+                    trace_states,
+                    invocation_context: spans,
+                    ..
+                } => {
+                    let invocation_payload =
+                        self.oplog.download_payload(payload).await.map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to deserialize agent invocation payload: {err}"
+                            ))
+                        })?;
+
+                    let invocation_context =
+                        InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
+
+                    Ok(Some(AgentInvocationStartedEntry {
                         idempotency_key,
-                        payload,
-                        trace_id,
-                        trace_states,
-                        invocation_context: spans,
-                        ..
-                    } => {
-                        let invocation_payload =
-                            self.oplog.download_payload(payload).await.map_err(|err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "failed to deserialize agent invocation payload: {err}"
-                                ))
-                            })?;
-
-                        let invocation_context =
-                            InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
-
-                        break Ok(Some(AgentInvocationStartedEntry {
-                            idempotency_key,
-                            invocation_payload,
-                            invocation_context,
-                        }));
-                    }
-                    _ => {
-                        break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "AgentInvocationStarted",
-                            format!("{oplog_entry:?}"),
-                        ));
-                    }
+                        invocation_payload,
+                        invocation_context,
+                    }))
                 }
-            } else {
-                break Ok(None);
+                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "AgentInvocationStarted",
+                    format!("{oplog_entry:?}"),
+                )),
             }
+        } else {
+            Ok(None)
         }
     }
 
     pub async fn get_oplog_entry_agent_invocation_finished(
         &mut self,
     ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
-        loop {
-            if self.is_replay() {
-                let (_, oplog_entry) = self.get_oplog_entry().await?;
-                match oplog_entry {
-                    OplogEntry::AgentInvocationFinished { result, .. } => {
-                        let result: AgentInvocationResult =
-                            self.oplog.download_payload(result).await.map_err(|err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "failed to deserialize agent invocation result payload: {err}"
-                                ))
-                            })?;
+        if self.is_replay() {
+            let (_, oplog_entry) = self.get_oplog_entry().await?;
+            match oplog_entry {
+                OplogEntry::AgentInvocationFinished { result, .. } => {
+                    let result: AgentInvocationResult =
+                        self.oplog.download_payload(result).await.map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to deserialize agent invocation result payload: {err}"
+                            ))
+                        })?;
 
-                        break Ok(Some(result));
-                    }
-                    _ => {
-                        break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "AgentInvocationFinished",
-                            format!("{oplog_entry:?}"),
-                        ));
-                    }
+                    Ok(Some(result))
                 }
-            } else {
-                break Ok(None);
+                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "AgentInvocationFinished",
+                    format!("{oplog_entry:?}"),
+                )),
             }
+        } else {
+            Ok(None)
         }
     }
 
@@ -540,8 +538,7 @@ impl ReplayState {
         if let Some(err) = validation_error {
             // `claim_any_concurrent_start` already registered a resolver receiver for this `Start`;
             // drop it on validation failure so it cannot be matched by a later resolution.
-            self
-                .concurrent_resolver
+            self.concurrent_resolver
                 .unregister(claimed.handle.start_idx());
             return Err(err);
         }
@@ -587,9 +584,7 @@ impl ReplayState {
                         "Start { request: None }".to_string(),
                     ));
                 }
-                let receiver = {
-                    self.concurrent_resolver.register(start_idx)
-                };
+                let receiver = { self.concurrent_resolver.register(start_idx) };
                 Ok(ClaimedConcurrentStart {
                     handle: ReplayCallHandle::new(start_idx, receiver),
                     function_name,
@@ -643,8 +638,7 @@ impl ReplayState {
                 Err(oneshot::error::TryRecvError::Closed) => {
                     // The sender was dropped without resolving (anomalous). Drop any lingering
                     // registration so it cannot be matched by a later resolution.
-                    self.concurrent_resolver
-                        .unregister(start_idx);
+                    self.concurrent_resolver.unregister(start_idx);
                     return Err(WorkerExecutorError::runtime(format!(
                         "concurrent replay resolver channel closed for Start at {start_idx}"
                     )));
@@ -656,8 +650,7 @@ impl ReplayState {
                 // committed lone `Start` (a forced commit flushed it before its `End`, or a crash
                 // happened in between). Drop the now-stale registration and report Incomplete so the
                 // caller can re-execute the side effect and complete the existing `Start`.
-                self.concurrent_resolver
-                    .unregister(start_idx);
+                self.concurrent_resolver.unregister(start_idx);
                 return Ok(ResolutionOutcome::Incomplete);
             }
 
@@ -671,8 +664,7 @@ impl ReplayState {
                 // scope/persistence marker). Crossing it would corrupt the cursor shared with
                 // legacy positional readers, so we refuse rather than advance past it. Drop the
                 // stale registration first so it cannot be matched by a later resolution.
-                self.concurrent_resolver
-                    .unregister(start_idx);
+                self.concurrent_resolver.unregister(start_idx);
                 return Err(WorkerExecutorError::runtime(format!(
                     "concurrent replay interleaving is not supported: encountered a non-End/Cancelled entry while awaiting resolution of Start at {start_idx}"
                 )));
@@ -692,7 +684,9 @@ impl ReplayState {
         self.committed.in_persist_nothing_region = self.pending.in_persist_nothing_region;
 
         let mut replay_events_in_jumps = self.extract_replay_events_in_jumped_regions().await;
-        self.pending.replay_events.append(&mut replay_events_in_jumps);
+        self.pending
+            .replay_events
+            .append(&mut replay_events_in_jumps);
 
         {
             let fork_starts = &mut self.committed.fork_starts;
@@ -718,7 +712,14 @@ impl ReplayState {
                         response,
                         forced_commit,
                     } => {
-                        self.concurrent_resolver.resolve_if_pending(start_index, Resolution::Completed { end_idx: event_idx, response: response.clone(), forced_commit });
+                        self.concurrent_resolver.resolve_if_pending(
+                            start_index,
+                            Resolution::Completed {
+                                end_idx: event_idx,
+                                response: response.clone(),
+                                forced_commit,
+                            },
+                        );
                         if fork_starts.remove(&start_index) {
                             let response = response.expect("fork end should have payload");
 
@@ -726,17 +727,21 @@ impl ReplayState {
                                 .oplog
                                 .download_payload(response)
                                 .await
-                                .expect(&format!("failed to download GolemApiFork oplog payload at index {start_index}"));
+                                .unwrap_or_else(|_| panic!("failed to download GolemApiFork oplog payload at index {start_index}"));
 
                             let result: HostResponseGolemApiFork =
                                 if let HostResponse::GolemApiFork(result) = response {
                                     result
                                 } else {
-                                    panic!("Unexpected host response when fetching golem api fork result at {event_idx}")
+                                    panic!(
+                                        "Unexpected host response when fetching golem api fork result at {event_idx}"
+                                    )
                                 };
 
                             if result.result == Ok(ForkResult::Forked) {
-                                replay_events.push(ReplayEvent::ForkReplayed { new_phantom_id: result.forked_phantom_id });
+                                replay_events.push(ReplayEvent::ForkReplayed {
+                                    new_phantom_id: result.forked_phantom_id,
+                                });
                             }
                         }
                     }
@@ -744,12 +749,18 @@ impl ReplayState {
                         start_index,
                         partial_response,
                     } => {
-                        self.concurrent_resolver.resolve_if_pending(start_index, Resolution::Cancelled { cancelled_idx: event_idx, partial: partial_response });
+                        self.concurrent_resolver.resolve_if_pending(
+                            start_index,
+                            Resolution::Cancelled {
+                                cancelled_idx: event_idx,
+                                partial: partial_response,
+                            },
+                        );
                     }
                     InternalReplayEvent::SeenLog {
                         level,
                         context,
-                        message
+                        message,
                     } => {
                         seen_logs.insert(Self::hash_log_entry(level, &context, &message));
                     }
@@ -788,14 +799,24 @@ impl ReplayState {
                     target_revision, ..
                 } => {
                     let new_revision = *target_revision;
-                    self.pending.replay_events.push((Reverse(idx), InternalReplayEvent::UpdateReplayed { new_revision }));
+                    self.pending.replay_events.push((
+                        Reverse(idx),
+                        InternalReplayEvent::UpdateReplayed { new_revision },
+                    ));
                 }
                 OplogEntry::CardRevoked { card_id, .. } => {
                     let card_id = CardId(*card_id);
-                    self.pending.replay_events.push((Reverse(idx), InternalReplayEvent::CardRevoked { card_id }));
+                    self.pending
+                        .replay_events
+                        .push((Reverse(idx), InternalReplayEvent::CardRevoked { card_id }));
                 }
-                OplogEntry::Start { function_name, .. } if !in_persist_nothing_region && function_name == &HostFunctionName::GolemApiFork => {
-                    self.pending.replay_events.push((Reverse(idx), InternalReplayEvent::ForkStarted));
+                OplogEntry::Start { function_name, .. }
+                    if !in_persist_nothing_region
+                        && function_name == &HostFunctionName::GolemApiFork =>
+                {
+                    self.pending
+                        .replay_events
+                        .push((Reverse(idx), InternalReplayEvent::ForkStarted));
                 }
                 OplogEntry::End {
                     start_index,
@@ -812,7 +833,7 @@ impl ReplayState {
                             start_index,
                             response,
                             forced_commit,
-                        }
+                        },
                     ));
                 }
                 OplogEntry::Cancelled {
@@ -827,10 +848,15 @@ impl ReplayState {
                         InternalReplayEvent::DurableCallCancelled {
                             start_index,
                             partial_response,
-                        }
+                        },
                     ));
                 }
-                OplogEntry::Log { level, context, message, .. } if !in_persist_nothing_region => {
+                OplogEntry::Log {
+                    level,
+                    context,
+                    message,
+                    ..
+                } if !in_persist_nothing_region => {
                     let level = *level;
                     let context = context.clone();
                     let message = message.clone();
@@ -839,12 +865,15 @@ impl ReplayState {
                         InternalReplayEvent::SeenLog {
                             level,
                             context,
-                            message
-                        }
+                            message,
+                        },
                     ));
                 }
-                OplogEntry::ChangePersistenceLevel { persistence_level, .. } => {
-                    self.pending.in_persist_nothing_region = *persistence_level != PersistenceLevel::PersistNothing;
+                OplogEntry::ChangePersistenceLevel {
+                    persistence_level, ..
+                } => {
+                    self.pending.in_persist_nothing_region =
+                        *persistence_level != PersistenceLevel::PersistNothing;
                 }
                 OplogEntry::AgentInvocationFinished { .. } => {
                     self.pending.in_persist_nothing_region = false;
@@ -861,7 +890,10 @@ impl ReplayState {
         self.pending.last_read_non_hint_oplog_index = self.pending.current_oplog_index;
 
         if self.pending_is_live() {
-            self.pending.replay_events.push((Reverse(self.pending.current_oplog_index), InternalReplayEvent::ReplayFinished));
+            self.pending.replay_events.push((
+                Reverse(self.pending.current_oplog_index),
+                InternalReplayEvent::ReplayFinished,
+            ));
         }
     }
 
@@ -876,7 +908,10 @@ impl ReplayState {
         while self.pending_is_replay()
             && let Some(skipped_region) = &self.pending.next_skipped_region
             && skipped_region.contains(self.pending.current_oplog_index)
-            && self.pending.current_oplog_chunk_region.contains(self.pending.current_oplog_index)
+            && self
+                .pending
+                .current_oplog_chunk_region
+                .contains(self.pending.current_oplog_index)
         {
             let exits_current_region = skipped_region.end == self.pending.current_oplog_index;
 
@@ -884,14 +919,18 @@ impl ReplayState {
             let (entry_index, entry) = self.get_current_entry().await;
 
             if let Some(replay_event) = Self::skipped_oplog_entry_as_replay_event(entry) {
-                self.pending.replay_events.push((Reverse(entry_index), replay_event));
+                self.pending
+                    .replay_events
+                    .push((Reverse(entry_index), replay_event));
             }
 
             self.pending.current_oplog_index = self.pending.current_oplog_index.next();
 
             // We moved out of the skipped region
             if exits_current_region {
-                self.pending.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.pending.current_oplog_index);
+                self.pending.next_skipped_region = self
+                    .skipped_regions
+                    .find_next_deleted_region(self.pending.current_oplog_index);
             }
         }
     }
@@ -907,16 +946,33 @@ impl ReplayState {
             let previous_index = self.pending.current_oplog_index;
 
             self.pending.current_oplog_index = skipped_region_end.next();
-            self.pending.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.pending.current_oplog_index);
-            self.pending.jumps.push(OplogRegion { start: previous_index, end: skipped_region_end });
+            self.pending.next_skipped_region = self
+                .skipped_regions
+                .find_next_deleted_region(self.pending.current_oplog_index);
+            self.pending.jumps.push(OplogRegion {
+                start: previous_index,
+                end: skipped_region_end,
+            });
         }
     }
 
     async fn ensure_chunk(&mut self) {
         let idx = self.pending.current_oplog_index;
-        if !self.pending.current_oplog_chunk_region.contains(self.pending.current_oplog_index) {
-            let new_entries = self.oplog.read_many(idx, CHUNK_SIZE).await.into_values().collect();
-            self.pending.current_oplog_chunk_region = OplogRegion { start: idx, end: idx.range_end(CHUNK_SIZE) };
+        if !self
+            .pending
+            .current_oplog_chunk_region
+            .contains(self.pending.current_oplog_index)
+        {
+            let new_entries = self
+                .oplog
+                .read_many(idx, CHUNK_SIZE)
+                .await
+                .into_values()
+                .collect();
+            self.pending.current_oplog_chunk_region = OplogRegion {
+                start: idx,
+                end: idx.range_end(CHUNK_SIZE),
+            };
             self.pending.current_oplog_chunk = Arc::new(new_entries);
         }
     }
@@ -924,14 +980,17 @@ impl ReplayState {
     async fn get_current_entry(&mut self) -> (OplogIndex, &OplogEntry) {
         self.ensure_chunk().await;
         let idx = self.pending.current_oplog_index;
-        let chunk_idx = (idx.as_u64() - self.pending.current_oplog_chunk_region.start.as_u64()) as usize;
+        let chunk_idx =
+            (idx.as_u64() - self.pending.current_oplog_chunk_region.start.as_u64()) as usize;
         (idx, &self.pending.current_oplog_chunk[chunk_idx])
     }
 
     // Some operational oplog entries like card-revoked stay relevant even if they are skipped.
     // The skipped chunks are guaranteed to have not been read during the prior replay, so there
     // is nothing to but to read them here.
-    async fn extract_replay_events_in_jumped_regions(&mut self) -> BinaryHeap<(Reverse<OplogIndex>, InternalReplayEvent)> {
+    async fn extract_replay_events_in_jumped_regions(
+        &mut self,
+    ) -> BinaryHeap<(Reverse<OplogIndex>, InternalReplayEvent)> {
         let mut result = BinaryHeap::new();
 
         for region in &self.pending.jumps {
@@ -955,19 +1014,21 @@ impl ReplayState {
 
     fn skipped_oplog_entry_as_replay_event(entry: &OplogEntry) -> Option<InternalReplayEvent> {
         match entry {
-            OplogEntry::CardRevoked { card_id, .. } =>
-                Some(InternalReplayEvent::CardRevoked {
-                    card_id: CardId(*card_id),
-                }),
-            _ => None
+            OplogEntry::CardRevoked { card_id, .. } => Some(InternalReplayEvent::CardRevoked {
+                card_id: CardId(*card_id),
+            }),
+            _ => None,
         }
     }
 
-    fn first_non_skipped_entry(deleted_regions: &DeletedRegions) -> (OplogIndex, Option<OplogRegion>) {
+    fn first_non_skipped_entry(
+        deleted_regions: &DeletedRegions,
+    ) -> (OplogIndex, Option<OplogRegion>) {
         let mut oplog_index = OplogIndex::INITIAL;
         let mut next_skipped_region = deleted_regions.find_next_deleted_region(oplog_index);
 
-        while let Some(skipped_region) = &next_skipped_region && skipped_region.contains(oplog_index)
+        while let Some(skipped_region) = &next_skipped_region
+            && skipped_region.contains(oplog_index)
         {
             oplog_index = skipped_region.end.next();
             next_skipped_region = deleted_regions.find_next_deleted_region(oplog_index);

@@ -1415,11 +1415,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: true,
-                        } => {
-                            Err(WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ))
-                        }
+                        } => Err(WorkerExecutorError::runtime(
+                            "Non-idempotent remote write operation was not completed, cannot retry",
+                        )),
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
