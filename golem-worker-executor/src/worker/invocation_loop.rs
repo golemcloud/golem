@@ -277,10 +277,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn archive_ephemeral_oplog(&self) {
-        while matches!(
-            EphemeralOplog::try_archive_blocking(&self.parent.oplog).await,
-            Some(true)
-        ) {}
+        let _ = EphemeralOplog::try_archive_background(&self.parent.oplog).await;
     }
 
     async fn record_retry_interrupt_failure(&self, store: &Mutex<Store<Ctx>>, kind: InterruptKind) {
