@@ -17,6 +17,7 @@ use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
+use crate::services::card::CardService;
 use crate::services::component::utils::prepare_component_files_for_upload;
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
@@ -68,6 +69,7 @@ use tracing::info;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
+    card_service: Arc<CardService>,
     object_store: Arc<ComponentObjectStore>,
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_agent_files_service: Arc<InitialAgentFilesService>,
@@ -79,6 +81,7 @@ pub struct ComponentWriteService {
 impl ComponentWriteService {
     pub fn new(
         component_repo: Arc<dyn ComponentRepo>,
+        card_service: Arc<CardService>,
         object_store: Arc<ComponentObjectStore>,
         component_compilation: Arc<dyn ComponentCompilationService>,
         initial_agent_files_service: Arc<InitialAgentFilesService>,
@@ -88,6 +91,7 @@ impl ComponentWriteService {
     ) -> Self {
         Self {
             component_repo,
+            card_service,
             object_store,
             component_compilation,
             initial_agent_files_service,
@@ -95,6 +99,34 @@ impl ComponentWriteService {
             environment_service,
             environment_plugin_grant_service,
         }
+    }
+
+    async fn create_default_initial_permissions(
+        &self,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        agent_types: &[AgentTypeSchema],
+        environment_name: &EnvironmentName,
+        component_name: &ComponentName,
+    ) -> Result<BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>, ComponentError> {
+        let mut result = BTreeMap::new();
+
+        for agent_type in agent_types {
+            let template =
+                AgentInitialPermissionTemplate::default_for(environment_name, component_name);
+            self.card_service
+                .create_agent_initial_card(
+                    component_id,
+                    component_revision,
+                    agent_type.type_name.clone(),
+                    &template,
+                )
+                .await?;
+
+            result.insert(agent_type.type_name.clone(), template);
+        }
+
+        Ok(result)
     }
 
     pub async fn create(
@@ -218,12 +250,16 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
-        let component_metadata =
-            component_metadata.with_agent_initial_permissions(default_initial_permissions(
+        let component_metadata = component_metadata.with_agent_initial_permissions(
+            self.create_default_initial_permissions(
+                component_id,
+                ComponentRevision::INITIAL,
                 component_metadata.agent_types(),
                 &environment.name,
                 &component_creation.component_name,
-            ));
+            )
+            .await?,
+        );
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
@@ -418,12 +454,16 @@ impl ComponentWriteService {
                 final_provision_configs,
             )
             .await?;
-            component.metadata =
-                metadata.with_agent_initial_permissions(default_initial_permissions(
+            component.metadata = metadata.with_agent_initial_permissions(
+                self.create_default_initial_permissions(
+                    component.id,
+                    component.revision,
                     metadata.agent_types(),
                     &environment.name,
                     &component.component_name,
-                ));
+                )
+                .await?,
+            );
         } else if agent_types_changed {
             // TODO: skip the download here
             let old_data = self
@@ -437,12 +477,16 @@ impl ComponentWriteService {
                 final_provision_configs,
             )
             .await?;
-            component.metadata =
-                metadata.with_agent_initial_permissions(default_initial_permissions(
+            component.metadata = metadata.with_agent_initial_permissions(
+                self.create_default_initial_permissions(
+                    component.id,
+                    component.revision,
                     metadata.agent_types(),
                     &environment.name,
                     &component_name,
-                ));
+                )
+                .await?,
+            );
         } else if provision_configs_changed {
             component.metadata = component
                 .metadata
@@ -999,22 +1043,6 @@ fn provision_configs_for_agent_types(
         .collect()
 }
 
-fn default_initial_permissions(
-    agent_types: &[AgentTypeSchema],
-    environment_name: &EnvironmentName,
-    component_name: &ComponentName,
-) -> BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
-    agent_types
-        .iter()
-        .map(|agent_type| {
-            (
-                agent_type.type_name.clone(),
-                AgentInitialPermissionTemplate::default_for(environment_name, component_name),
-            )
-        })
-        .collect()
-}
-
 fn validate_component_metadata_invariants(
     metadata: &ComponentMetadata,
 ) -> Result<(), ComponentError> {
@@ -1033,6 +1061,27 @@ fn validate_component_metadata_invariants(
             return Err(ComponentError::UndeclaredAgentTypeInProvisionConfig(
                 agent_type_name.clone(),
             ));
+        }
+    }
+
+    for agent_type in metadata.agent_types() {
+        match metadata.agent_type_initial_permission_template(&agent_type.type_name) {
+            Some(_) => {}
+            _ => {
+                return Err(ComponentError::MissingAgentInitialPermissionTemplate(
+                    agent_type.type_name.clone(),
+                ));
+            }
+        }
+    }
+
+    for agent_type_name in metadata.agent_type_initial_permission_templates().keys() {
+        if !agent_type_names.contains(agent_type_name) {
+            return Err(
+                ComponentError::UndeclaredAgentTypeInInitialPermissionTemplate(
+                    agent_type_name.clone(),
+                ),
+            );
         }
     }
 

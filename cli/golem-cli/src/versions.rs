@@ -69,6 +69,10 @@ pub mod scala_dep {
     pub const ZIO_BLOCKS_VERSION: &str = "0.0.43";
 }
 
+pub mod moonbit_dep {
+    pub const ASYNC_VERSION: &str = "0.18.1";
+}
+
 pub mod ai {
     pub const VERSION: &str = "v0.5.2";
     pub const SUFFIX: &str = ".wasm";

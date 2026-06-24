@@ -32,7 +32,12 @@ import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistr
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { RuntimeParam } from '../src/internal/typeInfoInternal';
 import { SchemaValue } from '../src/internal/schema-model';
-import { decodeOutput, encodeInputRecord } from '../src/internal/mapping/values/boundaryValue';
+import { SchemaValueTree } from 'golem:core/types@2.0.0';
+import {
+  decodeOutputFromWit,
+  encodeInputRecord,
+  encodeInputRecordToWit,
+} from '../src/internal/mapping/values/boundaryValue';
 import { ResolvedGraph, ResolvedType, TypeId } from '../src/internal/mapping/types/resolvedType';
 import type { RecTree, MutualA } from './validAgents';
 import type { ImportedRecTree } from './importedTestTypes';
@@ -77,7 +82,7 @@ function buildConstructorInput(
   return encodeInputRecord(args, userParams);
 }
 
-function buildMethodInput(methodName: string, nameValues: [string, any][]): SchemaValue {
+function buildMethodInput(methodName: string, nameValues: [string, any][]): SchemaValueTree {
   const valueByName = new Map(nameValues);
   const paramTypes = AgentMethodParamRegistry.getParametersAndType(RECURSIVE_AGENT, methodName);
   const userParams: RuntimeParam[] = [];
@@ -86,15 +91,15 @@ function buildMethodInput(methodName: string, nameValues: [string, any][]): Sche
     userParams.push({ name, type });
     args.push(valueByName.has(name) ? valueByName.get(name) : undefined);
   }
-  return encodeInputRecord(args, userParams);
+  return encodeInputRecordToWit(args, userParams);
 }
 
-function decodeReturn(methodName: string, value: SchemaValue | undefined): any {
+function decodeReturn(methodName: string, value: SchemaValueTree | undefined): any {
   const returnType = AgentMethodRegistry.getReturnType(RECURSIVE_AGENT, methodName);
   if (!returnType) {
     throw new Error(`Unsupported return type for method ${methodName}`);
   }
-  return decodeOutput(value, returnType);
+  return decodeOutputFromWit(value, returnType);
 }
 
 /** Single method-parameter resolved graph (every recursive method here takes one param). */

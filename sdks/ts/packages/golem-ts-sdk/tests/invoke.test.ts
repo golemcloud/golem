@@ -60,8 +60,13 @@ import {
   UnstructuredText,
 } from '../src';
 import { SchemaValue } from '../src/internal/schema-model';
+import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { RuntimeParam } from '../src/internal/typeInfoInternal';
-import { decodeOutput, encodeInputRecord } from '../src/internal/mapping/values/boundaryValue';
+import {
+  decodeOutputFromWit,
+  encodeInputRecord,
+  encodeInputRecordToWit,
+} from '../src/internal/mapping/values/boundaryValue';
 import { TextOrImage } from './validAgents';
 
 test('BarAgent can be successfully initiated', () => {
@@ -703,7 +708,7 @@ async function testInvoke(
   parameterNameAndValues: [string, any][],
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
-  assertRawOutput?: (raw: SchemaValue | undefined) => void,
+  assertRawOutput?: (raw: SchemaValueTree | undefined) => void,
 ) {
   // Build the schema-native input record and invoke dynamically.
   const input = buildMethodInput(methodName, parameterNameAndValues);
@@ -737,7 +742,7 @@ async function testInvoke(
 function buildMethodInput(
   methodName: string,
   parameterNameAndValues: [string, any][],
-): SchemaValue {
+): SchemaValueTree {
   const valueByName = new Map(parameterNameAndValues);
   const paramTypes = AgentMethodParamRegistry.getParametersAndType('FooAgent', methodName);
 
@@ -748,7 +753,7 @@ function buildMethodInput(
     args.push(valueByName.has(name) ? valueByName.get(name) : undefined);
   }
 
-  return encodeInputRecord(args, userParams);
+  return encodeInputRecordToWit(args, userParams);
 }
 
 /**
@@ -786,14 +791,14 @@ function buildConstructorInput(
 // In reality, only constructor arguments and method arguments which come in as a schema value are
 // converted to a typescript value. This functionality helps ensure the `SchemaValue` returned by
 // invoke is a properly serialised version of the typescript method result.
-function deserializeReturnValue(methodName: string, returnValue: SchemaValue | undefined): any {
+function deserializeReturnValue(methodName: string, returnValue: SchemaValueTree | undefined): any {
   const returnType = AgentMethodRegistry.getReturnType('FooAgent', methodName);
 
   if (!returnType) {
     throw new Error(`Unsupported return type for method ${methodName}`);
   }
 
-  return decodeOutput(returnValue, returnType);
+  return decodeOutputFromWit(returnValue, returnType);
 }
 
 function overrideSelfAgentId(agentId: ParsedAgentId) {

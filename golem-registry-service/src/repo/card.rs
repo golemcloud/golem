@@ -120,16 +120,16 @@ impl DbCardRepo<PostgresPool> {
     async fn insert_parent_links(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         card_id: Uuid,
-        parent_ids: &[Uuid],
+        parent_ids: &[CardId],
     ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
             tx.execute(
                 sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
                     .bind(card_id)
-                    .bind(parent_id),
+                    .bind(parent_id.0),
             )
             .await
-            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(*parent_id))?;
+            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(parent_id.0))?;
         }
 
         Ok(())
@@ -248,7 +248,7 @@ impl DbCardRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         record: CardRecord,
     ) -> Result<CardRecord, CardRepoError> {
-        Self::lock_parent_cards_for_create(tx, record.data.value().parent_ids.as_slice()).await?;
+        Self::lock_parent_cards_for_create(tx, record.data.value().parent_ids()).await?;
 
         let inserted: CardRecord = tx
             .fetch_one_as(
@@ -267,12 +267,7 @@ impl DbCardRepo<PostgresPool> {
             )
             .await?;
 
-        Self::insert_parent_links(
-            tx,
-            inserted.card_id,
-            inserted.data.value().parent_ids.as_slice(),
-        )
-        .await?;
+        Self::insert_parent_links(tx, inserted.card_id, inserted.data.value().parent_ids()).await?;
 
         Ok(inserted)
     }
@@ -281,18 +276,18 @@ impl DbCardRepo<PostgresPool> {
 impl DbCardRepo<PostgresPool> {
     async fn lock_parent_cards_for_create(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
-        parent_ids: &[Uuid],
+        parent_ids: &[CardId],
     ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
             let row = tx
                 .fetch_optional(
                     sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
-                        .bind(*parent_id),
+                        .bind(parent_id.0),
                 )
                 .await?;
 
             if row.is_none() {
-                return Err(CardRepoError::ParentNotFound(*parent_id));
+                return Err(CardRepoError::ParentNotFound(parent_id.0));
             }
         }
 
@@ -303,7 +298,7 @@ impl DbCardRepo<PostgresPool> {
 impl DbCardRepo<SqlitePool> {
     async fn lock_parent_cards_for_create(
         _tx: &mut PoolLabelledTransaction<SqlitePool>,
-        _parent_ids: &[Uuid],
+        _parent_ids: &[CardId],
     ) -> RepoResult<()> {
         // SQLite serializes write transactions, so there is no separate row-locking
         // primitive to use here. Missing parents are rejected by the card_parents FK.

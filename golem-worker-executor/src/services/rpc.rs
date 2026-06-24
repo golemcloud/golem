@@ -24,15 +24,16 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
-    HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
-    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasQuotaService,
-    HasRdbmsService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
-    HasSchedulerService, HasShardManagerService, HasShardService, HasShutdownToken,
-    HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService,
-    HasWorkerProxy, HasWorkerService, active_workers, agent_types, blob_store, component,
-    golem_config, key_value, oplog, promise, rdbms, scheduler, shard_manager, worker,
-    worker_activator, worker_enumeration, worker_fork,
+    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasCardService,
+    HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
+    HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
+    HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    active_workers, agent_types, blob_store, card, component, golem_config, key_value, oplog,
+    promise, rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
+    worker_fork,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -412,6 +413,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
+    card_service: Arc<dyn card::CardService>,
     component_service: Arc<dyn component::ComponentService>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
     quota_service: Arc<dyn crate::services::quota::QuotaService>,
@@ -452,6 +454,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
+            card_service: self.card_service.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             quota_service: self.quota_service.clone(),
@@ -511,6 +514,12 @@ impl<Ctx: WorkerCtx> HasAgentWebhooksService for DirectWorkerInvocationRpc<Ctx> 
 impl<Ctx: WorkerCtx> HasComponentService for DirectWorkerInvocationRpc<Ctx> {
     fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.component_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasCardService for DirectWorkerInvocationRpc<Ctx> {
+    fn card_service(&self) -> Arc<dyn card::CardService> {
+        self.card_service.clone()
     }
 }
 
@@ -696,6 +705,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
+        card_service: Arc<dyn card::CardService>,
         component_service: Arc<dyn component::ComponentService>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService>,
         worker_service: Arc<dyn worker::WorkerService>,
@@ -734,6 +744,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             engine,
             linker,
             runtime,
+            card_service,
             component_service,
             shard_manager_service,
             quota_service,

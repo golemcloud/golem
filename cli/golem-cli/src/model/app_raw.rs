@@ -834,6 +834,8 @@ pub struct BridgeSdks {
     pub rust: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scala: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moonbit: Option<BridgeSdkLanguageTargets>,
 }
 
 impl BridgeSdks {
@@ -842,7 +844,7 @@ impl BridgeSdks {
             GuestLanguage::Rust => self.rust.as_ref(),
             GuestLanguage::TypeScript => self.ts.as_ref(),
             GuestLanguage::Scala => self.scala.as_ref(),
-            GuestLanguage::MoonBit => None,
+            GuestLanguage::MoonBit => self.moonbit.as_ref(),
         }
     }
 
@@ -1580,8 +1582,14 @@ mod test {
             arb_opt(arb_bridge_sdk_language_targets()),
             arb_opt(arb_bridge_sdk_language_targets()),
             arb_opt(arb_bridge_sdk_language_targets()),
+            arb_opt(arb_bridge_sdk_language_targets()),
         )
-            .prop_map(|(ts, rust, scala)| BridgeSdks { ts, rust, scala })
+            .prop_map(|(ts, rust, scala, moonbit)| BridgeSdks {
+                ts,
+                rust,
+                scala,
+                moonbit,
+            })
             .boxed()
     }
 

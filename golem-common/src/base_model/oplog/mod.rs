@@ -667,5 +667,17 @@ oplog_entry! {
         public {
             name: String,
         }
+    },
+    /// Records that a permission card used by the agent has been revoked.
+    CardRevoked {
+        hint: true
+        wit_raw_type: "card-revoked-parameters"
+        wit_public_type: "card-revoked-parameters"
+        raw {
+            card_id: Uuid,
+        }
+        public {
+            card_id: Uuid,
+        }
     }
 }
