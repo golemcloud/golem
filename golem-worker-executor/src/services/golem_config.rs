@@ -42,6 +42,21 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    /// Retry policy applied to SQL-backed key-value storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). Retrying these transient failures keeps
+    /// hot paths such as promise and worker status updates from crashing the executor under load.
+    #[serde(default = "default_key_value_storage_retry")]
+    pub key_value_storage_retry: RetryConfig,
+    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
+    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
+    #[serde(default = "default_scheduler_storage_retry")]
+    pub scheduler_storage_retry: RetryConfig,
+    /// Retry policy applied to SQL-backed indexed storage (oplog) operations when the connection
+    /// pool is briefly exhausted (a pool acquisition timeout). Transient failures are retried so
+    /// oplog commits do not crash the executor under load.
+    #[serde(default = "default_indexed_storage_retry")]
+    pub indexed_storage_retry: RetryConfig,
     pub scheduler_storage: SchedulerStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -86,6 +101,18 @@ pub struct GolemConfig {
     pub runtime_metrics_sampling_interval: Duration,
 }
 
+fn default_key_value_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
+fn default_scheduler_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
+fn default_indexed_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
 impl SafeDisplay for GolemConfig {
     fn to_safe_string(&self) -> String {
         use std::fmt::Write;
@@ -104,6 +131,24 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "key-value storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.key_value_storage_retry.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "scheduler storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.scheduler_storage_retry.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "indexed storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.indexed_storage_retry.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "scheduler storage:");
         let _ = writeln!(
@@ -275,6 +320,9 @@ impl Default for GolemConfig {
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
+            key_value_storage_retry: default_key_value_storage_retry(),
+            scheduler_storage_retry: default_scheduler_storage_retry(),
+            indexed_storage_retry: default_indexed_storage_retry(),
             scheduler_storage: SchedulerStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
@@ -659,10 +707,6 @@ pub struct OplogConfig {
     /// (`oplog_writes_per_second`). Defaults to false (disabled).
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
-    /// Retry configuration for transient indexed-storage errors (pool exhaustion,
-    /// connection resets). Defaults to 3 attempts, 100 ms–1 s exponential backoff.
-    #[serde(default = "default_oplog_indexed_storage_retry")]
-    pub indexed_storage_retry: RetryConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -718,17 +762,8 @@ impl SafeDisplay for OplogConfig {
             "oplog rate limit enabled: {}",
             self.oplog_rate_limit_enabled
         );
-        let _ = writeln!(
-            &mut result,
-            "indexed storage retry: {:?}",
-            self.indexed_storage_retry
-        );
         result
     }
-}
-
-fn default_oplog_indexed_storage_retry() -> RetryConfig {
-    RetryConfig::max_attempts_3()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1629,7 +1664,6 @@ impl Default for OplogConfig {
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
-            indexed_storage_retry: default_oplog_indexed_storage_retry(),
         }
     }
 }

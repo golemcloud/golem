@@ -19,6 +19,7 @@ use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
+use golem_common::model::RetryConfig;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ pub struct MultiSqliteKeyValueStorage {
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
+    retry_config: RetryConfig,
 }
 
 struct HashCache {
@@ -42,7 +44,12 @@ struct HashCache {
 }
 
 impl MultiSqliteKeyValueStorage {
-    pub fn new(root_dir: &Path, max_connections: u32, foreign_keys: bool) -> Self {
+    pub fn new(
+        root_dir: &Path,
+        max_connections: u32,
+        foreign_keys: bool,
+        retry_config: RetryConfig,
+    ) -> Self {
         if !root_dir.exists() {
             std::fs::create_dir_all(root_dir)
                 .expect("Failed to create root directory for sqlite storage");
@@ -64,6 +71,7 @@ impl MultiSqliteKeyValueStorage {
             root_dir: root_dir.to_path_buf(),
             max_connections,
             foreign_keys,
+            retry_config,
         }
     }
 
@@ -71,13 +79,14 @@ impl MultiSqliteKeyValueStorage {
         max_connections: u32,
         foreign_keys: bool,
         database: String,
+        retry_config: RetryConfig,
     ) -> Result<SqliteKeyValueStorage, String> {
         let config = DbSqliteConfig {
             database,
             max_connections,
             foreign_keys,
         };
-        SqliteKeyValueStorage::configured(&config).await
+        SqliteKeyValueStorage::configured(&config, retry_config).await
     }
 
     async fn storage_by_namespace(
@@ -87,10 +96,11 @@ impl MultiSqliteKeyValueStorage {
         let db = self.namespace_to_db(namespace).await;
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
+        let retry_config = self.retry_config.clone();
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
         self.cache
             .get_or_insert_simple(&db, async move || {
-                Self::init_storage(max_connections, foreign_keys, db_path).await
+                Self::init_storage(max_connections, foreign_keys, db_path, retry_config).await
             })
             .await
     }
