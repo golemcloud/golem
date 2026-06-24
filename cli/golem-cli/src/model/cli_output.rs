@@ -1094,9 +1094,30 @@ mod tests {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: input_schema_value(0),
+                input_schema: golem_common::schema::agent::InputSchema::parameters([
+                    golem_common::schema::agent::NamedField::user_supplied(
+                        "value",
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                ]),
             },
-            methods: vec![],
+            methods: vec![golem_common::schema::agent::AgentMethodSchema {
+                name: "method".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: golem_common::schema::agent::InputSchema::parameters([
+                    golem_common::schema::agent::NamedField::auto_injected(
+                        "principal",
+                        golem_common::schema::agent::AutoInjectedKind::Principal,
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                ]),
+                output_schema: golem_common::schema::agent::OutputSchema::Single(Box::new(
+                    golem_common::schema::SchemaType::u64(),
+                )),
+                http_endpoint: vec![],
+                read_only: None,
+            }],
             dependencies: vec![],
             mode: golem_common::model::agent::AgentMode::Durable,
             http_mount: None,
@@ -2429,14 +2450,14 @@ mod tests {
             proptest::option::of(arb_small_string()),
             arb_small_string(),
             proptest::option::of(arb_small_string()),
-            any::<u8>(),
+            arb_input_schema(),
         )
-            .prop_map(|(name, description, prompt_hint, schema_flavor)| {
+            .prop_map(|(name, description, prompt_hint, input_schema)| {
                 golem_common::schema::agent::AgentConstructorSchema {
                     name,
                     description,
                     prompt_hint,
-                    input_schema: input_schema_value(schema_flavor),
+                    input_schema,
                 }
             })
             .boxed()
@@ -2447,9 +2468,9 @@ mod tests {
             arb_small_string(),
             arb_small_string(),
             proptest::option::of(arb_small_string()),
-            any::<u8>(),
-            any::<u8>(),
-            proptest::collection::vec(arb_http_endpoint_details(), 1..3),
+            arb_input_schema(),
+            arb_output_schema(),
+            proptest::collection::vec(arb_http_endpoint_details(), 0..3),
             proptest::option::of(arb_read_only_config()),
         )
             .prop_map(
@@ -2457,8 +2478,8 @@ mod tests {
                     name,
                     description,
                     prompt_hint,
-                    input_schema_flavor,
-                    output_schema_flavor,
+                    input_schema,
+                    output_schema,
                     http_endpoint,
                     read_only,
                 )| {
@@ -2466,8 +2487,8 @@ mod tests {
                         name,
                         description,
                         prompt_hint,
-                        input_schema: input_schema_value(input_schema_flavor),
-                        output_schema: output_schema_value(output_schema_flavor),
+                        input_schema,
+                        output_schema,
                         http_endpoint,
                         read_only,
                     }
@@ -2503,26 +2524,83 @@ mod tests {
         .boxed()
     }
 
-    fn schema_type_value(flavor: u8) -> golem_common::schema::SchemaType {
-        match flavor % 4 {
-            0 => golem_common::schema::SchemaType::string(),
-            1 => golem_common::schema::SchemaType::u64(),
-            2 => golem_common::schema::SchemaType::bool(),
-            _ => golem_common::schema::SchemaType::list(golem_common::schema::SchemaType::u64()),
-        }
+    /// Structural [`SchemaType`] strategy covering every schema-native type
+    /// case. Derived from the shared `golem-schema` graph strategy (we take the
+    /// generated graph's root), so new `SchemaType` variants are exercised
+    /// automatically.
+    fn arb_schema_type() -> BoxedStrategy<golem_common::schema::SchemaType> {
+        golem_common::schema::proptest_strategies::schema_graph_strategy()
+            .prop_map(|graph| graph.root)
+            .boxed()
     }
 
-    fn input_schema_value(flavor: u8) -> golem_common::schema::agent::InputSchema {
-        golem_common::schema::agent::InputSchema::parameters([
-            golem_common::schema::agent::NamedField::user_supplied(
-                "value",
-                schema_type_value(flavor),
-            ),
-        ])
+    fn arb_metadata_envelope() -> BoxedStrategy<golem_common::schema::MetadataEnvelope> {
+        (
+            proptest::option::of(arb_small_string()),
+            proptest::collection::vec(arb_small_string(), 0..2),
+            proptest::collection::vec(arb_small_string(), 0..2),
+            proptest::option::of(arb_small_string()),
+            proptest::option::of(prop_oneof![
+                Just(golem_common::schema::Role::Multimodal),
+                Just(golem_common::schema::Role::UnstructuredText),
+                Just(golem_common::schema::Role::UnstructuredBinary),
+                arb_small_string().prop_map(golem_common::schema::Role::Other),
+            ]),
+        )
+            .prop_map(|(doc, aliases, examples, deprecated, role)| {
+                golem_common::schema::MetadataEnvelope {
+                    doc,
+                    aliases,
+                    examples,
+                    deprecated,
+                    role,
+                }
+            })
+            .boxed()
     }
 
-    fn output_schema_value(flavor: u8) -> golem_common::schema::agent::OutputSchema {
-        golem_common::schema::agent::OutputSchema::Single(Box::new(schema_type_value(flavor)))
+    fn arb_field_source() -> BoxedStrategy<golem_common::schema::FieldSource> {
+        prop_oneof![
+            Just(golem_common::schema::FieldSource::UserSupplied),
+            Just(golem_common::schema::FieldSource::AutoInjected(
+                golem_common::schema::AutoInjectedKind::Principal,
+            )),
+        ]
+        .boxed()
+    }
+
+    fn arb_named_field() -> BoxedStrategy<golem_common::schema::NamedField> {
+        (
+            arb_small_string(),
+            arb_field_source(),
+            arb_schema_type(),
+            arb_metadata_envelope(),
+        )
+            .prop_map(
+                |(name, source, schema, metadata)| golem_common::schema::NamedField {
+                    name,
+                    source,
+                    schema,
+                    metadata,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_input_schema() -> BoxedStrategy<golem_common::schema::agent::InputSchema> {
+        proptest::collection::vec(arb_named_field(), 0..3)
+            .prop_map(golem_common::schema::agent::InputSchema::Parameters)
+            .boxed()
+    }
+
+    fn arb_output_schema() -> BoxedStrategy<golem_common::schema::agent::OutputSchema> {
+        prop_oneof![
+            Just(golem_common::schema::agent::OutputSchema::Unit),
+            arb_schema_type().prop_map(|schema_type| {
+                golem_common::schema::agent::OutputSchema::Single(Box::new(schema_type))
+            }),
+        ]
+        .boxed()
     }
 
     fn arb_read_only_config() -> BoxedStrategy<golem_common::model::agent::ReadOnlyConfig> {
@@ -2589,11 +2667,7 @@ mod tests {
                 Just(golem_common::model::agent::AgentConfigSource::Secret),
             ],
             proptest::collection::vec(arb_small_string(), 1..3),
-            prop_oneof![
-                Just(golem_common::schema::SchemaType::string()),
-                Just(golem_common::schema::SchemaType::bool()),
-                Just(golem_common::schema::SchemaType::u64()),
-            ],
+            arb_schema_type(),
         )
             .prop_map(|(source, path, value_type)| {
                 golem_common::schema::agent::AgentConfigDeclarationSchema {
@@ -2800,41 +2874,12 @@ mod tests {
             .boxed()
     }
 
+    /// Structural [`TypedSchemaValue`] strategy covering every schema-native
+    /// value and type case. Reuses the shared `golem-schema` strategy so new
+    /// `SchemaValue` / `SchemaType` / `SchemaGraph` shapes are exercised
+    /// automatically.
     fn arb_value_and_type() -> BoxedStrategy<golem_common::schema::TypedSchemaValue> {
-        prop_oneof![
-            arb_small_string().prop_map(|value| {
-                golem_common::schema::TypedSchemaValue::new(
-                    golem_common::schema::SchemaGraph::anonymous(
-                        golem_common::schema::SchemaType::string(),
-                    ),
-                    golem_common::schema::SchemaValue::String(value),
-                )
-            }),
-            any::<bool>().prop_map(|value| {
-                golem_common::schema::TypedSchemaValue::new(
-                    golem_common::schema::SchemaGraph::anonymous(
-                        golem_common::schema::SchemaType::bool(),
-                    ),
-                    golem_common::schema::SchemaValue::Bool(value),
-                )
-            }),
-            proptest::collection::vec(arb_small_u64(), 0..3).prop_map(|values| {
-                golem_common::schema::TypedSchemaValue::new(
-                    golem_common::schema::SchemaGraph::anonymous(
-                        golem_common::schema::SchemaType::list(
-                            golem_common::schema::SchemaType::u64(),
-                        ),
-                    ),
-                    golem_common::schema::SchemaValue::List {
-                        elements: values
-                            .into_iter()
-                            .map(golem_common::schema::SchemaValue::U64)
-                            .collect(),
-                    },
-                )
-            }),
-        ]
-        .boxed()
+        golem_common::schema::proptest_strategies::typed_schema_value_strategy().boxed()
     }
 
     fn arb_agent_list_result() -> OutputDocumentStrategy {
@@ -2869,12 +2914,35 @@ mod tests {
         serialized_output(
             (
                 arb_small_u64(),
-                proptest::sample::select(sample_public_oplog_entries()),
+                prop_oneof![
+                    proptest::sample::select(sample_public_oplog_entries()),
+                    arb_typed_value_oplog_entry(),
+                ],
             )
                 .prop_map(|(index, entry)| {
                     crate::model::text::worker::AgentOplogEntryView { index, entry }
                 }),
         )
+    }
+
+    /// Oplog entry carrying a structurally-comprehensive [`TypedSchemaValue`]
+    /// (full `SchemaGraph` + `SchemaValue`). This is the non-masked path that
+    /// exercises every schema-native value/graph case against the schema's
+    /// `TypedSchemaValue` definition, so new variants are caught automatically.
+    fn arb_typed_value_oplog_entry() -> BoxedStrategy<golem_common::model::oplog::PublicOplogEntry>
+    {
+        golem_common::schema::proptest_strategies::typed_schema_value_strategy()
+            .prop_map(|response| {
+                golem_common::model::oplog::PublicOplogEntry::End(
+                    golem_common::model::oplog::public_oplog_entry::EndParams {
+                        timestamp: golem_common::model::Timestamp::from(0),
+                        start_index: golem_common::model::oplog::OplogIndex::from_u64(1),
+                        response: Some(response),
+                        forced_commit: false,
+                    },
+                )
+            })
+            .boxed()
     }
 
     fn arb_agent_stream_event() -> OutputDocumentStrategy {
