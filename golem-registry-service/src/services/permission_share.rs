@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
@@ -84,16 +85,19 @@ error_forwarding!(PermissionShareError, PermissionShareRepoError, AccountError);
 pub struct PermissionShareService {
     permission_share_repo: Arc<dyn PermissionShareRepo>,
     account_service: Arc<AccountService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl PermissionShareService {
     pub fn new(
         permission_share_repo: Arc<dyn PermissionShareRepo>,
         account_service: Arc<AccountService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             permission_share_repo,
             account_service,
+            registry_change_notifier,
         }
     }
 
@@ -203,7 +207,13 @@ impl PermissionShareService {
                 .update(revision.clone(), replacement_card.clone())
                 .await
             {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    let permission_share: PermissionShare = record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?;
+
+                    return Ok(permission_share);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -260,7 +270,13 @@ impl PermissionShareService {
 
         for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
             match self.permission_share_repo.delete(revision.clone()).await {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    let permission_share: PermissionShare = record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?;
+
+                    return Ok(permission_share);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -548,7 +564,7 @@ fn validate_recipient(
 ) -> Result<(), PermissionShareError> {
     match recipient {
         RecipientPattern::Any => Ok(()),
-        RecipientPattern::Account { account } if account == target_account => Ok(()),
+        RecipientPattern::Account { account } if account.as_str() == target_account => Ok(()),
         _ => Err(PermissionShareError::InvalidRecipient {
             target_account: target_account.to_string(),
         }),

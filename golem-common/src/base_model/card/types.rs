@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-newtype_uuid!(CardId);
+newtype_uuid!(CardId, wit_name: "card-id", wit_owner: "golem:core@2.0.0/types");
 
 declare_revision!(CardRevision);
 
@@ -81,6 +81,18 @@ pub struct PolymorphicCard {
 pub enum StoredCard {
     Concrete(Card),
     Polymorphic(PolymorphicCard),
+}
+
+impl From<Card> for StoredCard {
+    fn from(value: Card) -> Self {
+        Self::Concrete(value)
+    }
+}
+
+impl From<PolymorphicCard> for StoredCard {
+    fn from(value: PolymorphicCard) -> Self {
+        Self::Polymorphic(value)
+    }
 }
 
 impl StoredCard {

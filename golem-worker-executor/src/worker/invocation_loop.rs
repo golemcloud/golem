@@ -1411,10 +1411,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self.parent.oplog.upload_raw_payload(serialized_bytes).await {
                             Ok(raw_payload) => match raw_payload.into_payload::<Vec<u8>>() {
                                 Ok(payload) => {
+                                    let active_cards = self
+                                        .store
+                                        .data()
+                                        .durable_ctx()
+                                        .agent_wallet_cards_snapshot();
                                     self.parent
                                         .add_and_commit_oplog(OplogEntry::snapshot(
                                             payload,
                                             snapshot.mime_type,
+                                            active_cards,
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");

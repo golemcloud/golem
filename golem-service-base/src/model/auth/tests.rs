@@ -109,7 +109,7 @@ fn effective_surface_for_account(
     lower_positive: Vec<PermissionPattern>,
 ) -> EffectiveSurface {
     let recipient = RecipientPattern::Account {
-        account: account_id.to_string(),
+        account: account_email(account_id),
     };
     EffectiveSurface::from_grants(&lower_positive, &[], &[], &[], &recipient).unwrap()
 }
@@ -127,7 +127,7 @@ fn system_authorization_bypasses_roles_and_effective_surface() {
 fn user_with_effective_surface_can_authorize_permission() {
     let account_id = AccountId::new();
     let grant = report_grant(RecipientPattern::Account {
-        account: account_id.to_string(),
+        account: account_email(account_id),
     });
     let target = report_target();
     let ctx = AuthCtx::User(UserAuthCtx {
@@ -153,7 +153,7 @@ fn user_with_empty_effective_surface_cannot_authorize_permission() {
 fn user_with_effective_surface_can_authorize_account_token_permission() {
     let account_id = AccountId::new();
     let recipient = RecipientPattern::Account {
-        account: account_id.to_string(),
+        account: account_email(account_id),
     };
     let grant = account_token_grant(account_id, recipient);
     let target = account_token_target(account_id);
@@ -175,7 +175,7 @@ fn effective_surface_account_token_grant_for_different_holder_does_not_authorize
     let grant = account_token_grant(
         account_id,
         RecipientPattern::Account {
-            account: other_account_id.to_string(),
+            account: account_email(other_account_id),
         },
     );
     let target = account_token_target(account_id);
@@ -196,7 +196,7 @@ fn effective_surface_account_token_target_ignores_recipient_after_holder_filteri
     let grant = account_token_grant(
         account_id,
         RecipientPattern::Account {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
     );
     let target = account_token_target(account_id);
@@ -217,7 +217,7 @@ fn effective_surface_account_token_grant_does_not_authorize_different_owner_targ
     let grant = account_token_grant(
         account_id,
         RecipientPattern::Account {
-            account: account_id.to_string(),
+            account: account_email(account_id),
         },
     );
     let ctx = AuthCtx::User(UserAuthCtx {
@@ -244,14 +244,15 @@ fn user_with_empty_effective_surface_cannot_authorize_account_token_permission()
 #[test]
 fn user_with_effective_surface_can_authorize_account_permission() {
     let account_id = AccountId::new();
+    let account_email = account_email(account_id);
     let recipient = RecipientPattern::Account {
-        account: account_id.to_string(),
+        account: account_email.clone(),
     };
     let grant = account_grant(account_id, recipient);
     let target = account_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
-        account_email: account_email(account_id),
+        account_email,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),

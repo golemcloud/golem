@@ -68,6 +68,9 @@ message OplogEntry {
     EndParameters End = 45;
     CancelledParameters Cancelled = 46;
     CardRevokedParameters CardRevoked = 47;
+    CardEventQueuedParameters CardEventQueued = 48;
+    CardInstalledParameters CardInstalled = 49;
+    CardInstallFailedParameters CardInstallFailed = 50;
   }
 }
 
@@ -278,7 +281,45 @@ message RemoveRetryPolicyParameters {
 
 message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
-  golem.common.UUID card_id = 2;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message QueuedCardEvent {
+  oneof event {
+    QueuedCardEventCard install = 1;
+    QueuedCardEventCard revoke = 2;
+  }
+}
+
+message QueuedCardEventCard {
+  golem.common.UUID card_id = 1;
+}
+
+enum CardInstallFailure {
+  CARD_INSTALL_FAILURE_UNSPECIFIED = 0;
+  CARD_INSTALL_FAILURE_CARD_REVOKED = 1;
+  CARD_INSTALL_FAILURE_NOT_FOUND = 2;
+  CARD_INSTALL_FAILURE_RECIPIENT_MISMATCH = 3;
+  CARD_INSTALL_FAILURE_NOT_PERMITTED = 4;
+}
+
+message CardEventQueuedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  QueuedCardEvent event = 2;
+}
+
+message CardInstalledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  optional uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message CardInstallFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+  CardInstallFailure reason = 4;
 }
 
 message EndAtomicRegionParameters {

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::card::{CardId, StoredCard};
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
@@ -21,6 +22,7 @@ use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::declare_structs;
 use crate::schema::TypedSchemaValue;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -566,6 +568,106 @@ pub enum PublicRetryPolicyState {
     AndThen(PublicRetryPolicyStateAndThen),
     /// Pair state for union/intersect composition.
     Pair(PublicRetryPolicyStatePair),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct QueuedCardEventCard {
+    pub card_id: CardId,
+    #[cfg_attr(feature = "full", oai(skip))]
+    pub card: Option<StoredCard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicQueuedCardEventCard {
+    pub card_id: CardId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum QueuedCardEvent {
+    Install(QueuedCardEventCard),
+    Revoke(QueuedCardEventCard),
+}
+
+impl QueuedCardEvent {
+    pub fn card_id(&self) -> CardId {
+        match self {
+            Self::Install(event) | Self::Revoke(event) => event.card_id,
+        }
+    }
+
+    pub fn install(card: impl Into<StoredCard>) -> Self {
+        let card = card.into();
+        Self::Install(QueuedCardEventCard {
+            card_id: card.card_id(),
+            card: Some(card),
+        })
+    }
+
+    pub fn revoke(card_id: CardId) -> Self {
+        Self::Revoke(QueuedCardEventCard {
+            card_id,
+            card: None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicQueuedCardEvent {
+    Install(PublicQueuedCardEventCard),
+    Revoke(PublicQueuedCardEventCard),
+}
+
+impl PublicQueuedCardEvent {
+    pub fn card_id(&self) -> CardId {
+        match self {
+            Self::Install(event) | Self::Revoke(event) => event.card_id,
+        }
+    }
+}
+
+impl From<QueuedCardEvent> for PublicQueuedCardEvent {
+    fn from(value: QueuedCardEvent) -> Self {
+        match value {
+            QueuedCardEvent::Install(event) => Self::Install(PublicQueuedCardEventCard {
+                card_id: event.card_id,
+            }),
+            QueuedCardEvent::Revoke(event) => Self::Revoke(PublicQueuedCardEventCard {
+                card_id: event.card_id,
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum CardInstallFailure {
+    CardRevoked,
+    NotFound,
+    RecipientMismatch,
+    NotPermitted,
 }
 
 #[cfg(feature = "full")]

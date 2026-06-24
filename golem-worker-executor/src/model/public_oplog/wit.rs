@@ -13,22 +13,24 @@
 // limitations under the License.
 
 use crate::preview2::golem_api_1_x::oplog;
+use golem_common::base_model::oplog::{CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent};
+use golem_common::model::card::CardId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CancelledParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams,
+    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -57,6 +59,70 @@ fn encode_untyped_schema_value(value: SchemaValue) -> Result<wire::SchemaValueTr
 
 fn decode_untyped_schema_value(value: wire::SchemaValueTree) -> Result<SchemaValue, String> {
     decode_value(&value).map_err(|e| e.to_string())
+}
+
+fn card_id_to_wit(card_id: CardId) -> oplog::CardId {
+    oplog::CardId {
+        uuid: card_id.0.into(),
+    }
+}
+
+fn card_id_from_wit(card_id: oplog::CardId) -> CardId {
+    CardId(card_id.uuid.into())
+}
+
+fn queued_card_event_to_wit(value: PublicQueuedCardEvent) -> oplog::PublicQueuedCardEvent {
+    match value {
+        PublicQueuedCardEvent::Install(event) => {
+            oplog::PublicQueuedCardEvent::Install(oplog::PublicQueuedCardEventCard {
+                card_id: card_id_to_wit(event.card_id),
+            })
+        }
+        PublicQueuedCardEvent::Revoke(event) => {
+            oplog::PublicQueuedCardEvent::Revoke(oplog::PublicQueuedCardEventCard {
+                card_id: card_id_to_wit(event.card_id),
+            })
+        }
+    }
+}
+
+fn raw_queued_card_event_to_wit(value: QueuedCardEvent) -> oplog::QueuedCardEvent {
+    match value {
+        QueuedCardEvent::Install(event) => {
+            oplog::QueuedCardEvent::Install(oplog::QueuedCardEventCard {
+                card_id: card_id_to_wit(event.card_id),
+                card: event
+                    .card
+                    .and_then(|card| serde_json::to_vec(&card).ok())
+                    .map(Some)
+                    .unwrap_or_default(),
+            })
+        }
+        QueuedCardEvent::Revoke(event) => {
+            oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventCard {
+                card_id: card_id_to_wit(event.card_id),
+                card: None,
+            })
+        }
+    }
+}
+
+fn card_install_failure_to_wit(value: CardInstallFailure) -> oplog::CardInstallFailure {
+    match value {
+        CardInstallFailure::CardRevoked => oplog::CardInstallFailure::CardRevoked,
+        CardInstallFailure::NotFound => oplog::CardInstallFailure::NotFound,
+        CardInstallFailure::RecipientMismatch => oplog::CardInstallFailure::RecipientMismatch,
+        CardInstallFailure::NotPermitted => oplog::CardInstallFailure::NotPermitted,
+    }
+}
+
+fn card_install_failure_from_wit(value: oplog::CardInstallFailure) -> CardInstallFailure {
+    match value {
+        oplog::CardInstallFailure::CardRevoked => CardInstallFailure::CardRevoked,
+        oplog::CardInstallFailure::NotFound => CardInstallFailure::NotFound,
+        oplog::CardInstallFailure::RecipientMismatch => CardInstallFailure::RecipientMismatch,
+        oplog::CardInstallFailure::NotPermitted => CardInstallFailure::NotPermitted,
+    }
 }
 
 impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
@@ -444,12 +510,41 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     name,
                 })
             }
-            PublicOplogEntry::CardRevoked(CardRevokedParams { timestamp, card_id }) => {
-                Self::CardRevoked(oplog::CardRevokedParameters {
+            PublicOplogEntry::CardRevoked(CardRevokedParams {
+                timestamp,
+                queued_event_index,
+                card_id,
+            }) => Self::CardRevoked(oplog::CardRevokedParameters {
+                timestamp: timestamp.into(),
+                queued_event_index: queued_event_index.into(),
+                card_id: card_id_to_wit(card_id),
+            }),
+            PublicOplogEntry::CardEventQueued(CardEventQueuedParams { timestamp, event }) => {
+                Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),
-                    card_id: card_id.into(),
+                    event: queued_card_event_to_wit(event),
                 })
             }
+            PublicOplogEntry::CardInstalled(CardInstalledParams {
+                timestamp,
+                queued_event_index,
+                card_id,
+            }) => Self::CardInstalled(oplog::CardInstalledParameters {
+                timestamp: timestamp.into(),
+                queued_event_index: queued_event_index.map(Into::into),
+                card_id: card_id_to_wit(card_id),
+            }),
+            PublicOplogEntry::CardInstallFailed(CardInstallFailedParams {
+                timestamp,
+                queued_event_index,
+                card_id,
+                reason,
+            }) => Self::CardInstallFailed(oplog::CardInstallFailedParameters {
+                timestamp: timestamp.into(),
+                queued_event_index: queued_event_index.into(),
+                card_id: card_id_to_wit(card_id),
+                reason: card_install_failure_to_wit(reason),
+            }),
         }
     }
 }
@@ -1163,6 +1258,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 data: oplog_payload_from_wit(params.data),
                 mime_type: params.mime_type,
+                active_cards: Vec::new(),
             }),
             oplog::OplogEntry::OplogProcessorCheckpoint(params) => {
                 Ok(Self::OplogProcessorCheckpoint {
@@ -1196,7 +1292,26 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::CardRevoked(params) => Ok(Self::CardRevoked {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                card_id: params.card_id.into(),
+                queued_event_index: golem_common::model::OplogIndex::from_u64(
+                    params.queued_event_index,
+                ),
+                card_id: card_id_from_wit(params.card_id),
+            }),
+            oplog::OplogEntry::CardEventQueued(_params) => Err(
+                "Converting CardEventQueued from public WIT to raw oplog entry is not supported"
+                    .to_string(),
+            ),
+            oplog::OplogEntry::CardInstalled(_params) => Err(
+                "Converting CardInstalled from public WIT to raw oplog entry is not supported"
+                    .to_string(),
+            ),
+            oplog::OplogEntry::CardInstallFailed(params) => Ok(Self::CardInstallFailed {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                queued_event_index: golem_common::model::OplogIndex::from_u64(
+                    params.queued_event_index,
+                ),
+                card_id: card_id_from_wit(params.card_id),
+                reason: card_install_failure_from_wit(params.reason),
             }),
         }
     }
@@ -1717,12 +1832,43 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     delta,
                 }),
             ),
-            M::CardRevoked { timestamp, card_id } => {
-                Ok(Self::CardRevoked(oplog::CardRevokedParameters {
+            M::CardRevoked {
+                timestamp,
+                queued_event_index,
+                card_id,
+            } => Ok(Self::CardRevoked(oplog::CardRevokedParameters {
+                timestamp: timestamp.into(),
+                queued_event_index: queued_event_index.into(),
+                card_id: card_id_to_wit(card_id),
+            })),
+            M::CardEventQueued { timestamp, event } => {
+                Ok(Self::CardEventQueued(oplog::RawCardEventQueuedParameters {
                     timestamp: timestamp.into(),
-                    card_id: card_id.into(),
+                    event: raw_queued_card_event_to_wit(event),
                 }))
             }
+            M::CardInstalled {
+                timestamp,
+                queued_event_index,
+                card,
+            } => Ok(Self::CardInstalled(oplog::RawCardInstalledParameters {
+                timestamp: timestamp.into(),
+                queued_event_index: queued_event_index.map(Into::into),
+                card: serde_json::to_vec(&card).map_err(|err| err.to_string())?,
+            })),
+            M::CardInstallFailed {
+                timestamp,
+                queued_event_index,
+                card_id,
+                reason,
+            } => Ok(Self::CardInstallFailed(
+                oplog::CardInstallFailedParameters {
+                    timestamp: timestamp.into(),
+                    queued_event_index: queued_event_index.into(),
+                    card_id: card_id_to_wit(card_id),
+                    reason: card_install_failure_to_wit(reason),
+                },
+            )),
             M::CreateResource {
                 timestamp,
                 id,
@@ -1891,6 +2037,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 data,
                 mime_type,
+                ..
             } => Ok(Self::Snapshot(oplog::RawSnapshotParameters {
                 timestamp: timestamp.into(),
                 data: oplog_payload_to_wit(data)?,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_rust::quota::{QuotaToken, with_reservation};
+use golem_rust::quota::QuotaToken;
 use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use golem_wasi_http::Client;
 use serde::{Deserialize, Serialize};
@@ -210,7 +210,7 @@ impl QuotaApi for QuotaApiImpl {
                 Err(_) => break,
                 Ok(reservation) => {
                     let _resp = client
-                        .get(&format!("http://{host}:{port}/call"))
+                        .get(format!("http://{host}:{port}/call"))
                         .send()
                         .unwrap();
                     reservation.commit(1);

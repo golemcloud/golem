@@ -55,6 +55,7 @@ service RegistryService {
 
   // cards api
   rpc BatchGetExistingCards (BatchGetExistingCardsRequest) returns (BatchGetExistingCardsResponse);
+  rpc BatchGetCards (BatchGetCardsRequest) returns (BatchGetCardsResponse);
 
   // registry invalidation stream — multiplexed event types
   rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
@@ -132,6 +133,26 @@ message BatchGetExistingCardsResponse {
 
 message BatchGetExistingCardsSuccessResponse {
   repeated golem.common.UUID card_ids = 1;
+}
+
+message BatchGetCardsRequest {
+  repeated golem.common.UUID card_ids = 1;
+}
+
+message BatchGetCardsResponse {
+  oneof result {
+    BatchGetCardsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message CardData {
+  golem.common.UUID card_id = 1;
+  bytes card = 2;
+}
+
+message BatchGetCardsSuccessResponse {
+  repeated CardData cards = 1;
 }
 
 message DownloadComponentRequest {
