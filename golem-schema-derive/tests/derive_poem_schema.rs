@@ -26,7 +26,7 @@
 //!    generated `MetaSchema` (a small subset validator), so the schema can't
 //!    silently drift from the wire format.
 
-#![allow(dead_code)]
+#![allow(dead_code, unreachable_code, clippy::diverging_sub_expression)]
 
 use golem_schema_derive::PoemSchema;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
