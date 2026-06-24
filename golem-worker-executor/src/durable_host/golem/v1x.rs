@@ -333,7 +333,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .state
             .replay_state
             .is_in_skipped_region(original_target)
-            .await
         {
             Err(anyhow!(
                 "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"

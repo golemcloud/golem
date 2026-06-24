@@ -31,6 +31,7 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
+mod replay_state_old;
 mod sockets;
 pub mod wasm_rpc;
 pub mod websocket;
@@ -38,7 +39,7 @@ pub mod websocket;
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::durable_host::replay_state_old::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
@@ -126,7 +127,7 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use replay_state::ReplayEvent;
+use replay_state_old::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -1253,7 +1254,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn emit_log_event(&self, event: InternalWorkerEvent) {
+    async fn emit_log_event(&mut self, event: InternalWorkerEvent) {
         if let Some(entry) = event.as_oplog_entry()
             && let OplogEntry::Log {
                 level,
@@ -3460,7 +3461,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .await?;
                         break Ok(None);
                     }
-                    Ok(Some(replay_state::AgentInvocationStartedEntry {
+                    Ok(Some(replay_state_old::AgentInvocationStartedEntry {
                         idempotency_key,
                         invocation_payload,
                         invocation_context,
