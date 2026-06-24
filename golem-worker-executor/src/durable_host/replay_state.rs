@@ -21,8 +21,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostResponse, HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex,
-    PersistenceLevel,
+    DurableFunctionType, HostResponse, HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -31,7 +30,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -90,7 +89,9 @@ struct PendingState {
     next_skipped_region: Option<OplogRegion>,
     seen_logs: HashSet<(u64, u64)>,
     replay_events: BTreeMap<OplogIndex, ReplayEvent>,
-    jumps: Vec<OplogRegion>
+    jumps: Vec<OplogRegion>,
+    fork_starts: Vec<OplogIndex>,
+    fork_ends: Vec<(OplogIndex, OplogIndex, OplogPayload<HostResponse>)>,
 }
 
 #[derive(Debug)]
@@ -103,6 +104,7 @@ struct CommittedState {
     next_skipped_region: Option<OplogRegion>,
     seen_logs: HashSet<(u64, u64)>,
     replay_events: Vec<ReplayEvent>,
+    fork_starts: HashSet<OplogIndex>,
 }
 
 #[derive(Debug)]
@@ -583,7 +585,34 @@ impl ReplayState {
 
         let mut replay_events_in_jumps = self.extract_replay_events_in_jumped_regions().await;
         self.pending.replay_events.append(&mut replay_events_in_jumps);
-        let all_new_replay_events = std::mem::take(&mut self.pending.replay_events);
+        let mut all_new_replay_events = std::mem::take(&mut self.pending.replay_events);
+
+        self.committed.fork_starts.extend(std::mem::take(&mut self.pending.fork_starts));
+        for (end_idx, start_idx, payload) in std::mem::take(&mut self.pending.fork_ends) {
+            if self.committed.fork_starts.remove(&start_idx) {
+                let response = self
+                    .oplog
+                    .download_payload(payload)
+                    .await
+                    .expect(&format!("failed to download GolemApiFork oplog payload at index {start_idx}"));
+                let result: HostResponseGolemApiFork =
+                    if let HostResponse::GolemApiFork(result) = response {
+                        result
+                    } else {
+                        panic!("Unexpected host response when fetching golem api fork result at {end_idx}")
+                    };
+
+                if result.result == Ok(ForkResult::Forked) {
+                    all_new_replay_events.insert(
+                        end_idx,
+                        ReplayEvent::ForkReplayed {
+                            new_phantom_id: result.forked_phantom_id,
+                        }
+                    );
+                }
+            }
+        }
+
         self.committed.replay_events.extend(all_new_replay_events.into_values());
 
         self.committed.seen_logs.extend(std::mem::take(&mut self.pending.seen_logs));
@@ -600,6 +629,8 @@ impl ReplayState {
         self.pending.next_skipped_region = self.committed.next_skipped_region.clone();
         self.pending.seen_logs.clear();
         self.pending.replay_events.clear();
+        self.pending.fork_starts.clear();
+        self.pending.fork_ends.clear();
         self.pending.jumps.clear();
     }
 
@@ -625,26 +656,34 @@ impl ReplayState {
                     let card_id = CardId(*card_id);
                     self.record_replay_event(idx, ReplayEvent::CardRevoked { card_id });
                 }
-                OplogEntry::Start { .. } => {
-                    todo!()
+                OplogEntry::Start { function_name, .. } if function_name == &HostFunctionName::GolemApiFork => {
+                    self.pending.fork_starts.push(idx);
                 }
-                OplogEntry::End { .. } => {
-                    todo!()
+                OplogEntry::End {
+                    start_index,
+                    response: Some(response_payload),
+                    ..
+                } => {
+                    let start_index = *start_index;
+                    let response_payload = response_payload.clone();
+                    self.pending.fork_ends.push((idx, start_index, response_payload));
                 }
                 other if other.is_hint() => { }
                 _ => { break; }
             }
-            self.advance_current_entry().await;
+            self.pending.current_oplog_index = self.pending.current_oplog_index.next()
+        }
+
+        self.pending.last_read_non_hint_oplog_index = self.pending.current_oplog_index;
+
+        if self.is_live() {
+            self.record_replay_event(self.pending.current_oplog_index, ReplayEvent::ReplayFinished);
         }
     }
 
     async fn advance_to_next_non_skipped_entry(&mut self) {
         self.move_to_end_of_skipped_region_in_loaded_chunk().await;
         self.jump_out_of_skipped_region();
-    }
-
-    async fn advance_current_entry(&mut self) {
-        self.pending.current_oplog_index = self.pending.current_oplog_index.next()
     }
 
     // Move to the end of the loaded chunk in the end of the currently loaded chunk,
