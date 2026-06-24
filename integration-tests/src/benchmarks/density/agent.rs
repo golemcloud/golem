@@ -391,18 +391,20 @@ fn agent_for_index<'a>(
 /// Classification of a single invocation attempt.
 struct AttemptOutcome {
     latency: Duration,
-    /// True if the attempt failed with a connection-level error (as opposed to
-    /// a normal application error or a timeout), which the ceiling detector
-    /// treats as the catastrophic connection-lost condition.
+    /// True if the attempt failed with a connection-level error or client-side
+    /// timeout, which the ceiling detector treats as the catastrophic
+    /// connection-lost condition.
     connection_lost: bool,
     /// True if the attempt was rejected with an overloaded (HTTP 503) response.
     /// A sustained run of these is the catastrophic overloaded condition.
     overloaded: bool,
 }
 
-/// Per-attempt client timeout. Starts at 30s (the hard-ceiling threshold);
-/// escalated to 5 minutes once the hard ceiling is crossed, so the eventual
-/// catastrophic 5-minute-timeout condition can fire.
+/// Per-attempt client timeout. Starts above the 30s hard-ceiling threshold so a
+/// client-side timeout is unambiguously a failed round-trip, not just a sample
+/// equal to the hard-ceiling boundary. Escalated to 5 minutes once the hard
+/// ceiling is crossed, so the eventual catastrophic 5-minute-timeout condition
+/// can fire.
 struct AdaptiveTimeout {
     current: Duration,
 }
@@ -410,7 +412,7 @@ struct AdaptiveTimeout {
 impl AdaptiveTimeout {
     fn new() -> Self {
         Self {
-            current: super::ceiling::HARD_CEILING_THRESHOLD,
+            current: Duration::from_secs(60),
         }
     }
 
@@ -493,11 +495,12 @@ async fn timed_invoke(
             }
         }
         Err(_) => {
-            // Timed out: report the timeout duration as the latency so the
-            // detector's hard/catastrophic thresholds can fire on it.
+            // Timed out: report the timeout duration as the latency and mark
+            // the attempt as a failed round-trip so the detector stops the cell
+            // instead of counting the target as successfully resumed.
             AttemptOutcome {
                 latency: timeout,
-                connection_lost: false,
+                connection_lost: true,
                 overloaded: false,
             }
         }
