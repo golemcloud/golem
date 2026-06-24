@@ -145,12 +145,20 @@ async fn test_moonbit_bridge_e2e() {
         }}
         "#
     };
-    let main_moon_pkg = indoc! {r#"
-        import {
+    let module_name = std::fs::read_to_string(client_dir.join("moon.mod.json"))
+        .unwrap()
+        .parse::<serde_json::Value>()
+        .unwrap()
+        .get("name")
+        .and_then(|name| name.as_str())
+        .unwrap()
+        .to_string();
+    let main_moon_pkg = formatdoc! {r#"
+        import {{
           "moonbitlang/async" @async,
-          "golem/bridge/client" @client,
-          "golem/bridge/runtime" @runtime,
-        }
+          "{module_name}/client" @client,
+          "{module_name}/runtime" @runtime,
+        }}
 
         options(
           "is-main": true,
