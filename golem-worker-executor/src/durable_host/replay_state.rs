@@ -206,7 +206,7 @@ impl ReplayState {
             return Ok(None);
         }
 
-        self.advance_to_next_non_hint().await;
+        self.advance_to_next_non_hint_entry().await;
         let (index, entry) = self.get_current_entry().await;
 
         if condition(&entry) {
@@ -279,7 +279,7 @@ impl ReplayState {
     ) -> OplogEntryLookupResult {
         let mut violation = false;
         while self.is_replay() {
-            self.advance_to_next_non_hint().await;
+            self.advance_to_next_non_hint_entry().await;
             let (idx, entry) = self.get_current_entry().await;
 
             update_state(entry, idx, &mut state);
@@ -581,9 +581,13 @@ impl ReplayState {
         self.committed.last_read_non_hint_oplog_index = self.pending.last_read_non_hint_oplog_index;
         self.committed.next_skipped_region = self.pending.next_skipped_region.clone();
 
+        let mut replay_events_in_jumps = self.extract_replay_events_in_jumped_regions().await;
+        self.pending.replay_events.append(&mut replay_events_in_jumps);
+        let all_new_replay_events = std::mem::take(&mut self.pending.replay_events);
+        self.committed.replay_events.extend(all_new_replay_events.into_values());
 
-        self.pending.seen_logs.clear();
-        self.pending.replay_events.clear();
+        self.committed.seen_logs.extend(std::mem::take(&mut self.pending.seen_logs));
+
         self.pending.jumps.clear();
     }
 
@@ -603,28 +607,12 @@ impl ReplayState {
         self.pending.replay_events.insert(oplog_index, event);
     }
 
-    // Jump to the first oplog entry that should be replayed, discarding all read entries.
-    // If the cursor is at a non-skipped entry this is a noop.
-    fn jump_out_of_skipped_region(&mut self) {
-        while self.is_replay()
-            && let Some(skipped_region) = &self.pending.next_skipped_region
-            && skipped_region.contains(self.pending.current_oplog_index)
-        {
-            let skipped_region_end = skipped_region.end;
-            let previous_index = self.pending.current_oplog_index;
-
-            self.pending.current_oplog_index = skipped_region_end.next();
-            self.pending.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.pending.current_oplog_index);
-            self.pending.jumps.push(OplogRegion { start: previous_index, end: skipped_region_end });
-        }
-    }
-
     // Guaranteed to read at least 1 entry and to land on a non-hint, non-skipped entry
-    async fn advance_to_next_non_hint(&mut self) {
+    async fn advance_to_next_non_hint_entry(&mut self) {
         assert!(self.is_replay());
 
         while self.is_replay() {
-            self.advance_current_index();
+            self.advance_to_next_non_skipped_entry().await;
             let (idx, entry) = self.get_current_entry().await;
             match entry {
                 OplogEntry::SuccessfulUpdate {
@@ -646,12 +634,59 @@ impl ReplayState {
                 other if other.is_hint() => { }
                 _ => { break; }
             }
+            self.advance_current_entry().await;
         }
     }
 
-    fn advance_current_index(&mut self) {
-        self.pending.current_oplog_index = self.pending.current_oplog_index.next();
+    async fn advance_to_next_non_skipped_entry(&mut self) {
+        self.move_to_end_of_skipped_region_in_loaded_chunk().await;
         self.jump_out_of_skipped_region();
+    }
+
+    async fn advance_current_entry(&mut self) {
+        self.pending.current_oplog_index = self.pending.current_oplog_index.next()
+    }
+
+    // Move to the end of the loaded chunk in the end of the currently loaded chunk,
+    // recording any events in the chunk immediately. This is guaranteed to not load any new chunks.
+    async fn move_to_end_of_skipped_region_in_loaded_chunk(&mut self) {
+        while self.is_replay()
+            && let Some(skipped_region) = &self.pending.next_skipped_region
+            && skipped_region.contains(self.pending.current_oplog_index)
+            && self.pending.current_oplog_chunk_region.contains(self.pending.current_oplog_index)
+        {
+            let exits_current_region = skipped_region.end == self.pending.current_oplog_index;
+
+            // Guaranteed to not require a remote read
+            let (entry_index, entry) = self.get_current_entry().await;
+
+            if let Some(replay_event) = Self::skipped_oplog_entry_as_replay_event(entry) {
+                self.pending.replay_events.insert(entry_index, replay_event);
+            }
+
+            self.pending.current_oplog_index = self.pending.current_oplog_index.next();
+
+            // We moved out of the skipped region
+            if exits_current_region {
+                self.pending.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.pending.current_oplog_index);
+            }
+        }
+    }
+
+    // Jump to the first oplog entry that should be replayed, discarding all read entries.
+    // If the cursor is at a non-skipped entry this is a noop.
+    fn jump_out_of_skipped_region(&mut self) {
+        while self.is_replay()
+            && let Some(skipped_region) = &self.pending.next_skipped_region
+            && skipped_region.contains(self.pending.current_oplog_index)
+        {
+            let skipped_region_end = skipped_region.end;
+            let previous_index = self.pending.current_oplog_index;
+
+            self.pending.current_oplog_index = skipped_region_end.next();
+            self.pending.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.pending.current_oplog_index);
+            self.pending.jumps.push(OplogRegion { start: previous_index, end: skipped_region_end });
+        }
     }
 
     async fn ensure_chunk(&mut self) {
@@ -673,10 +708,10 @@ impl ReplayState {
     // Some operational oplog entries like card-revoked stay relevant even if they are skipped.
     // The skipped chunks are guaranteed to have not been read during the prior replay, so there
     // is nothing to but to read them here.
-    async fn extract_replay_events_from_jumped_regions(&mut self, regions: &Vec<OplogRegion>) -> BTreeMap<OplogIndex, ReplayEvent> {
+    async fn extract_replay_events_in_jumped_regions(&mut self) -> BTreeMap<OplogIndex, ReplayEvent> {
         let mut result = BTreeMap::new();
 
-        for region in regions {
+        for region in &self.pending.jumps {
             let mut next = region.start;
             let end = region.end.as_u64();
 
@@ -685,16 +720,24 @@ impl ReplayState {
                 let count = remaining.min(CHUNK_SIZE);
 
                 for (entry_index, entry) in self.oplog.read_many(next, count).await {
-                    if let OplogEntry::CardRevoked { card_id, .. } = entry {
-                        result.insert(entry_index, ReplayEvent::CardRevoked {
-                            card_id: CardId(card_id),
-                        });
+                    if let Some(replay_event) = Self::skipped_oplog_entry_as_replay_event(&entry) {
+                        result.insert(entry_index, replay_event);
                     }
                     next = entry_index.next()
                 }
             }
         }
         result
+    }
+
+    fn skipped_oplog_entry_as_replay_event(entry: &OplogEntry) -> Option<ReplayEvent> {
+        match entry {
+            OplogEntry::CardRevoked { card_id, .. } =>
+                Some(ReplayEvent::CardRevoked {
+                    card_id: CardId(*card_id),
+                }),
+            _ => None
+        }
     }
 }
 
