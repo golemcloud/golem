@@ -234,10 +234,6 @@ impl ReplayState {
         *self = Self::new_with_target(owned_agent_id, oplog, skipped_regions, replay_target);
     }
 
-    pub async fn switch_to_live(&mut self) {
-        unimplemented!()
-    }
-
     pub fn last_replayed_index(&self) -> OplogIndex {
         self.committed.current_oplog_index
     }
