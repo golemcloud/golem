@@ -406,7 +406,7 @@ impl Display for AgentResourceId {
 }
 
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(u8)]
 pub enum LogLevel {
