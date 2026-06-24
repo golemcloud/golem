@@ -67,43 +67,44 @@ pub fn get_remote_client(
     // The constructor value is therefore encoded freshly for each host call
     // (`make-agent-id` and the `wasm-rpc` constructor), the agent-id is computed
     // eagerly, and only the resulting `String` is kept in the client struct.
-    let build_constructor_body = |prelude: proc_macro2::TokenStream,
-                                  phantom_wire: proc_macro2::TokenStream,
-                                  phantom_struct: proc_macro2::TokenStream,
-                                  config: proc_macro2::TokenStream| {
-        quote! {
-            let agent_type =
-                golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
-                    .expect("Internal Error: Agent type not registered");
+    let build_constructor_body =
+        |prelude: proc_macro2::TokenStream,
+         phantom_wire: proc_macro2::TokenStream,
+         phantom_struct: proc_macro2::TokenStream,
+         config: proc_macro2::TokenStream| {
+            quote! {
+                let agent_type =
+                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
+                        .expect("Internal Error: Agent type not registered");
 
-            #encode_constructor
+                #encode_constructor
 
-            #prelude
+                #prelude
 
-            let agent_id = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
-                #type_name,
-                golem_rust::encode_schema_value(&constructor_value)
-                    .expect("Failed to encode constructor parameters for agent id"),
-                #phantom_wire,
-            )
-            .expect("Internal Error: Failed to make agent id");
+                let agent_id = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                    #type_name,
+                    golem_rust::encode_schema_value(&constructor_value)
+                        .expect("Failed to encode constructor parameters for agent id"),
+                    #phantom_wire,
+                )
+                .expect("Internal Error: Failed to make agent id");
 
-            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
-                #type_name,
-                golem_rust::encode_schema_value(&constructor_value)
-                    .expect("Failed to encode constructor parameters"),
-                #phantom_wire,
-                #config,
-            );
+                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                    #type_name,
+                    golem_rust::encode_schema_value(&constructor_value)
+                        .expect("Failed to encode constructor parameters"),
+                    #phantom_wire,
+                    #config,
+                );
 
-            #remote_client_type_name {
-                agent_id,
-                phantom_id: #phantom_struct,
-                component_id: agent_type.implemented_by,
-                wasm_rpc,
+                #remote_client_type_name {
+                    agent_id,
+                    phantom_id: #phantom_struct,
+                    component_id: agent_type.implemented_by,
+                    wasm_rpc,
+                }
             }
-        }
-    };
+        };
 
     let optional_get_with_config_impl = if agent_is_durable
         && !constructor_agent_config_param_defs.is_empty()

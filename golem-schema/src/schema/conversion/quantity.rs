@@ -21,7 +21,9 @@
 
 use std::marker::PhantomData;
 
-use super::{FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, type_id_with_args, value_kind};
+use super::{
+    FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, type_id_with_args, value_kind,
+};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{QuantitySpec, QuantityValue, SchemaType};
 use crate::schema::schema_value::SchemaValue;
@@ -121,7 +123,7 @@ impl<U: QuantityUnit> Quantity<U> {
         if allowed.is_empty() {
             unit == U::base_unit()
         } else {
-            allowed.iter().any(|candidate| *candidate == unit)
+            allowed.contains(&unit)
         }
     }
 

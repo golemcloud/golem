@@ -613,7 +613,10 @@ mod tests {
 
         // A relative path has no `file://` URI, so it renders as structured JSON.
         assert!(result.content.is_empty() || result.content[0].raw.as_resource_link().is_none());
-        assert_eq!(result.structured_content, Some(json!({"value": "relative.txt"})));
+        assert_eq!(
+            result.structured_content,
+            Some(json!({"value": "relative.txt"}))
+        );
     }
 
     #[test]

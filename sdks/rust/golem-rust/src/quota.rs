@@ -33,8 +33,8 @@ use std::time::Duration;
 
 #[cfg(feature = "export_golem_agentic")]
 use crate::schema::{
-    FromSchema, FromSchemaError, IntoSchema, QuotaTokenSpec, SchemaBuilder, SchemaType, SchemaValue,
-    TypeId,
+    FromSchema, FromSchemaError, IntoSchema, QuotaTokenSpec, SchemaBuilder, SchemaType,
+    SchemaValue, TypeId,
 };
 
 /// Error returned when a reservation cannot be granted because the resource's
@@ -192,8 +192,7 @@ impl QuotaToken {
     }
 }
 
-const TOKEN_CONSUMED: &str =
-    "quota token has already been transferred and can no longer be used; split the token first if \
+const TOKEN_CONSUMED: &str = "quota token has already been transferred and can no longer be used; split the token first if \
      you need to both keep and send a capability";
 
 #[cfg(feature = "export_golem_agentic")]

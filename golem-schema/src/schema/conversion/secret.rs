@@ -19,7 +19,9 @@
 //! and return a [`SchemaType::Secret`] capability while the reference is
 //! redacted at the CLI/tracing surfaces.
 
-use super::{FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, secret_from_value, secret_to_value};
+use super::{
+    FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, secret_from_value, secret_to_value,
+};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{SchemaType, SecretSpec};
 use crate::schema::schema_value::SchemaValue;
