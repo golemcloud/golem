@@ -189,6 +189,20 @@ function mapTypeInner(type: TsType, scope: TypeScope | undefined, state: MapperS
       return mapPrincipal(state);
     case 'quota-token':
       return mapQuotaToken();
+    case 'path':
+      return Either.right(r.path({ direction: 'in-out', kind: 'any' }));
+    case 'url':
+      return Either.right(r.url({}));
+    case 'datetime':
+      return Either.right(r.datetime());
+    case 'duration':
+      return Either.right(r.duration());
+    case 'quantity':
+      if (!type.spec)
+        return Either.left(
+          'Quantity<T> type parameter must have a literal baseUnit and a tuple of string-literal allowedSuffixes',
+        );
+      return Either.right(r.quantity(type.spec));
 
     case 'others':
       return mapOthers(type, state);

@@ -1008,6 +1008,7 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
 fn path_schema(spec: &PathSpec) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("string".to_string()));
+    m.insert("format".to_string(), Value::String("file-path".to_string()));
     let kind = match spec.kind {
         crate::schema::schema_type::PathKind::File => "file",
         crate::schema::schema_type::PathKind::Directory => "directory",
@@ -1041,6 +1042,7 @@ fn path_schema(spec: &PathSpec) -> Map<String, Value> {
 fn url_schema(restrictions: &UrlRestrictions) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("string".to_string()));
+    m.insert("format".to_string(), Value::String("uri".to_string()));
     m.insert("title".to_string(), Value::String("URL".to_string()));
     let mut description = Vec::new();
     if let Some(schemes) = &restrictions.allowed_schemes {

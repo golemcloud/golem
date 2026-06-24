@@ -49,6 +49,7 @@ import type {
 import { SchemaDecodeError } from '../../schema-model';
 import { Result } from '../../../host/result';
 import { QuotaToken } from '../../../host/quota';
+import { Duration, Path, Quantity } from '../../../richTypes';
 
 // ============================================================
 // Errors
@@ -80,6 +81,26 @@ function unionMismatch(cases: ResolvedVariantCase[], value: unknown): Error {
 
 function internalError(message: string): Error {
   return new Error(`Internal error: ${message}`);
+}
+
+function dateToDatetime(value: Date): { seconds: bigint; nanoseconds: number } {
+  const milliseconds = BigInt(value.getTime());
+  let seconds = milliseconds / 1000n;
+  let ms = milliseconds % 1000n;
+  if (ms < 0n) {
+    seconds -= 1n;
+    ms += 1000n;
+  }
+  return {
+    seconds,
+    nanoseconds: Number(ms) * 1_000_000,
+  };
+}
+
+function datetimeToDate(value: { seconds: bigint; nanoseconds: number }): Date {
+  return new Date(
+    Number(value.seconds * 1000n + BigInt(Math.trunc(value.nanoseconds / 1_000_000))),
+  );
 }
 
 // ============================================================
@@ -306,6 +327,22 @@ export function serialize(tsValue: any, rt: ResolvedType, defs: Defs = EMPTY_DEF
     case 'quota-token':
       if (!(tsValue instanceof QuotaToken)) throw typeMismatch(tsValue, 'QuotaToken');
       return tsValue._toSchemaValue(QUOTA_INTERNAL);
+
+    case 'path':
+      if (!(tsValue instanceof Path)) throw typeMismatch(tsValue, 'Path');
+      return { tag: 'path', value: tsValue.path };
+    case 'url':
+      if (!(tsValue instanceof URL)) throw typeMismatch(tsValue, 'URL');
+      return { tag: 'url', value: tsValue.toString() };
+    case 'datetime':
+      if (!(tsValue instanceof Date)) throw typeMismatch(tsValue, 'Date');
+      return { tag: 'datetime', value: dateToDatetime(tsValue) };
+    case 'duration':
+      if (!(tsValue instanceof Duration)) throw typeMismatch(tsValue, 'Duration');
+      return { tag: 'duration', nanoseconds: tsValue.nanoseconds };
+    case 'quantity':
+      if (!(tsValue instanceof Quantity)) throw typeMismatch(tsValue, 'Quantity');
+      return { tag: 'quantity', value: tsValue.value };
 
     case 'flags':
       throw new Error(`Serializing 'flags' values is not supported`);
@@ -686,6 +723,22 @@ export function createWireEncoder(): WireEncoder {
         return push({ tag: 'quota-token-handle', val: raw });
       }
 
+      case 'path':
+        if (!(value instanceof Path)) throw typeMismatch(value, 'Path');
+        return push({ tag: 'path-value', val: value.path });
+      case 'url':
+        if (!(value instanceof URL)) throw typeMismatch(value, 'URL');
+        return push({ tag: 'url-value', val: value.toString() });
+      case 'datetime':
+        if (!(value instanceof Date)) throw typeMismatch(value, 'Date');
+        return push({ tag: 'datetime-value', val: dateToDatetime(value) });
+      case 'duration':
+        if (!(value instanceof Duration)) throw typeMismatch(value, 'Duration');
+        return push({ tag: 'duration-value', val: { nanoseconds: value.nanoseconds } });
+      case 'quantity':
+        if (!(value instanceof Quantity)) throw typeMismatch(value, 'Quantity');
+        return push({ tag: 'quantity-value-node', val: value.value });
+
       case 'flags':
         throw new Error(`Serializing 'flags' values is not supported`);
 
@@ -917,6 +970,22 @@ export function deserialize(value: SchemaValue, rt: ResolvedType, defs: Defs = E
     case 'quota-token':
       if (value.tag !== 'quota-token') throw deserializeMismatch(value, 'QuotaToken');
       return QuotaToken._fromSchemaValue(QUOTA_INTERNAL, value);
+
+    case 'path':
+      if (value.tag !== 'path') throw deserializeMismatch(value, 'Path');
+      return new Path(value.value);
+    case 'url':
+      if (value.tag !== 'url') throw deserializeMismatch(value, 'URL');
+      return new URL(value.value);
+    case 'datetime':
+      if (value.tag !== 'datetime') throw deserializeMismatch(value, 'Date');
+      return datetimeToDate(value.value);
+    case 'duration':
+      if (value.tag !== 'duration') throw deserializeMismatch(value, 'Duration');
+      return new Duration(value.nanoseconds);
+    case 'quantity':
+      if (value.tag !== 'quantity') throw deserializeMismatch(value, 'Quantity');
+      return new Quantity(value.value);
 
     case 'flags':
       throw new Error(`Deserializing 'flags' values is not supported`);
@@ -1321,6 +1390,22 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
         );
       }
 
+      case 'path':
+        if (n.tag !== 'path-value') throw wireMismatch(n, 'Path');
+        return new Path(n.val);
+      case 'url':
+        if (n.tag !== 'url-value') throw wireMismatch(n, 'URL');
+        return new URL(n.val);
+      case 'datetime':
+        if (n.tag !== 'datetime-value') throw wireMismatch(n, 'Date');
+        return datetimeToDate(n.val);
+      case 'duration':
+        if (n.tag !== 'duration-value') throw wireMismatch(n, 'Duration');
+        return new Duration(n.val.nanoseconds);
+      case 'quantity':
+        if (n.tag !== 'quantity-value-node') throw wireMismatch(n, 'Quantity');
+        return new Quantity(n.val);
+
       case 'flags':
         throw new Error(`Deserializing 'flags' values is not supported`);
 
@@ -1512,6 +1597,16 @@ export function matchesResolved(value: any, rt: ResolvedType, defs: Defs = EMPTY
 
     case 'quota-token':
       return value instanceof QuotaToken;
+    case 'path':
+      return value instanceof Path;
+    case 'url':
+      return value instanceof URL;
+    case 'datetime':
+      return value instanceof Date;
+    case 'duration':
+      return value instanceof Duration;
+    case 'quantity':
+      return value instanceof Quantity;
 
     case 'flags':
       return false;
@@ -1915,6 +2010,25 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
       );
       return `(nodes.push({ tag: 'quota-token-handle', val: ${raw} }) - 1)`;
     }
+    case 'path':
+      out.push(`if (!(${valExpr} instanceof Path)) throw typeMismatch(${valExpr}, 'Path');`);
+      return `(nodes.push({ tag: 'path-value', val: ${valExpr}.path }) - 1)`;
+    case 'url':
+      out.push(`if (!(${valExpr} instanceof URL)) throw typeMismatch(${valExpr}, 'URL');`);
+      return `(nodes.push({ tag: 'url-value', val: ${valExpr}.toString() }) - 1)`;
+    case 'datetime':
+      out.push(`if (!(${valExpr} instanceof Date)) throw typeMismatch(${valExpr}, 'Date');`);
+      return `(nodes.push({ tag: 'datetime-value', val: dateToDatetime(${valExpr}) }) - 1)`;
+    case 'duration':
+      out.push(
+        `if (!(${valExpr} instanceof Duration)) throw typeMismatch(${valExpr}, 'Duration');`,
+      );
+      return `(nodes.push({ tag: 'duration-value', val: { nanoseconds: ${valExpr}.nanoseconds } }) - 1)`;
+    case 'quantity':
+      out.push(
+        `if (!(${valExpr} instanceof Quantity)) throw typeMismatch(${valExpr}, 'Quantity');`,
+      );
+      return `(nodes.push({ tag: 'quantity-value-node', val: ${valExpr}.value }) - 1)`;
     case 'flags':
       throw new CompileUnsupported(b.tag);
   }
@@ -2287,6 +2401,35 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       out.push(`${nv}.val = undefined;`);
       return `QuotaToken._fromHandle(QUOTA_INTERNAL, GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, ${raw}))`;
     }
+    case 'path':
+    case 'url':
+    case 'datetime':
+    case 'duration':
+    case 'quantity': {
+      const iv = ctx.fresh();
+      out.push(`const ${iv} = ${idxExpr};`);
+      genDecRange(iv, out);
+      const nv = ctx.fresh();
+      out.push(`const ${nv} = nodes[${iv}];`);
+      if (b.tag === 'path') {
+        out.push(`if (${nv}.tag !== 'path-value') throw wireMismatch(${nv}, 'Path');`);
+        return `new Path(${nv}.val)`;
+      }
+      if (b.tag === 'url') {
+        out.push(`if (${nv}.tag !== 'url-value') throw wireMismatch(${nv}, 'URL');`);
+        return `new URL(${nv}.val)`;
+      }
+      if (b.tag === 'datetime') {
+        out.push(`if (${nv}.tag !== 'datetime-value') throw wireMismatch(${nv}, 'Date');`);
+        return `datetimeToDate(${nv}.val)`;
+      }
+      if (b.tag === 'duration') {
+        out.push(`if (${nv}.tag !== 'duration-value') throw wireMismatch(${nv}, 'Duration');`);
+        return `new Duration(${nv}.val.nanoseconds)`;
+      }
+      out.push(`if (${nv}.tag !== 'quantity-value-node') throw wireMismatch(${nv}, 'Quantity');`);
+      return `new Quantity(${nv}.val)`;
+    }
     case 'flags':
       throw new CompileUnsupported(b.tag);
   }
@@ -2344,6 +2487,10 @@ function genGraphEmitFn(
     'TYPED_ARRAYS',
     'QuotaToken',
     'QUOTA_INTERNAL',
+    'Path',
+    'Duration',
+    'Quantity',
+    'dateToDatetime',
     'DEFS',
     'C',
     lines.join('\n'),
@@ -2358,6 +2505,10 @@ function genGraphEmitFn(
     TYPED_ARRAYS,
     QuotaToken,
     QUOTA_INTERNAL,
+    Path,
+    Duration,
+    Quantity,
+    dateToDatetime,
     graph.defs,
     ctx.consts,
   );
@@ -2402,6 +2553,10 @@ function genGraphReadFn(
     'QuotaToken',
     'GuestQuotaTokenHandle',
     'QUOTA_INTERNAL',
+    'Path',
+    'Duration',
+    'Quantity',
+    'datetimeToDate',
     'C',
     lines.join('\n'),
   ) as (
@@ -2415,6 +2570,10 @@ function genGraphReadFn(
     QuotaToken,
     GuestQuotaTokenHandle,
     QUOTA_INTERNAL,
+    Path,
+    Duration,
+    Quantity,
+    datetimeToDate,
     ctx.consts,
   );
 }

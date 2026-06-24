@@ -60,6 +60,7 @@ export * from './host/result';
 export * from './host/transaction';
 export * from './host/checkpoint';
 export { Config, Secret } from './agentConfig';
+export { Path, Duration, Quantity } from './richTypes';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;

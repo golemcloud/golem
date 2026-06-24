@@ -47,7 +47,8 @@ pub use agent::{
 };
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
-    SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
+    Quantity, QuantityUnit, SchemaBuilder, SecretRef, merge_agent_graphs, try_into_schema_graph,
+    try_into_typed_schema_value,
 };
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};

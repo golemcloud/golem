@@ -60,6 +60,12 @@ mod serde_json_types;
 #[cfg(feature = "url")]
 mod url;
 
+mod quantity;
+mod secret;
+
+pub use quantity::{Quantity, QuantityUnit};
+pub use secret::SecretRef;
+
 // =====================================================================
 // Trait surface
 // =====================================================================
@@ -1050,6 +1056,35 @@ impl FromSchema for std::time::Duration {
                 "Duration",
             )),
         }
+    }
+}
+
+// A `std::path::PathBuf` is modelled as the rich `Path` schema type. Only
+// UTF-8 paths are supported because `SchemaValue::Path` is string-backed.
+impl IntoSchema for std::path::PathBuf {
+    fn type_id() -> TypeId {
+        TypeId::new("std.path.PathBuf")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        use crate::schema::schema_type::{PathDirection, PathKind, PathSpec};
+        SchemaType::path(PathSpec {
+            direction: PathDirection::InOut,
+            kind: PathKind::Any,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        })
+    }
+    fn to_value(&self) -> SchemaValue {
+        match self.to_str() {
+            Some(s) => path_to_value(s.to_string()),
+            None => path_to_value(self.to_string_lossy().into_owned()),
+        }
+    }
+}
+
+impl FromSchema for std::path::PathBuf {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        Ok(std::path::PathBuf::from(path_from_value(v, "PathBuf")?))
     }
 }
 

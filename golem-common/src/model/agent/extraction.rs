@@ -17,6 +17,7 @@ use crate::model::parsed_function_name::ParsedFunctionName;
 use crate::schema::agent::AgentTypeSchema;
 use crate::schema::agent::wit::{decode_agent_error, decode_agent_type, wire};
 use anyhow::anyhow;
+use golem_schema::schema::wit::QuotaTokenHandleRep;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
@@ -240,6 +241,19 @@ impl WasiView for Host {
     }
 }
 
+/// Whether the resource `resource_name` imported from interface
+/// `interface_name` is the opaque `golem:core/types.quota-token`. It is matched
+/// both at its defining interface and at the `golem:quota/types` interface that
+/// re-exports (`use`s) it, so every linker instance binds it to the same host
+/// resource type expected by the generated `wire` bindings.
+fn is_quota_token_resource(interface_name: &str, resource_name: &str) -> bool {
+    resource_name == "quota-token"
+        && matches!(
+            interface_name,
+            "golem:core/types@2.0.0" | "golem:quota/types@1.5.0"
+        )
+}
+
 fn dynamic_import(
     name: &str,
     engine: &Engine,
@@ -285,7 +299,24 @@ fn dynamic_import(
                 ComponentItem::ComponentInstance(_) => {}
                 ComponentItem::Type(_) => {}
                 ComponentItem::Resource(_resource) => {
-                    if &inner_name != "pollable"
+                    if is_quota_token_resource(&name, &inner_name) {
+                        // The `quota-token` resource appears transitively in the
+                        // `discover-agent-types` result type (via
+                        // `agent-error` -> `typed-schema-value` ->
+                        // `schema-value-tree` -> `quota-token-handle`). The host
+                        // calls that export through the generated `wire` bindings,
+                        // which map this resource to [`QuotaTokenHandleRep`]. The
+                        // resource type registered here must use the same host
+                        // type or `Func::typed` rejects the signature with a
+                        // resource type mismatch. Agent discovery never produces
+                        // or consumes real quota tokens, so a dummy registration
+                        // with a no-op destructor is sufficient.
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<QuotaTokenHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if &inner_name != "pollable"
                         && inner_name != "wasi-io-pollable"
                         && &inner_name != "input-stream"
                         && &inner_name != "output-stream"

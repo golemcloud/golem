@@ -40,7 +40,8 @@ pub mod proptest_strategies;
 
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
-    SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
+    Quantity, QuantityUnit, SchemaBuilder, SecretRef, merge_agent_graphs, try_into_schema_graph,
+    try_into_typed_schema_value,
 };
 #[cfg(feature = "derive")]
 pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};

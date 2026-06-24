@@ -264,8 +264,11 @@ export const t = {
   map: (key: SchemaType, value: SchemaType): SchemaType => schemaType({ tag: 'map', key, value }),
   option: (element: SchemaType): SchemaType => schemaType({ tag: 'option', element }),
   result: (ok?: SchemaType, err?: SchemaType): SchemaType => schemaType({ tag: 'result', ok, err }),
+  path: (spec: PathSpec): SchemaType => schemaType({ tag: 'path', spec }),
+  url: (restrictions: UrlRestrictions): SchemaType => schemaType({ tag: 'url', restrictions }),
   datetime: (): SchemaType => schemaType({ tag: 'datetime' }),
   duration: (): SchemaType => schemaType({ tag: 'duration' }),
+  quantity: (spec: QuantitySpec): SchemaType => schemaType({ tag: 'quantity', spec }),
   quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
 };
 
@@ -316,6 +319,11 @@ export const v = {
   option: (value?: SchemaValue): SchemaValue => ({ tag: 'option', value }),
   ok: (value?: SchemaValue): SchemaValue => ({ tag: 'result', result: { tag: 'ok', value } }),
   err: (value?: SchemaValue): SchemaValue => ({ tag: 'result', result: { tag: 'err', value } }),
+  path: (value: string): SchemaValue => ({ tag: 'path', value }),
+  url: (value: string): SchemaValue => ({ tag: 'url', value }),
+  datetime: (value: Datetime): SchemaValue => ({ tag: 'datetime', value }),
+  duration: (nanoseconds: bigint): SchemaValue => ({ tag: 'duration', nanoseconds }),
+  quantity: (value: QuantityValue): SchemaValue => ({ tag: 'quantity', value }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
 };
 

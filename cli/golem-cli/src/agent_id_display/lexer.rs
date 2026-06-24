@@ -27,6 +27,7 @@ pub enum Token {
     DoubleColon,
     Dot,
     Eq,
+    Star,
     Ident(String),
     StringLit(String),
     CharLit(char),
@@ -36,8 +37,7 @@ pub enum Token {
     BoolLit(bool),
     Null,
     Undefined,
-    AtT,
-    AtB,
+    At,
     Eof,
 }
 
@@ -76,6 +76,13 @@ impl<'a> Lexer<'a> {
 
     pub fn position(&self) -> usize {
         self.pos
+    }
+
+    /// Returns the raw source slice between two byte offsets (as produced by
+    /// [`Lexer::next_token`]). Used to recover the exact textual form of a
+    /// numeric literal when reconstructing canonical rich-type payloads.
+    pub fn slice(&self, start: usize, end: usize) -> &str {
+        &self.input[start..end]
     }
 
     pub fn skip_raw_char(&mut self, ch: u8) -> bool {
@@ -213,23 +220,22 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 Ok((Token::Dot, start, self.pos))
             }
+            b'*' => {
+                self.pos += 1;
+                Ok((Token::Star, start, self.pos))
+            }
             b'=' => {
                 self.pos += 1;
                 Ok((Token::Eq, start, self.pos))
             }
             b'@' => {
-                if self.pos + 1 < bytes.len() && bytes[self.pos + 1] == b't' {
-                    self.pos += 2;
-                    Ok((Token::AtT, start, self.pos))
-                } else if self.pos + 1 < bytes.len() && bytes[self.pos + 1] == b'b' {
-                    self.pos += 2;
-                    Ok((Token::AtB, start, self.pos))
-                } else {
-                    Err(LexError {
-                        position: start,
-                        message: "unexpected character after '@'".into(),
-                    })
-                }
+                // A lone `@` introduces a MoonBit package qualifier such as
+                // `@wallClock.Datetime`; the following identifier is lexed
+                // separately. Lexing it as its own token (rather than rejecting
+                // it) lets qualified literals appear in nested positions where
+                // the dispatcher peeks before choosing a parser.
+                self.pos += 1;
+                Ok((Token::At, start, self.pos))
             }
             b'"' => self.read_string(start),
             b'\'' => self.read_char(start),
@@ -303,7 +309,13 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         let mut is_float = false;
-        if self.pos < self.input.len() && self.bytes()[self.pos] == b'.' {
+        // Only treat a `.` as a decimal point when it is followed by a digit, so
+        // that `5.kg()` lexes as `5` `.` `kg` `(` `)` (a quantity literal) rather
+        // than the float `5.0` swallowing the dot.
+        if self.pos + 1 < self.input.len()
+            && self.bytes()[self.pos] == b'.'
+            && self.bytes()[self.pos + 1].is_ascii_digit()
+        {
             is_float = true;
             self.pos += 1;
             while self.pos < self.input.len() && self.bytes()[self.pos].is_ascii_digit() {

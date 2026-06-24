@@ -229,5 +229,19 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         owner: json.owner,
         optional: json.optional,
       };
+
+    case 'path':
+    case 'url':
+    case 'datetime':
+    case 'duration':
+      return { kind: json.kind, name: json.name, owner: json.owner, optional: json.optional };
+    case 'quantity':
+      return {
+        kind: 'quantity',
+        name: json.name,
+        owner: json.owner,
+        optional: json.optional,
+        spec: json.spec,
+      };
   }
 }

@@ -24,7 +24,7 @@ use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{
     NamedFieldType, ResultSpec, SchemaType, UnionBranch, VariantCaseType,
 };
-use golem_common::schema::schema_value::{SchemaValue, UnionValuePayload};
+use golem_common::schema::schema_value::{DurationValuePayload, SchemaValue, UnionValuePayload};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
@@ -125,6 +125,33 @@ pub(super) trait Dialect: Sized {
         }
         lexer.expect(&Token::RBrack)?;
         Ok(SchemaValue::List { elements: items })
+    }
+
+    // Rich semantic scalars. The default implementations accept the shared
+    // constructor form `Name("payload")` (which every renderer emits);
+    // dialects override these to *additionally* accept the language's native
+    // literal syntax (e.g. Rust `5.kg()`, TypeScript `Duration.seconds(30)`).
+    // `Url` and `Path` have no grounded native literal in any current SDK, so
+    // they intentionally stay constructor-only in every dialect.
+
+    fn parse_quantity(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        parse_quantity_constructor(lexer)
+    }
+
+    fn parse_duration(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        parse_duration_constructor(lexer)
+    }
+
+    fn parse_datetime(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        parse_datetime_constructor(lexer)
+    }
+
+    fn parse_url(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        parse_url_constructor(lexer)
+    }
+
+    fn parse_path(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        parse_path_constructor(lexer)
     }
 }
 
@@ -237,39 +264,11 @@ fn parse_cm_value_inner<D: Dialect>(
                 .map_err(|e| perr(lexer.position(), &format!("invalid binary value: {e}")))?;
             Ok(SchemaValue::Binary(payload))
         }
-        SchemaType::Path { .. } => {
-            let s = parse_rich_constructor(lexer, "Path")?;
-            let path = canon_path::from_text(&s)
-                .map_err(|e| perr(lexer.position(), &format!("invalid path value: {e}")))?;
-            Ok(SchemaValue::Path { path })
-        }
-        SchemaType::Url { .. } => {
-            let s = parse_rich_constructor(lexer, "Url")?;
-            let url = canon_url::from_text(&s)
-                .map_err(|e| perr(lexer.position(), &format!("invalid url value: {e}")))?;
-            Ok(SchemaValue::Url { url })
-        }
-        SchemaType::Datetime { .. } => {
-            let s = parse_rich_constructor(lexer, "Datetime")?;
-            let value = canon_datetime::from_text(&s)
-                .or_else(|_| {
-                    DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&chrono::Utc))
-                })
-                .map_err(|e| perr(lexer.position(), &format!("invalid datetime value: {e}")))?;
-            Ok(SchemaValue::Datetime { value })
-        }
-        SchemaType::Duration { .. } => {
-            let s = parse_rich_constructor(lexer, "Duration")?;
-            let payload = canon_duration::from_text(&s)
-                .map_err(|e| perr(lexer.position(), &format!("invalid duration value: {e}")))?;
-            Ok(SchemaValue::Duration(payload))
-        }
-        SchemaType::Quantity { .. } => {
-            let s = parse_rich_constructor(lexer, "Quantity")?;
-            let payload = canon_quantity::from_text(&s)
-                .map_err(|e| perr(lexer.position(), &format!("invalid quantity value: {e}")))?;
-            Ok(SchemaValue::Quantity(payload))
-        }
+        SchemaType::Path { .. } => D::parse_path(lexer),
+        SchemaType::Url { .. } => D::parse_url(lexer),
+        SchemaType::Datetime { .. } => D::parse_datetime(lexer),
+        SchemaType::Duration { .. } => D::parse_duration(lexer),
+        SchemaType::Quantity { .. } => D::parse_quantity(lexer),
         SchemaType::Secret { .. } => {
             let s = parse_rich_constructor(lexer, "Secret")?;
             let payload = canon_secret::from_text(&s)
@@ -407,7 +406,170 @@ fn parse_text_constructor(lexer: &mut Lexer) -> Result<(String, Option<String>),
     Ok((body, language))
 }
 
+// ── Rich-scalar constructor parsers + value builders ────────────────────────
+//
+// The constructor parsers below implement the `Name("payload")` form accepted
+// in every dialect (these back the default `Dialect::parse_*` hooks). The value
+// builders are shared by both the constructor parsers and the per-language
+// native-literal overrides so all paths funnel through the same canonical
+// decoders and produce identically-typed `SchemaValue`s.
+
+pub(super) fn parse_quantity_constructor(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+    let pos = lexer.position();
+    let s = parse_rich_constructor(lexer, "Quantity")?;
+    quantity_value_from_text(pos, &s)
+}
+
+pub(super) fn parse_duration_constructor(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+    let pos = lexer.position();
+    let s = parse_rich_constructor(lexer, "Duration")?;
+    duration_value_from_text(pos, &s)
+}
+
+pub(super) fn parse_datetime_constructor(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+    let pos = lexer.position();
+    let s = parse_rich_constructor(lexer, "Datetime")?;
+    datetime_value_from_text(pos, &s)
+}
+
+pub(super) fn parse_url_constructor(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+    let pos = lexer.position();
+    let s = parse_rich_constructor(lexer, "Url")?;
+    let url =
+        canon_url::from_text(&s).map_err(|e| perr(pos, &format!("invalid url value: {e}")))?;
+    Ok(SchemaValue::Url { url })
+}
+
+pub(super) fn parse_path_constructor(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+    let pos = lexer.position();
+    let s = parse_rich_constructor(lexer, "Path")?;
+    let path =
+        canon_path::from_text(&s).map_err(|e| perr(pos, &format!("invalid path value: {e}")))?;
+    Ok(SchemaValue::Path { path })
+}
+
+/// Parse the `("body")` tail of a rich constructor whose name identifier has
+/// already been consumed. Dialect overrides use this after looking past the
+/// name to disambiguate a constructor from a native literal.
+pub(super) fn parse_rich_constructor_body(lexer: &mut Lexer) -> Result<String, ParseError> {
+    lexer.expect(&Token::LParen)?;
+    let (body, _, _) = lexer.expect_string()?;
+    lexer.expect(&Token::RParen)?;
+    Ok(body)
+}
+
+pub(super) fn quantity_value_from_text(pos: usize, s: &str) -> Result<SchemaValue, ParseError> {
+    let payload = canon_quantity::from_text(s)
+        .map_err(|e| perr(pos, &format!("invalid quantity value: {e}")))?;
+    Ok(SchemaValue::Quantity(payload))
+}
+
+pub(super) fn duration_value_from_text(pos: usize, s: &str) -> Result<SchemaValue, ParseError> {
+    let payload = canon_duration::from_text(s)
+        .map_err(|e| perr(pos, &format!("invalid duration value: {e}")))?;
+    Ok(SchemaValue::Duration(payload))
+}
+
+pub(super) fn duration_value_from_nanos(nanos: i64) -> SchemaValue {
+    SchemaValue::Duration(DurationValuePayload { nanoseconds: nanos })
+}
+
+pub(super) fn datetime_value_from_text(pos: usize, s: &str) -> Result<SchemaValue, ParseError> {
+    let value = canon_datetime::from_text(s)
+        .or_else(|_| DateTime::parse_from_rfc3339(s).map(|d| d.with_timezone(&chrono::Utc)))
+        .map_err(|e| perr(pos, &format!("invalid datetime value: {e}")))?;
+    Ok(SchemaValue::Datetime { value })
+}
+
+pub(super) fn datetime_value_from_millis(
+    pos: usize,
+    millis: i64,
+) -> Result<SchemaValue, ParseError> {
+    let value = DateTime::<chrono::Utc>::from_timestamp_millis(millis).ok_or_else(|| {
+        perr(
+            pos,
+            &format!("datetime out of range for epoch millis {millis}"),
+        )
+    })?;
+    Ok(SchemaValue::Datetime { value })
+}
+
+pub(super) fn datetime_value_from_secs_nanos(
+    pos: usize,
+    secs: i64,
+    nanos: u32,
+) -> Result<SchemaValue, ParseError> {
+    let value = DateTime::<chrono::Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
+        perr(
+            pos,
+            &format!("datetime out of range for epoch seconds {secs}"),
+        )
+    })?;
+    Ok(SchemaValue::Datetime { value })
+}
+
+/// Build a datetime from a (possibly fractional) epoch-milliseconds value. The
+/// SDK epoch constructors take a floating-point argument, so the fractional
+/// millisecond part is honoured down to nanosecond resolution; non-finite
+/// values are rejected rather than silently coerced to the epoch.
+///
+/// The split is done in floating-point *seconds* (not total nanoseconds) so the
+/// supported range matches `chrono`'s own range rather than being clipped to the
+/// ±292-year window where epoch nanoseconds happen to fit in `i64`.
+pub(super) fn datetime_value_from_epoch_millis_f64(
+    pos: usize,
+    millis: f64,
+) -> Result<SchemaValue, ParseError> {
+    if !millis.is_finite() {
+        return Err(perr(pos, "datetime epoch value must be a finite number"));
+    }
+    let secs_f = (millis / 1_000.0).floor();
+    if secs_f < i64::MIN as f64 || secs_f > i64::MAX as f64 {
+        return Err(perr(
+            pos,
+            &format!("datetime out of range for epoch millis {millis}"),
+        ));
+    }
+    let mut secs = secs_f as i64;
+    // `secs_f` is floored, so the remainder is non-negative; the carry branches
+    // below only correct floating-point rounding drift at the boundaries.
+    let mut nanos = ((millis - secs_f * 1_000.0) * 1_000_000.0).floor() as i64;
+    if nanos < 0 {
+        secs = secs
+            .checked_sub(1)
+            .ok_or_else(|| perr(pos, "datetime out of range for epoch millis"))?;
+        nanos += 1_000_000_000;
+    } else if nanos >= 1_000_000_000 {
+        secs = secs
+            .checked_add(1)
+            .ok_or_else(|| perr(pos, "datetime out of range for epoch millis"))?;
+        nanos -= 1_000_000_000;
+    }
+    datetime_value_from_secs_nanos(pos, secs, nanos as u32)
+}
+
 // ── Shared numeric helpers ──────────────────────────────────────────────────
+
+/// A numeric literal used by epoch-based datetime constructors. The
+/// integer/float distinction is preserved so integer epochs stay bit-exact
+/// while fractional epochs (the SDK constructors take floating-point arguments)
+/// keep their sub-unit precision instead of being truncated.
+pub(super) enum EpochNumber {
+    Int(i64),
+    Float(f64),
+}
+
+pub(super) fn parse_epoch_number(lexer: &mut Lexer) -> Result<EpochNumber, ParseError> {
+    let (tok, pos, _) = lexer.next_token()?;
+    match tok {
+        Token::UintLit(v) => i64::try_from(v)
+            .map(EpochNumber::Int)
+            .map_err(|_| perr(pos, &format!("number {v} does not fit in i64"))),
+        Token::IntLit(v) => Ok(EpochNumber::Int(v)),
+        Token::FloatLit(v) => Ok(EpochNumber::Float(v)),
+        _ => Err(perr(pos, "expected a number")),
+    }
+}
 
 pub(super) fn parse_uint(lexer: &mut Lexer) -> Result<u64, ParseError> {
     let (tok, pos, _) = lexer.next_token()?;

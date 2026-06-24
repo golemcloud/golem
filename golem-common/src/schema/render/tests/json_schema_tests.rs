@@ -240,6 +240,31 @@ fn datetime_emits_date_time_format() {
 }
 
 #[test]
+fn path_emits_file_path_format() {
+    use crate::schema::schema_type::{PathDirection, PathKind, PathSpec};
+    let ty = SchemaType::path(PathSpec {
+        direction: PathDirection::Input,
+        kind: PathKind::File,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let schema = to_json_schema(&graph, &ty);
+    assert_eq!(schema["type"], json!("string"));
+    assert_eq!(schema["format"], json!("file-path"));
+}
+
+#[test]
+fn url_emits_uri_format() {
+    use crate::schema::schema_type::UrlRestrictions;
+    let ty = SchemaType::url(UrlRestrictions::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let schema = to_json_schema(&graph, &ty);
+    assert_eq!(schema["type"], json!("string"));
+    assert_eq!(schema["format"], json!("uri"));
+}
+
+#[test]
 fn root_schema_carries_draft_2020_12_marker() {
     let graph = SchemaGraph::anonymous(SchemaType::bool());
     let schema = to_json_schema(&graph, &graph.root);

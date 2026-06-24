@@ -22,8 +22,8 @@ pub use wstd;
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Schema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
+    SchemaType, SchemaValue, SecretRef, TypedSchemaValue,
 };
 pub use golem_schema::{AgentId, ComponentId, EnvironmentId, PromiseId};
 
