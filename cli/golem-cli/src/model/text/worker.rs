@@ -1137,6 +1137,17 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.name)
                 ));
             }
+            PublicOplogEntry::CardRevoked(params) => {
+                logln(format_message_highlight("CARD REVOKED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.card_id)
+                ));
+            }
         }
     }
 }

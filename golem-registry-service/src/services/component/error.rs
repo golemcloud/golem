@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::card::CardRepoError;
 use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::application::ApplicationError;
@@ -83,6 +84,12 @@ pub enum ComponentError {
         "Agent type '{0}' is referenced in provision config but not declared in the component's agent types"
     )]
     UndeclaredAgentTypeInProvisionConfig(AgentTypeName),
+    #[error("Agent type '{0}' has no initial permission template")]
+    MissingAgentInitialPermissionTemplate(AgentTypeName),
+    #[error(
+        "Agent type '{0}' is referenced in initial permissions but not declared in the component's agent types"
+    )]
+    UndeclaredAgentTypeInInitialPermissionTemplate(AgentTypeName),
     #[error("Config for agent {agent} at key {rendered_key} is not declared", rendered_key = key.join("."))]
     AgentConfigNotDeclared {
         agent: AgentTypeName,
@@ -154,6 +161,8 @@ impl SafeDisplay for ComponentError {
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
             Self::DuplicateAgentTypeName(_) => self.to_string(),
             Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
+            Self::MissingAgentInitialPermissionTemplate(_) => self.to_string(),
+            Self::UndeclaredAgentTypeInInitialPermissionTemplate(_) => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),
             Self::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. } => self.to_string(),
@@ -171,6 +180,7 @@ error_forwarding!(
     ComponentError,
     RepoError,
     ApplicationError,
+    CardRepoError,
     ComponentRepoError,
     EnvironmentError,
     EnvironmentPluginGrantError,

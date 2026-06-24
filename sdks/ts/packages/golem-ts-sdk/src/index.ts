@@ -16,7 +16,7 @@ import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
-import { schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
+import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -105,10 +105,10 @@ async function invoke(
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
 
-  const result = await resolvedAgent.invoke(methodName, schemaValueFromWit(input), principal);
+  const result = await resolvedAgent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
-    return result.val === undefined ? undefined : schemaValueToWit(result.val);
+    return result.val;
   } else {
     throw result.val;
   }

@@ -15,6 +15,7 @@
 import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValue } from './schema-model';
+import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { ParsedAgentId } from '../agentId';
 import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
@@ -22,7 +23,7 @@ import {
   AgentMethodParamMetadata,
   AgentMethodParamRegistry,
 } from './registry/agentMethodParamRegistry';
-import { decodeInputRecord, encodeOutput } from './mapping/values/boundaryValue';
+import { decodeInputRecordFromWit, encodeOutputToWit } from './mapping/values/boundaryValue';
 import { AgentMethodMetadata, AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { createCustomError, invalidInput, invalidMethod, invalidType } from './agentError';
 import { RuntimeOutput, RuntimeParam } from './typeInfoInternal';
@@ -99,9 +100,9 @@ export class ResolvedAgent {
 
   async invoke(
     methodName: string,
-    methodArgs: SchemaValue,
+    methodArgs: SchemaValueTree,
     principal: Principal,
-  ): Promise<Result<SchemaValue | undefined, AgentError>> {
+  ): Promise<Result<SchemaValueTree | undefined, AgentError>> {
     const methodInfoResult = this.getCachedMethodInfo(methodName);
     if (methodInfoResult.tag === 'err') {
       return methodInfoResult;
@@ -110,7 +111,7 @@ export class ResolvedAgent {
 
     let deserializedArgs: any[];
     try {
-      deserializedArgs = decodeInputRecord(methodArgs, methodInfo.params, principal);
+      deserializedArgs = decodeInputRecordFromWit(methodArgs, methodInfo.params, principal);
     } catch (e) {
       return {
         tag: 'err',
@@ -122,11 +123,11 @@ export class ResolvedAgent {
 
     const methodResult = await methodInfo.method.apply(this.agentInstance, deserializedArgs);
 
-    // Converting the result from the method back to a schema value (or `undefined` for unit output)
+    // Converting the result from the method back to a wire schema-value-tree (or `undefined` for unit output)
     try {
       return {
         tag: 'ok',
-        val: encodeOutput(methodResult, methodInfo.returnType),
+        val: encodeOutputToWit(methodResult, methodInfo.returnType),
       };
     } catch (e) {
       return {

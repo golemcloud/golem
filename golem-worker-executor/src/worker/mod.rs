@@ -24,7 +24,7 @@ use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use self::status::update_status_with_new_entries;
-use crate::durable_host::recover_stderr_logs;
+use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
@@ -39,12 +39,12 @@ use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents,
-    HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog,
-    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
-    HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    UsesAllDeps,
+    HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
+    HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
+    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
+    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
+    HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
@@ -321,7 +321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
-        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+        T: HasAll<Ctx> + HasCardService + Clone + Send + Sync + 'static,
     {
         deps.active_workers()
             .get_or_add(
@@ -349,7 +349,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
-        T: HasAll<Ctx> + Send + Sync + Clone + 'static,
+        T: HasAll<Ctx> + HasCardService + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_or_create_suspended(
             deps,
@@ -396,7 +396,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn new<T: HasAll<Ctx>>(
+    pub async fn new<T: HasAll<Ctx> + HasCardService>(
         deps: &T,
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
@@ -756,6 +756,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // ensure we hold mutex for the full duration
         drop(update_state_lock_guard);
         result
+    }
+
+    pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
+        &self.owned_agent_id
     }
 
     /// Marks the worker as interrupting - this should eventually make the worker interrupted.
@@ -3659,6 +3663,57 @@ impl RunningWorker {
                     .component_revision_for_replay,
             );
 
+        let component_metadata_for_replay =
+            if component_metadata.revision == component_version_for_replay {
+                component_metadata.clone()
+            } else {
+                parent
+                    .component_service()
+                    .get_metadata(component_id, Some(component_version_for_replay))
+                    .await?
+            };
+
+        let initial_agent_card_id = parent.parsed_agent_id.as_ref().and_then(|agent_id| {
+            component_metadata_for_replay
+                .metadata
+                .agent_type_initial_permission_template(&agent_id.agent_type)
+                .map(|template| template.card_id)
+        });
+        let initial_agent_card_already_revoked = initial_agent_card_id.is_some_and(|card_id| {
+            worker_metadata
+                .last_known_status
+                .revoked_cards
+                .contains(&card_id)
+        });
+        let agent_effective_surface = match &parent.parsed_agent_id {
+            Some(agent_id) => agent_effective_surface_from_component_metadata(
+                &component_metadata_for_replay,
+                &parent.owned_agent_id,
+                agent_id,
+            ),
+            None => golem_common::model::card::EffectiveSurface::default(),
+        };
+
+        if let Some(card_id) = initial_agent_card_id {
+            parent
+                .card_service()
+                .register_agent_cards(parent.owned_agent_id.clone(), &[card_id])
+                .await;
+
+            if !initial_agent_card_already_revoked
+                && parent
+                    .card_service()
+                    .check_cards(vec![card_id])
+                    .await?
+                    .contains(&card_id)
+            {
+                parent
+                    .card_service()
+                    .enqueue_revoked_cards_for_agent(&parent.owned_agent_id, &[card_id])
+                    .await;
+            }
+        }
+
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata
             .last_known_status
@@ -3701,6 +3756,7 @@ impl RunningWorker {
             parent.scheduler_service(),
             parent.rpc(),
             parent.worker_proxy(),
+            parent.card_service(),
             parent.component_service(),
             parent.extra_deps(),
             parent.config(),
@@ -3715,6 +3771,7 @@ impl RunningWorker {
                 worker_metadata.created_by_email,
                 worker_metadata.config,
                 last_snapshot_index,
+                agent_effective_surface,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),

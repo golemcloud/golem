@@ -16,6 +16,7 @@ use super::error::GrpcApiError;
 use crate::repo::registry_change::RegistryChangeRepo;
 use crate::services::account_usage::{AccountUsageService, ResourceUsageUpdate};
 use crate::services::auth::AuthService;
+use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
@@ -29,16 +30,17 @@ use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
-    BatchUpdateResourceUsageRequest, BatchUpdateResourceUsageResponse,
-    BatchUpdateResourceUsageSuccessResponse, DownloadComponentRequest, DownloadComponentResponse,
-    GetActiveMcpForDomainRequest, GetActiveMcpForDomainResponse,
-    GetActiveMcpForDomainSuccessResponse, GetActiveRoutesForDomainRequest,
-    GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest,
-    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
-    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
-    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
-    GetAllDeployedComponentRevisionsSuccessResponse, GetComponentMetadataRequest,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    BatchGetExistingCardsRequest, BatchGetExistingCardsResponse,
+    BatchGetExistingCardsSuccessResponse, BatchUpdateResourceUsageRequest,
+    BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse,
+    DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
+    GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
+    GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
+    GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
+    GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
+    GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
+    GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
     GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
@@ -51,9 +53,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, authenticate_token_response,
-    batch_update_resource_usage_response, download_component_response,
-    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_type_response, get_all_agent_types_response,
+    batch_get_existing_cards_response, batch_update_resource_usage_response,
+    download_component_response, get_active_mcp_for_domain_response,
+    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
@@ -64,6 +66,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
@@ -79,6 +82,7 @@ use tracing_futures::Instrument;
 pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
     account_usage_service: Arc<AccountUsageService>,
+    card_service: Arc<CardService>,
     component_service: Arc<ComponentService>,
     component_resolver_service: Arc<ComponentResolverService>,
     deployment_service: Arc<DeploymentService>,
@@ -94,6 +98,7 @@ impl RegistryServiceGrpcApi {
     pub fn new(
         auth_service: Arc<AuthService>,
         account_usage_service: Arc<AccountUsageService>,
+        card_service: Arc<CardService>,
         component_service: Arc<ComponentService>,
         component_resolver_service: Arc<ComponentResolverService>,
         deployment_service: Arc<DeploymentService>,
@@ -107,6 +112,7 @@ impl RegistryServiceGrpcApi {
         Self {
             auth_service,
             account_usage_service,
+            card_service,
             component_service,
             component_resolver_service,
             deployment_service,
@@ -196,6 +202,22 @@ impl RegistryServiceGrpcApi {
 
         Ok(BatchUpdateResourceUsageSuccessResponse {
             account_resource_limits: Some(account_resource_limits.into()),
+        })
+    }
+
+    async fn batch_get_existing_cards_internal(
+        &self,
+        request: BatchGetExistingCardsRequest,
+    ) -> Result<BatchGetExistingCardsSuccessResponse, GrpcApiError> {
+        let card_ids = request
+            .card_ids
+            .into_iter()
+            .map(|id| CardId(id.into()))
+            .collect::<Vec<_>>();
+        let existing = self.card_service.existing(card_ids).await?;
+
+        Ok(BatchGetExistingCardsSuccessResponse {
+            card_ids: existing.into_iter().map(|id| id.0.into()).collect(),
         })
     }
 
@@ -603,6 +625,28 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(BatchUpdateResourceUsageResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn batch_get_existing_cards(
+        &self,
+        request: Request<BatchGetExistingCardsRequest>,
+    ) -> Result<Response<BatchGetExistingCardsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("batch_get_existing_cards",);
+
+        let response = match self
+            .batch_get_existing_cards_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => batch_get_existing_cards_response::Result::Success(result),
+            Err(error) => batch_get_existing_cards_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(BatchGetExistingCardsResponse {
             result: Some(response),
         }))
     }

@@ -4,3 +4,7 @@ agent-template/
 dist/
 node_modules/
 wasm/*.wasm
+
+# QuickJS benchmark harness build artifacts
+tests/bench/quickjs/dist/
+tests/bench/quickjs/crate/

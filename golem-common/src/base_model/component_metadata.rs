@@ -15,6 +15,7 @@
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
+use crate::model::card::CardId;
 use crate::model::card::PolymorphicPermissionPattern;
 use crate::schema::AgentTypeSchema;
 use serde::{Deserialize, Serialize, Serializer};
@@ -204,6 +205,7 @@ pub struct ComponentMetadataInnerData {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInitialPermissionTemplate {
+    pub card_id: CardId,
     #[serde(default)]
     pub lower_positive: Vec<PolymorphicPermissionPattern>,
     #[serde(default)]
