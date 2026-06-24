@@ -542,6 +542,39 @@ fn json_input_projected_result_round_trips_and_revalidates() {
     .expect("projected value must still validate against its own graph");
 }
 
+#[test]
+fn json_input_with_auto_injected_field_validates_caller_only_record() {
+    // A method/constructor input schema that mixes user-supplied fields with an
+    // auto-injected `principal` field. The REST caller supplies only the
+    // user-supplied values (the host fills the principal out of band), so the
+    // caller-only record must validate, and the synthesized self-contained root
+    // must describe exactly the user-supplied fields.
+    let input_schema = InputSchema::parameters([
+        NamedField::user_supplied("count", SchemaType::u32()),
+        NamedField::user_supplied("label", SchemaType::string()),
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        ),
+    ]);
+    // Caller supplies only the two user-supplied values.
+    let json = serde_json::to_value(SchemaValue::Record {
+        fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
+    })
+    .unwrap();
+
+    let typed =
+        json_input_schema_value_to_typed_schema_value(json, &SchemaGraph::empty(), &input_schema)
+            .expect("caller-only record (excluding auto-injected fields) must validate");
+
+    let SchemaType::Record { fields, .. } = typed.root_type() else {
+        panic!("expected record root, got {:?}", typed.root_type());
+    };
+    let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["count", "label"]);
+}
+
 // --- typed_schema_value_with_projected_defs (A4/A5/agent_config site 2) ---
 
 #[test]

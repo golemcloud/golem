@@ -54,6 +54,44 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
+/// REST/JSON invocation of a method whose only declared input is the
+/// auto-injected `principal` field. The caller supplies no parameters (the
+/// host injects the principal out of band), so the invocation must succeed —
+/// the same way the gRPC executor path and the HTTP gateway path already do.
+///
+/// `ReadonlyAgent::get_count_for(&self, _principal: Principal) -> u64` declares
+/// a single auto-injected principal field and no user-supplied parameters, so
+/// the caller sends an empty parameter record. This guards against the
+/// worker-service REST path validating method parameters against the *full*
+/// input schema (including auto-injected fields) instead of only the
+/// user-supplied ones.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn rest_invoke_of_principal_only_method_succeeds(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_rust_release")
+        .name("golem-it:agent-sdk-rust")
+        .store()
+        .await?;
+    let agent_id = agent_id!("ReadonlyAgent", "rest-principal-1");
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = user
+        .invoke_and_await_agent(&component, &agent_id, "get_count_for", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(result, SchemaValue::U64(0));
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]

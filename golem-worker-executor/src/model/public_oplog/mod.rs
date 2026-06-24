@@ -51,6 +51,7 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
+use golem_common::schema::agent::FieldSource;
 use golem_common::schema::{
     InputSchema, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue,
@@ -1013,6 +1014,10 @@ fn empty_typed_schema_value() -> TypedSchemaValue {
 /// Pair a schema-native invocation **input** value (a parameter record, see
 /// [`crate::worker::invocation::lower_invocation`]) with the record schema
 /// derived from the agent's declared [`InputSchema`].
+///
+/// The recorded value is caller-only: auto-injected fields (e.g. the principal)
+/// travel out of band and are not part of it, so they are excluded from the
+/// derived record schema to keep the schema and value arities aligned.
 fn input_value_to_typed_schema_value(
     input_schema: &InputSchema,
     value: SchemaValue,
@@ -1020,6 +1025,7 @@ fn input_value_to_typed_schema_value(
     let fields = input_schema
         .fields()
         .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),
@@ -1233,5 +1239,51 @@ fn make_plugin_installation_description(
         plugin_name: installation.plugin_name,
         plugin_version: installation.plugin_version,
         parameters: installation.parameters,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::schema::agent::{AutoInjectedKind, NamedField};
+    use test_r::test;
+
+    /// An agent method (or constructor) input schema that mixes user-supplied
+    /// fields with an auto-injected `principal` field. The value recorded in
+    /// the oplog is caller-only (the principal travels out of band), so the
+    /// typed value paired for the public oplog must describe exactly the
+    /// user-supplied fields — its root record arity must match the value's.
+    #[test]
+    fn input_value_to_typed_schema_value_excludes_auto_injected_fields() {
+        let input_schema = InputSchema::parameters([
+            NamedField::user_supplied("count", SchemaType::u32()),
+            NamedField::user_supplied("label", SchemaType::string()),
+            NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::string(),
+            ),
+        ]);
+        // Caller-only record as stored in the oplog (two user-supplied values).
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
+        };
+
+        let typed = input_value_to_typed_schema_value(&input_schema, value)
+            .expect("pairing caller-only value with method schema must succeed");
+
+        let SchemaType::Record { fields, .. } = typed.root_type() else {
+            panic!("expected record root, got {:?}", typed.root_type());
+        };
+        let SchemaValue::Record { fields: values } = typed.value() else {
+            panic!("expected record value, got {:?}", typed.value());
+        };
+        assert_eq!(
+            fields.len(),
+            values.len(),
+            "root record schema arity must match the caller-only value arity"
+        );
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["count", "label"]);
     }
 }
