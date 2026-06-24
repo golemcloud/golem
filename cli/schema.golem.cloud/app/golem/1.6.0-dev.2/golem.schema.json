@@ -1128,6 +1128,10 @@
           "description": "Rust SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
         },
+        "scala": {
+          "description": "Scala SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
         "moonbit": {
           "description": "MoonBit SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
