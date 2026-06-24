@@ -1190,7 +1190,7 @@ fn coord_agents(coord: SampleCoord) -> Option<u32> {
 
 /// Number of warmup calls made per prepared agent in scenario 4. These calls
 /// create oplog history to replay after the executor restart.
-const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 50;
+const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 1000;
 
 /// Busy time for each scenario-4 warmup call. Keep it low: the goal is oplog
 /// depth, not CPU pressure during warmup.

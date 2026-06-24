@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
 
-#[agent_definition(snapshotting = "every(50)")]
+#[agent_definition(snapshotting = "every(100)")]
 trait SnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
