@@ -737,6 +737,31 @@ cargo tarpaulin \
     --output-dir target-tarpaulin/reports
 '''
 
+## ** CHECK-CLI-OUTPUT-SCHEMA **
+
+[tasks.check-cli-output-schema]
+description = "Validates CLI command output schema and checks drift against CliOutput implementations"
+command = "cargo"
+args = [
+    "test",
+    "-p",
+    "golem-cli",
+    "cli_output_schema_",
+    "--lib",
+]
+
+[tasks.update-cli-output-schema-summary]
+description = "Generates a temporary Markdown summary of CLI output types for local review"
+env = { GOLEM_CLI_OUTPUT_SUMMARY_MD = "${CARGO_MAKE_WORKING_DIRECTORY}/tmp/issue-3374-cli-output-summary.md" }
+command = "cargo"
+args = [
+    "test",
+    "-p",
+    "golem-cli",
+    "cli_output_schema_source_kinds_are_consistent",
+    "--lib",
+]
+
 ## ** CHECK-OPENAPI **
 
 [tasks.check-openapi]

@@ -19,7 +19,7 @@ pub use crate::log::terminal_width;
 use crate::log::{LogColorize, LogIndent, current_indent_width, log_warn_action};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
-use crate::model::text::component::is_sensitive_env_var_name;
+use crate::model::masking::{Masked, MaskingConfig};
 use anyhow::anyhow;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
@@ -35,12 +35,36 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
 
-pub trait TextView {
-    fn log(&self);
+pub trait TextOutput {
+    fn log(&self) {}
+
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()>
+    where
+        Self: Sized,
+    {
+        // Most text views do not contain secret-bearing fields. Views that can
+        // include known secrets or sensitive user values must override this and
+        // render from a masked representation before writing any text.
+        let _ = config;
+        self.log();
+        Ok(())
+    }
 }
 
-pub trait TruncatableTextView: TextView {
+pub trait NoTextOutput {}
+
+pub trait TruncatableTextOutput: TextOutput {
     fn render_truncated(&self, max_lines: usize, colorize: bool) -> String;
+
+    // Truncated rendering returns an already-rendered string, so there is no
+    // safe generic post-processing default. Each implementation must decide
+    // whether it carries sensitive data and render from masked data if needed.
+    fn render_truncated_masked(
+        &self,
+        max_lines: usize,
+        colorize: bool,
+        config: MaskingConfig,
+    ) -> anyhow::Result<String>;
 }
 
 /// Truncates a pre-rendered string to `max_lines` terminal lines.
@@ -67,9 +91,16 @@ pub enum MessageWithFieldsIndentMode {
     NestedIdentAll,
 }
 
-pub trait MessageWithFields {
+pub trait MessageWithFields: Masked {
     fn message(&self) -> String;
     fn fields(&self) -> Vec<(String, String)>;
+
+    fn fields_masked(self, config: MaskingConfig) -> anyhow::Result<Vec<(String, String)>>
+    where
+        Self: Sized,
+    {
+        Ok(self.masked(config)?.fields())
+    }
 
     fn indent_mode() -> MessageWithFieldsIndentMode {
         MessageWithFieldsIndentMode::NestedIdentAll
@@ -80,41 +111,50 @@ pub trait MessageWithFields {
     }
 }
 
-impl<T: MessageWithFields> TextView for T {
+impl<T: MessageWithFields> TextOutput for T {
     fn log(&self) {
-        let _ident = match Self::indent_mode() {
-            MessageWithFieldsIndentMode::None => None,
-            MessageWithFieldsIndentMode::IdentFields => None,
-            MessageWithFieldsIndentMode::NestedIdentAll => {
-                Some(DecoratedIndent::new_primary(Format::Text))
-            }
-        };
+        log_message_with_fields::<T>(self.message(), self.fields());
+    }
 
-        logln(self.message());
-        logln("");
+    fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
+        let message = self.message();
+        log_message_with_fields::<T>(message, self.fields_masked(config)?);
+        Ok(())
+    }
+}
 
-        let fields = self.fields();
-        let padding = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
+fn log_message_with_fields<T: MessageWithFields>(message: String, fields: Vec<(String, String)>) {
+    let _ident = match T::indent_mode() {
+        MessageWithFieldsIndentMode::None => None,
+        MessageWithFieldsIndentMode::IdentFields => None,
+        MessageWithFieldsIndentMode::NestedIdentAll => {
+            Some(DecoratedIndent::new_primary(Format::Text))
+        }
+    };
 
-        let _indent = match Self::indent_mode() {
-            MessageWithFieldsIndentMode::None => None,
-            MessageWithFieldsIndentMode::IdentFields => Some(LogIndent::new()),
-            MessageWithFieldsIndentMode::NestedIdentAll => None,
-        };
+    logln(message);
+    logln("");
 
-        for (name, value) in self.fields() {
-            let lines: Vec<_> = value.split("\n").collect();
-            if lines.len() == 1 {
-                logln(format!(
-                    "{:<padding$} {}",
-                    format!("{}:", Self::format_field_name(name)),
-                    lines[0]
-                ));
-            } else {
-                logln(format!("{}:", Self::format_field_name(name)));
-                for line in lines {
-                    logln(format!("  {line}"))
-                }
+    let padding = fields.iter().map(|(name, _)| name.len()).max().unwrap_or(0) + 1;
+
+    let _indent = match T::indent_mode() {
+        MessageWithFieldsIndentMode::None => None,
+        MessageWithFieldsIndentMode::IdentFields => Some(LogIndent::new()),
+        MessageWithFieldsIndentMode::NestedIdentAll => None,
+    };
+
+    for (name, value) in fields {
+        let lines: Vec<_> = value.split("\n").collect();
+        if lines.len() == 1 {
+            logln(format!(
+                "{:<padding$} {}",
+                format!("{}:", T::format_field_name(name)),
+                lines[0]
+            ));
+        } else {
+            logln(format!("{}:", T::format_field_name(name)));
+            for line in lines {
+                logln(format!("  {line}"))
             }
         }
     }
@@ -381,16 +421,9 @@ pub fn format_plugins(plugins: &[InstalledPlugin]) -> String {
         .join("\n")
 }
 
-pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> String {
-    let hidden = "*****".log_color_highlight();
+pub fn format_env(env: &BTreeMap<String, String>) -> String {
     env.iter()
-        .map(|(k, v)| {
-            if is_sensitive_env_var_name(show_sensitive, k) {
-                format!("{k}={hidden}")
-            } else {
-                format!("{}={}", k, v.log_color_highlight())
-            }
-        })
+        .map(|(k, v)| format!("{}={}", k, v.log_color_highlight()))
         .join("\n")
 }
 
@@ -589,7 +622,7 @@ pub fn new_table_full_condensed(headers: Vec<Column>) -> ComfyTable {
     new_table(TablePreset::FullCondensed, headers)
 }
 
-pub fn log_text_view<View: TextView>(view: &View) {
+pub fn log_text_view<View: TextOutput>(view: &View) {
     view.log();
 }
 

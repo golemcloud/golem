@@ -13,15 +13,30 @@
 // limitations under the License.
 
 use crate::config::ProfileConfig;
+use crate::config::ProfileName;
 use crate::log::{LogColorize, logln};
 use crate::model::ProfileView;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::format::Format;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use colored::Colorize;
+use serde::{Deserialize, Serialize};
 
-impl TextView for Vec<ProfileView> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileListView {
+    pub profiles: Vec<ProfileView>,
+}
+
+impl StructuredOutput for ProfileListView {
+    const KIND: &'static str = "profile.list";
+}
+
+impl TextOutput for ProfileListView {
     fn log(&self) {
         logln("Available profiles:".log_color_help_group().to_string());
-        for profile in self {
+        for profile in &self.profiles {
             logln(format!(
                 " {} {}{}",
                 if profile.is_active { "*" } else { " " },
@@ -72,7 +87,71 @@ impl MessageWithFields for ProfileView {
     }
 }
 
-impl TextView for ProfileConfig {
+impl Masked for ProfileView {}
+
+impl StructuredOutput for ProfileView {
+    const KIND: &'static str = "profile.get";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileCreateResult {
+    pub created: bool,
+    pub profile: ProfileName,
+    pub set_active: bool,
+}
+
+impl NoTextOutput for ProfileCreateResult {}
+impl TextOutput for ProfileCreateResult {}
+
+impl StructuredOutput for ProfileCreateResult {
+    const KIND: &'static str = "profile.new";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSwitchResult {
+    pub switched: bool,
+    pub profile: ProfileName,
+}
+
+impl NoTextOutput for ProfileSwitchResult {}
+impl TextOutput for ProfileSwitchResult {}
+
+impl StructuredOutput for ProfileSwitchResult {
+    const KIND: &'static str = "profile.switch";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileDeleteResult {
+    pub deleted: bool,
+    pub profile: ProfileName,
+}
+
+impl NoTextOutput for ProfileDeleteResult {}
+impl TextOutput for ProfileDeleteResult {}
+
+impl StructuredOutput for ProfileDeleteResult {
+    const KIND: &'static str = "profile.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileConfigSetFormatResult {
+    pub updated: bool,
+    pub profile: ProfileName,
+    pub format: Format,
+}
+
+impl NoTextOutput for ProfileConfigSetFormatResult {}
+impl TextOutput for ProfileConfigSetFormatResult {}
+
+impl StructuredOutput for ProfileConfigSetFormatResult {
+    const KIND: &'static str = "profile.config.set-format";
+}
+
+impl TextOutput for ProfileConfig {
     fn log(&self) {
         logln(format!(
             "Default output format: {}",

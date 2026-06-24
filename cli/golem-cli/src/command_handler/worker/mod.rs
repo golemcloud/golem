@@ -33,7 +33,8 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::action_result::{
-    AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
+    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
+    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
@@ -41,8 +42,8 @@ use crate::model::text::help::{
     ParameterErrorTableView,
 };
 use crate::model::text::worker::{
-    FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
-    format_timestamp,
+    AgentOplogEntryView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    format_agent_name_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -63,7 +64,7 @@ use golem_client::model::{
     UpdateWorkerRequest,
 };
 use golem_common::model::agent::typed_constructor_parameters;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -84,7 +85,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -322,7 +323,7 @@ impl WorkerCommandHandler {
         };
 
         logln("");
-        self.ctx.log_handler().log_view(&WorkerCreateView {
+        self.ctx.log_handler().log_output(WorkerCreateView {
             component_name: agent_name_match.component_name,
             agent_name: Some(display_agent_name),
         })?;
@@ -538,12 +539,12 @@ impl WorkerCommandHandler {
             log_action("Triggered", "invocation");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_trigger(idempotency_key))?;
+                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
         } else {
             logln("");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_agent_invoke(
+                .log_output(InvokeResultView::new_agent_invoke(
                     idempotency_key,
                     result,
                     &agent_type,
@@ -659,6 +660,13 @@ impl WorkerCommandHandler {
             format!("for agent {}", format_agent_name_match(&agent_name_match)),
         );
 
+        self.ctx
+            .log_handler()
+            .log_output(AgentSimulateCrashResult {
+                simulated: true,
+                agent: agent_name.0.clone(),
+            })?;
+
         Ok(())
     }
 
@@ -706,7 +714,11 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                self.ctx.log_handler().log_view(&entries)?;
+                for (index, entry) in entries {
+                    self.ctx
+                        .log_handler()
+                        .log_output(AgentOplogEntryView { index, entry })?;
+                }
             }
 
             if cursor.is_none() {
@@ -714,7 +726,7 @@ impl WorkerCommandHandler {
             }
         }
 
-        if !had_entries {
+        if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -777,7 +789,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentRevertResult {
+        self.ctx.log_handler().log_output(AgentRevertResult {
             reverted: true,
             agent: agent_name.0.clone(),
             last_oplog_index,
@@ -816,12 +828,19 @@ impl WorkerCommandHandler {
             .map(|result| result.canceled)
             .map_service_error()?;
 
-        // TODO: json / yaml response?
         if canceled {
             log_action("Canceled", "");
         } else {
             log_warn_action("Failed", "to cancel, invocation already started");
         }
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentCancelInvocationResult {
+                canceled,
+                agent: agent_name.0,
+                idempotency_key: idempotency_key.value,
+            })?;
 
         Ok(())
     }
@@ -837,6 +856,10 @@ impl WorkerCommandHandler {
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        if refresh.is_some() && self.ctx.format().is_structured() {
+            bail!("Refresh mode is only supported with --format text");
+        }
+
         let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)
@@ -863,7 +886,7 @@ impl WorkerCommandHandler {
                     false,
                 )
                 .await?;
-            self.ctx.log_handler().log_view(&view)?;
+            self.ctx.log_handler().log_output(view)?;
             Ok(())
         }
     }
@@ -892,7 +915,7 @@ impl WorkerCommandHandler {
                     .and_then(|view| {
                         self.ctx
                             .log_handler()
-                            .render_view_truncated(&view, term_height)
+                            .render_view_truncated(view, term_height)
                     })
                     .unwrap_or_else(|e| format!("Error: {e:#}"));
 
@@ -1087,7 +1110,19 @@ impl WorkerCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let mut agent_view = AgentMetadataView::from(worker).with_defaults(defaults);
+                let secret_config_paths = parsed_agent_type_name
+                    .as_ref()
+                    .map(|agent_type_name| {
+                        secret_config_paths_for_agent_type(
+                            worker_component.metadata.agent_types(),
+                            agent_type_name,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let mut agent_view = AgentMetadataView::from(worker)
+                    .with_defaults(defaults)
+                    .with_secret_config_paths(secret_config_paths);
 
                 if source_language.is_known()
                     && let Ok(parsed) =
@@ -1155,6 +1190,11 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
+        self.ctx.log_handler().log_output(AgentInterruptResult {
+            interrupted: true,
+            agent: agent_name.0.clone(),
+        })?;
+
         Ok(())
     }
 
@@ -1176,6 +1216,11 @@ impl WorkerCommandHandler {
             "Resumed",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx.log_handler().log_output(AgentResumeResult {
+            resumed: true,
+            agent: agent_name.0.clone(),
+        })?;
 
         Ok(())
     }
@@ -1228,16 +1273,38 @@ impl WorkerCommandHandler {
             }
         };
 
-        self.update_worker(
-            &component.component_name,
-            &component.id,
-            &agent_name.0,
-            mode,
-            target_revision,
-            await_update,
-            disable_wakeup,
-        )
-        .await?;
+        let mut update_results = TryUpdateAllWorkersResult::default();
+        match self
+            .update_worker(
+                &component.component_name,
+                &component.id,
+                &agent_name.0,
+                mode,
+                target_revision,
+                await_update,
+                disable_wakeup,
+            )
+            .await
+        {
+            Ok(()) => update_results.triggered.push(WorkerUpdateAttempt {
+                component_name: component.component_name.clone(),
+                target_revision,
+                agent_name: agent_name.0.as_str().into(),
+                error: None,
+            }),
+            Err(error) => {
+                update_results.failed.push(WorkerUpdateAttempt {
+                    component_name: component.component_name.clone(),
+                    target_revision,
+                    agent_name: agent_name.0.as_str().into(),
+                    error: Some(error.to_string()),
+                });
+                self.ctx.log_handler().log_output(update_results)?;
+                return Err(error);
+            }
+        }
+
+        self.ctx.log_handler().log_output(update_results)?;
 
         Ok(())
     }
@@ -1268,8 +1335,14 @@ impl WorkerCommandHandler {
             .cloned()
             .unwrap_or_default();
 
+        let secret_config_paths = secret_config_paths_for_agent_type(
+            component.metadata.agent_types(),
+            &agent_name_match.agent_type_name,
+        );
+
         let mut metadata_view = AgentMetadataView::from(metadata)
             .with_defaults(defaults)
+            .with_secret_config_paths(secret_config_paths)
             .with_source_language(agent_name_match.source_language.clone());
         if let Some(parsed) = &agent_name_match.parsed_agent_id
             && agent_name_match.source_language.is_known()
@@ -1281,7 +1354,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(metadata_view, true))?;
+            .log_output(WorkerGetView::from_metadata(metadata_view, true))?;
 
         Ok(())
     }
@@ -1305,7 +1378,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentDeleteResult {
+        self.ctx.log_handler().log_output(AgentDeleteResult {
             deleted: true,
             agent: agent_name.0.clone(),
         })?;
@@ -1369,7 +1442,7 @@ impl WorkerCommandHandler {
                 .collect(),
         };
 
-        self.ctx.log_handler().log_view(&view)?;
+        self.ctx.log_handler().log_output(view)?;
 
         log_action(
             "Listed files",
@@ -1442,6 +1515,13 @@ impl WorkerCommandHandler {
                     "File download cancelled",
                     format!("by user for file {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: false,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: 0,
+                })?;
                 return Ok(());
             }
         }
@@ -1452,6 +1532,13 @@ impl WorkerCommandHandler {
                     "File saved",
                     format!("to {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: true,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: file_contents.len(),
+                })?;
                 Ok(())
             }
             Err(e) => {
@@ -1505,7 +1592,7 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: true,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
@@ -1556,7 +1643,7 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: false,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
@@ -2820,6 +2907,24 @@ fn parse_method_argument_schema_value(
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
+}
+
+fn secret_config_paths_for_agent_type(
+    agent_types: &[AgentTypeSchema],
+    agent_type_name: &AgentTypeName,
+) -> BTreeSet<String> {
+    agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .map(|agent_type| {
+            agent_type
+                .config
+                .iter()
+                .filter(|config| config.source == AgentConfigSource::Secret)
+                .map(|config| config.path.join("."))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Injects a `mode == ...` filter string at the front of `filters` based on

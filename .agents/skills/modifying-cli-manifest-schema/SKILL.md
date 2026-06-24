@@ -5,6 +5,11 @@ Use this skill when changing the Golem application manifest JSON schema under
 `cli/golem-cli` that must be reflected in schema validation and generated
 template references.
 
+Do **not** use this skill for the structured command output schema under
+`cli/golem-cli/command-output-schema/command-output.schema.json`. For `CliOutput`
+types, `to_cli_output_value`, or command-output schema generators, use
+`modifying-cli-output-schema` instead.
+
 ## Core Rules
 
 1. Do not edit the currently published schema version in place for feature work.

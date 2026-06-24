@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::services::golem_config::KeyValueStoragePostgresConfig;
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace, retry_on_pool_timeout};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::FutureExt;
-use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::RetryConfig;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -32,6 +32,7 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Debug, Clone)]
 pub struct PostgresKeyValueStorage {
     pool: PostgresPool,
+    retry_config: RetryConfig,
 }
 
 impl PostgresKeyValueStorage {
@@ -39,7 +40,10 @@ impl PostgresKeyValueStorage {
     const MANY_KEYS_DELETE_CHUNK_SIZE: usize = 512;
     const MANY_KEYS_READ_CHUNK_SIZE: usize = 1024;
 
-    pub async fn configured(config: &KeyValueStoragePostgresConfig) -> Result<Self, String> {
+    pub async fn configured(
+        config: &KeyValueStoragePostgresConfig,
+        retry_config: RetryConfig,
+    ) -> Result<Self, String> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
         golem_service_base::db::postgres::migrate(
             &config.postgres,
@@ -54,11 +58,11 @@ impl PostgresKeyValueStorage {
                 format!("Postgres key-value storage pool initialization failed: {err:?}")
             })?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, retry_config })
     }
 
-    pub async fn new(pool: PostgresPool) -> Result<Self, String> {
-        Ok(Self { pool })
+    pub async fn new(pool: PostgresPool, retry_config: RetryConfig) -> Result<Self, String> {
+        Ok(Self { pool, retry_config })
     }
 
     pub async fn run_metrics_loop(&self, svc_name: &'static str) -> anyhow::Result<()> {
@@ -103,18 +107,22 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         value: &[u8],
     ) -> Result<(), String> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let query =
-            sqlx::query("INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;")
-                .bind(Self::namespace(namespace))
-                .bind(key)
-                .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query("INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;")
+                    .bind(namespace)
+                    .bind(key)
+                    .bind(value);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn set_many(
@@ -138,31 +146,40 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             })
             .collect();
 
-        self.pool
-            .with_tx(svc_name, api_name, |tx| {
-                async move {
-                    for chunk in pairs.chunks(Self::SET_MANY_WRITE_CHUNK_SIZE) {
-                        let mut query_builder = QueryBuilder::<Postgres>::new(
-                            "INSERT INTO kv_storage (namespace, key, value) ",
-                        );
-                        query_builder.push_values(chunk.iter(), |mut builder, (key, value)| {
-                            builder
-                                .push_bind(namespace.clone())
-                                .push_bind(key)
-                                .push_bind(value);
-                        });
-                        query_builder.push(
-                            " ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;",
-                        );
+        retry_on_pool_timeout(&self.retry_config, "set_many", || {
+            let namespace = namespace.clone();
+            let pairs = pairs.clone();
+            async move {
+                self.pool
+                    .with_tx(svc_name, api_name, move |tx| {
+                        async move {
+                            for chunk in pairs.chunks(Self::SET_MANY_WRITE_CHUNK_SIZE) {
+                                let mut query_builder = QueryBuilder::<Postgres>::new(
+                                    "INSERT INTO kv_storage (namespace, key, value) ",
+                                );
+                                query_builder.push_values(
+                                    chunk.iter(),
+                                    |mut builder, (key, value)| {
+                                        builder
+                                            .push_bind(namespace.clone())
+                                            .push_bind(key)
+                                            .push_bind(value);
+                                    },
+                                );
+                                query_builder.push(
+                                    " ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;",
+                                );
 
-                        tx.execute(query_builder.build()).await?;
-                    }
-                    Ok(())
-                }
-                .boxed()
-            })
-            .await
-            .map_err(|err| err.to_safe_string())
+                                tx.execute(query_builder.build()).await?;
+                            }
+                            Ok(())
+                        }
+                        .boxed()
+                    })
+                    .await
+            }
+        })
+        .await
     }
 
     async fn set_if_not_exists(
@@ -175,19 +192,24 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         value: &[u8],
     ) -> Result<bool, String> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let query = sqlx::query(
-            "INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO NOTHING;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "set_if_not_exists", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO NOTHING;",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(value);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|result| result.rows_affected() == 1)
+            }
+        })
+        .await
     }
 
     async fn get(
@@ -198,18 +220,23 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
-        let query = sqlx::query_as::<_, DBValue>(
-            "SELECT value FROM kv_storage WHERE namespace = $1 AND key = $2;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key);
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_optional_as::<DBValue, _>(query)
-            .await
-            .map(|v| v.map(DBValue::into_bytes))
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "get", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, DBValue>(
+                    "SELECT value FROM kv_storage WHERE namespace = $1 AND key = $2;",
+                )
+                .bind(namespace)
+                .bind(key);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_optional_as::<DBValue, _>(query)
+                    .await
+                    .map(|v| v.map(DBValue::into_bytes))
+            }
+        })
+        .await
     }
 
     async fn get_many(
@@ -226,31 +253,37 @@ impl KeyValueStorage for PostgresKeyValueStorage {
 
         let namespace = Self::namespace(namespace);
 
-        self.pool
-            .with_tx(svc_name, api_name, |tx| {
-                async move {
-                    let mut result = Vec::with_capacity(keys.len());
+        retry_on_pool_timeout(&self.retry_config, "get_many", || {
+            let namespace = namespace.clone();
+            let keys = keys.clone();
+            async move {
+                self.pool
+                    .with_tx(svc_name, api_name, move |tx| {
+                        async move {
+                            let mut result = Vec::with_capacity(keys.len());
 
-                    for chunk in keys.chunks(Self::MANY_KEYS_READ_CHUNK_SIZE) {
-                        let query = sqlx::query_as::<_, DBOrderedValue>(
-                            "SELECT kv.value
-                             FROM unnest($2::text[]) WITH ORDINALITY AS requested(key, ord)
-                             LEFT JOIN kv_storage kv ON kv.namespace = $1 AND kv.key = requested.key
-                             ORDER BY requested.ord;",
-                        )
-                        .bind(namespace.clone())
-                        .bind(chunk);
+                            for chunk in keys.chunks(Self::MANY_KEYS_READ_CHUNK_SIZE) {
+                                let query = sqlx::query_as::<_, DBOrderedValue>(
+                                    "SELECT kv.value
+                                     FROM unnest($2::text[]) WITH ORDINALITY AS requested(key, ord)
+                                     LEFT JOIN kv_storage kv ON kv.namespace = $1 AND kv.key = requested.key
+                                     ORDER BY requested.ord;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(chunk);
 
-                        let rows = tx.fetch_all_as::<DBOrderedValue, _>(query).await?;
-                        result.extend(rows.into_iter().map(DBOrderedValue::into_bytes));
-                    }
+                                let rows = tx.fetch_all_as::<DBOrderedValue, _>(query).await?;
+                                result.extend(rows.into_iter().map(DBOrderedValue::into_bytes));
+                            }
 
-                    Ok(result)
-                }
-                .boxed()
-            })
-            .await
-            .map_err(|err| err.to_safe_string())
+                            Ok(result)
+                        }
+                        .boxed()
+                    })
+                    .await
+            }
+        })
+        .await
     }
 
     async fn get_all(
@@ -260,21 +293,26 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<(String, Bytes)>, String> {
-        let query = sqlx::query_as::<_, (String, Vec<u8>)>(
-            "SELECT key, value FROM kv_storage WHERE namespace = $1;",
-        )
-        .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String, Vec<u8>), _>(query)
-            .await
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|(key, value)| (key, Bytes::from(value)))
-                    .collect()
-            })
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "get_all", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, (String, Vec<u8>)>(
+                    "SELECT key, value FROM kv_storage WHERE namespace = $1;",
+                )
+                .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<(String, Vec<u8>), _>(query)
+                    .await
+                    .map(|rows| {
+                        rows.into_iter()
+                            .map(|(key, value)| (key, Bytes::from(value)))
+                            .collect()
+                    })
+            }
+        })
+        .await
     }
 
     async fn del(
@@ -284,16 +322,22 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
-        let query = sqlx::query("DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;")
-            .bind(Self::namespace(namespace))
-            .bind(key);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "del", || {
+            let namespace = namespace.clone();
+            async move {
+                let query =
+                    sqlx::query("DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;")
+                        .bind(namespace)
+                        .bind(key);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn del_many(
@@ -308,24 +352,30 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         }
 
         let namespace = Self::namespace(namespace);
-        self.pool
-            .with_tx(svc_name, api_name, |tx| {
-                async move {
-                    for chunk in keys.chunks(Self::MANY_KEYS_DELETE_CHUNK_SIZE) {
-                        let query = sqlx::query(
-                            "DELETE FROM kv_storage WHERE namespace = $1 AND key = ANY($2);",
-                        )
-                        .bind(namespace.clone())
-                        .bind(chunk);
+        retry_on_pool_timeout(&self.retry_config, "del_many", || {
+            let namespace = namespace.clone();
+            let keys = keys.clone();
+            async move {
+                self.pool
+                    .with_tx(svc_name, api_name, move |tx| {
+                        async move {
+                            for chunk in keys.chunks(Self::MANY_KEYS_DELETE_CHUNK_SIZE) {
+                                let query = sqlx::query(
+                                    "DELETE FROM kv_storage WHERE namespace = $1 AND key = ANY($2);",
+                                )
+                                .bind(namespace.clone())
+                                .bind(chunk);
 
-                        tx.execute(query).await?;
-                    }
-                    Ok(())
-                }
-                .boxed()
-            })
-            .await
-            .map_err(|err| err.to_safe_string())
+                                tx.execute(query).await?;
+                            }
+                            Ok(())
+                        }
+                        .boxed()
+                    })
+                    .await
+            }
+        })
+        .await
     }
 
     async fn exists(
@@ -335,18 +385,23 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
-        let query = sqlx::query_as::<_, (bool,)>(
-            "SELECT EXISTS(SELECT 1 FROM kv_storage WHERE namespace = $1 AND key = $2);",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key);
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_one_as::<(bool,), _>(query)
-            .await
-            .map(|row| row.0)
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "exists", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, (bool,)>(
+                    "SELECT EXISTS(SELECT 1 FROM kv_storage WHERE namespace = $1 AND key = $2);",
+                )
+                .bind(namespace)
+                .bind(key);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_one_as::<(bool,), _>(query)
+                    .await
+                    .map(|row| row.0)
+            }
+        })
+        .await
     }
 
     async fn keys(
@@ -355,17 +410,22 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String> {
-        let query = sqlx::query_as::<_, (String,)>(
-            "SELECT key FROM kv_storage WHERE namespace = $1 ORDER BY key ASC;",
-        )
-        .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
-            .await
-            .map(|rows| rows.into_iter().map(|row| row.0).collect())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "keys", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, (String,)>(
+                    "SELECT key FROM kv_storage WHERE namespace = $1 ORDER BY key ASC;",
+                )
+                .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<(String,), _>(query)
+                    .await
+                    .map(|rows| rows.into_iter().map(|row| row.0).collect())
+            }
+        })
+        .await
     }
 
     async fn add_to_set(
@@ -377,19 +437,24 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let query = sqlx::query(
-            "INSERT INTO set_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key, value) DO NOTHING;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "add_to_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "INSERT INTO set_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key, value) DO NOTHING;",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(value);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn remove_from_set(
@@ -401,19 +466,24 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let query = sqlx::query(
-            "DELETE FROM set_storage WHERE namespace = $1 AND key = $2 AND value = $3;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "remove_from_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "DELETE FROM set_storage WHERE namespace = $1 AND key = $2 AND value = $3;",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(value);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn members_of_set(
@@ -424,18 +494,23 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<Bytes>, String> {
-        let query = sqlx::query_as::<_, DBValue>(
-            "SELECT value FROM set_storage WHERE namespace = $1 AND key = $2;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key);
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBValue, _>(query)
-            .await
-            .map(|rows| rows.into_iter().map(DBValue::into_bytes).collect())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "members_of_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, DBValue>(
+                    "SELECT value FROM set_storage WHERE namespace = $1 AND key = $2;",
+                )
+                .bind(namespace)
+                .bind(key);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<DBValue, _>(query)
+                    .await
+                    .map(|rows| rows.into_iter().map(DBValue::into_bytes).collect())
+            }
+        })
+        .await
     }
 
     async fn add_to_sorted_set(
@@ -449,21 +524,27 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         value: &[u8],
     ) -> Result<(), String> {
         let value_hash = Self::value_hash(value);
-        let query = sqlx::query(
-            "INSERT INTO sorted_set_storage (namespace, key, value_hash, value, score) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (namespace, key, value_hash) DO UPDATE SET value = EXCLUDED.value, score = EXCLUDED.score;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(value_hash)
-        .bind(value)
-        .bind(score);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "add_to_sorted_set", || {
+            let namespace = namespace.clone();
+            let value_hash = value_hash.clone();
+            async move {
+                let query = sqlx::query(
+                    "INSERT INTO sorted_set_storage (namespace, key, value_hash, value, score) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (namespace, key, value_hash) DO UPDATE SET value = EXCLUDED.value, score = EXCLUDED.score;",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(value_hash)
+                .bind(value)
+                .bind(score);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn remove_from_sorted_set(
@@ -476,20 +557,26 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         value: &[u8],
     ) -> Result<(), String> {
         let value_hash = Self::value_hash(value);
-        let query = sqlx::query(
-            "DELETE FROM sorted_set_storage WHERE namespace = $1 AND key = $2 AND value_hash = $3 AND value = $4;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(value_hash)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "remove_from_sorted_set", || {
+            let namespace = namespace.clone();
+            let value_hash = value_hash.clone();
+            async move {
+                let query = sqlx::query(
+                    "DELETE FROM sorted_set_storage WHERE namespace = $1 AND key = $2 AND value_hash = $3 AND value = $4;",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(value_hash)
+                .bind(value);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn get_sorted_set(
@@ -500,18 +587,23 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        let query = sqlx::query_as::<_, DBScoreValue>(
-            "SELECT score, value FROM sorted_set_storage WHERE namespace = $1 AND key = $2 ORDER BY score ASC;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key);
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBScoreValue, _>(query)
-            .await
-            .map(|rows| rows.into_iter().map(DBScoreValue::into_pair).collect())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "get_sorted_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, DBScoreValue>(
+                    "SELECT score, value FROM sorted_set_storage WHERE namespace = $1 AND key = $2 ORDER BY score ASC;",
+                )
+                .bind(namespace)
+                .bind(key);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<DBScoreValue, _>(query)
+                    .await
+                    .map(|rows| rows.into_iter().map(DBScoreValue::into_pair).collect())
+            }
+        })
+        .await
     }
 
     async fn query_sorted_set(
@@ -524,20 +616,25 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        let query = sqlx::query_as::<_, DBScoreValue>(
-            "SELECT score, value FROM sorted_set_storage WHERE namespace = $1 AND key = $2 AND score BETWEEN $3 AND $4 ORDER BY score ASC;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(min)
-        .bind(max);
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBScoreValue, _>(query)
-            .await
-            .map(|rows| rows.into_iter().map(DBScoreValue::into_pair).collect())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "query_sorted_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as::<_, DBScoreValue>(
+                    "SELECT score, value FROM sorted_set_storage WHERE namespace = $1 AND key = $2 AND score BETWEEN $3 AND $4 ORDER BY score ASC;",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(min)
+                .bind(max);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<DBScoreValue, _>(query)
+                    .await
+                    .map(|rows| rows.into_iter().map(DBScoreValue::into_pair).collect())
+            }
+        })
+        .await
     }
 }
 

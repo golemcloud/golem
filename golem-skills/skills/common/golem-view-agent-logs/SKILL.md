@@ -26,7 +26,9 @@ golem agent invoke <AGENT_TYPE_NAME> <AGENT_NAME> <FUNCTION_NAME> [ARGUMENTS...]
 
 These flags can be appended to any `agent invoke` command. For the invocation syntax itself (agent ID, function name, arguments), refer to the language-specific invocation skills.
 
-### Structured TOON Output
+### Structured Streaming Output
+
+Streaming commands emit multiple structured output documents, one document per event. For JSON and YAML, parse stdout as a sequence of documents, not as one array or object.
 
 When `golem` or `golem-cli` is run with `--format toon`, structured stdout is emitted as a sequence of framed TOON documents:
 
@@ -38,7 +40,7 @@ When `golem` or `golem-cli` is run with `--format toon`, structured stdout is em
 
 Parse stdout by splitting on exact `@toon` and `@end` marker lines. The content between them is one TOON document. In non-text formats, stderr may contain progress or diagnostic text and should not be parsed as the structured payload.
 
-Stream events use a rich event shape with common fields such as `timestamp`, `kind`, `level`, `context`, and `message`. Agent-facing code should branch on `kind` rather than parsing the message text. Typical `kind` values include `log`, `stdout`, `stderr`, `stream-closed`, `stream-error`, `invocation-started`, `invocation-finished`, and `missed-messages`.
+Stream events use `$type: "agent.stream"` and a rich event shape with common fields such as `timestamp`, `kind`, `level`, `context`, and `message`. Agent-facing code should branch on `kind` rather than parsing the message text. Typical `kind` values include `log`, `stdout`, `stderr`, `stream-closed`, `stream-error`, `invocation-started`, `invocation-finished`, and `missed-messages`.
 
 `--stream-no-log-level` and `--stream-no-timestamp` affect only text output. In structured formats (`json`, `yaml`, `toon`), `level` and `timestamp` fields are always present for reliable parsing.
 

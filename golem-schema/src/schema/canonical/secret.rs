@@ -17,7 +17,7 @@
 //! - Text form: `secret:<opaque-ref>`. The `secret:` prefix is required on
 //!   both encode and decode. An empty `secret_ref` is rejected on both
 //!   sides — we never emit a form we would not decode back.
-//! - JSON form: `{ "secret_ref": "..." }`.
+//! - JSON form: `{ "secretRef": "..." }`.
 
 use crate::schema::canonical::error::ParseError;
 use crate::schema::schema_value::SecretValuePayload;
@@ -53,7 +53,7 @@ pub fn to_json(payload: &SecretValuePayload) -> Result<Value, ParseError> {
     }
     let mut obj = Map::new();
     obj.insert(
-        "secret_ref".to_string(),
+        "secretRef".to_string(),
         Value::String(payload.secret_ref.clone()),
     );
     Ok(Value::Object(obj))
@@ -65,19 +65,19 @@ pub fn from_json(value: &Value) -> Result<SecretValuePayload, ParseError> {
         field: None,
     })?;
     let secret_ref = obj
-        .get("secret_ref")
-        .ok_or(ParseError::MissingField("secret_ref"))?
+        .get("secretRef")
+        .ok_or(ParseError::MissingField("secretRef"))?
         .as_str()
         .ok_or(ParseError::TypeField {
             expected: "string",
-            field: Some("secret_ref"),
+            field: Some("secretRef"),
         })?
         .to_string();
     if secret_ref.is_empty() {
         return Err(ParseError::Empty);
     }
     for key in obj.keys() {
-        if key != "secret_ref" {
+        if key != "secretRef" {
             return Err(ParseError::ExtraField(key.clone()));
         }
     }
@@ -142,7 +142,7 @@ mod tests {
     fn json_missing_field() {
         assert_eq!(
             from_json(&serde_json::json!({})),
-            Err(ParseError::MissingField("secret_ref"))
+            Err(ParseError::MissingField("secretRef"))
         );
     }
 
@@ -164,18 +164,18 @@ mod tests {
 
     #[test]
     fn json_extra_field_rejected() {
-        let v = serde_json::json!({ "secret_ref": "x", "extra": true });
+        let v = serde_json::json!({ "secretRef": "x", "extra": true });
         assert_eq!(from_json(&v), Err(ParseError::ExtraField("extra".into())));
     }
 
     #[test]
     fn json_wrong_secret_ref_type_rejected() {
-        let v = serde_json::json!({ "secret_ref": 42 });
+        let v = serde_json::json!({ "secretRef": 42 });
         assert_eq!(
             from_json(&v),
             Err(ParseError::TypeField {
                 expected: "string",
-                field: Some("secret_ref"),
+                field: Some("secretRef"),
             })
         );
     }

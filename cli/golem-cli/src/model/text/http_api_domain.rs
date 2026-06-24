@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
-use golem_common::model::domain_registration::DomainRegistration;
+use golem_common::model::domain_registration::{Domain, DomainRegistration, DomainRegistrationId};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainRegistrationNewView(pub DomainRegistration);
+
+impl Masked for DomainRegistrationNewView {}
 
 impl MessageWithFields for DomainRegistrationNewView {
     fn message(&self) -> String {
@@ -40,17 +44,39 @@ impl MessageWithFields for DomainRegistrationNewView {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HttpApiDomainListView(pub Vec<DomainRegistration>);
+impl StructuredOutput for DomainRegistrationNewView {
+    const KIND: &'static str = "api.domain.register";
+}
 
-impl TextView for HttpApiDomainListView {
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainRegistrationDeleteResult {
+    pub deleted: bool,
+    pub domain: Domain,
+    pub id: DomainRegistrationId,
+}
+
+impl NoTextOutput for DomainRegistrationDeleteResult {}
+impl TextOutput for DomainRegistrationDeleteResult {}
+
+impl StructuredOutput for DomainRegistrationDeleteResult {
+    const KIND: &'static str = "api.domain.delete";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpApiDomainListView {
+    pub domains: Vec<DomainRegistration>,
+}
+
+impl TextOutput for HttpApiDomainListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),
             Column::new("ID").fixed(),
             Column::new("Environment ID").fixed(),
         ]);
-        for reg in &self.0 {
+        for reg in &self.domains {
             table.add_row(vec![
                 reg.domain.0.clone(),
                 reg.id.0.to_string(),
@@ -59,4 +85,8 @@ impl TextView for HttpApiDomainListView {
         }
         log_table(table);
     }
+}
+
+impl StructuredOutput for HttpApiDomainListView {
+    const KIND: &'static str = "api.domain.list";
 }

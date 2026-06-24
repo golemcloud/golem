@@ -240,7 +240,7 @@ mod tests {
     fn tuple_extracts_unstructured_binary() {
         let schema = input(vec![binary_field("image")]);
         // base64url-no-pad("abc") = "YWJj"
-        let args: JsonObject = json!({"image": {"bytes": "YWJj", "mime_type": "image/png"}})
+        let args: JsonObject = json!({"image": {"bytes": "YWJj", "mimeType": "image/png"}})
             .as_object()
             .unwrap()
             .clone();
@@ -269,7 +269,7 @@ mod tests {
     fn error_on_invalid_base64() {
         let schema = input(vec![binary_field("image")]);
         let args: JsonObject =
-            json!({"image": {"bytes": "not-valid-b64!!!", "mime_type": "image/png"}})
+            json!({"image": {"bytes": "not-valid-b64!!!", "mimeType": "image/png"}})
                 .as_object()
                 .unwrap()
                 .clone();
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn restricted_binary_with_disallowed_mime_type_is_rejected() {
         let schema = input(vec![restricted_binary_field("image", vec!["image/png"])]);
-        let args: JsonObject = json!({"image": {"bytes": "YWJj", "mime_type": "image/jpeg"}})
+        let args: JsonObject = json!({"image": {"bytes": "YWJj", "mimeType": "image/jpeg"}})
             .as_object()
             .unwrap()
             .clone();
@@ -342,7 +342,7 @@ mod tests {
         let args: JsonObject = json!({
             "parts": [
                 {"description": {"text": "a photo"}},
-                {"photo": {"bytes": "AQID", "mime_type": "image/png"}}
+                {"photo": {"bytes": "AQID", "mimeType": "image/png"}}
             ]
         })
         .as_object()
@@ -449,7 +449,7 @@ mod tests {
     fn wrapper_binary_input_inline_case_roundtrips() {
         let schema = input(vec![wrapper_binary_field("image")]);
         let args: JsonObject =
-            json!({"image": {"inline": {"bytes": "YWJj", "mime_type": "image/png"}}})
+            json!({"image": {"inline": {"bytes": "YWJj", "mimeType": "image/png"}}})
                 .as_object()
                 .unwrap()
                 .clone();

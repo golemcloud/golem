@@ -86,9 +86,12 @@ async fn build_namespace_routed_kvs(
     };
 
     let postgres_storage = std::sync::Arc::new(
-        PostgresKeyValueStorage::configured(&postgres_config)
-            .await
-            .expect("Cannot create postgres key value storage for routed kvs tests"),
+        PostgresKeyValueStorage::configured(
+            &postgres_config,
+            golem_common::model::RetryConfig::max_attempts_3(),
+        )
+        .await
+        .expect("Cannot create postgres key value storage for routed kvs tests"),
     );
 
     let kvs = NamespaceRoutedKeyValueStorage::new(redis_storage.clone(), postgres_storage.clone());
