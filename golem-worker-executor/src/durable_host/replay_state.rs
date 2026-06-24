@@ -31,7 +31,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -68,47 +68,55 @@ pub struct ClaimedConcurrentStart {
 }
 
 #[derive(Debug)]
-struct PendingReplayRead {
-    idx: OplogIndex,
-    entry: OplogEntry,
-    skipped_regions: Vec<OplogRegion>,
+pub enum OplogEntryLookupResult {
+    Found {
+        index: OplogIndex,
+        entry: Box<OplogEntry>,
+        violates_for_all: bool,
+    },
+    NotFound {
+        violates_for_all: bool,
+    },
+}
+
+#[derive(Debug)]
+struct CommittedState {
+    current_oplog_index: OplogIndex,
+    last_read_non_hint_oplog_index: OplogIndex,
+    // invariant: either start or end must be at or after last_read_oplog_index.
+    next_skipped_region: Option<OplogRegion>,
+    seen_logs: HashSet<(u64, u64)>,
+}
+
+impl CommittedState {
+    fn current_index_is_skipped(&self) -> bool {
+        self.next_skipped_region
+            .as_ref()
+            .map(|r| r.contains(self.current_oplog_index))
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug)]
 pub struct ReplayState {
-    owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
-    replay_target: OplogIndex,
-    /// The oplog index of the last replayed entry
-    last_replayed_index: OplogIndex,
-    /// The last replayed entry whose side effects have been committed.
-    committed_replayed_index: OplogIndex,
-    /// The oplog index of the last non-hint entry read
-    last_replayed_non_hint_index: OplogIndex,
-    internal: InternalReplayState,
-    has_seen_logs: bool,
-}
 
-#[derive(Debug)]
-struct InternalReplayState {
-    pub skipped_regions: DeletedRegions,
-    pub next_skipped_region: Option<OplogRegion>,
-    pub committed_next_skipped_region: Option<OplogRegion>,
-    /// Hashes of log entries persisted since the last read non-hint oplog entry
-    pub log_hashes: HashSet<(u64, u64)>,
-    /// Updates that were encountered while reading the oplog
-    pub pending_replay_events: Vec<ReplayEvent>,
-    pub pending_reads: Vec<PendingReplayRead>,
-    /// `Start` entries for `GolemApiFork` whose matching `End` has not yet
-    /// been replayed. When the matching `End` is read, the response is
-    /// decoded and a `ForkReplayed` event is emitted. The legacy adapter only
-    /// ever has at most one in flight at a time (it writes the matched `End`
-    /// immediately after the `Start`), but we use a set so that future
-    /// concurrent recorders cannot trip us up.
-    pub pending_fork_starts: HashSet<OplogIndex>,
-    /// Matches replayed `End`/`Cancelled` entries to the concurrent [`crate::durable_host::concurrent::CallHandle`]s
-    /// awaiting them, keyed by their `Start` index. Fed only from the committed-consume hook.
-    pub concurrent_resolver: ConcurrentReplayResolver,
+    // === initialization-only ===
+    replay_target: OplogIndex,
+    skipped_regions: DeletedRegions,
+    concurrent_resolver: ConcurrentReplayResolver,
+
+    // === runtime mutable ===
+    seen_logs: HashSet<(u64, u64)>,
+    replay_events: Vec<ReplayEvent>,
+    committed_state: CommittedState,
+    current_oplog_index: OplogIndex,
+    current_oplog_chunk_region: OplogRegion,
+    current_oplog_chunk: Vec<OplogEntry>,
+    // invariant: either start or end must be at or after current_oplog_index.
+    next_skipped_region: Option<OplogRegion>,
+    last_read_non_hint_oplog_index: OplogIndex,
+    jumps_since_last_commit: Vec<OplogRegion>
 }
 
 impl ReplayState {
@@ -117,63 +125,23 @@ impl ReplayState {
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
     ) -> Result<Self, WorkerExecutorError> {
-        let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
-        let last_oplog_index = oplog.current_oplog_index().await;
-        let mut result = Self {
-            owned_agent_id,
-            oplog,
-            last_replayed_index: OplogIndex::NONE,
-            committed_replayed_index: OplogIndex::NONE,
-            last_replayed_non_hint_index: OplogIndex::NONE,
-            replay_target: last_oplog_index,
-            internal: InternalReplayState {
-                skipped_regions,
-                next_skipped_region: next_skipped_region.clone(),
-                committed_next_skipped_region: next_skipped_region,
-                log_hashes: HashSet::new(),
-                pending_replay_events: Vec::new(),
-                pending_reads: Vec::new(),
-                pending_fork_starts: HashSet::new(),
-                concurrent_resolver: ConcurrentReplayResolver::default(),
-            },
-            has_seen_logs: false,
-        };
-        result.move_to_start_of_replay().await;
-        result.skip_forward().await?;
-        Ok(result)
+        unimplemented!()
     }
 
     pub async fn drop_override_and_restart(&mut self) -> Result<(), WorkerExecutorError> {
-        self.internal.skipped_regions.drop_override();
-        self.internal.next_skipped_region = self
-            .internal
-            .skipped_regions
-            .find_next_deleted_region(OplogIndex::NONE);
-        self.internal.log_hashes.clear();
-        self.internal.pending_replay_events.clear();
-        self.internal.pending_reads.clear();
-        self.internal.committed_next_skipped_region = self.internal.next_skipped_region.clone();
-        self.last_replayed_index = OplogIndex::NONE;
-        self.committed_replayed_index = OplogIndex::NONE;
-        self.last_replayed_non_hint_index = OplogIndex::NONE;
-        self.move_to_start_of_replay().await;
-        self.skip_forward().await
+        unimplemented!()
     }
 
     pub async fn switch_to_live(&mut self) {
-        if !self.is_live() {
-            self.record_replay_event(ReplayEvent::ReplayFinished).await;
-        }
-        self.last_replayed_index = self.replay_target;
-        self.committed_replayed_index = self.replay_target;
+        unimplemented!()
     }
 
     pub fn last_replayed_index(&self) -> OplogIndex {
-        self.last_replayed_index
+        self.committed_state.current_oplog_index
     }
 
     pub fn last_replayed_non_hint_index(&self) -> OplogIndex {
-        self.last_replayed_non_hint_index
+        self.committed_state.last_read_non_hint_oplog_index
     }
 
     pub fn replay_target(&self) -> OplogIndex {
@@ -181,18 +149,16 @@ impl ReplayState {
     }
 
     pub fn set_replay_target(&mut self, new_target: OplogIndex) {
-        self.replay_target = new_target;
+        self.replay_target = new_target
     }
 
     pub fn is_in_skipped_region(&self, oplog_index: OplogIndex) -> bool {
-        self.internal
-            .skipped_regions
-            .is_in_deleted_region(oplog_index)
+        self.skipped_regions.is_in_deleted_region(oplog_index)
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.last_replayed_index == self.replay_target
+        self.last_replayed_index() >= self.replay_target()
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.
@@ -200,12 +166,56 @@ impl ReplayState {
         !self.is_live()
     }
 
-    async fn record_replay_event(&mut self, event: ReplayEvent) {
-        self.internal.pending_replay_events.push(event)
+    pub async fn take_new_replay_events(&mut self) -> Vec<ReplayEvent> {
+        unimplemented!()
     }
 
-    pub async fn take_new_replay_events(&mut self) -> Vec<ReplayEvent> {
-        std::mem::take(&mut self.internal.pending_replay_events)
+    /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
+    pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
+        !self.seen_logs.is_empty() && {
+            let hash = Self::hash_log_entry(level, context, message);
+            self.seen_logs.contains(&hash)
+        }
+    }
+
+    /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
+    pub async fn remove_seen_log(&mut self, level: LogLevel, context: &str, message: &str) {
+        if !self.seen_logs.is_empty() {
+            let hash = Self::hash_log_entry(level, context, message);
+            self.seen_logs.remove(&hash);
+        }
+    }
+
+    fn hash_log_entry(level: LogLevel, context: &str, message: &str) -> (u64, u64) {
+        let mut hasher = MetroHash128::new();
+        hasher.write_u8(level as u8);
+        hasher.write(context.as_bytes());
+        hasher.write(message.as_bytes());
+        hasher.finish128()
+    }
+
+    /// Reads the next oplog entry, and if it matches the given condition, returns the entry.
+    /// If the condition is not met, returns None and the current replay state remains
+    /// unchanged.
+    pub async fn try_get_oplog_entry(
+        &mut self,
+        condition: impl FnOnce(&OplogEntry) -> bool,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        if !self.is_replay() {
+            return Ok(None);
+        }
+
+        self.advance_to_next_non_hint().await;
+        let (index, entry) = self.get_current_entry().await;
+
+        if condition(&entry) {
+            let entry = entry.clone();
+            self.commit();
+            Ok(Some((index, entry)))
+        } else {
+            self.revert_to_last_commit();
+            Ok(None)
+        }
     }
 
     /// Reads the next oplog entry, and skips every hint entry following it.
@@ -226,218 +236,8 @@ impl ReplayState {
             .expect("try_get_oplog_entry with always-true predicate must return Some"))
     }
 
-    /// Checks whether the currently read `entry` is a hint entry is valid for replay, or
-    /// if a new oplog index should be tried instead.
-    ///
-    /// For hint entries, the next tried oplog index is the next one. When reaching
-    /// persist-nothing zones, it points to the end of the zone.
-    ///
-    /// If the entry is a hint entry, the result is `Some` and contains the current last
-    /// read index, so the next read will get the next one.
-    /// If the entry is the beginning of a persist-nothing zone, the result will be `Some`
-    /// containing the _end_ of the zone so the next read will get the first entry outside
-    /// the zone.
-    /// If the entry is not a hint entry the result is `None`.
-    ///
-    async fn should_skip_to(&self, entry: &OplogEntry) -> Option<OplogIndex> {
-        if entry.is_hint() {
-            // Keeping the last replayed index as-is, so the next attempt will read the next one
-            Some(self.last_replayed_index)
-        } else if let OplogEntry::ChangePersistenceLevel {
-            persistence_level, ..
-        } = &entry
-        {
-            if persistence_level == &PersistenceLevel::PersistNothing {
-                let begin_index = self.last_replayed_index;
-                let end_index = self
-                    .lookup_oplog_entry(begin_index, |entry, _idx| match entry {
-                        OplogEntry::ChangePersistenceLevel {
-                            persistence_level, ..
-                        } => persistence_level != &PersistenceLevel::PersistNothing,
-                        OplogEntry::AgentInvocationFinished { .. } => true,
-                        _ => false,
-                    })
-                    .await;
-
-                if let Some(end_index) = end_index {
-                    Some(end_index)
-                } else {
-                    // The zone has not been closed
-                    Some(self.replay_target())
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    /// Reads the next oplog entry, and if it matches the given condition, skips
-    /// every hint entry following it and returns the oplog index of the entry read.
-    /// If the condition is not met, returns None and the current replay state remains
-    /// unchanged.
-    ///
-    /// The auto-skipped hint entries can be of two kind:
-    /// - A set of oplog entry cases are always hint entries. They manipulate the worker status
-    ///   but are non-deterministic from the replay's point of view.
-    /// - Every oplog entry recorded in persist-nothing zones. These are there for observability,
-    ///   but they never participate in the replay. A persist-nothing zone is bounded by two
-    ///   ChangePersistenceLevel entries, or if the closing one is missing, it is up to the end of the
-    ///   oplog.
-    pub async fn try_get_oplog_entry(
-        &mut self,
-        condition: impl FnOnce(&OplogEntry) -> bool,
-    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        let saved_replay_idx = self.last_replayed_index;
-        let saved_next_skipped_region = self.internal.next_skipped_region.clone();
-
-        let read_idx = self.last_replayed_index.next();
-        let entry = self.internal_get_next_oplog_entry().await?;
-
-        if condition(&entry) {
-            self.commit_pending_replay().await?;
-            self.skip_forward().await?;
-            self.last_replayed_non_hint_index = read_idx;
-
-            Ok(Some((read_idx, entry)))
-        } else {
-            self.revert_pending_replay().await;
-
-            Ok(None)
-        }
-    }
-
-    async fn skip_forward(&mut self) -> Result<(), WorkerExecutorError> {
-        // Skipping hint entries and recording log entries
-        let mut logs = HashSet::new();
-        while self.is_replay() {
-            let entry = self.internal_get_next_oplog_entry().await?;
-            match self.should_skip_to(&entry).await {
-                Some(last_read_idx) => {
-                    // Recording seen log entries
-                    if let OplogEntry::Log {
-                        level,
-                        context,
-                        message,
-                        ..
-                    } = &entry
-                    {
-                        let hash = Self::hash_log_entry(*level, context, message);
-                        logs.insert(hash);
-                    }
-
-                    if last_read_idx > self.last_replayed_index {
-                        self.record_pending_skipped_region(OplogRegion {
-                            start: self.last_replayed_index.next(),
-                            end: last_read_idx,
-                        })
-                        .await;
-                    }
-                    // Moving the replay pointer. Leaving last_replayed_non_hint_index unchanged, because this is a hint entry.
-                    self.last_replayed_index = last_read_idx;
-                    self.commit_pending_replay().await?;
-                    // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
-                }
-                None => {
-                    // We've found the first non-hint entry after the first read one,
-                    // so we move everything back the last position (saved_replay_idx), including
-                    // possibly skipped regions.
-                    // TODO: cache the last hint entry to avoid reading it again
-                    self.revert_pending_replay().await;
-                    break;
-                }
-            }
-        }
-
-        self.has_seen_logs = !logs.is_empty();
-        self.internal.log_hashes = logs;
-        Ok(())
-    }
-
-    /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
-    pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
-        if self.has_seen_logs {
-            let hash = Self::hash_log_entry(level, context, message);
-            self.internal.log_hashes.contains(&hash)
-        } else {
-            false
-        }
-    }
-
-    /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
-    pub async fn remove_seen_log(&mut self, level: LogLevel, context: &str, message: &str) {
-        let hash = Self::hash_log_entry(level, context, message);
-        self.internal.log_hashes.remove(&hash);
-        self.has_seen_logs = !self.internal.log_hashes.is_empty();
-    }
-
-    fn hash_log_entry(level: LogLevel, context: &str, message: &str) -> (u64, u64) {
-        let mut hasher = MetroHash128::new();
-        hasher.write_u8(level as u8);
-        hasher.write(context.as_bytes());
-        hasher.write(message.as_bytes());
-        hasher.finish128()
-    }
-
-    /// Gets the next oplog entry, no matter if it is hint or not, following jumps.
-    ///
-    /// Returns an error (rather than panicking) if the expected entry is missing
-    /// or if the eager `GolemApiFork` payload inspection fails. The caller (and
-    /// transitively any host function) propagates the error up so the worker
-    /// fails the agent with a non-retriable trap instead of crashing the
-    /// executor process.
-    async fn internal_get_next_oplog_entry(&mut self) -> Result<OplogEntry, WorkerExecutorError> {
-        let read_idx = self.last_replayed_index.next();
-
-        let oplog_entries = self.read_oplog(read_idx, 1).await;
-        let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
-            oplog_entry
-        } else {
-            // Use `unexpected_oplog_entry` so the typing survives the wasmtime
-            // round-trip and `TrapType::from_error` classifies it as a
-            // non-retriable internal error rather than a policy-retriable
-            // `Runtime`/`Unknown` failure (retrying replay against the same
-            // truncated oplog would just fail again).
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "next oplog entry to replay",
-                format!(
-                    "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
-                    self.owned_agent_id,
-                    read_idx,
-                    self.replay_target,
-                    self.last_replayed_non_hint_index
-                ),
-            ));
-        };
-
-        let skipped_regions = self.move_replay_idx(read_idx).await;
-        self.internal
-            .pending_reads
-            .push(PendingReplayRead {
-                idx: read_idx,
-                entry: oplog_entry.clone(),
-                skipped_regions,
-            });
-
-        Ok(oplog_entry)
-    }
-
-    // Moves to the start of the region used for replay, handling initial skipped regions applied by manual updates correctly
-    async fn move_to_start_of_replay(&mut self) {
-        self.last_replayed_index = OplogIndex::INITIAL;
-        self.get_out_of_skipped_region(true).await;
-        self.committed_replayed_index = self.last_replayed_index;
-        self.internal.committed_next_skipped_region = self.internal.next_skipped_region.clone();
-    }
-
-    async fn move_replay_idx(&mut self, new_idx: OplogIndex) -> Vec<OplogRegion> {
-        self.last_replayed_index = new_idx;
-        self.get_out_of_skipped_region(false).await
-    }
-
     pub async fn lookup_oplog_entry(
-        &self,
+        &mut self,
         begin_idx: OplogIndex,
         check: impl Fn(&OplogEntry, OplogIndex) -> bool,
     ) -> Option<OplogIndex> {
@@ -451,7 +251,7 @@ impl ReplayState {
     }
 
     pub async fn lookup_oplog_entry_with_condition(
-        &self,
+        &mut self,
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
@@ -466,59 +266,39 @@ impl ReplayState {
         .await
     }
 
+    // If the entry was not found, the replay state is guaranteed to be in live mode
+    // as we reached the end of the oplog.
     pub async fn lookup_oplog_entry_with_condition_and_state<State>(
-        &self,
+        &mut self,
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
         mut state: State,
         mut update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
     ) -> OplogEntryLookupResult {
-        let replay_target = self.replay_target;
-        let mut start = self.last_replayed_index.next();
-
-        let mut current_next_skip_region = self.internal.next_skipped_region.clone();
         let mut violation = false;
+        while self.is_replay() {
+            self.advance_to_next_non_hint().await;
+            let (idx, entry) = self.get_current_entry().await;
 
-        while start < replay_target {
-            let entries = self.read_oplog(start, CHUNK_SIZE).await;
-            for (idx, entry) in &entries {
-                if current_next_skip_region
-                    .as_ref()
-                    .map(|r| r.contains(*idx))
-                    .unwrap_or(false)
-                {
-                    // If we are in the current skip region, ignore the entry
-                    continue;
-                }
-                if current_next_skip_region
-                    .as_ref()
-                    .map(|r| &r.end == idx)
-                    .unwrap_or(false)
-                {
-                    // if we are at the end of the current skip region, find the next one
-                    current_next_skip_region = self
-                        .internal
-                        .skipped_regions
-                        .find_next_deleted_region(idx.next());
-                }
+            update_state(entry, idx, &mut state);
 
-                update_state(entry, *idx, &mut state);
-
-                if end_check(entry, begin_idx, &state) {
-                    return OplogEntryLookupResult::Found {
-                        index: *idx,
-                        entry: Box::new(entry.clone()),
-                        violates_for_all: violation,
-                    };
-                }
-
-                if !for_all_intermediate(entry, begin_idx, &state) {
-                    violation = true;
-                }
+            if end_check(entry, begin_idx, &state) {
+                let entry = entry.clone();
+                self.commit();
+                return OplogEntryLookupResult::Found {
+                    index: idx,
+                    entry: Box::new(entry),
+                    violates_for_all: violation,
+                };
             }
-            start = start.range_end(entries.len() as u64).next();
+
+            if !for_all_intermediate(entry, begin_idx, &state) {
+                violation = true;
+            }
         }
+        self.commit();
+        assert!(self.is_live());
 
         OplogEntryLookupResult::NotFound {
             violates_for_all: violation,
@@ -556,7 +336,6 @@ impl ReplayState {
                             invocation_context,
                         }));
                     }
-                    entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
                             "AgentInvocationStarted",
@@ -587,7 +366,6 @@ impl ReplayState {
 
                         break Ok(Some(result));
                     }
-                    entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
                             "AgentInvocationFinished",
@@ -599,189 +377,6 @@ impl ReplayState {
                 break Ok(None);
             }
         }
-    }
-
-    async fn get_out_of_skipped_region(&mut self, initial_skip: bool) -> Vec<OplogRegion> {
-        let mut skipped_regions = Vec::new();
-        if self.is_replay() {
-            let skipped_region = {
-                match &self.internal.next_skipped_region {
-                    Some(region) if region.start == (self.last_replayed_index.next()) => {
-                        let target = region.end.next(); // we want to continue reading _after_ the region
-                        debug!(
-                            "Worker reached skipped region at {}, jumping to {} (oplog size: {})",
-                            region.start, target, self.replay_target
-                        );
-                        self.last_replayed_index = target.previous(); // so we set the last replayed index to the end of the region
-                        Some(region.clone())
-                    }
-                    _ => None,
-                }
-            };
-
-            if let Some(skipped_region) = skipped_region {
-                // Initial skip is used to advance the replay cursor to the beginning of the replay / index of the loaded snapshot.
-                // All card events in that region are already part of the snapshot, so no need to consider them here.
-                if !initial_skip {
-                    skipped_regions.push(skipped_region);
-                }
-                self.internal.next_skipped_region = self
-                    .internal
-                    .skipped_regions
-                    .find_next_deleted_region(self.last_replayed_index);
-            }
-        }
-        skipped_regions
-    }
-
-    async fn record_card_revoked_events_in_region(&mut self, region: &OplogRegion) {
-        let mut next = region.start;
-        let end = region.end.as_u64();
-
-        while next.as_u64() <= end {
-            let remaining = end - next.as_u64() + 1;
-            let count = remaining.min(CHUNK_SIZE);
-
-            for (entry_index, entry) in self.read_oplog(next, count).await {
-                if let OplogEntry::CardRevoked { card_id, .. } = entry {
-                    self.record_replay_event(ReplayEvent::CardRevoked {
-                        card_id: CardId(card_id),
-                    })
-                    .await;
-                }
-                next = entry_index.next()
-            }
-        }
-    }
-
-    async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<(OplogIndex, OplogEntry)> {
-        self.oplog.read_many(idx, n).await.into_iter().collect()
-    }
-
-    async fn record_pending_skipped_region(&mut self, region: OplogRegion) {
-        if let Some(read) = self.internal.pending_reads.last_mut() {
-            read.skipped_regions.push(region);
-        }
-    }
-
-    async fn commit_pending_replay(&mut self) -> Result<(), WorkerExecutorError> {
-        let reads = std::mem::take(&mut self.internal.pending_reads);
-        for read in reads {
-            self.on_committed_replay_entry(read.idx, &read.entry)
-                .await?;
-            for skipped_region in &read.skipped_regions {
-                self.record_card_revoked_events_in_region(skipped_region)
-                    .await;
-            }
-        }
-
-        if self.last_replayed_index == self.replay_target {
-            self.record_replay_event(ReplayEvent::ReplayFinished).await;
-        }
-        self.committed_replayed_index = self.last_replayed_index;
-        self.internal.committed_next_skipped_region = self.internal.next_skipped_region.clone();
-        Ok(())
-    }
-
-    async fn revert_pending_replay(&mut self) {
-        self.last_replayed_index = self.committed_replayed_index;
-        self.internal.next_skipped_region = self.internal.committed_next_skipped_region.clone();
-        self.internal.pending_reads.clear();
-    }
-
-    /// Feeds the concurrent replay resolver when an `End`/`Cancelled` entry is *committed*
-    /// (permanently consumed). Resolves only calls that are actually being awaited
-    /// (`resolve_if_pending`), so the `End`/`Cancelled` of any call not tracked by the resolver —
-    /// e.g. the guest-facing manual durability pair, consumed through this same cursor but never
-    /// registered — is ignored instead of leaking.
-    async fn on_committed_replay_entry(
-        &mut self,
-        idx: OplogIndex,
-        entry: &OplogEntry,
-    ) -> Result<(), WorkerExecutorError> {
-        match entry {
-            OplogEntry::SuccessfulUpdate {
-                target_revision, ..
-            } => {
-                self.record_replay_event(ReplayEvent::UpdateReplayed {
-                    new_revision: *target_revision,
-                })
-                .await;
-            }
-            OplogEntry::CardRevoked { card_id, .. } => {
-                self.record_replay_event(ReplayEvent::CardRevoked {
-                    card_id: CardId(*card_id),
-                })
-                .await;
-            }
-            OplogEntry::Start { function_name, .. }
-                if function_name == &HostFunctionName::GolemApiFork =>
-            {
-                self.internal.pending_fork_starts.insert(idx);
-            }
-            OplogEntry::End {
-                start_index,
-                response,
-                forced_commit,
-                ..
-            } => {
-                let is_pending_fork_start = {
-                    let is_pending_fork_start =
-                        self.internal.pending_fork_starts.remove(start_index);
-                    self.internal.concurrent_resolver.resolve_if_pending(
-                        *start_index,
-                        Resolution::Completed {
-                            end_idx: idx,
-                            response: response.clone(),
-                            forced_commit: *forced_commit,
-                        },
-                    );
-                    is_pending_fork_start
-                };
-
-                if is_pending_fork_start && let Some(response_payload) = response {
-                    let response = self
-                        .oplog
-                        .download_payload(response_payload.clone())
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to download GolemApiFork oplog payload at index {idx}: {err}"
-                            ))
-                        })?;
-                    let result: HostResponseGolemApiFork =
-                        if let HostResponse::GolemApiFork(result) = response {
-                            result
-                        } else {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                "HostResponse::GolemApiFork",
-                                format!("{response:?}"),
-                            ));
-                        };
-                    if result.result == Ok(ForkResult::Forked) {
-                        self.record_replay_event(ReplayEvent::ForkReplayed {
-                            new_phantom_id: result.forked_phantom_id,
-                        })
-                        .await;
-                    }
-                }
-            }
-            OplogEntry::Cancelled {
-                start_index,
-                partial,
-                ..
-            } => {
-                self.internal.concurrent_resolver.resolve_if_pending(
-                    *start_index,
-                    Resolution::Cancelled {
-                        cancelled_idx: idx,
-                        partial: partial.clone(),
-                    },
-                );
-            }
-            _ => {}
-        }
-        Ok(())
     }
 
     /// Positionally claims the next `Start` entry for a durable call, validates its identity
@@ -835,7 +430,7 @@ impl ReplayState {
         if let Some(err) = validation_error {
             // `claim_any_concurrent_start` already registered a resolver receiver for this `Start`;
             // drop it on validation failure so it cannot be matched by a later resolution.
-            self.internal
+            self
                 .concurrent_resolver
                 .unregister(claimed.handle.start_idx());
             return Err(err);
@@ -882,7 +477,9 @@ impl ReplayState {
                         "Start { request: None }".to_string(),
                     ));
                 }
-                let receiver = { self.internal.concurrent_resolver.register(start_idx) };
+                let receiver = {
+                    self.concurrent_resolver.register(start_idx)
+                };
                 Ok(ClaimedConcurrentStart {
                     handle: ReplayCallHandle::new(start_idx, receiver),
                     function_name,
@@ -908,16 +505,7 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<Resolution, WorkerExecutorError> {
-        let start_idx = handle.start_idx();
-        match self.await_resolution_outcome(handle).await? {
-            ResolutionOutcome::Resolved(resolution) => Ok(resolution),
-            ResolutionOutcome::Incomplete => Err(WorkerExecutorError::unexpected_oplog_entry(
-                "End or Cancelled",
-                format!(
-                    "end of replay: durable call Start at {start_idx} has no matching End/Cancelled"
-                ),
-            )),
-        }
+        unimplemented!()
     }
 
     /// Like [`Self::await_resolution`], but reports a lone committed `Start` (replay reached the end
@@ -928,68 +516,88 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
-        let (start_idx, mut receiver) = handle.into_parts();
-        loop {
-            match receiver.try_recv() {
-                Ok(resolution) => return Ok(ResolutionOutcome::Resolved(resolution)),
-                Err(oneshot::error::TryRecvError::Empty) => {}
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    // The sender was dropped without resolving (anomalous). Drop any lingering
-                    // registration so it cannot be matched by a later resolution.
-                    self.internal
-                        .concurrent_resolver
-                        .unregister(start_idx);
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "concurrent replay resolver channel closed for Start at {start_idx}"
-                    )));
-                }
-            }
+        unimplemented!()
+    }
 
-            if self.is_live() {
-                // Reached the end of the oplog without ever seeing the matching End/Cancelled: a
-                // committed lone `Start` (a forced commit flushed it before its `End`, or a crash
-                // happened in between). Drop the now-stale registration and report Incomplete so the
-                // caller can re-execute the side effect and complete the existing `Start`.
-                self.internal
-                    .concurrent_resolver
-                    .unregister(start_idx);
-                return Ok(ResolutionOutcome::Incomplete);
-            }
+    // Make current internal state visible to users and update checkpoint for reverts
+    fn commit(&mut self) {
 
-            let consumed = self
-                .try_get_oplog_entry(|entry| {
-                    matches!(entry, OplogEntry::End { .. } | OplogEntry::Cancelled { .. })
-                })
-                .await?;
-            if consumed.is_none() {
-                // The next non-hint entry is not an End/Cancelled (e.g. an unclaimed `Start` or a
-                // scope/persistence marker). Crossing it would corrupt the cursor shared with
-                // legacy positional readers, so we refuse rather than advance past it. Drop the
-                // stale registration first so it cannot be matched by a later resolution.
-                self.internal
-                    .concurrent_resolver
-                    .unregister(start_idx);
-                return Err(WorkerExecutorError::runtime(format!(
-                    "concurrent replay interleaving is not supported: encountered a non-End/Cancelled entry while awaiting resolution of Start at {start_idx}"
-                )));
-            }
-            // The consumed entry was an End/Cancelled; the committed-consume hook has resolved the
-            // receiver, which the next loop iteration picks up.
+    }
+
+    // Reset internal state to last commit
+    fn revert_to_last_commit(&mut self) {
+
+    }
+
+    fn record_replay_event(&mut self, event: ReplayEvent) {
+        unimplemented!()
+    }
+
+
+    // Jump to the first oplog entry that should be replayed, discarding all read entries.
+    // If the cursor is at a non-skipped entry this is a noop.
+    fn jump_out_of_skipped_region(&mut self) {
+        while self.is_replay()
+            && let Some(skipped_region) = &self.next_skipped_region
+            && skipped_region.contains(self.current_oplog_index)
+        {
+            let previous_index = self.current_oplog_index;
+
+            self.current_oplog_index = skipped_region.end.next();
+            self.committed_state.next_skipped_region = self.skipped_regions.find_next_deleted_region(self.committed_state.current_oplog_index);
+            self.jumps_since_last_commit.push(OplogRegion { start: previous_index, end: skipped_region.end });
         }
     }
-}
 
-#[allow(dead_code)]
-#[derive(Debug)]
-pub enum OplogEntryLookupResult {
-    Found {
-        index: OplogIndex,
-        entry: Box<OplogEntry>,
-        violates_for_all: bool,
-    },
-    NotFound {
-        violates_for_all: bool,
-    },
+    // Guaranteed to read at least 1 entry and to land on a non-hint, non-skipped entry
+    async fn advance_to_next_non_hint(&mut self) {
+        assert!(self.is_replay());
+
+        while self.is_replay() {
+            self.advance_current_index();
+            match self.get_current_entry().await.1 {
+                OplogEntry::SuccessfulUpdate {
+                    target_revision, ..
+                } => {
+                    let new_revision = *target_revision;
+                    self.record_replay_event(ReplayEvent::UpdateReplayed { new_revision });
+                }
+                OplogEntry::CardRevoked { card_id, .. } => {
+                    let card_id = CardId(*card_id);
+                    self.record_replay_event(ReplayEvent::CardRevoked { card_id });
+                }
+                OplogEntry::Start { .. } => {
+                    todo!()
+                }
+                OplogEntry::End { .. } => {
+                    todo!()
+                }
+                other if other.is_hint() => { }
+                _ => { break; }
+            }
+        }
+    }
+
+    fn advance_current_index(&mut self) {
+        self.current_oplog_index = self.current_oplog_index.next();
+        self.jump_out_of_skipped_region();
+    }
+
+    async fn ensure_chunk(&mut self) {
+        let idx = self.current_oplog_index;
+        if !self.current_oplog_chunk_region.contains(self.current_oplog_index) {
+            let new_entries = self.oplog.read_many(idx, CHUNK_SIZE).await.into_values().collect();
+            self.current_oplog_chunk_region = OplogRegion { start: idx, end: idx.range_end(CHUNK_SIZE) };
+            self.current_oplog_chunk = new_entries;
+        }
+    }
+
+    async fn get_current_entry(&mut self) -> (OplogIndex, &OplogEntry) {
+        self.ensure_chunk().await;
+        let idx = self.current_oplog_index;
+        let chunk_idx = (idx.as_u64() - self.current_oplog_chunk_region.start.as_u64()) as usize;
+        (idx, &self.current_oplog_chunk[chunk_idx])
+    }
 }
 
 #[cfg(test)]

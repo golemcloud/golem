@@ -389,6 +389,11 @@ impl OplogIndex {
         OplogIndex(self.0 - 1)
     }
 
+    /// Add the given number of entries from the oplog index
+    pub fn add(&self, n: u64) -> OplogIndex {
+        OplogIndex(self.0 + n)
+    }
+
     /// Subtract the given number of entries from the oplog index
     pub fn subtract(&self, n: u64) -> OplogIndex {
         OplogIndex(self.0 - n)
