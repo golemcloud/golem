@@ -24,6 +24,7 @@ mod common_impls;
 #[cfg(feature = "full")]
 pub mod protobuf;
 pub mod render;
+pub mod tool;
 pub mod validation;
 
 #[cfg(any(test, feature = "proptest"))]

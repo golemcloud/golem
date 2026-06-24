@@ -502,6 +502,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
         golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,

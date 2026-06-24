@@ -94,6 +94,8 @@ cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-core-v2 golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
+cp wit/deps/golem-secrets golem-common/wit/deps
+cp wit/deps/golem-tool golem-common/wit/deps
 """
 
 [tasks.wit-sdks]
