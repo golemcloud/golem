@@ -140,6 +140,7 @@ struct PendingState {
     current_oplog_chunk_region: OplogRegion,
     // invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
+    in_persist_nothing_region: bool,
     // We are doing appends in ascending order 90%+ of the time here. A binary heap is not a great choice
     // for this, but better than the alternatives.
     replay_events: BinaryHeap<(Reverse<OplogIndex>, InternalReplayEvent)>,
@@ -154,6 +155,7 @@ struct CommittedState {
     last_read_non_hint_oplog_index: OplogIndex,
     // invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
+    in_persist_nothing_region: bool,
     replay_events: Vec<ReplayEvent>,
     seen_logs: HashSet<(u64, u64)>,
     fork_starts: HashSet<OplogIndex>,
@@ -206,6 +208,7 @@ impl ReplayState {
                 current_oplog_chunk: initial_oplog_chunk.clone(),
                 current_oplog_chunk_region: initial_oplog_chunk_region.clone(),
                 next_skipped_region: initial_skipped_region.clone(),
+                in_persist_nothing_region: false,
                 replay_events: BinaryHeap::new(),
                 jumps: Vec::new(),
             },
@@ -215,6 +218,7 @@ impl ReplayState {
                 current_oplog_chunk: initial_oplog_chunk,
                 current_oplog_chunk_region: initial_oplog_chunk_region,
                 next_skipped_region: initial_skipped_region,
+                in_persist_nothing_region: false,
                 replay_events: Vec::new(),
                 seen_logs: HashSet::new(),
                 fork_starts: HashSet::new(),
@@ -685,6 +689,7 @@ impl ReplayState {
         self.committed.current_oplog_chunk = Rc::clone(&self.pending.current_oplog_chunk);
         self.committed.last_read_non_hint_oplog_index = self.pending.last_read_non_hint_oplog_index;
         self.committed.next_skipped_region = self.pending.next_skipped_region.clone();
+        self.committed.in_persist_nothing_region = self.pending.in_persist_nothing_region;
 
         let mut replay_events_in_jumps = self.extract_replay_events_in_jumped_regions().await;
         self.pending.replay_events.append(&mut replay_events_in_jumps);
@@ -762,6 +767,7 @@ impl ReplayState {
         self.pending.current_oplog_chunk = Rc::clone(&self.committed.current_oplog_chunk);
         self.pending.last_read_non_hint_oplog_index = self.committed.last_read_non_hint_oplog_index;
         self.pending.next_skipped_region = self.committed.next_skipped_region.clone();
+        self.pending.in_persist_nothing_region = self.committed.in_persist_nothing_region;
         self.pending.replay_events.clear();
         self.pending.jumps.clear();
     }
@@ -772,7 +778,11 @@ impl ReplayState {
 
         while self.is_replay() {
             self.advance_to_next_non_skipped_entry().await;
+            let in_persist_nothing_region = self.pending.in_persist_nothing_region;
             let (idx, entry) = self.get_current_entry().await;
+
+            let entry_is_hint = entry.is_hint();
+
             match entry {
                 OplogEntry::SuccessfulUpdate {
                     target_revision, ..
@@ -784,7 +794,7 @@ impl ReplayState {
                     let card_id = CardId(*card_id);
                     self.pending.replay_events.push((Reverse(idx), InternalReplayEvent::CardRevoked { card_id }));
                 }
-                OplogEntry::Start { function_name, .. } if function_name == &HostFunctionName::GolemApiFork => {
+                OplogEntry::Start { function_name, .. } if !in_persist_nothing_region && function_name == &HostFunctionName::GolemApiFork => {
                     self.pending.replay_events.push((Reverse(idx), InternalReplayEvent::ForkStarted));
                 }
                 OplogEntry::End {
@@ -792,7 +802,7 @@ impl ReplayState {
                     response,
                     forced_commit,
                     ..
-                } => {
+                } if !in_persist_nothing_region => {
                     let start_index = *start_index;
                     let response = response.clone();
                     let forced_commit = *forced_commit;
@@ -809,7 +819,7 @@ impl ReplayState {
                     start_index,
                     partial,
                     ..
-                } => {
+                } if !in_persist_nothing_region => {
                     let start_index = *start_index;
                     let partial_response = partial.clone();
                     self.pending.replay_events.push((
@@ -820,7 +830,7 @@ impl ReplayState {
                         }
                     ));
                 }
-                OplogEntry::Log { level, context, message, .. } => {
+                OplogEntry::Log { level, context, message, .. } if !in_persist_nothing_region => {
                     let level = *level;
                     let context = context.clone();
                     let message = message.clone();
@@ -833,9 +843,18 @@ impl ReplayState {
                         }
                     ));
                 }
-                other if other.is_hint() => { }
-                _ => { break; }
+                OplogEntry::ChangePersistenceLevel { persistence_level, .. } => {
+                    self.pending.in_persist_nothing_region = *persistence_level != PersistenceLevel::PersistNothing;
+                }
+                OplogEntry::AgentInvocationFinished { .. } => {
+                    self.pending.in_persist_nothing_region = false;
+                }
+                _ => {}
             }
+
+            if !entry_is_hint && !self.pending.in_persist_nothing_region {
+                break;
+            };
             self.pending.current_oplog_index = self.pending.current_oplog_index.next()
         }
 
