@@ -262,7 +262,17 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     pub async fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        let _ = self.card_service.record_revoked_cards(card_ids).await;
+        let affected_agent_cards = self.card_service.record_revoked_cards(card_ids).await;
+
+        for (owned_agent_id, affected_card_ids) in affected_agent_cards {
+            let Some(worker) = self.try_get(&owned_agent_id).await else {
+                continue;
+            };
+
+            for card_id in affected_card_ids {
+                worker.queue_card_revocation(card_id).await;
+            }
+        }
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {

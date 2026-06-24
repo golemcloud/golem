@@ -17,6 +17,7 @@ pub mod agent;
 pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod card;
 pub mod certificate;
 pub mod component;
 pub mod component_metadata;
@@ -57,6 +58,7 @@ pub use retry_policy::{
 use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
+use self::oplog::QueuedCardEvent;
 use self::worker::TypedAgentConfigEntry;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::Principal;
@@ -672,6 +674,7 @@ pub struct AgentStatusRecord {
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
+    pub pending_card_events: VecDeque<PendingCardEventRef>,
     pub pending_updates: VecDeque<PendingUpdateRef>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
@@ -717,6 +720,7 @@ impl Default for AgentStatusRecord {
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
+            pending_card_events: VecDeque::new(),
             pending_updates: VecDeque::new(),
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
@@ -1177,6 +1181,14 @@ impl PendingInvocationRef {
     pub fn is_manual_update(&self) -> bool {
         self.manual_update_target_revision.is_some()
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct PendingCardEventRef {
+    pub timestamp: Timestamp,
+    pub oplog_index: OplogIndex,
+    pub event: QueuedCardEvent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]

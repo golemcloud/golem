@@ -152,7 +152,7 @@ fn broadcast_current_invocation_context(from: &str) {
     let client = Client::builder().build().unwrap();
 
     client
-        .post(&format!("http://localhost:{port}/invocation-context"))
+        .post(format!("http://localhost:{port}/invocation-context"))
         .json(&body)
         .send()
         .expect("Request failed");

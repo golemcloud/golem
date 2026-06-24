@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::model::card::{Card, CardId};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
@@ -31,11 +32,12 @@ use crate::model::oplog::public_oplog_entry::{
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
-    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicSnapshotData, PublicSpanData, PublicTypedAgentConfigEntry,
-    PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogPayload,
+    PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicLocalSpanData, PublicOplogEntry, PublicSnapshotData, PublicSpanData,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -55,6 +57,21 @@ use uuid::Uuid;
 /// root and a value tree.
 fn typed(root: SchemaType, value: SchemaValue) -> TypedSchemaValue {
     TypedSchemaValue::new(SchemaGraph::anonymous(root), value)
+}
+
+fn test_card(card_id: CardId) -> Card {
+    Card {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    }
 }
 
 fn nf(name: &str, body: SchemaType) -> NamedFieldType {
@@ -899,6 +916,29 @@ fn snapshot_raw_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
+    let card = test_card(CardId::new());
+    let active_cards = vec![card.clone().into()];
+    let entry = OplogEntry::Snapshot {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards,
+    };
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+
+    match decoded {
+        OplogEntry::Snapshot { active_cards, .. } => {
+            assert_eq!(active_cards, vec![card.into()]);
+        }
+        other => panic!("expected snapshot entry, got {other:?}"),
+    }
 }
 
 #[test]

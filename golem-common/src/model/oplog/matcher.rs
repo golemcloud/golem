@@ -440,6 +440,26 @@ impl PublicOplogEntry {
                     || Self::string_match("card-revoked", &[], query_path, query)
                     || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
             }
+            PublicOplogEntry::CardEventQueued(params) => {
+                Self::string_match("cardeventqueued", &[], query_path, query)
+                    || Self::string_match("card-event-queued", &[], query_path, query)
+                    || Self::string_match(
+                        &params.event.card_id().to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+            }
+            PublicOplogEntry::CardInstalled(params) => {
+                Self::string_match("cardinstalled", &[], query_path, query)
+                    || Self::string_match("card-installed", &[], query_path, query)
+                    || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
+            PublicOplogEntry::CardInstallFailed(params) => {
+                Self::string_match("cardinstallfailed", &[], query_path, query)
+                    || Self::string_match("card-install-failed", &[], query_path, query)
+                    || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
         }
     }
 

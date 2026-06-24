@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:core/types@2.0.0.{account-id, schema-value-tree, typed-schema-value};
+    use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
@@ -204,10 +204,71 @@ interface oplog {
         name: string,
     }
 
+    record queued-card-event-card {
+        card-id: card-id,
+        card: option<list<u8>>,
+    }
+
+    record public-queued-card-event-card {
+        card-id: card-id,
+    }
+
+    variant queued-card-event {
+        install(queued-card-event-card),
+        revoke(queued-card-event-card),
+    }
+
+    variant public-queued-card-event {
+        install(public-queued-card-event-card),
+        revoke(public-queued-card-event-card),
+    }
+
+    enum card-install-failure {
+        card-revoked,
+        not-found,
+        recipient-mismatch,
+        not-permitted,
+    }
+
+    /// Parameters for a card-event-queued oplog entry.
+    record card-event-queued-parameters {
+        timestamp: datetime,
+        event: public-queued-card-event,
+    }
+
+    /// Raw parameters for a card-event-queued oplog entry.
+    record raw-card-event-queued-parameters {
+        timestamp: datetime,
+        event: queued-card-event,
+    }
+
+    /// Parameters for a card-installed oplog entry.
+    record card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card-id: card-id,
+    }
+
+    /// Raw parameters for a card-installed oplog entry.
+    record raw-card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card: list<u8>,
+    }
+
+    /// Parameters for a card-install-failed oplog entry.
+    record card-install-failed-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+        reason: card-install-failure,
+    }
+
     /// Parameters for a card-revoked oplog entry.
     record card-revoked-parameters {
         timestamp: datetime,
-        card-id: uuid,
+        queued-event-index: oplog-index,
+        card-id: card-id,
     }
 
     record end-atomic-region-parameters {
@@ -723,6 +784,12 @@ interface oplog {
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
         remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(raw-card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(raw-card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
         /// Records that a permission card used by the agent has been revoked
         card-revoked(card-revoked-parameters)
     }
@@ -819,6 +886,12 @@ interface oplog {
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
         remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
         /// Records that a permission card used by the agent has been revoked
         card-revoked(card-revoked-parameters)
     }

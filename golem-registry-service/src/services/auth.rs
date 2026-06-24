@@ -195,7 +195,7 @@ impl AuthService {
         cards.extend(share_cards);
 
         let account_recipient = RecipientPattern::Account {
-            account: account.email.as_str().to_string(),
+            account: account.email.clone(),
         };
 
         EffectiveSurface::from_cards(&cards, &account_recipient).map_err(|err| {
