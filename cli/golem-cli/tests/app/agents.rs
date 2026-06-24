@@ -15,7 +15,7 @@ use golem_cli::versions;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -73,6 +73,124 @@ async fn test_rust_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+}
+
+/// End-to-end test for the MoonBit bridge generator: deploys the Rust counter
+/// agent, generates a MoonBit bridge SDK for it, then compiles and runs a small
+/// MoonBit program that invokes the live agent through the generated, async
+/// client and verifies the returned values.
+///
+/// Requires `moon` on the PATH (same as the MoonBit bridge compile tests).
+#[test]
+#[timeout("10 minutes")]
+async fn test_moonbit_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // Generate the MoonBit bridge SDK for the counter agent into a known directory.
+    let bridge_root = ctx.cwd_path_join("moonbit-bridge");
+    let bridge_root_str = bridge_root.to_str().unwrap().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "moonbit",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            &bridge_root_str,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("moon.mod.json").exists(),
+        "generated MoonBit bridge module is missing at {}",
+        client_dir.display()
+    );
+
+    // Write a small MoonBit program that drives the generated client against the
+    // live local server, mirroring the Scala bridge e2e check.
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    let main_mbt = formatdoc! {r#"
+        async fn main {{
+          @client.CounterAgent::configure(
+            @runtime.Custom("{server_url}", "{token}"),
+            "{app_name}",
+            "local",
+          )
+          let remote = @client.CounterAgent::get("moonbit-e2e-counter")
+          let first = remote.increment()
+          let second = remote.increment()
+          if first != 1 || second != 2 {{
+            abort("Unexpected counter values")
+          }}
+          println(
+            "MOONBIT_BRIDGE_E2E_OK first=" + first.to_string() + " second=" + second.to_string(),
+          )
+        }}
+        "#
+    };
+    let module_name = std::fs::read_to_string(client_dir.join("moon.mod.json"))
+        .unwrap()
+        .parse::<serde_json::Value>()
+        .unwrap()
+        .get("name")
+        .and_then(|name| name.as_str())
+        .unwrap()
+        .to_string();
+    let main_moon_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async" @async,
+          "{module_name}/client" @client,
+          "{module_name}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#
+    };
+    let main_dir = client_dir.join("main");
+    std::fs::create_dir_all(&main_dir).unwrap();
+    std::fs::write(main_dir.join("moon.pkg"), main_moon_pkg).unwrap();
+    std::fs::write(main_dir.join("main.mbt"), main_mbt).unwrap();
+
+    // Compile and run the generated client + driver with moon.
+    let output = std::process::Command::new("moon")
+        .arg("run")
+        .arg("--target")
+        .arg("native")
+        .arg("main")
+        .current_dir(&client_dir)
+        .output()
+        .expect("failed to run moon; is it installed?");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "moon run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        client_dir.display()
+    );
+    assert!(
+        stdout.contains("MOONBIT_BRIDGE_E2E_OK first=1 second=2"),
+        "MoonBit bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
 }
 
 #[test]
