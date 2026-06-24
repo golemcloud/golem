@@ -121,6 +121,13 @@ database = "../data/worker-executor-key-value-storage.db"
 foreign_keys = false
 max_connections = 10
 
+[key_value_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
@@ -254,6 +261,13 @@ claim_batch_size = 100
 lease_ttl = "30s"
 max_batches_per_tick = 10
 refresh_interval = "2s"
+
+[scheduler.storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
 
 [scheduler_storage]
 type = "Sqlite"
@@ -470,6 +484,13 @@ without_time = false
 # 
 # [key_value_storage.config]
 # 
+# [key_value_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -603,6 +624,13 @@ without_time = false
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # refresh_interval = "2s"
+# 
+# [scheduler.storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [scheduler_storage]
 # type = "Sqlite"
@@ -789,6 +817,13 @@ without_time = false
 # 
 # [key_value_storage.config]
 # 
+# [key_value_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -922,6 +957,13 @@ without_time = false
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # refresh_interval = "2s"
+# 
+# [scheduler.storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [scheduler_storage]
 # type = "Sqlite"

@@ -42,6 +42,11 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    /// Retry policy applied to SQL-backed key-value storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). Retrying these transient failures keeps
+    /// hot paths such as promise and worker status updates from crashing the executor under load.
+    #[serde(default = "default_key_value_storage_retry")]
+    pub key_value_storage_retry: RetryConfig,
     pub scheduler_storage: SchedulerStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -86,6 +91,10 @@ pub struct GolemConfig {
     pub runtime_metrics_sampling_interval: Duration,
 }
 
+fn default_key_value_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
 impl SafeDisplay for GolemConfig {
     fn to_safe_string(&self) -> String {
         use std::fmt::Write;
@@ -104,6 +113,12 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "key-value storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.key_value_storage_retry.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "scheduler storage:");
         let _ = writeln!(
@@ -275,6 +290,7 @@ impl Default for GolemConfig {
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
+            key_value_storage_retry: default_key_value_storage_retry(),
             scheduler_storage: SchedulerStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
@@ -618,6 +634,12 @@ pub struct SchedulerConfig {
     #[serde(with = "humantime_serde")]
     pub lease_ttl: Duration,
     pub max_batches_per_tick: u32,
+    #[serde(default = "default_scheduler_storage_retry")]
+    pub storage_retry: RetryConfig,
+}
+
+fn default_scheduler_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
 }
 
 impl SafeDisplay for SchedulerConfig {
@@ -630,6 +652,12 @@ impl SafeDisplay for SchedulerConfig {
             &mut result,
             "max batches per tick: {}",
             self.max_batches_per_tick
+        );
+        let _ = writeln!(&mut result, "storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.storage_retry.to_safe_string_indented()
         );
         result
     }
@@ -1659,6 +1687,7 @@ impl Default for SchedulerConfig {
             claim_batch_size: 100,
             lease_ttl: Duration::from_secs(30),
             max_batches_per_tick: 10,
+            storage_retry: default_scheduler_storage_retry(),
         }
     }
 }

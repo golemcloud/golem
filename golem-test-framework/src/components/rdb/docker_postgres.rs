@@ -61,15 +61,14 @@ impl DockerPostgresRdb {
         let username = Self::DEFAULT_USERNAME;
         let port = Self::DEFAULT_PORT;
 
-        let args = if enable_stats {
-            vec![
-                "postgres",
-                "-c",
-                "shared_preload_libraries=pg_stat_statements",
-            ]
-        } else {
-            vec!["postgres"]
-        };
+        // The default Postgres `max_connections` (100) is too low for spawned clusters:
+        // each worker executor opens separate key-value, indexed and scheduler pools, so
+        // a multi-node benchmark cluster can demand several hundred connections in total.
+        let mut args = vec!["postgres", "-c", "max_connections=500"];
+        if enable_stats {
+            args.push("-c");
+            args.push("shared_preload_libraries=pg_stat_statements");
+        }
         let container = tryhard::retry_fn(move || {
             Postgres::default()
                 .with_name(image)
