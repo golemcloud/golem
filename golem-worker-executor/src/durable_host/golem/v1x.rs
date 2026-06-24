@@ -423,9 +423,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         begin_index
                     );
 
-                    // We need to jump to the end of the oplog
-                    self.state.replay_state.switch_to_live().await;
-
                     // But this is not enough, because if the retried transactional block succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.

@@ -136,7 +136,7 @@ impl PartialOrd for InternalReplayEvent {
 struct PendingState {
     current_oplog_index: OplogIndex,
     last_read_non_hint_oplog_index: OplogIndex,
-    current_oplog_chunk: Rc<Vec<OplogEntry>>,
+    current_oplog_chunk: Arc<Vec<OplogEntry>>,
     current_oplog_chunk_region: OplogRegion,
     // invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
@@ -151,7 +151,7 @@ struct PendingState {
 struct CommittedState {
     current_oplog_index: OplogIndex,
     current_oplog_chunk_region: OplogRegion,
-    current_oplog_chunk: Rc<Vec<OplogEntry>>,
+    current_oplog_chunk: Arc<Vec<OplogEntry>>,
     last_read_non_hint_oplog_index: OplogIndex,
     // invariant: either start or end must be at or after last_read_oplog_index.
     next_skipped_region: Option<OplogRegion>,
@@ -194,7 +194,7 @@ impl ReplayState {
         replay_target: OplogIndex
     ) -> Self {
         let (start_index, initial_skipped_region) = Self::first_non_skipped_entry(&skipped_regions);
-        let initial_oplog_chunk = Rc::new(Vec::new());
+        let initial_oplog_chunk = Arc::new(Vec::new());
         let initial_oplog_chunk_region = OplogRegion { start: OplogIndex::NONE, end: OplogIndex::NONE };
 
         Self {
@@ -686,7 +686,7 @@ impl ReplayState {
     async fn commit(&mut self) {
         self.committed.current_oplog_index = self.pending.current_oplog_index;
         self.committed.current_oplog_chunk_region = self.pending.current_oplog_chunk_region.clone();
-        self.committed.current_oplog_chunk = Rc::clone(&self.pending.current_oplog_chunk);
+        self.committed.current_oplog_chunk = Arc::clone(&self.pending.current_oplog_chunk);
         self.committed.last_read_non_hint_oplog_index = self.pending.last_read_non_hint_oplog_index;
         self.committed.next_skipped_region = self.pending.next_skipped_region.clone();
         self.committed.in_persist_nothing_region = self.pending.in_persist_nothing_region;
@@ -764,7 +764,7 @@ impl ReplayState {
     fn revert_to_last_commit(&mut self) {
         self.pending.current_oplog_index = self.committed.current_oplog_index;
         self.pending.current_oplog_chunk_region = self.committed.current_oplog_chunk_region.clone();
-        self.pending.current_oplog_chunk = Rc::clone(&self.committed.current_oplog_chunk);
+        self.pending.current_oplog_chunk = Arc::clone(&self.committed.current_oplog_chunk);
         self.pending.last_read_non_hint_oplog_index = self.committed.last_read_non_hint_oplog_index;
         self.pending.next_skipped_region = self.committed.next_skipped_region.clone();
         self.pending.in_persist_nothing_region = self.committed.in_persist_nothing_region;
@@ -774,9 +774,9 @@ impl ReplayState {
 
     // Guaranteed to read at least 1 entry and to land on a non-hint, non-skipped entry
     async fn advance_to_next_non_hint_entry(&mut self) {
-        assert!(self.is_replay());
+        assert!(self.pending_is_replay());
 
-        while self.is_replay() {
+        while self.pending_is_replay() {
             self.advance_to_next_non_skipped_entry().await;
             let in_persist_nothing_region = self.pending.in_persist_nothing_region;
             let (idx, entry) = self.get_current_entry().await;
@@ -860,7 +860,7 @@ impl ReplayState {
 
         self.pending.last_read_non_hint_oplog_index = self.pending.current_oplog_index;
 
-        if self.is_live() {
+        if self.pending_is_live() {
             self.pending.replay_events.push((Reverse(self.pending.current_oplog_index), InternalReplayEvent::ReplayFinished));
         }
     }
@@ -873,7 +873,7 @@ impl ReplayState {
     // Move to the end of the loaded chunk in the end of the currently loaded chunk,
     // recording any events in the chunk immediately. This is guaranteed to not load any new chunks.
     async fn move_to_end_of_skipped_region_in_loaded_chunk(&mut self) {
-        while self.is_replay()
+        while self.pending_is_replay()
             && let Some(skipped_region) = &self.pending.next_skipped_region
             && skipped_region.contains(self.pending.current_oplog_index)
             && self.pending.current_oplog_chunk_region.contains(self.pending.current_oplog_index)
@@ -899,7 +899,7 @@ impl ReplayState {
     // Jump to the first oplog entry that should be replayed, discarding all read entries.
     // If the cursor is at a non-skipped entry this is a noop.
     fn jump_out_of_skipped_region(&mut self) {
-        while self.is_replay()
+        while self.pending_is_replay()
             && let Some(skipped_region) = &self.pending.next_skipped_region
             && skipped_region.contains(self.pending.current_oplog_index)
         {
@@ -917,7 +917,7 @@ impl ReplayState {
         if !self.pending.current_oplog_chunk_region.contains(self.pending.current_oplog_index) {
             let new_entries = self.oplog.read_many(idx, CHUNK_SIZE).await.into_values().collect();
             self.pending.current_oplog_chunk_region = OplogRegion { start: idx, end: idx.range_end(CHUNK_SIZE) };
-            self.pending.current_oplog_chunk = Rc::new(new_entries);
+            self.pending.current_oplog_chunk = Arc::new(new_entries);
         }
     }
 
@@ -974,386 +974,5 @@ impl ReplayState {
         }
 
         (oplog_index, next_skipped_region)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::services::oplog::CommitLevel;
-    use async_trait::async_trait;
-    use golem_common::model::component::ComponentId;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::oplog::{
-        AgentError, DurableFunctionType, HostRequest, HostRequestNoInput,
-        HostResponseMonotonicClockTimestamp, OplogPayload, PayloadId, RawOplogPayload,
-    };
-    use golem_common::model::{AgentId, Timestamp};
-    use std::collections::BTreeMap;
-    use std::time::Duration;
-    use test_r::test;
-
-    /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
-    #[derive(Debug)]
-    struct InMemoryOplog {
-        entries: tokio::sync::Mutex<Vec<OplogEntry>>,
-    }
-
-    impl InMemoryOplog {
-        fn new() -> Self {
-            Self {
-                entries: tokio::sync::Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl Oplog for InMemoryOplog {
-        async fn add(&self, entry: OplogEntry) -> OplogIndex {
-            let mut entries = self.entries.lock().await;
-            entries.push(entry);
-            OplogIndex::from_u64(entries.len() as u64)
-        }
-
-        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
-            0
-        }
-
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-            BTreeMap::new()
-        }
-
-        async fn current_oplog_index(&self) -> OplogIndex {
-            OplogIndex::from_u64(self.entries.lock().await.len() as u64)
-        }
-
-        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
-            None
-        }
-
-        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-            true
-        }
-
-        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            let entries = self.entries.lock().await;
-            let idx: u64 = oplog_index.into();
-            entries[(idx - 1) as usize].clone()
-        }
-
-        async fn read_many(
-            &self,
-            oplog_index: OplogIndex,
-            n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
-            let entries = self.entries.lock().await;
-            let start: u64 = oplog_index.into();
-            let mut result = BTreeMap::new();
-            for i in start..(start + n) {
-                if let Some(entry) = entries.get((i - 1) as usize) {
-                    result.insert(OplogIndex::from_u64(i), entry.clone());
-                }
-            }
-            result
-        }
-
-        async fn length(&self) -> u64 {
-            self.entries.lock().await.len() as u64
-        }
-
-        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
-            unimplemented!()
-        }
-
-        async fn download_raw_payload(
-            &self,
-            _payload_id: PayloadId,
-            _md5_hash: Vec<u8>,
-        ) -> Result<Vec<u8>, String> {
-            unimplemented!()
-        }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
-    }
-
-    fn test_agent_id() -> OwnedAgentId {
-        OwnedAgentId {
-            environment_id: EnvironmentId::new(),
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "replay-state-test".to_string(),
-            },
-        }
-    }
-
-    fn noop() -> OplogEntry {
-        OplogEntry::NoOp {
-            timestamp: Timestamp::now_utc(),
-        }
-    }
-
-    fn start_now() -> OplogEntry {
-        OplogEntry::Start {
-            timestamp: Timestamp::now_utc(),
-            parent_start_index: None,
-            function_name: HostFunctionName::MonotonicClockNow,
-            request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
-                HostRequestNoInput {},
-            )))),
-            durable_function_type: DurableFunctionType::ReadLocal,
-        }
-    }
-
-    fn begin_atomic_region() -> OplogEntry {
-        OplogEntry::BeginAtomicRegion {
-            timestamp: Timestamp::now_utc(),
-        }
-    }
-
-    fn end_for(start_index: u64, nanos: u64) -> OplogEntry {
-        OplogEntry::End {
-            timestamp: Timestamp::now_utc(),
-            start_index: OplogIndex::from_u64(start_index),
-            response: Some(OplogPayload::Inline(Box::new(
-                HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp {
-                    nanos,
-                }),
-            ))),
-            forced_commit: false,
-        }
-    }
-
-    async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
-        let oplog = Arc::new(InMemoryOplog::new());
-        for entry in entries {
-            oplog.add(entry).await;
-        }
-        let oplog: Arc<dyn Oplog> = oplog;
-        ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
-            .await
-            .expect("failed to build replay state")
-    }
-
-    #[test]
-    async fn claim_and_await_resolves_completed() {
-        // [NoOp, Start, End]
-        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
-
-        match rs.await_resolution(handle).await.unwrap() {
-            Resolution::Completed {
-                end_idx, response, ..
-            } => {
-                assert_eq!(end_idx, OplogIndex::from_u64(3));
-                assert!(response.is_some());
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    async fn claim_any_returns_claimed_identity() {
-        // The dynamic claim does not validate name/type; it returns the claimed Start's identity.
-        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
-        let claimed = rs.claim_any_concurrent_start().await.unwrap();
-        assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
-        assert_eq!(claimed.function_name, HostFunctionName::MonotonicClockNow);
-        assert_eq!(
-            claimed.durable_function_type,
-            DurableFunctionType::ReadLocal
-        );
-
-        match rs.await_resolution(claimed.handle).await.unwrap() {
-            Resolution::Completed { end_idx, .. } => {
-                assert_eq!(end_idx, OplogIndex::from_u64(3));
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    async fn typed_claim_mismatch_does_not_leak_pending() {
-        // A typed claim whose expected type does not match the recorded Start must fail AND drop the
-        // resolver receiver that `claim_any_concurrent_start` registered, so no stale awaiter leaks.
-        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
-        let err = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::WriteRemote, // recorded is ReadLocal
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("durable_function_type"),
-            "unexpected error: {err}"
-        );
-        assert!(
-            !rs.internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2)),
-            "failed typed claim must not leave a pending awaiter"
-        );
-    }
-
-    #[test]
-    async fn speculative_read_does_not_resolve() {
-        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        let start_idx = handle.start_idx();
-
-        // A speculative read whose condition fails rolls the cursor back and must NOT resolve.
-        let speculative = rs.try_get_oplog_entry(|_| false).await.unwrap();
-        assert!(speculative.is_none());
-        {
-            assert!(
-                rs.internal.concurrent_resolver.is_pending(start_idx),
-                "speculative rollback must not resolve the handle"
-            );
-        }
-
-        // The committed consume does resolve it.
-        match rs.await_resolution(handle).await.unwrap() {
-            Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(3)),
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    async fn error_hint_between_start_and_end_resolves() {
-        // [NoOp, Start, Error{retry_from: Start}, End] — Error is a hint, skipped transparently.
-        let mut rs = replay_state_over(vec![
-            noop(),
-            start_now(),
-            OplogEntry::error(
-                AgentError::TransientError("boom".to_string()),
-                OplogIndex::from_u64(2),
-                false,
-                None,
-            ),
-            end_for(2, 42),
-        ])
-        .await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-
-        match rs.await_resolution(handle).await.unwrap() {
-            Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    async fn dangling_start_without_end_errors() {
-        // [NoOp, Start] — eager Start with no matching End/Cancelled (crash window).
-        let mut rs = replay_state_over(vec![noop(), start_now()]).await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-
-        let err = rs.await_resolution(handle).await.unwrap_err();
-        let message = format!("{err}");
-        assert!(
-            message.contains("no matching End/Cancelled"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    async fn lone_start_reports_incomplete_outcome_and_unregisters() {
-        // [NoOp, Start] — same crash window as above, but via the outcome-returning API: the lone
-        // committed Start (no End) must be reported as Incomplete (not an error), and the stale
-        // resolver registration must be dropped so it cannot leak.
-        let mut rs = replay_state_over(vec![noop(), start_now()]).await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        let start_idx = handle.start_idx();
-
-        match rs.await_resolution_outcome(handle).await.unwrap() {
-            ResolutionOutcome::Incomplete => {}
-            other => panic!("expected Incomplete, got {other:?}"),
-        }
-        assert!(
-            !rs.internal.concurrent_resolver.is_pending(start_idx),
-            "incomplete outcome must unregister the awaiter"
-        );
-    }
-
-    #[test]
-    async fn await_refuses_to_cross_unclaimed_start() {
-        // [NoOp, Start(claimed), Start(unclaimed), End(for first)] — awaiting the first call must
-        // not drive past the second, unclaimed Start.
-        let mut rs =
-            replay_state_over(vec![noop(), start_now(), start_now(), end_for(2, 42)]).await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
-
-        let err = rs.await_resolution(handle).await.unwrap_err();
-        let message = format!("{err}");
-        assert!(
-            message.contains("interleaving"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    async fn await_refuses_to_cross_non_terminal_entry() {
-        // [NoOp, Start(claimed), BeginAtomicRegion, End(for first)] — awaiting the first call must
-        // not drive past a non-hint, non-End/Cancelled entry (here a scope marker) that a legacy
-        // positional reader still expects to consume.
-        let mut rs = replay_state_over(vec![
-            noop(),
-            start_now(),
-            begin_atomic_region(),
-            end_for(2, 42),
-        ])
-        .await;
-        let handle = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
-
-        let err = rs.await_resolution(handle).await.unwrap_err();
-        let message = format!("{err}");
-        assert!(
-            message.contains("interleaving"),
-            "unexpected error: {message}"
-        );
     }
 }

@@ -31,7 +31,6 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
-mod replay_state_old;
 mod sockets;
 pub mod wasm_rpc;
 pub mod websocket;
@@ -39,7 +38,7 @@ pub mod websocket;
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state_old::{OplogEntryLookupResult, ReplayState};
+use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
@@ -127,7 +126,7 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use replay_state_old::ReplayEvent;
+use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -1386,8 +1385,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                         .await;
                     if end_index.is_none() {
-                        // Must switch to live mode before failing to be able to commit an Error entry
-                        self.state.replay_state.switch_to_live().await;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -1419,8 +1416,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: true,
                         } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.state.replay_state.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -1428,9 +1423,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
-                            // We need to jump to the end of the oplog
-                            self.state.replay_state.switch_to_live().await;
-
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
                             // Se we add a Jump entry to the oplog that registers a deleted region.
@@ -1451,7 +1443,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound { .. } => {
                             // assume_idempotence is false and the operation was not completed —
                             // we cannot safely retry a non-idempotent batched write.
-                            self.state.replay_state.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -1764,8 +1755,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: true,
                         } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.state.replay_state.switch_to_live().await;
                             return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -1780,8 +1769,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 OplogEntryLookupResult::NotFound {
                     violates_for_all: true,
                 } => {
-                    // Must switch to live mode before failing to be able to commit an Error entry
-                    self.state.replay_state.switch_to_live().await;
                     return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -1789,9 +1776,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
 
             let (result, tx) = if should_restart {
-                // We need to jump to the end of the oplog
-                self.state.replay_state.switch_to_live().await;
-
                 if !assume_idempotence {
                     Err(WorkerExecutorError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
@@ -2262,18 +2246,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 warn!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
                 );
-                if let Err(err) = store
+                store
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
                     .state
                     .replay_state
-                    .drop_override_and_restart()
-                    .await
-                {
-                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
+                    .drop_override_and_restart();
                 return SnapshotRecoveryResult::NotAttempted;
             }
         };
@@ -2289,18 +2268,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Ok(data) => data,
             Err(err) => {
                 warn!("Failed to download snapshot payload: {err}; falling back to full replay");
-                if let Err(err) = store
+                store
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
                     .state
                     .replay_state
-                    .drop_override_and_restart()
-                    .await
-                {
-                    warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
+                    .drop_override_and_restart();
                 return SnapshotRecoveryResult::NotAttempted;
             }
         };
@@ -3461,7 +3435,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .await?;
                         break Ok(None);
                     }
-                    Ok(Some(replay_state_old::AgentInvocationStartedEntry {
+                    Ok(Some(replay_state::AgentInvocationStartedEntry {
                         idempotency_key,
                         invocation_payload,
                         invocation_context,
@@ -3655,16 +3629,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             record_resume_worker(start.elapsed());
 
             if replay_decision == Ok(None) {
-                // Moving to the end of the oplog
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .switch_to_live()
-                    .await;
-
                 // Appending a Restart marker
                 store
                     .as_context_mut()
@@ -4766,7 +4730,7 @@ impl PrivateDurableWorkerState {
             deleted_regions
         };
         let replay_state =
-            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
+            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let agent_wallet_card_ids = agent_id
