@@ -107,6 +107,11 @@ const LOAD_ROUND_PROGRESS_INTERVAL: u32 = 5;
 /// driver's own connection pool from becoming the bottleneck.
 const CREATE_CONCURRENCY: usize = 100;
 
+/// Maximum number of scenario-4 warmup agents in flight at once. Each warmup
+/// agent performs many sequential calls, so this can be higher than create
+/// concurrency without increasing per-agent request burstiness.
+const RESUME_WARMUP_CONCURRENCY: usize = 250;
+
 /// Maximum number of durable-agent deletions in flight during best-effort cell
 /// cleanup. Deleting a worker can load it first, so use a lower cap than create
 /// to avoid turning cleanup itself into another saturation event.
@@ -1193,11 +1198,11 @@ fn coord_agents(coord: SampleCoord) -> Option<u32> {
 
 /// Number of warmup calls made per prepared agent in scenario 4. These calls
 /// create oplog history to replay after the executor restart.
-const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 1000;
+const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 100;
 
-/// Busy time for each scenario-4 warmup call. Keep it low: the goal is oplog
-/// depth, not CPU pressure during warmup.
-const RESUME_WARMUP_BUSY_MILLIS: u32 = 1;
+/// Busy time for each scenario-4 warmup call. Match the active-load scenarios
+/// so the replay test uses comparable per-invocation work.
+const RESUME_WARMUP_BUSY_MILLIS: u32 = 250;
 
 /// Scenario 4 (durable-only): warm `prefill_n` existing agents to produce oplog,
 /// restart the worker-executor to force them out of memory, then ramp cumulative
@@ -1247,7 +1252,7 @@ async fn run_resume_cell(
                 (index, attempts)
             }
         })
-        .buffer_unordered(CREATE_CONCURRENCY)
+        .buffer_unordered(RESUME_WARMUP_CONCURRENCY)
         .collect()
         .await;
 
