@@ -91,6 +91,13 @@ type = "KVStoreRedis"
 
 [indexed_storage.config]
 
+[indexed_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [key_value_storage]
 type = "NamespaceRouted"
 
@@ -168,13 +175,6 @@ plugin_max_elapsed_time = "5s"
 
 [oplog.default_snapshotting]
 type = "Disabled"
-
-[oplog.indexed_storage_retry]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
 
 [oplog.oplog_processor_snapshotting]
 type = "EveryNInvocation"
@@ -262,13 +262,6 @@ lease_ttl = "30s"
 max_batches_per_tick = 10
 refresh_interval = "2s"
 
-[scheduler.storage_retry]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
-
 [scheduler_storage]
 type = "Sqlite"
 
@@ -276,6 +269,13 @@ type = "Sqlite"
 database = "../data/worker-executor-scheduler-storage.db"
 foreign_keys = false
 max_connections = 10
+
+[scheduler_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
 
 [shard_manager]
 connect_timeout = "10s"
@@ -479,6 +479,13 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 2.0
 # 
+# [indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [key_value_storage]
 # type = "InMemory"
 # 
@@ -531,13 +538,6 @@ without_time = false
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
-# 
-# [oplog.indexed_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
@@ -625,13 +625,6 @@ without_time = false
 # max_batches_per_tick = 10
 # refresh_interval = "2s"
 # 
-# [scheduler.storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
 # [scheduler_storage]
 # type = "Sqlite"
 # 
@@ -639,6 +632,13 @@ without_time = false
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
+# 
+# [scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [shard_manager]
 # connect_timeout = "10s"
@@ -812,6 +812,13 @@ without_time = false
 # 
 # [indexed_storage.config]
 # 
+# [indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [key_value_storage]
 # type = "InMemory"
 # 
@@ -864,13 +871,6 @@ without_time = false
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
-# 
-# [oplog.indexed_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
@@ -958,13 +958,6 @@ without_time = false
 # max_batches_per_tick = 10
 # refresh_interval = "2s"
 # 
-# [scheduler.storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
 # [scheduler_storage]
 # type = "Sqlite"
 # 
@@ -972,6 +965,13 @@ without_time = false
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
+# 
+# [scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [shard_manager]
 # connect_timeout = "10s"

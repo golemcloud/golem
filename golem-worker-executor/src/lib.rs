@@ -762,7 +762,7 @@ pub async fn create_worker_executor_impl<
         let svc: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
             indexed_storage.clone(),
             idx,
-            golem_config.oplog.indexed_storage_retry.clone(),
+            golem_config.indexed_storage_retry.clone(),
         ));
         oplog_archives.push(svc);
     }
@@ -781,7 +781,7 @@ pub async fn create_worker_executor_impl<
                 golem_config.oplog.max_operations_before_commit,
                 golem_config.oplog.max_operations_before_commit_ephemeral,
                 golem_config.oplog.max_payload_size,
-                golem_config.oplog.indexed_storage_retry.clone(),
+                golem_config.indexed_storage_retry.clone(),
             )
             .await,
         ),
@@ -793,7 +793,7 @@ pub async fn create_worker_executor_impl<
                     golem_config.oplog.max_operations_before_commit,
                     golem_config.oplog.max_operations_before_commit_ephemeral,
                     golem_config.oplog.max_payload_size,
-                    golem_config.oplog.indexed_storage_retry.clone(),
+                    golem_config.indexed_storage_retry.clone(),
                 )
                 .await,
             );
@@ -923,7 +923,7 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.claim_batch_size,
         golem_config.scheduler.lease_ttl,
         golem_config.scheduler.max_batches_per_tick,
-        golem_config.scheduler.storage_retry.clone(),
+        golem_config.scheduler_storage_retry.clone(),
         shutdown_token.clone(),
     );
 
