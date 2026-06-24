@@ -120,7 +120,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
-            let mut archive_ephemeral_oplog = false;
+            let mut cleanup_ephemeral_worker = false;
 
             if let Some((kind, decision)) = self.pending_interrupt().await {
                 debug!(
@@ -152,7 +152,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
                 let result = inner_loop.run().await;
                 final_decision = result.retry_decision;
-                archive_ephemeral_oplog = result.archive_ephemeral_oplog;
+                cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
             self.suspend_worker(&store).await;
@@ -165,8 +165,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
                     self.stop_unloaded().await;
-                    if archive_ephemeral_oplog {
-                        self.archive_ephemeral_oplog().await;
+                    if cleanup_ephemeral_worker {
+                        self.parent.remove_from_active_workers().await;
+                        self.archive_ephemeral_oplog();
                     }
                     break;
                 }
@@ -276,8 +277,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await;
     }
 
-    async fn archive_ephemeral_oplog(&self) {
-        let _ = EphemeralOplog::try_archive_background(&self.parent.oplog).await;
+    fn archive_ephemeral_oplog(&self) {
+        let oplog = self.parent.oplog.clone();
+        tokio::spawn(async move {
+            let _ = EphemeralOplog::try_archive_background(&oplog).await;
+        });
     }
 
     async fn record_retry_interrupt_failure(&self, store: &Mutex<Store<Ctx>>, kind: InterruptKind) {
@@ -448,7 +452,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!("Invocation queue loop started");
 
         let mut final_decision = None;
-        let mut archive_ephemeral_oplog = false;
+        let mut cleanup_ephemeral_worker = false;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
@@ -508,7 +512,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
                 CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
                     final_decision = Some(decision);
-                    archive_ephemeral_oplog = true;
+                    cleanup_ephemeral_worker = true;
                     break;
                 }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
@@ -525,7 +529,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         InnerInvocationLoopResult {
             retry_decision: final_decision,
-            archive_ephemeral_oplog,
+            cleanup_ephemeral_worker,
         }
     }
 
@@ -1043,7 +1047,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
     }
@@ -1473,7 +1477,7 @@ enum CommandOutcome {
 
 struct InnerInvocationLoopResult {
     retry_decision: Option<RetryDecision>,
-    archive_ephemeral_oplog: bool,
+    cleanup_ephemeral_worker: bool,
 }
 
 fn successful_agent_invocation_outcome(
