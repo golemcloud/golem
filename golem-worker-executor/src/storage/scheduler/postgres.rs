@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime};
+use super::{
+    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, datetime_to_millis,
+    millis_to_datetime,
+};
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::SafeDisplay;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::db::postgres::PostgresPool;
@@ -73,7 +75,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         due_at: DateTime<Utc>,
         shard_id: ShardId,
         action: &ScheduledAction,
-    ) -> Result<(), String> {
+    ) -> Result<(), SchedulerStorageError> {
         let action = serialize(action)?;
 
         let due_at_ms = datetime_to_millis(due_at);
@@ -90,10 +92,10 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
-    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String> {
+    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         let query = sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = $1;")
             .bind(schedule_id.id);
 
@@ -102,7 +104,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
     async fn claim_due(
@@ -111,7 +113,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
-    ) -> Result<Vec<ClaimedScheduledAction>, String> {
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
         if limit == 0 || assignment.shard_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -157,7 +159,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .with_rw("scheduler_storage", "claim_due")
             .fetch_all_as::<ScheduledActionRow, _>(query)
             .await
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(SchedulerStorageError::from)?;
 
         rows.into_iter()
             .map(|row| {
@@ -179,7 +181,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, SchedulerStorageError> {
         let query = sqlx::query(
             "UPDATE scheduled_actions SET lease_until_ms = $3, available_at_ms = $3 WHERE schedule_id = $1 AND lease_owner = $2;",
         )
@@ -192,10 +194,14 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
-    async fn ack(&self, schedule_id: &ScheduleId, lease_owner: Uuid) -> Result<bool, String> {
+    async fn ack(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+    ) -> Result<bool, SchedulerStorageError> {
         let query = sqlx::query(
             "DELETE FROM scheduled_actions WHERE schedule_id = $1 AND lease_owner = $2;",
         )
@@ -207,6 +213,6 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 }
