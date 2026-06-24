@@ -1,0 +1,7 @@
+package golem:bench;
+
+// Minimal world for the QuickJS benchmark harness: a single export that runs
+// every registered benchmark suite and returns the results as a JSON string.
+world bench {
+  export run: func() -> string;
+}

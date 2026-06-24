@@ -63,6 +63,7 @@ use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
+use crate::model::card::CardId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
@@ -685,6 +686,7 @@ pub struct AgentStatusRecord {
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub oplog_processor_checkpoints:
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
+    pub revoked_cards: HashSet<CardId>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
@@ -728,6 +730,7 @@ impl Default for AgentStatusRecord {
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             oplog_processor_checkpoints: HashMap::new(),
+            revoked_cards: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_state: HashMap::new(),

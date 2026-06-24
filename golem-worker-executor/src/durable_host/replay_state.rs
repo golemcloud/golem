@@ -16,6 +16,7 @@ use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
 use crate::services::oplog::{Oplog, OplogOps};
+use golem_common::model::card::CardId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -39,11 +40,14 @@ use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
 
+const CHUNK_SIZE: u64 = 1024;
+
 #[derive(Debug, Clone)]
 pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed { new_revision: ComponentRevision },
     ForkReplayed { new_phantom_id: Uuid },
+    CardRevoked { card_id: CardId },
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +126,7 @@ impl ReplayState {
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
-        result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
+        result.move_to_start_of_replay().await;
         result.skip_forward().await?;
         Ok(result)
     }
@@ -139,7 +143,7 @@ impl ReplayState {
         }
         self.last_replayed_index.set(OplogIndex::NONE);
         self.last_replayed_non_hint_index.set(OplogIndex::NONE);
-        self.move_replay_idx(OplogIndex::INITIAL).await;
+        self.move_to_start_of_replay().await;
         self.skip_forward().await
     }
 
@@ -325,7 +329,6 @@ impl ReplayState {
                         let hash = Self::hash_log_entry(*level, context, message);
                         logs.insert(hash);
                     }
-
                     // Moving the replay pointer. Leaving last_replayed_non_hint_index unchanged, because this is a hint entry.
                     self.last_replayed_index.set(last_read_idx);
                     // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
@@ -412,12 +415,18 @@ impl ReplayState {
         // record side effects that need to be applied at the next opportunity
         if let OplogEntry::SuccessfulUpdate {
             target_revision, ..
-        } = oplog_entry
+        } = &oplog_entry
         {
             self.record_replay_event(ReplayEvent::UpdateReplayed {
-                new_revision: target_revision,
+                new_revision: *target_revision,
             })
             .await
+        }
+        if let OplogEntry::CardRevoked { card_id, .. } = &oplog_entry {
+            self.record_replay_event(ReplayEvent::CardRevoked {
+                card_id: CardId(*card_id),
+            })
+            .await;
         }
         // The legacy adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
@@ -479,9 +488,15 @@ impl ReplayState {
         Ok(oplog_entry)
     }
 
+    // Moves to the start of the region used for replay, handling initial skipped regions applied by manual updates correctly
+    async fn move_to_start_of_replay(&mut self) {
+        self.last_replayed_index.set(OplogIndex::INITIAL);
+        self.get_out_of_skipped_region(true).await;
+    }
+
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         self.last_replayed_index.set(new_idx);
-        self.get_out_of_skipped_region().await;
+        self.get_out_of_skipped_region(false).await;
     }
 
     pub async fn lookup_oplog_entry(
@@ -524,8 +539,6 @@ impl ReplayState {
     ) -> OplogEntryLookupResult {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
-
-        const CHUNK_SIZE: u64 = 1024;
 
         let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
         let mut violation = false;
@@ -653,29 +666,57 @@ impl ReplayState {
         }
     }
 
-    async fn get_out_of_skipped_region(&mut self) {
+    async fn get_out_of_skipped_region(&mut self, initial_skip: bool) {
         if self.is_replay() {
-            let mut internal = self.internal.write().await;
-            let update_next_skipped_region = match &internal.next_skipped_region {
-                Some(region) if region.start == (self.last_replayed_index.get().next()) => {
-                    let target = region.end.next(); // we want to continue reading _after_ the region
-                    debug!(
-                        "Worker reached skipped region at {}, jumping to {} (oplog size: {})",
-                        region.start,
-                        target,
-                        self.replay_target.get()
-                    );
-                    self.last_replayed_index.set(target.previous()); // so we set the last replayed index to the end of the region
-
-                    true
+            let skipped_region = {
+                let internal = self.internal.write().await;
+                match &internal.next_skipped_region {
+                    Some(region) if region.start == (self.last_replayed_index.get().next()) => {
+                        let target = region.end.next(); // we want to continue reading _after_ the region
+                        debug!(
+                            "Worker reached skipped region at {}, jumping to {} (oplog size: {})",
+                            region.start,
+                            target,
+                            self.replay_target.get()
+                        );
+                        self.last_replayed_index.set(target.previous()); // so we set the last replayed index to the end of the region
+                        Some(region.clone())
+                    }
+                    _ => None,
                 }
-                _ => false,
             };
 
-            if update_next_skipped_region {
+            if let Some(skipped_region) = skipped_region {
+                // Initial skip is used to advance the replay cursor to the beginning of the replay / index of the loaded snapshot.
+                // All card events in that region are already part of the snapshot, so no need to consider them here.
+                if !initial_skip {
+                    self.record_card_revoked_events_in_region(&skipped_region)
+                        .await;
+                }
+                let mut internal = self.internal.write().await;
                 internal.next_skipped_region = internal
                     .skipped_regions
                     .find_next_deleted_region(self.last_replayed_index.get());
+            }
+        }
+    }
+
+    async fn record_card_revoked_events_in_region(&mut self, region: &OplogRegion) {
+        let mut next = region.start;
+        let end = region.end.as_u64();
+
+        while next.as_u64() <= end {
+            let remaining = end - next.as_u64() + 1;
+            let count = remaining.min(CHUNK_SIZE);
+
+            for (entry_index, entry) in self.read_oplog(next, count).await {
+                if let OplogEntry::CardRevoked { card_id, .. } = entry {
+                    self.record_replay_event(ReplayEvent::CardRevoked {
+                        card_id: CardId(card_id),
+                    })
+                    .await;
+                }
+                next = entry_index.next()
             }
         }
     }

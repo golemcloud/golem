@@ -4114,6 +4114,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
       discriminator:
         propertyName: type
         mapping:
@@ -4158,6 +4159,7 @@ components:
           OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
           SetRetryPolicy: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
           RemoveRetryPolicy: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
+          CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -4254,6 +4256,18 @@ components:
             - Cancelled
             example: Cancelled
       - $ref: '#/components/schemas/r#CancelledParams'
+    PublicOplogEntry_r#CardRevokedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardRevoked
+            example: CardRevoked
+      - $ref: '#/components/schemas/r#CardRevokedParams'
     PublicOplogEntry_r#ChangePersistenceLevelParams:
       allOf:
       - type: object
@@ -6183,6 +6197,19 @@ components:
           format: uint64
         partial:
           $ref: '#/components/schemas/TypedSchemaValue'
+    r#CardRevokedParams:
+      type: object
+      title: r#CardRevokedParams
+      required:
+      - timestamp
+      - cardId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        cardId:
+          type: string
+          format: uuid
     r#ChangePersistenceLevelParams:
       type: object
       title: r#ChangePersistenceLevelParams

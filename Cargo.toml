@@ -97,7 +97,7 @@ crossterm = "0.29"
 darling = "0.20.11"
 dashmap = "7.0.0-rc2"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
-desert_rust = { version = "0.1.8", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
+desert_rust = { version = "0.1.9", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
@@ -307,7 +307,7 @@ webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = "0.57.0"
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0" }
 wit-bindgen-rt = "=0.44.0"
 wit-bindgen-rust = "0.57.0"
 wit-component = "0.248"
@@ -324,6 +324,25 @@ wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = 
 
 [profile.dev]
 panic = "abort"
+
+# Build the Cranelift/regalloc codegen crates (the ones Wasmtime runs to compile
+# wasm -> native) at opt-level 3 even in debug builds. A debug-built Cranelift is
+# ~40x slower at compiling components, which dominates worker-executor and
+# integration test time; optimizing just these dependencies keeps our own crates
+# debuggable while making component compilation fast. `dev-ci` inherits these
+# overrides from `dev`.
+[profile.dev.package]
+cranelift-codegen = { opt-level = 3 }
+cranelift-codegen-shared = { opt-level = 3 }
+cranelift-frontend = { opt-level = 3 }
+cranelift-entity = { opt-level = 3 }
+cranelift-bforest = { opt-level = 3 }
+cranelift-bitset = { opt-level = 3 }
+cranelift-control = { opt-level = 3 }
+cranelift-native = { opt-level = 3 }
+cranelift-assembler-x64 = { opt-level = 3 }
+regalloc2 = { opt-level = 3 }
+gimli = { opt-level = 3 }
 
 [profile.dev-ci]
 inherits = "dev"

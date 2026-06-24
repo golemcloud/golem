@@ -160,6 +160,12 @@ impl ComponentMetadata {
         self.data.agent_type_initial_permissions.get(name)
     }
 
+    pub fn agent_type_initial_permission_templates(
+        &self,
+    ) -> &BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
+        &self.data.agent_type_initial_permissions
+    }
+
     pub fn agent_type_env(&self, name: &AgentTypeName) -> Option<&BTreeMap<String, String>> {
         self.agent_type_provision_config(name)
             .map(|config| &config.env)
@@ -496,6 +502,7 @@ impl AgentInitialPermissionTemplate {
     ) -> Self {
         let recipient = RecipientPattern::Any;
         Self {
+            card_id: crate::model::card::CardId::new(),
             lower_positive: vec![
                 PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
@@ -749,7 +756,14 @@ mod protobuf {
                             .map(|config| (AgentTypeName(k), config))
                     })
                     .collect::<Result<_, _>>()?,
-                agent_type_initial_permissions: std::collections::BTreeMap::new(),
+                agent_type_initial_permissions: value
+                    .agent_type_initial_permissions
+                    .into_iter()
+                    .map(|(k, v)| {
+                        crate::serialization::deserialize(&v)
+                            .map(|template| (AgentTypeName(k), template))
+                    })
+                    .collect::<Result<_, _>>()?,
             })
         }
     }
@@ -811,6 +825,15 @@ mod protobuf {
                                 v,
                             ),
                         )
+                    })
+                    .collect(),
+                agent_type_initial_permissions: value
+                    .agent_type_initial_permissions
+                    .into_iter()
+                    .map(|(k, v)| {
+                        crate::serialization::serialize(&v)
+                            .map(|template| (k.0, template))
+                            .expect("failed to serialize agent initial permission template")
                     })
                     .collect(),
             }
@@ -891,6 +914,10 @@ mod protobuf {
 mod tests {
     use super::*;
     use crate::component_introspection::{ExportedInstance, TopLevelExport};
+    use crate::model::agent::AgentTypeName;
+    use crate::model::card::CardId;
+    use crate::model::component::ComponentName;
+    use crate::model::environment::EnvironmentName;
     use test_r::test;
 
     fn instance_export(name: &str) -> TopLevelExport {
@@ -972,6 +999,35 @@ mod tests {
         assert_eq!(
             metadata.oplog_processor_function_name(),
             Some("golem:api/oplog-processor@1.5.0.{process}".to_string())
+        );
+    }
+
+    #[test]
+    fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
+        let agent_type = AgentTypeName("Cart".to_string());
+        let card_id = CardId::new();
+        let mut template = AgentInitialPermissionTemplate::default_for(
+            &EnvironmentName::try_from("prod").unwrap(),
+            &ComponentName("cart-svc".to_string()),
+        );
+        template.card_id = card_id;
+
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .with_agent_initial_permissions(BTreeMap::from([(agent_type.clone(), template.clone())]));
+
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+
+        assert_eq!(
+            decoded.agent_type_initial_permission_template(&agent_type),
+            Some(&template)
         );
     }
 }

@@ -22,4 +22,5 @@ message ComponentMetadata {
   optional string root_package_version = 7;
   repeated golem.schema.AgentTypeSchema agent_types = 8;
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
+  map<string, bytes> agent_type_initial_permissions = 11;
 }

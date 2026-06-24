@@ -28,7 +28,11 @@ import { AgentClassName } from '../agentClassName';
 import { AgentInitiatorRegistry } from '../internal/registry/agentInitiatorRegistry';
 import { createCustomError } from '../internal/agentError';
 import { AgentConstructorRegistry } from '../internal/registry/agentConstructorRegistry';
-import { decodeInputRecord } from '../internal/mapping/values/boundaryValue';
+import {
+  decodeInputRecord,
+  precompileOutputCodec,
+  precompileParamCodecs,
+} from '../internal/mapping/values/boundaryValue';
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
 import { resolveAgentConstructor } from '../internal/schema/constructor';
@@ -332,6 +336,16 @@ export function agent(options?: AgentDecoratorOptions) {
     }
 
     AgentTypeRegistry.register(agentClassName, agentType);
+
+    // Eagerly compile the value-boundary codecs for this agent's constructor /
+    // method inputs and outputs. This runs during top-level module evaluation,
+    // so the compiled function objects are captured by the Wizer pre-init
+    // snapshot in `golem build` and add no per-process startup cost.
+    precompileParamCodecs(enrichedConstructor.params);
+    for (const method of enrichedMethods) {
+      precompileParamCodecs(method.params);
+      precompileOutputCodec(method.output);
+    }
 
     if (agentType.mode === 'durable') {
       (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor, false);

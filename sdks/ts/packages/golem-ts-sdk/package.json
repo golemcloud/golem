@@ -44,6 +44,7 @@
   },
   "scripts": {
     "bench": "vitest bench",
+    "bench:quickjs": "node ./scripts/bench-quickjs.mjs",
     "lint": "eslint . --ext .ts,.tsx,.mjs",
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
     "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types",
