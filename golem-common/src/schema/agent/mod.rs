@@ -651,6 +651,8 @@ pub mod bindings {
           anyhow: true,
           with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:io/streams.input-stream": wasmtime_wasi::DynInputStream,
+            "wasi:io/streams.output-stream": wasmtime_wasi::DynOutputStream,
           },
           wasmtime_crate: ::wasmtime
     });

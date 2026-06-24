@@ -483,6 +483,10 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::tool::host::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
     golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
         &mut linker,
         get_durable_ctx,
