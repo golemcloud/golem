@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 #[schema(named = "schema-value")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum SchemaValue {
     // Primitives
     Bool(bool),
@@ -102,6 +103,8 @@ pub enum SchemaValue {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct VariantValuePayload {
     pub case: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,6 +117,7 @@ pub struct VariantValuePayload {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum ResultValuePayload {
     Ok { value: Option<Box<SchemaValue>> },
     Err { value: Option<Box<SchemaValue>> },
@@ -122,6 +126,8 @@ pub enum ResultValuePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct TextValuePayload {
     pub text: String,
     /// BCP-47 language tag, when known.
@@ -132,6 +138,8 @@ pub struct TextValuePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct BinaryValuePayload {
     pub bytes: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +150,8 @@ pub struct BinaryValuePayload {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct DurationValuePayload {
     pub nanoseconds: i64,
 }
@@ -149,6 +159,8 @@ pub struct DurationValuePayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct UnionValuePayload {
     /// Tag of the branch the decoder resolved, matching one of the
     /// [`super::UnionBranch::tag`] values. Carried so receivers do not have
@@ -167,6 +179,8 @@ pub struct UnionValuePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SecretValuePayload {
     pub secret_ref: String,
 }
@@ -177,6 +191,8 @@ pub struct SecretValuePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct QuotaTokenValuePayload {
     pub environment_id: EnvironmentId,
     pub resource_name: String,

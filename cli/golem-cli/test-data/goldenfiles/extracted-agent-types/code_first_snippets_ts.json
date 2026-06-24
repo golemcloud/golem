@@ -1957,7 +1957,7 @@
                         "kind": "binary",
                         "value": {
                           "restrictions": {
-                            "mime_types": [
+                            "mimeTypes": [
                               "application/json"
                             ]
                           }
@@ -5379,7 +5379,7 @@
                         "kind": "binary",
                         "value": {
                           "restrictions": {
-                            "mime_types": [
+                            "mimeTypes": [
                               "application/json"
                             ]
                           }

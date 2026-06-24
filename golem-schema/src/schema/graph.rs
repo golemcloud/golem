@@ -46,6 +46,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "schema-graph")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SchemaGraph {
@@ -205,6 +206,7 @@ impl std::error::Error for RefResolutionError {}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "schema-type-def")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SchemaTypeDef {
@@ -226,6 +228,7 @@ pub struct SchemaTypeDef {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "typed-schema-value")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct TypedSchemaValue {
