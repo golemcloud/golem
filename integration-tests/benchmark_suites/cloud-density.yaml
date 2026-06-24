@@ -183,20 +183,20 @@ cells:
   # Scenario 4 — resume-under-saturation (durable-only): warm N agents to produce
   # oplog, restart the executor to unload them, then resume cumulative ramp
   # targets from that prepared population. durable x 2 sharing x 2 snapshotting.
-  - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-6000
+  - name: resume-under-saturation-durable-shared-component-snapshot-disabled-prefill-4000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
     snapshotting: disabled
-    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
-    prefill: 6000
-  - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-6000
+    ramp: [250, 500, 1000, 2000, 3000, 4000]
+    prefill: 4000
+  - name: resume-under-saturation-durable-shared-component-snapshot-enabled-prefill-4000
     scenario: resume-under-saturation
     agentMode: durable
     sharing: shared
     snapshotting: enabled
-    ramp: [250, 500, 1000, 2000, 3000, 4000, 6000]
-    prefill: 6000
+    ramp: [250, 500, 1000, 2000, 3000, 4000]
+    prefill: 4000
   - name: resume-under-saturation-durable-per-agent-component-snapshot-disabled-prefill-999
     scenario: resume-under-saturation
     agentMode: durable
