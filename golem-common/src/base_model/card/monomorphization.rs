@@ -43,11 +43,10 @@ pub fn agent_effective_surface_from_wallet(
     let cards = wallet_cards
         .values()
         .map(|card| match card {
-            StoredCard::Concrete(card) => Ok(card.clone()),
+            StoredCard::Concrete(card) => card.clone(),
             StoredCard::Polymorphic(_) => monomorphize_stored_card(card, context),
         })
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
+        .collect::<Vec<_>>();
 
     EffectiveSurface::from_cards(&cards, &holder).unwrap_or_default()
 }
@@ -65,28 +64,28 @@ fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> 
 fn monomorphize_stored_card(
     card: &StoredCard,
     context: &AgentPermissionMonomorphizationContext,
-) -> Result<Card, String> {
+) -> Card {
     match card {
-        StoredCard::Concrete(card) => Ok(card.clone()),
-        StoredCard::Polymorphic(card) => Ok(Card {
+        StoredCard::Concrete(card) => card.clone(),
+        StoredCard::Polymorphic(card) => Card {
             card_id: card.card_id,
             parent_ids: card.parent_ids.clone(),
-            lower_positive: monomorphize_permissions(&card.lower_positive, context)?,
-            lower_negative: monomorphize_permissions(&card.lower_negative, context)?,
-            upper_positive: monomorphize_permissions(&card.upper_positive, context)?,
-            upper_negative: monomorphize_permissions(&card.upper_negative, context)?,
+            lower_positive: monomorphize_permissions(&card.lower_positive, context),
+            lower_negative: monomorphize_permissions(&card.lower_negative, context),
+            upper_positive: monomorphize_permissions(&card.upper_positive, context),
+            upper_negative: monomorphize_permissions(&card.upper_negative, context),
             created_at: card.created_at,
             expires_at: card.expires_at,
             system_card: card.system_card,
             managed_by: None,
-        }),
+        },
     }
 }
 
 fn monomorphize_permissions(
     permissions: &[PolymorphicPermissionPattern],
     context: &AgentPermissionMonomorphizationContext,
-) -> Result<Vec<PermissionPattern>, String> {
+) -> Vec<PermissionPattern> {
     permissions
         .iter()
         .map(|permission| monomorphize_permission(permission, context))
@@ -96,19 +95,19 @@ fn monomorphize_permissions(
 macro_rules! mono_permission {
     ($variant:ident, $pattern:expr, $context:expr) => {{
         let pattern = $pattern;
-        Ok(PermissionPattern::$variant(ClassPermissionPattern {
-            owner: pattern.owner.monomorphize($context)?,
+        PermissionPattern::$variant(ClassPermissionPattern {
+            owner: pattern.owner.monomorphize($context),
             recipient: pattern.recipient.clone(),
             verb: pattern.verb,
             resource: pattern.resource.clone(),
-        }))
+        })
     }};
 }
 
 fn monomorphize_permission(
     permission: &PolymorphicPermissionPattern,
     context: &AgentPermissionMonomorphizationContext,
-) -> Result<PermissionPattern, String> {
+) -> PermissionPattern {
     match permission {
         PolymorphicPermissionPattern::Filesystem(p) => mono_permission!(Filesystem, p, context),
         PolymorphicPermissionPattern::Network(p) => mono_permission!(Network, p, context),
@@ -176,16 +175,13 @@ fn monomorphize_permission(
 }
 
 trait MonomorphizeOwner<T> {
-    fn monomorphize(&self, context: &AgentPermissionMonomorphizationContext) -> Result<T, String>;
+    fn monomorphize(&self, context: &AgentPermissionMonomorphizationContext) -> T;
 }
 
 impl MonomorphizeOwner<EmptyOwnerPattern> for PolymorphicEmptyOwnerPattern {
-    fn monomorphize(
-        &self,
-        _context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<EmptyOwnerPattern, String> {
+    fn monomorphize(&self, _context: &AgentPermissionMonomorphizationContext) -> EmptyOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
+            Self::Concrete(owner) => owner.clone(),
         }
     }
 }
@@ -194,12 +190,12 @@ impl MonomorphizeOwner<AccountOwnerPattern> for PolymorphicAccountOwnerPattern {
     fn monomorphize(
         &self,
         context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<AccountOwnerPattern, String> {
+    ) -> AccountOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
-            Self::Account => Ok(AccountOwnerPattern::Account {
+            Self::Concrete(owner) => owner.clone(),
+            Self::Account => AccountOwnerPattern::Account {
                 account: context.account.clone(),
-            }),
+            },
         }
     }
 }
@@ -208,20 +204,20 @@ impl MonomorphizeOwner<ApplicationOwnerPattern> for PolymorphicApplicationOwnerP
     fn monomorphize(
         &self,
         context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<ApplicationOwnerPattern, String> {
+    ) -> ApplicationOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
-            Self::AccountApplications => Ok(ApplicationOwnerPattern::AccountApplications {
+            Self::Concrete(owner) => owner.clone(),
+            Self::AccountApplications => ApplicationOwnerPattern::AccountApplications {
                 account: context.account.clone(),
-            }),
-            Self::AccountApplication { application } => Ok(ApplicationOwnerPattern::Application {
+            },
+            Self::AccountApplication { application } => ApplicationOwnerPattern::Application {
                 account: context.account.clone(),
                 application: application.clone(),
-            }),
-            Self::App => Ok(ApplicationOwnerPattern::Application {
+            },
+            Self::App => ApplicationOwnerPattern::Application {
                 account: context.account.clone(),
                 application: context.application.clone(),
-            }),
+            },
         }
     }
 }
@@ -230,42 +226,40 @@ impl MonomorphizeOwner<EnvironmentOwnerPattern> for PolymorphicEnvironmentOwnerP
     fn monomorphize(
         &self,
         context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<EnvironmentOwnerPattern, String> {
+    ) -> EnvironmentOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
-            Self::AccountEnvironments => Ok(EnvironmentOwnerPattern::AccountEnvironments {
+            Self::Concrete(owner) => owner.clone(),
+            Self::AccountEnvironments => EnvironmentOwnerPattern::AccountEnvironments {
                 account: context.account.clone(),
-            }),
+            },
             Self::AccountApplicationEnvironments { application } => {
-                Ok(EnvironmentOwnerPattern::ApplicationEnvironments {
+                EnvironmentOwnerPattern::ApplicationEnvironments {
                     account: context.account.clone(),
                     application: application.clone(),
-                })
+                }
             }
             Self::AccountEnvironment {
                 application,
                 environment,
-            } => Ok(EnvironmentOwnerPattern::Environment {
+            } => EnvironmentOwnerPattern::Environment {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
-            }),
-            Self::ApplicationEnvironments => Ok(EnvironmentOwnerPattern::ApplicationEnvironments {
+            },
+            Self::ApplicationEnvironments => EnvironmentOwnerPattern::ApplicationEnvironments {
                 account: context.account.clone(),
                 application: context.application.clone(),
-            }),
-            Self::ApplicationEnvironment { environment } => {
-                Ok(EnvironmentOwnerPattern::Environment {
-                    account: context.account.clone(),
-                    application: context.application.clone(),
-                    environment: environment.clone(),
-                })
-            }
-            Self::Env => Ok(EnvironmentOwnerPattern::Environment {
+            },
+            Self::ApplicationEnvironment { environment } => EnvironmentOwnerPattern::Environment {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: environment.clone(),
+            },
+            Self::Env => EnvironmentOwnerPattern::Environment {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
-            }),
+            },
         }
     }
 }
@@ -274,304 +268,296 @@ impl MonomorphizeOwner<ComponentOwnerPattern> for PolymorphicComponentOwnerPatte
     fn monomorphize(
         &self,
         context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<ComponentOwnerPattern, String> {
+    ) -> ComponentOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
-            Self::AccountComponents => Ok(ComponentOwnerPattern::AccountComponents {
+            Self::Concrete(owner) => owner.clone(),
+            Self::AccountComponents => ComponentOwnerPattern::AccountComponents {
                 account: context.account.clone(),
-            }),
+            },
             Self::AccountApplicationComponents { application } => {
-                Ok(ComponentOwnerPattern::ApplicationComponents {
+                ComponentOwnerPattern::ApplicationComponents {
                     account: context.account.clone(),
                     application: application.clone(),
-                })
+                }
             }
             Self::AccountEnvironmentComponents {
                 application,
                 environment,
-            } => Ok(ComponentOwnerPattern::EnvironmentComponents {
+            } => ComponentOwnerPattern::EnvironmentComponents {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
-            }),
+            },
             Self::AccountComponent {
                 application,
                 environment,
                 component,
-            } => Ok(ComponentOwnerPattern::Component {
+            } => ComponentOwnerPattern::Component {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
-            }),
-            Self::ApplicationComponents => Ok(ComponentOwnerPattern::ApplicationComponents {
+            },
+            Self::ApplicationComponents => ComponentOwnerPattern::ApplicationComponents {
                 account: context.account.clone(),
                 application: context.application.clone(),
-            }),
+            },
             Self::ApplicationEnvironmentComponents { environment } => {
-                Ok(ComponentOwnerPattern::EnvironmentComponents {
+                ComponentOwnerPattern::EnvironmentComponents {
                     account: context.account.clone(),
                     application: context.application.clone(),
                     environment: environment.clone(),
-                })
+                }
             }
             Self::ApplicationComponent {
                 environment,
                 component,
-            } => Ok(ComponentOwnerPattern::Component {
+            } => ComponentOwnerPattern::Component {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
-            }),
-            Self::EnvComponents => Ok(ComponentOwnerPattern::EnvironmentComponents {
+            },
+            Self::EnvComponents => ComponentOwnerPattern::EnvironmentComponents {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
-            }),
-            Self::EnvComponent { component } => Ok(ComponentOwnerPattern::Component {
+            },
+            Self::EnvComponent { component } => ComponentOwnerPattern::Component {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: component.clone(),
-            }),
-            Self::Component => Ok(ComponentOwnerPattern::Component {
+            },
+            Self::Component => ComponentOwnerPattern::Component {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
-            }),
+            },
         }
     }
 }
 
 impl MonomorphizeOwner<AgentOwnerPattern> for PolymorphicAgentOwnerPattern {
-    fn monomorphize(
-        &self,
-        context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<AgentOwnerPattern, String> {
+    fn monomorphize(&self, context: &AgentPermissionMonomorphizationContext) -> AgentOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
-            Self::AccountAgents => Ok(AgentOwnerPattern::AccountAgents {
+            Self::Concrete(owner) => owner.clone(),
+            Self::AccountAgents => AgentOwnerPattern::AccountAgents {
                 account: context.account.clone(),
-            }),
+            },
             Self::AccountApplicationAgents { application } => {
-                Ok(AgentOwnerPattern::ApplicationAgents {
+                AgentOwnerPattern::ApplicationAgents {
                     account: context.account.clone(),
                     application: application.clone(),
-                })
+                }
             }
             Self::AccountEnvironmentAgents {
                 application,
                 environment,
-            } => Ok(AgentOwnerPattern::EnvironmentAgents {
+            } => AgentOwnerPattern::EnvironmentAgents {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
-            }),
+            },
             Self::AccountComponentAgents {
                 application,
                 environment,
                 component,
-            } => Ok(AgentOwnerPattern::ComponentAgents {
+            } => AgentOwnerPattern::ComponentAgents {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
-            }),
+            },
             Self::AccountAgent {
                 application,
                 environment,
                 component,
                 agent,
-            } => Ok(AgentOwnerPattern::Agent {
+            } => AgentOwnerPattern::Agent {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
                 agent: agent.clone(),
-            }),
-            Self::ApplicationAgents => Ok(AgentOwnerPattern::ApplicationAgents {
+            },
+            Self::ApplicationAgents => AgentOwnerPattern::ApplicationAgents {
                 account: context.account.clone(),
                 application: context.application.clone(),
-            }),
+            },
             Self::ApplicationEnvironmentAgents { environment } => {
-                Ok(AgentOwnerPattern::EnvironmentAgents {
+                AgentOwnerPattern::EnvironmentAgents {
                     account: context.account.clone(),
                     application: context.application.clone(),
                     environment: environment.clone(),
-                })
+                }
             }
             Self::ApplicationComponentAgents {
                 environment,
                 component,
-            } => Ok(AgentOwnerPattern::ComponentAgents {
+            } => AgentOwnerPattern::ComponentAgents {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
-            }),
+            },
             Self::ApplicationAgent {
                 environment,
                 component,
                 agent,
-            } => Ok(AgentOwnerPattern::Agent {
+            } => AgentOwnerPattern::Agent {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
                 agent: agent.clone(),
-            }),
-            Self::EnvAgents => Ok(AgentOwnerPattern::EnvironmentAgents {
+            },
+            Self::EnvAgents => AgentOwnerPattern::EnvironmentAgents {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
-            }),
-            Self::EnvComponentAgents { component } => Ok(AgentOwnerPattern::ComponentAgents {
+            },
+            Self::EnvComponentAgents { component } => AgentOwnerPattern::ComponentAgents {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: component.clone(),
-            }),
-            Self::EnvAgent { component, agent } => Ok(AgentOwnerPattern::Agent {
+            },
+            Self::EnvAgent { component, agent } => AgentOwnerPattern::Agent {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: component.clone(),
                 agent: agent.clone(),
-            }),
-            Self::ComponentAgents => Ok(AgentOwnerPattern::ComponentAgents {
+            },
+            Self::ComponentAgents => AgentOwnerPattern::ComponentAgents {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
-            }),
-            Self::ComponentAgent { agent } => Ok(AgentOwnerPattern::Agent {
+            },
+            Self::ComponentAgent { agent } => AgentOwnerPattern::Agent {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
                 agent: agent.clone(),
-            }),
-            Self::Agent => Ok(AgentOwnerPattern::Agent {
+            },
+            Self::Agent => AgentOwnerPattern::Agent {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
                 agent: AgentOwnerLeafPattern::Agent(context.agent_name.clone()),
-            }),
+            },
         }
     }
 }
 
 impl MonomorphizeOwner<ToolOwnerPattern> for PolymorphicToolOwnerPattern {
-    fn monomorphize(
-        &self,
-        context: &AgentPermissionMonomorphizationContext,
-    ) -> Result<ToolOwnerPattern, String> {
+    fn monomorphize(&self, context: &AgentPermissionMonomorphizationContext) -> ToolOwnerPattern {
         match self {
-            Self::Concrete(owner) => Ok(owner.clone()),
-            Self::AccountTools => Ok(ToolOwnerPattern::AccountTools {
+            Self::Concrete(owner) => owner.clone(),
+            Self::AccountTools => ToolOwnerPattern::AccountTools {
                 account: context.account.clone(),
-            }),
-            Self::AccountApplicationTools { application } => {
-                Ok(ToolOwnerPattern::ApplicationTools {
-                    account: context.account.clone(),
-                    application: application.clone(),
-                })
-            }
+            },
+            Self::AccountApplicationTools { application } => ToolOwnerPattern::ApplicationTools {
+                account: context.account.clone(),
+                application: application.clone(),
+            },
             Self::AccountEnvironmentTools {
                 application,
                 environment,
-            } => Ok(ToolOwnerPattern::EnvironmentTools {
+            } => ToolOwnerPattern::EnvironmentTools {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
-            }),
+            },
             Self::AccountComponentTools {
                 application,
                 environment,
                 component,
-            } => Ok(ToolOwnerPattern::ComponentTools {
+            } => ToolOwnerPattern::ComponentTools {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
-            }),
+            },
             Self::AccountTool {
                 application,
                 environment,
                 component,
                 tool,
-            } => Ok(ToolOwnerPattern::Tool {
+            } => ToolOwnerPattern::Tool {
                 account: context.account.clone(),
                 application: application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
                 tool: tool.clone(),
-            }),
-            Self::ApplicationTools => Ok(ToolOwnerPattern::ApplicationTools {
+            },
+            Self::ApplicationTools => ToolOwnerPattern::ApplicationTools {
                 account: context.account.clone(),
                 application: context.application.clone(),
-            }),
+            },
             Self::ApplicationEnvironmentTools { environment } => {
-                Ok(ToolOwnerPattern::EnvironmentTools {
+                ToolOwnerPattern::EnvironmentTools {
                     account: context.account.clone(),
                     application: context.application.clone(),
                     environment: environment.clone(),
-                })
+                }
             }
             Self::ApplicationComponentTools {
                 environment,
                 component,
-            } => Ok(ToolOwnerPattern::ComponentTools {
+            } => ToolOwnerPattern::ComponentTools {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
-            }),
+            },
             Self::ApplicationTool {
                 environment,
                 component,
                 tool,
-            } => Ok(ToolOwnerPattern::Tool {
+            } => ToolOwnerPattern::Tool {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: environment.clone(),
                 component: component.clone(),
                 tool: tool.clone(),
-            }),
-            Self::EnvTools => Ok(ToolOwnerPattern::EnvironmentTools {
+            },
+            Self::EnvTools => ToolOwnerPattern::EnvironmentTools {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
-            }),
-            Self::EnvComponentTools { component } => Ok(ToolOwnerPattern::ComponentTools {
+            },
+            Self::EnvComponentTools { component } => ToolOwnerPattern::ComponentTools {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: component.clone(),
-            }),
-            Self::EnvTool { component, tool } => Ok(ToolOwnerPattern::Tool {
+            },
+            Self::EnvTool { component, tool } => ToolOwnerPattern::Tool {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: component.clone(),
                 tool: tool.clone(),
-            }),
-            Self::ComponentTools => Ok(ToolOwnerPattern::ComponentTools {
+            },
+            Self::ComponentTools => ToolOwnerPattern::ComponentTools {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
-            }),
-            Self::ComponentTool { tool } => Ok(ToolOwnerPattern::Tool {
+            },
+            Self::ComponentTool { tool } => ToolOwnerPattern::Tool {
                 account: context.account.clone(),
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
                 tool: tool.clone(),
-            }),
+            },
         }
     }
 }
