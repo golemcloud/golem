@@ -26,7 +26,7 @@ use golem_common::schema::FALLBACK_OUTPUT_FIELD_NAME;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::to_json_value;
+use golem_common::schema::render::json_value::to_json_value_redacted;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
@@ -277,7 +277,7 @@ fn schema_value_to_tool_result(
     // filesystem path becomes a `resource_link` to its `file://` URI. The arms
     // are gated on the resolved schema type as well as the value so a value
     // that does not match its declared type still surfaces the normal
-    // `to_json_value` mismatch error. (The unstructured `variant { inline, url }`
+    // JSON renderer mismatch error. (The unstructured `variant { inline, url }`
     // wrapper is handled above; this covers values typed directly as
     // `Url` / `Path`.)
     match (graph.resolve_ref(ty).map_err(internal_error)?, value) {
@@ -301,7 +301,7 @@ fn schema_value_to_tool_result(
         _ => {}
     }
 
-    to_json_value(graph, ty, value)
+    to_json_value_redacted(graph, ty, value)
         .map_err(|e| internal_error(format!("Failed to serialize component model response: {e}")))
         .map(ToolResult::Default)
 }
