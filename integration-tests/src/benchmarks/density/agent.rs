@@ -118,6 +118,7 @@ const DELETE_CONCURRENCY: usize = 25;
 const INVOCATION_PATH_CANARY_BUDGET: Duration = Duration::from_secs(120);
 const INVOCATION_PATH_CANARY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 const INVOCATION_PATH_CANARY_RETRY_DELAY: Duration = Duration::from_secs(2);
+const RESUME_CANARY_INDEX_OFFSET: u32 = 1_000_000;
 
 /// Fraction of a ramp batch that must fail at the transport level (request
 /// could not be sent / no round-trip) before the batch is judged as the
@@ -1067,6 +1068,82 @@ async fn wait_for_invocation_path(
     }
 }
 
+async fn warm_resume_canary_agent(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    target: u32,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let canary_index = RESUME_CANARY_INDEX_OFFSET + target;
+    let attempts = invoke_agent_indices(
+        config,
+        user,
+        components,
+        vec![canary_index],
+        "busy_for",
+        data_value!(RESUME_WARMUP_BUSY_MILLIS),
+        timeout,
+    )
+    .await;
+    let Some((_, attempt)) = attempts.into_iter().next() else {
+        anyhow::bail!("resume canary warmup produced no attempt");
+    };
+    if attempt.connection_lost || attempt.overloaded {
+        anyhow::bail!("resume canary warmup failed before restart");
+    }
+    Ok(())
+}
+
+async fn wait_for_resume_canary_agent(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    target: u32,
+) -> anyhow::Result<()> {
+    let canary_index = RESUME_CANARY_INDEX_OFFSET + target;
+    let deadline = Instant::now() + INVOCATION_PATH_CANARY_BUDGET;
+    let mut attempt_no = 0u32;
+
+    loop {
+        attempt_no += 1;
+        let attempts = invoke_agent_indices(
+            config,
+            user,
+            components,
+            vec![canary_index],
+            "increment",
+            data_value!(),
+            INVOCATION_PATH_CANARY_ATTEMPT_TIMEOUT,
+        )
+        .await;
+        let Some((_, attempt)) = attempts.into_iter().next() else {
+            anyhow::bail!("resume canary produced no attempt");
+        };
+
+        if !attempt.connection_lost && !attempt.overloaded {
+            info!(
+                "Density-agent[{}]: durable resume canary ready for target {target} after {attempt_no} attempt(s)",
+                config.cell_name()
+            );
+            return Ok(());
+        }
+
+        warn!(
+            "Density-agent[{}]: durable resume canary for target {target} attempt {attempt_no} failed after {:?}",
+            config.cell_name(),
+            attempt.latency
+        );
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "durable resume canary for target {target} did not become ready within {:?}",
+                INVOCATION_PATH_CANARY_BUDGET
+            );
+        }
+        tokio::time::sleep(INVOCATION_PATH_CANARY_RETRY_DELAY).await;
+    }
+}
+
 fn batch_connection_alive(attempts: &[&AttemptOutcome]) -> bool {
     let transport_failures = attempts.iter().filter(|a| a.connection_lost).count();
     attempts.is_empty()
@@ -1505,10 +1582,10 @@ async fn run_resume_cell(
             outcome.catastrophic_ceiling_agents = Some(target);
             break 'ramp;
         }
+        warm_resume_canary_agent(config, user, components, target, timeout.current).await?;
 
         probe.restart_executor().await?;
-        let canary_label = format!("post-restart-{target}");
-        wait_for_invocation_path(config, user, components, &canary_label).await?;
+        wait_for_resume_canary_agent(config, user, components, target).await?;
 
         info!(
             "Density-agent[{}]: reviving {target} warmed agents concurrently",
@@ -1521,7 +1598,7 @@ async fn run_resume_cell(
             (0..target).collect(),
             "increment",
             data_value!(),
-            timeout.current,
+            super::ceiling::ESCALATED_TIMEOUT,
         )
         .await;
 
