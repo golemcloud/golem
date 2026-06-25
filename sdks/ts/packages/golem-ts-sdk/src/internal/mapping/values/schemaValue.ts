@@ -512,6 +512,14 @@ export interface WireEncoder {
 export function createWireEncoder(): WireEncoder {
   const valueNodes: WitSchemaValueNode[] = [];
   let defs: Defs = EMPTY_DEFS;
+  // Per-`emitGraph` deferred quota-token takes. The raw owned resource is only
+  // moved out of its take-once cell after the whole walk succeeds (see
+  // `emitGraph`), so a sibling that fails mid-walk leaves the caller's token
+  // intact — atomic, matching the non-fused `schemaValueToWit` preflight.
+  // `seenRaw` rejects the same handle appearing twice in one tree before any
+  // move. Both are reset for every `emitGraph` call (each call is one tree).
+  let pendingTakes: { idx: number; handle: GuestQuotaTokenHandle }[] = [];
+  let seenRaw: Set<unknown> = new Set();
 
   function push(node: WitSchemaValueNode): ValueNodeIndex {
     valueNodes.push(node);
@@ -714,13 +722,27 @@ export function createWireEncoder(): WireEncoder {
         if (!(value instanceof QuotaToken)) throw typeMismatch(value, 'QuotaToken');
         const quotaValue = value._toSchemaValue(QUOTA_INTERNAL);
         if (quotaValue.tag !== 'quota-token') throw internalError('expected quota-token value');
-        const raw = quotaValue.handle.take();
+        const handle = quotaValue.handle;
+        // Peek the underlying owned resource without consuming it. If this
+        // throws (already transferred, or aliased), nothing has been moved out,
+        // so the caller still owns its token. The take is deferred until
+        // `emitGraph` commits after a successful walk.
+        const raw = handle.withHandle((r) => r);
         if (raw === undefined) {
           throw new Error(
             'quota-token handle was already transferred; an owned quota-token can only be sent once',
           );
         }
-        return push({ tag: 'quota-token-handle', val: raw });
+        if (seenRaw.has(raw)) {
+          throw new Error('the same quota-token handle appeared more than once in one value tree');
+        }
+        seenRaw.add(raw);
+        const idx = push({
+          tag: 'quota-token-handle',
+          val: undefined,
+        } as unknown as WitSchemaValueNode);
+        pendingTakes.push({ idx, handle });
+        return idx;
       }
 
       case 'path':
@@ -861,7 +883,23 @@ export function createWireEncoder(): WireEncoder {
     valueNodes,
     emitGraph(tsValue: any, graph: ResolvedGraph): ValueNodeIndex {
       defs = graph.defs;
-      return emit(tsValue, graph.root);
+      pendingTakes = [];
+      seenRaw = new Set();
+      const root = emit(tsValue, graph.root);
+      // The walk succeeded: commit every deferred take. `take()` cannot return
+      // `undefined` here — the peek confirmed presence and uniqueness, and
+      // nothing else moves the handle on this single thread — so the affine
+      // move runs exactly once per handle, only on success.
+      for (const { idx, handle } of pendingTakes) {
+        const raw = handle.take();
+        if (raw === undefined) {
+          throw new Error(
+            'quota-token handle was already transferred; an owned quota-token can only be sent once',
+          );
+        }
+        (valueNodes[idx] as { val: unknown }).val = raw;
+      }
+      return root;
     },
     pushRecord(fieldIndices: ValueNodeIndex[]): ValueNodeIndex {
       return push({ tag: 'record-value', val: fieldIndices });
@@ -1170,6 +1208,15 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
   // See `schemaValueFromWit`: `1` = node currently on the DFS path. A back-edge
   // to an on-path node is a cycle; DAG sharing across sibling branches is fine.
   const onPath = new Uint8Array(nodes.length);
+  // Per-`readGraph` record of quota-token lifts. When a `quota-token-handle`
+  // node is lifted its raw resource is moved out of the wire node into a
+  // `QuotaToken`; if a *later* sibling then fails the whole decode throws, and
+  // these entries restore the wire node so the operation is atomic — the input
+  // wire is left exactly as it was, for the runtime to release. `seenRaw`
+  // rejects the same owned resource appearing in two distinct nodes (an affine
+  // alias) before the second is lifted. Both reset per `readGraph` call.
+  let pendingLifts: { node: WitSchemaValueNode; raw: unknown }[] = [];
+  let seenRaw: Set<unknown> = new Set();
 
   function nodeAt(idx: ValueNodeIndex): WitSchemaValueNode {
     if (idx < 0 || idx >= nodes.length) {
@@ -1383,7 +1430,15 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
         if (raw === undefined) {
           throw new SchemaDecodeError('quota-token handle referenced more than once');
         }
+        if (seenRaw.has(raw)) {
+          throw new SchemaDecodeError('the same quota-token resource appeared more than once');
+        }
+        seenRaw.add(raw);
+        // Lift the owned resource out of the wire node into a `QuotaToken`, but
+        // record the lift so a later-sibling failure in `readGraph` can restore
+        // the wire node — leaving the input wire untouched on a failed decode.
         (n as { val: unknown }).val = undefined;
+        pendingLifts.push({ node: n, raw });
         return QuotaToken._fromHandle(
           QUOTA_INTERNAL,
           GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw),
@@ -1512,7 +1567,19 @@ export function createWireDecoder(nodes: WitSchemaValueNode[]): WireDecoder {
     },
     readGraph(idx: ValueNodeIndex, graph: ResolvedGraph): any {
       defs = graph.defs;
-      return fromIdx(idx, graph.root);
+      pendingLifts = [];
+      seenRaw = new Set();
+      try {
+        return fromIdx(idx, graph.root);
+      } catch (e) {
+        // Restore every wire node that was lifted during this walk so the
+        // decode is atomic: a later-sibling failure leaves the input wire
+        // exactly as it was, so the runtime can release the owned resources.
+        for (const { node, raw } of pendingLifts) {
+          (node as { val: unknown }).val = raw;
+        }
+        throw e;
+      }
     },
   };
 }
@@ -2001,14 +2068,25 @@ function genEnc(rt: ResolvedType, valExpr: string, out: string[], ctx: GenCtx): 
     }
     case 'quota-token': {
       const qv = ctx.fresh();
+      const handle = ctx.fresh();
       const raw = ctx.fresh();
+      const idx = ctx.fresh();
       out.push(`const ${qv} = ${valExpr};`);
       out.push(`if (!(${qv} instanceof QuotaToken)) throw typeMismatch(${qv}, 'QuotaToken');`);
-      out.push(`const ${raw} = ${qv}._toSchemaValue(QUOTA_INTERNAL).handle.take();`);
+      // Peek without consuming; the take is deferred to the `__root` commit so a
+      // later-sibling failure leaves the caller's token intact.
+      out.push(`const ${handle} = ${qv}._toSchemaValue(QUOTA_INTERNAL).handle;`);
+      out.push(`const ${raw} = ${handle}.withHandle((r) => r);`);
       out.push(
         `if (${raw} === undefined) throw new Error('quota-token handle was already transferred; an owned quota-token can only be sent once');`,
       );
-      return `(nodes.push({ tag: 'quota-token-handle', val: ${raw} }) - 1)`;
+      out.push(
+        `if (__seen.has(${raw})) throw new Error('the same quota-token handle appeared more than once in one value tree');`,
+      );
+      out.push(`__seen.add(${raw});`);
+      out.push(`const ${idx} = (nodes.push({ tag: 'quota-token-handle', val: undefined }) - 1);`);
+      out.push(`__pending.push({ idx: ${idx}, handle: ${handle} });`);
+      return idx;
     }
     case 'path':
       out.push(`if (!(${valExpr} instanceof Path)) throw typeMismatch(${valExpr}, 'Path');`);
@@ -2398,7 +2476,14 @@ function genDec(rt: ResolvedType, idxExpr: string, out: string[], ctx: GenCtx): 
       out.push(
         `if (${raw} === undefined) throw new SchemaDecodeError('quota-token handle referenced more than once');`,
       );
+      out.push(
+        `if (__seen.has(${raw})) throw new SchemaDecodeError('the same quota-token resource appeared more than once');`,
+      );
+      out.push(`__seen.add(${raw});`);
+      // Lift the owned resource out of the wire node, but record the lift so the
+      // `__root` wrapper can restore the wire on a later-sibling failure.
       out.push(`${nv}.val = undefined;`);
+      out.push(`__pending.push({ idx: ${iv}, raw: ${raw} });`);
       return `QuotaToken._fromHandle(QUOTA_INTERNAL, GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, ${raw}))`;
     }
     case 'path':
@@ -2462,7 +2547,13 @@ function genGraphEmitFn(
   graph: ResolvedGraph,
 ): (v: any, nodes: WitSchemaValueNode[]) => ValueNodeIndex {
   const ctx = makeGenCtx(graph, 'e');
-  const lines: string[] = ['"use strict";'];
+  // `__pending` / `__seen` are shared across the generated `__root` and def
+  // functions (all defined in this one `new Function` body, so they close over
+  // the same bindings). `__root` resets them per call and commits the deferred
+  // quota-token takes only after a successful walk — atomic, matching the
+  // non-fused `schemaValueToWit` preflight. See the `quota-token` case in
+  // `genEnc` for the peek-and-defer.
+  const lines: string[] = ['"use strict";', 'let __pending; let __seen;'];
   for (const [id, def] of graph.defs) {
     const body: string[] = [];
     const expr = genEnc(def, 'v', body, ctx);
@@ -2472,8 +2563,14 @@ function genGraphEmitFn(
   const rootExpr = genEnc(graph.root, 'v', rootBody, ctx);
   lines.push(
     `const __root = (v, nodes) => {`,
+    `__pending = []; __seen = new Set();`,
     ...rootBody,
-    `return ${rootExpr};`,
+    `const __rootIdx = ${rootExpr};`,
+    // Commit every deferred take now that the whole walk succeeded. `take()`
+    // cannot return undefined here: the peek confirmed presence/uniqueness and
+    // nothing else moves the handle on this thread.
+    `for (const __p of __pending) { const __raw = __p.handle.take(); if (__raw === undefined) throw new Error('quota-token handle was already transferred; an owned quota-token can only be sent once'); nodes[__p.idx].val = __raw; }`,
+    `return __rootIdx;`,
     `};`,
     `return __root;`,
   );
@@ -2525,7 +2622,12 @@ function genGraphReadFn(
   graph: ResolvedGraph,
 ): (idx: ValueNodeIndex, nodes: WitSchemaValueNode[], onPath: Uint8Array) => any {
   const ctx = makeGenCtx(graph, 'd');
-  const lines: string[] = ['"use strict";'];
+  // `__pending` / `__seen` are shared across the generated `__root` and def
+  // functions (all defined in this one `new Function` body). `__root` resets them
+  // per call and, on a thrown error, restores every wire node that was lifted
+  // during the walk — atomic, matching the non-fused `schemaValueFromWit`
+  // preflight. See the `quota-token` case in `genDec` for the lift-and-record.
+  const lines: string[] = ['"use strict";', 'let __pending; let __seen;'];
   for (const [id, def] of graph.defs) {
     const body: string[] = [];
     const expr = genDec(def, 'idx', body, ctx);
@@ -2540,8 +2642,17 @@ function genGraphReadFn(
   const rootExpr = genDec(graph.root, 'idx', rootBody, ctx);
   lines.push(
     `const __root = (idx, nodes, onPath) => {`,
+    `__pending = []; __seen = new Set();`,
+    `try {`,
     ...rootBody,
     `return ${rootExpr};`,
+    `} catch (__e) {`,
+    // Restore every wire node lifted during this walk so a later-sibling
+    // failure leaves the input wire exactly as it was, for the runtime to
+    // release the owned resources.
+    `for (const __p of __pending) { nodes[__p.idx].val = __p.raw; }`,
+    `throw __e;`,
+    `}`,
     `};`,
     `return __root;`,
   );
