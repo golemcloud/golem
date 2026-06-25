@@ -86,6 +86,31 @@ When `--ports-file` is specified, the server writes a JSON file with the actual 
 }
 ```
 
+The application manifest can mirror these local ports with `localServer.customRequestPort` and `localServer.mcpPort`. Those fields control how deployment `subdomain` values expand: HTTP API domains resolve to `<label>.localhost:<customRequestPort>` and MCP domains resolve to `<label>.localhost:<mcpPort>`. Load `golem-configure-api-domain` or `golem-configure-mcp-server` for the full `subdomain` versus `domain` rules.
+
+#### Manual Testing with Free Ports
+
+For manual testing in temporary apps, prefer putting the local server configuration in `golem.yaml` and let the OS assign free ports:
+
+```yaml
+localServer:
+  routerPort: 0
+  customRequestPort: 0
+  mcpPort: 0
+  portsFile: .golem/ports.json
+  dataDir: .golem/data
+```
+
+Then start the server from the app root:
+
+```shell
+golem server run
+```
+
+The `0` port values request OS-assigned free ports. The `portsFile` records the actual bound ports and is also the readiness signal; wait for `.golem/ports.json` before deploying or sending requests. Keep manifest deployments on built-in local environments as `subdomain: name` so HTTP API domains resolve through `localServer.customRequestPort` and MCP domains resolve through `localServer.mcpPort`.
+
+Setting only `portsFile` records the selected ports but does not request free ports. Explicit CLI flags such as `--router-port`, `--custom-request-port`, `--mcp-port`, `--ports-file`, and `--data-dir` override the manifest values.
+
 #### Warning: `--agent-filesystem-root`
 
 **Do not use `--agent-filesystem-root` unless you have a specific reason.** This option replaces the default random temporary directories with deterministic paths. Manually modifying files under this root while agents are running can break durable execution guarantees — Golem relies on controlling the agent filesystem to ensure consistency across restarts and replays. This flag is intended for advanced debugging and inspection scenarios only.

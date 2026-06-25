@@ -164,7 +164,7 @@ To configure the base URL for webhooks and deploy agents with webhook support, u
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       webhookUrl: http://my-app.localhost:9006
       agents:
         WebhookAgent: {}

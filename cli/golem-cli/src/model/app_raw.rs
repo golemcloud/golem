@@ -116,6 +116,8 @@ pub struct Application {
     pub http_api: Option<HttpApi>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Mcp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_server: Option<LocalServer>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environments: IndexMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -516,7 +518,10 @@ pub struct HttpApi {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDeployment {
-    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<DeploymentDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -535,7 +540,10 @@ pub struct Mcp {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpDeployment {
-    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<DeploymentDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
 }
@@ -545,6 +553,51 @@ pub struct McpDeployment {
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeploymentDomain(pub String);
+
+impl From<Domain> for DeploymentDomain {
+    fn from(value: Domain) -> Self {
+        Self(value.0)
+    }
+}
+
+impl DeploymentDomain {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeploymentSubdomain(pub String);
+
+impl DeploymentSubdomain {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalServer {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub router_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub router_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub custom_request_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mcp_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ports_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub data_dir: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_filesystem_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1487,6 +1540,42 @@ mod test {
             .boxed()
     }
 
+    fn arb_path_buf_model() -> BoxedStrategy<PathBuf> {
+        arb_ident().prop_map(PathBuf::from).boxed()
+    }
+
+    fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
+        (
+            arb_opt(arb_ident()),
+            arb_opt(any::<u16>().boxed()),
+            arb_opt(any::<u16>().boxed()),
+            arb_opt(any::<u16>().boxed()),
+            arb_opt(arb_path_buf_model()),
+            arb_opt(arb_path_buf_model()),
+            arb_opt(arb_path_buf_model()),
+        )
+            .prop_map(
+                |(
+                    router_addr,
+                    router_port,
+                    custom_request_port,
+                    mcp_port,
+                    ports_file,
+                    data_dir,
+                    agent_filesystem_root,
+                )| LocalServer {
+                    router_addr,
+                    router_port,
+                    custom_request_port,
+                    mcp_port,
+                    ports_file,
+                    data_dir,
+                    agent_filesystem_root,
+                },
+            )
+            .boxed()
+    }
+
     fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
         (
             arb_dns_label(),
@@ -1514,7 +1603,8 @@ mod test {
         )
             .prop_map(
                 |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
-                    domain: Domain(format!("{domain}.example.com")),
+                    domain: Some(Domain(format!("{domain}.example.com")).into()),
+                    subdomain: None,
                     webhook_url,
                     openapi_endpoint,
                     agents,
@@ -1551,7 +1641,8 @@ mod test {
             .prop_map(IndexMap::from_iter),
         )
             .prop_map(|(domain, agents)| McpDeployment {
-                domain: Domain(format!("{domain}.example.com")),
+                domain: Some(Domain(format!("{domain}.example.com")).into()),
+                subdomain: None,
                 agents,
             })
             .boxed()
@@ -1880,6 +1971,7 @@ mod test {
             (
                 arb_opt(arb_http_api_model()),
                 arb_opt(arb_mcp_model()),
+                arb_opt(arb_local_server_model()),
                 prop::collection::vec((arb_ident(), arb_environment_model()), 0..=3)
                     .prop_map(IndexMap::from_iter),
                 arb_opt(arb_bridge_sdks_model()),
@@ -1897,6 +1989,7 @@ mod test {
                     (
                         http_api,
                         mcp,
+                        local_server,
                         environments,
                         bridge,
                         secret_defaults,
@@ -1914,6 +2007,7 @@ mod test {
                     clean,
                     http_api,
                     mcp,
+                    local_server,
                     environments,
                     bridge,
                     secret_defaults,
@@ -1992,6 +2086,42 @@ mod test {
         assert!(
             err.contains("secretDefaults.local") || err.contains("secret_defaults.local"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn local_server_accepts_server_run_defaults() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            localServer:
+              routerAddr: 127.0.0.1
+              routerPort: 9882
+              customRequestPort: 9008
+              mcpPort: 9009
+              portsFile: .golem/ports.json
+              dataDir: .golem/server-data
+              agentFilesystemRoot: .golem/agents
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let local_server = app.local_server.expect("localServer should be parsed");
+
+        assert_eq!(local_server.router_addr.as_deref(), Some("127.0.0.1"));
+        assert_eq!(local_server.router_port, Some(9882));
+        assert_eq!(local_server.custom_request_port, Some(9008));
+        assert_eq!(local_server.mcp_port, Some(9009));
+        assert_eq!(
+            local_server.ports_file,
+            Some(PathBuf::from(".golem/ports.json"))
+        );
+        assert_eq!(
+            local_server.data_dir,
+            Some(PathBuf::from(".golem/server-data"))
+        );
+        assert_eq!(
+            local_server.agent_filesystem_root,
+            Some(PathBuf::from(".golem/agents"))
         );
     }
 

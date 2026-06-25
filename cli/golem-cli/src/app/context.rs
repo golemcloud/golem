@@ -25,8 +25,8 @@ use crate::fs;
 use crate::log::{LogColorize, LogIndent, LogOutput, Output, log_action, logln};
 use crate::model::app::{
     AppBuildStep, Application, ApplicationComponentSelectMode, ApplicationConfig,
-    ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig, CleanMode,
-    ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, WithSource,
+    ApplicationPreload, ApplicationSourceMode, BuildConfig, CleanMode, ComponentPresetSelector,
+    CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, ResolvedLocalServer, WithSource,
     includes_from_yaml_file,
 };
 use crate::model::format::Format;
@@ -152,7 +152,8 @@ impl ToolsWithEnsuredCommonDeps {
 pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
-    pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
+    pub application_preload: Option<ApplicationPreload>,
+    pub resolved_local_server: Option<ResolvedLocalServer>,
     pub used_language_templates: HashSet<GuestLanguage>,
 }
 
@@ -262,7 +263,8 @@ impl ApplicationContext {
             None => Ok(ApplicationPreloadResult {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
-                application_name_and_environments: None,
+                application_preload: None,
+                resolved_local_server: None,
                 used_language_templates: HashSet::new(),
             }),
         }
@@ -273,12 +275,14 @@ impl ApplicationContext {
         config: ApplicationConfig,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         file_download_client: reqwest::Client,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let Some(app_and_calling_working_dir) = load_app(
             application_name,
             environments,
+            local_server,
             component_presets,
             source_mode,
         ) else {
@@ -626,6 +630,28 @@ impl ApplicationContext {
                     ));
                 }
             }
+
+            let mcp_deployments = self
+                .application
+                .mcp_deployments(self.application.environment_name());
+            if let Some(mcp_deployments) = mcp_deployments {
+                logln(format!(
+                    "{}",
+                    format!(
+                        "Application MCP deployments for environment {}:",
+                        environment_name.0
+                    )
+                    .log_color_help_group()
+                ));
+
+                for (site, deployment) in mcp_deployments {
+                    logln(format!("  {}", site.to_string().log_color_highlight(),));
+                    for (agent_name, _) in deployment.value.agents.iter() {
+                        logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
+                    }
+                }
+                logln("");
+            }
         }
 
         if config.custom_commands() {
@@ -663,6 +689,7 @@ impl ApplicationContext {
 fn load_app(
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    local_server: Option<WithSource<app_raw::LocalServer>>,
     component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
@@ -672,6 +699,7 @@ fn load_app(
                 loaded_raw_apps.app_root_dir,
                 application_name,
                 environments,
+                local_server,
                 component_presets,
                 loaded_raw_apps.raw_apps,
             )
@@ -689,38 +717,45 @@ fn preload_app(
             let used_language_templates =
                 Application::language_templates_from_raw_apps(&loaded_raw_apps.raw_apps);
 
-            Application::environments_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
-                .and_then(|application_name_and_environments| {
+            Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
+                .and_then(|application_preload| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
                         &used_language_templates,
                         dev_mode,
                     ))
                     .map(|on_demand_common_raw_apps| {
-                        (on_demand_common_raw_apps, application_name_and_environments)
+                        (on_demand_common_raw_apps, application_preload)
                     })
                 })
-                .map(
-                    |(on_demand_common_raw_apps, application_name_and_environments)| {
-                        let raw_apps = {
-                            let mut raw_apps = loaded_raw_apps.raw_apps;
-                            raw_apps.extend(on_demand_common_raw_apps);
-                            raw_apps
-                        };
+                .map(|(on_demand_common_raw_apps, application_preload)| {
+                    let resolved_local_server =
+                        application_preload
+                            .local_server
+                            .as_ref()
+                            .map(|local_server| {
+                                ResolvedLocalServer::from_raw_with_source(
+                                    local_server,
+                                    &loaded_raw_apps.app_root_dir,
+                                )
+                            });
+                    let raw_apps = {
+                        let mut raw_apps = loaded_raw_apps.raw_apps;
+                        raw_apps.extend(on_demand_common_raw_apps);
+                        raw_apps
+                    };
 
-                        ApplicationPreloadResult {
-                            source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
-                                app_root_dir: loaded_raw_apps.app_root_dir,
-                                calling_working_dir: loaded_raw_apps.calling_working_dir,
-                                raw_apps,
-                            }),
-                            loaded_with_warnings: false,
-                            application_name_and_environments: Some(
-                                application_name_and_environments,
-                            ),
-                            used_language_templates,
-                        }
-                    },
-                )
+                    ApplicationPreloadResult {
+                        source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
+                            app_root_dir: loaded_raw_apps.app_root_dir,
+                            calling_working_dir: loaded_raw_apps.calling_working_dir,
+                            raw_apps,
+                        }),
+                        loaded_with_warnings: false,
+                        application_preload: Some(application_preload),
+                        resolved_local_server,
+                        used_language_templates,
+                    }
+                })
         })
     })
 }
@@ -918,7 +953,7 @@ pub fn validated_to_anyhow<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::ApplicationContext;
+    use super::{ApplicationContext, preload_app};
     use crate::model::app::ApplicationSourceMode;
     use test_r::test;
 
@@ -958,6 +993,86 @@ app: demo
 
         let upgraded = std::fs::read_to_string(manifest).unwrap();
         assert!(upgraded.contains("manifestVersion: 1.6.0"));
-        assert!(upgraded.contains("/1.6.0-dev.2/golem.schema.json"));
+        assert!(upgraded.contains("/1.6.0-dev.3/golem.schema.json"));
+    }
+
+    #[test]
+    fn preload_resolves_local_server_paths_against_declaring_manifest_dir() {
+        let original_dir = std::env::current_dir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let app_dir = temp_dir.path().join("app");
+        let config_dir = app_dir.join("config");
+        std::fs::create_dir(&app_dir).unwrap();
+        std::fs::create_dir(&config_dir).unwrap();
+        let manifest = app_dir.join("golem.yaml");
+        let local_server_manifest = config_dir.join("local-server.yaml");
+        std::fs::write(
+            &manifest,
+            r#"
+manifestVersion: 1.6.0
+app: demo
+includes:
+  - config/local-server.yaml
+environments:
+  local:
+    server: local
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &local_server_manifest,
+            r#"
+manifestVersion: 1.6.0
+localServer:
+  portsFile: .golem/ports.json
+  dataDir: .golem/data
+  agentFilesystemRoot: .golem/agents
+"#,
+        )
+        .unwrap();
+
+        let result = preload_app(ApplicationSourceMode::ByRootManifest(manifest), false)
+            .expect("manifest should be found");
+        let (preload_result, warns, errors) = result.into_product();
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+
+        let preload_result = preload_result.unwrap();
+        let raw_local_server = preload_result
+            .application_preload
+            .unwrap()
+            .local_server
+            .unwrap()
+            .value;
+
+        assert_eq!(
+            raw_local_server.ports_file,
+            Some(std::path::PathBuf::from(".golem/ports.json"))
+        );
+        assert_eq!(
+            raw_local_server.data_dir,
+            Some(std::path::PathBuf::from(".golem/data"))
+        );
+        assert_eq!(
+            raw_local_server.agent_filesystem_root,
+            Some(std::path::PathBuf::from(".golem/agents"))
+        );
+
+        let resolved_local_server = preload_result.resolved_local_server.unwrap();
+
+        assert_eq!(
+            resolved_local_server.ports_file,
+            Some(config_dir.join(".golem/ports.json"))
+        );
+        assert_eq!(
+            resolved_local_server.data_dir,
+            Some(config_dir.join(".golem/data"))
+        );
+        assert_eq!(
+            resolved_local_server.agent_filesystem_root,
+            Some(config_dir.join(".golem/agents"))
+        );
     }
 }

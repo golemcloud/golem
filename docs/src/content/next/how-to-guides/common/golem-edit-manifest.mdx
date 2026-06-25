@@ -341,20 +341,25 @@ When `format: toon` is used, structured stdout is emitted as framed TOON documen
 
 Configure HTTP API domain deployments per environment.
 
+Each deployment must define exactly one of:
+
+- `subdomain`: a single DNS label resolved through the target environment server (`my-app.localhost:9006` locally by default, `my-app.apps.golem.cloud` on built-in cloud).
+- `domain`: a full custom domain such as `api.example.com` for custom DNS or custom server environments.
+
 ```yaml
 httpApi:
   deployments:
     local:
-      - domain: my-app.localhost:9006
-        webhookUrl: http://my-app.localhost:9006   # Optional webhook base URL
+      - subdomain: my-app  # resolves to my-app.localhost:9006 by default
+        webhookUrl: /webhooks/                     # Optional webhook path prefix
         agents:
           TaskAgent: {}                             # No auth
           SecureAgent:
             securityScheme: my-oidc                 # OIDC security scheme name
           DevAgent:
             testSessionHeaderName: X-Test-Auth      # Test auth header
-    prod:
-      - domain: api.myapp.com
+    cloud:
+      - subdomain: my-app  # resolves to my-app.apps.golem.cloud
         agents:
           TaskAgent: {}
           SecureAgent:
@@ -367,11 +372,16 @@ Agent names use **PascalCase** matching the agent type name in code.
 
 Configure MCP (Model Context Protocol) deployments per environment.
 
+Each deployment must define exactly one of:
+
+- `subdomain`: a single DNS label resolved through the target environment server (`my-mcp.localhost:9007` locally by default, `my-mcp.mcps.golem.cloud` on built-in cloud).
+- `domain`: a full custom domain such as `mcp.example.com` for custom DNS or custom server environments.
+
 ```yaml
 mcp:
   deployments:
     local:
-      - domain: mcp.localhost:9006
+      - subdomain: my-mcp  # resolves to my-mcp.localhost:9007 by default
         agents:
           ToolAgent: {}
           SecureToolAgent:

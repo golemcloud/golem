@@ -7,7 +7,7 @@ description: "Configuring HTTP API domain deployments and security schemes in go
 
 ## Overview
 
-After adding HTTP mounts and endpoints to agents in code, you must configure a **domain deployment** in `golem.yaml` so Golem knows which agents to expose and on which domain. This skill covers the `httpApi` manifest section, security scheme setup, and the auto-generated OpenAPI specification.
+After adding HTTP mounts and endpoints to agents in code, you must configure an HTTP API deployment in `golem.yaml` so Golem knows which agents to expose and on which domain. This skill covers the `httpApi` manifest section, security scheme setup, and the auto-generated OpenAPI specification.
 
 ## Adding a Domain Deployment
 
@@ -17,7 +17,7 @@ Add an `httpApi` section to the root `golem.yaml`:
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       agents:
         TaskAgent: {}
         UserAgent: {}
@@ -28,9 +28,12 @@ httpApi:
 - `httpApi.deployments` is a map keyed by **environment name** (e.g., `local`, `staging`, `prod`)
 - Each environment contains a list of deployment objects
 - Each deployment has:
-  - `domain`: the (sub)domain to bind to (e.g., `my-app.localhost:9006` for local development)
+  - `subdomain`: a single DNS label resolved through the target environment server. Local HTTP API deployments resolve to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set. Cloud HTTP API deployments resolve to `<subdomain>.apps.golem.cloud`.
+  - `domain`: a full domain such as `api.example.com` for custom registered domains or custom server environments.
   - `agents`: a map of agent type names (PascalCase) to their deployment options
-  - `webhookUrl` (optional): base URL for webhook callbacks
+  - `webhookUrl` (optional): path prefix for webhook callbacks; defaults to `/webhooks/`
+
+Define exactly one of `subdomain` or `domain` on each deployment. Prefer `subdomain` for built-in `server: local` and `server: cloud` environments. Use `domain` only when you need a full custom domain or the environment uses a custom server.
 
 ### Agent Options
 
@@ -60,7 +63,7 @@ golem api security-scheme create my-oidc \
   --provider-type google \
   --client-id "YOUR_CLIENT_ID" \
   --client-secret "YOUR_CLIENT_SECRET" \
-  --redirect-url "http://localhost:9006/auth/callback" \
+  s  "http://my-app.localhost:9006/auth/callback" \
   --scope openid --scope email --scope profile
 ```
 
@@ -102,7 +105,7 @@ After creating a security scheme, reference it by name in the agent deployment o
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       agents:
         SecureAgent:
           securityScheme: my-oidc
@@ -118,7 +121,7 @@ For local development without a real OIDC provider, use a test session header:
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       agents:
         SecureAgent:
           testSessionHeaderName: X-Test-Auth
@@ -157,34 +160,40 @@ Define different domains and security configurations per environment:
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       agents:
         TaskAgent: {}
         SecureAgent:
           testSessionHeaderName: X-Test-Auth
-    prod:
-    - domain: api.myapp.com
+    cloud:
+    - subdomain: my-app  # resolves to my-app.apps.golem.cloud
       agents:
         TaskAgent: {}
         SecureAgent:
           securityScheme: prod-google-oidc
+
+environments:
+  local:
+    server: local
+  cloud:
+    server: cloud
 ```
 
 ## Webhook URL
 
-If agents use webhooks, configure the base URL:
+If agents use webhooks, configure the webhook path prefix:
 
 ```yaml
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
-      webhookUrl: http://my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
+      webhookUrl: /my-custom-webhooks/
       agents:
         WebhookAgent: {}
 ```
 
-The `webhookUrl` is combined with the agent's `webhookSuffix` (defined in code) to form the full webhook callback URL.
+The deployment domain comes from `subdomain` or `domain`. The `webhookUrl` path prefix is combined with the agent's `webhookSuffix` (defined in code) and the generated webhook ID to form the full callback URL, such as `http://my-app.localhost:9006/my-custom-webhooks/order-hooks/<id>`.
 
 ## Deploying
 
@@ -214,18 +223,24 @@ This specification includes all endpoints from all agents deployed to that domai
 httpApi:
   deployments:
     local:
-    - domain: task-app.localhost:9006
-      webhookUrl: http://task-app.localhost:9006
+    - subdomain: task-app  # resolves to task-app.localhost:9006 by default
+      webhookUrl: /webhooks/
       agents:
         TaskAgent: {}
         AdminAgent:
           testSessionHeaderName: X-Admin-Auth
-    prod:
-    - domain: api.taskapp.com
+    cloud:
+    - subdomain: task-app  # resolves to task-app.apps.golem.cloud
       agents:
         TaskAgent: {}
         AdminAgent:
           securityScheme: google-oidc
+
+environments:
+  local:
+    server: local
+  cloud:
+    server: cloud
 ```
 
 ## Key Constraints
@@ -233,5 +248,5 @@ httpApi:
 - Agent type names in `golem.yaml` use **PascalCase** (matching the class/trait name in code)
 - Each agent entry can have at most one of `securityScheme` or `testSessionHeaderName`
 - Security schemes must be created via `golem api security-scheme create` before they can be referenced
-- The domain must be unique per environment
+- The resolved domain must be unique per environment
 - After changing `golem.yaml`, run `golem deploy --yes` to apply changes

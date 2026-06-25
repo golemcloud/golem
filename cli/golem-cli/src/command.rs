@@ -2300,6 +2300,9 @@ pub mod account {
 }
 
 pub mod server {
+    use crate::config::{
+        DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
+    };
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
@@ -2356,14 +2359,15 @@ pub mod server {
         }
 
         pub fn router_port(&self) -> u16 {
-            self.router_port.unwrap_or(9881)
+            self.router_port.unwrap_or(DEFAULT_LOCAL_ROUTER_PORT)
         }
 
         pub fn custom_request_port(&self) -> u16 {
-            self.custom_request_port.unwrap_or(9006)
+            self.custom_request_port
+                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT)
         }
         pub fn mcp_port(&self) -> u16 {
-            self.mcp_port.unwrap_or(9007)
+            self.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT)
         }
     }
 

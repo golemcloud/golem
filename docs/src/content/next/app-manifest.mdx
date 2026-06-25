@@ -117,6 +117,24 @@ Available naming related string transforming functions:
   </Field>
 
   <Field meta={{
+    path: "localServer",
+  }}>
+    ***Optional local server defaults*** used by `golem server run` and by local deployment subdomain expansion.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.customRequestPort",
+  }}>
+    ***Optional HTTP API port*** for local custom requests. Defaults to `9006`; HTTP deployments using `subdomain` resolve to `<subdomain>.localhost:<customRequestPort>`.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.mcpPort",
+  }}>
+    ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`.
+  </Field>
+
+  <Field meta={{
     path: "httpApi",
     since: Release.R_1_5_0
   }}>
@@ -142,7 +160,14 @@ Available naming related string transforming functions:
     path: "httpApi.deployments.<environment-name>[*].domain",
     since: Release.R_1_5_0
   }}>
-    ***Required domain*** for the deployment.
+    ***Full concrete domain*** for the deployment. Use `domain` for custom registered domains and custom server environments. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].subdomain",
+    since: Release.R_1_5_0
+  }}>
+    ***Built-in server subdomain*** for the deployment. Must be a single DNS label. In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Define exactly one of `domain` or `subdomain`.
   </Field>
 
   <Field meta={{
@@ -198,7 +223,14 @@ Available naming related string transforming functions:
     path: "mcp.deployments.<environment-name>[*].domain",
     since: Release.R_1_5_0
   }}>
-    ***Required domain*** for the MCP deployment.
+    ***Full concrete domain*** for the MCP deployment. Use `domain` for custom registered domains and custom server environments. Define exactly one of `domain` or `subdomain`.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].subdomain",
+    since: Release.R_1_5_0
+  }}>
+    ***Built-in server subdomain*** for the MCP deployment. Must be a single DNS label. In a local environment it resolves to `<subdomain>.localhost:9007` by default, or `<subdomain>.localhost:<mcpPort>` when `localServer.mcpPort` is set. In a cloud environment it resolves to `<subdomain>.mcps.golem.cloud`. Define exactly one of `domain` or `subdomain`.
   </Field>
 
   <Field meta={{
