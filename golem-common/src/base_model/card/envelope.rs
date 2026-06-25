@@ -32,7 +32,7 @@ pub fn permission_envelopes_for_recipient_patterns(
         result.append(&mut resolve_permissions_for_agent_context(
             std::slice::from_ref(permission),
             &context,
-        )?);
+        ));
     }
     Ok(result)
 }
