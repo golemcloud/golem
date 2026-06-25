@@ -117,3 +117,39 @@ pub fn wasmExportInvokePostReturn(p0 : Int) -> Unit {
 pub fn wasmExportGetDefinition() -> Int {
   @guest.wasmExportGetDefinition()
 }
+
+///|
+#doc(hidden)
+pub fn wasmExportInvoke0(p0 : Int) -> Int {
+  @guest0.wasmExportInvoke0(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportInvokePostReturn1(p0 : Int) -> Unit {
+  @guest0.wasmExportInvokePostReturn1(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportDiscoverTools() -> Int {
+  @guest0.wasmExportDiscoverTools()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportDiscoverToolsPostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
+  @guest0.wasmExportGetTool(p0, p1)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportGetToolPostReturn(p0)
+}

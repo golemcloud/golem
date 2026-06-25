@@ -32,6 +32,7 @@ mod random;
 pub mod rdbms;
 mod replay_state;
 mod sockets;
+pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
