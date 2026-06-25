@@ -3096,7 +3096,33 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
+        let density_probe = agent_id.to_string().contains("resume-under-saturation");
         store.as_context_mut().data_mut().set_running();
+
+        if density_probe {
+            let agent_mode = store.as_context().data().agent_mode();
+            let last_oplog_index = store
+                .as_context()
+                .data()
+                .get_public_state()
+                .oplog()
+                .current_oplog_index()
+                .await;
+            let snapshot_recovery_disabled = store
+                .as_context()
+                .data()
+                .get_public_state()
+                .worker()
+                .snapshot_recovery_disabled
+                .load(std::sync::atomic::Ordering::Acquire);
+            info!(
+                agent_id = %agent_id,
+                ?agent_mode,
+                %last_oplog_index,
+                snapshot_recovery_disabled,
+                "Density probe: prepare_instance started"
+            );
+        }
 
         let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
@@ -3217,35 +3243,84 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                None => match Self::try_load_snapshot(store, instance).await {
-                    SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
-                        let result = Self::resume_replay(store, instance, false).await;
-                        record_resume_worker(start.elapsed());
-                        result
+                None => {
+                    if density_probe {
+                        info!(
+                            agent_id = %agent_id,
+                            "Density probe: attempting snapshot recovery"
+                        );
                     }
-                    SnapshotRecoveryResult::Failed => {
-                        store
-                            .as_context()
-                            .data()
-                            .get_public_state()
-                            .worker()
-                            .snapshot_recovery_disabled
-                            .store(true, std::sync::atomic::Ordering::Release);
-                        Ok(Some(RetryDecision::Immediate))
+                    match Self::try_load_snapshot(store, instance).await {
+                        SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
+                            if density_probe {
+                                info!(
+                                    agent_id = %agent_id,
+                                    elapsed_ms = start.elapsed().as_millis(),
+                                    "Density probe: starting resume replay after snapshot step"
+                                );
+                            }
+                            let result = Self::resume_replay(store, instance, false).await;
+                            record_resume_worker(start.elapsed());
+                            result
+                        }
+                        SnapshotRecoveryResult::Failed => {
+                            if density_probe {
+                                warn!(
+                                    agent_id = %agent_id,
+                                    elapsed_ms = start.elapsed().as_millis(),
+                                    "Density probe: snapshot recovery failed before replay retry"
+                                );
+                            }
+                            store
+                                .as_context()
+                                .data()
+                                .get_public_state()
+                                .worker()
+                                .snapshot_recovery_disabled
+                                .store(true, std::sync::atomic::Ordering::Release);
+                            Ok(Some(RetryDecision::Immediate))
+                        }
                     }
-                },
+                }
             }
         };
         match prepare_result {
             Ok(None) => {
                 store.as_context_mut().data_mut().set_suspended();
+                if density_probe {
+                    info!(
+                        agent_id = %agent_id,
+                        elapsed_ms = start.elapsed().as_millis(),
+                        "Density probe: prepare_instance completed"
+                    );
+                }
                 Ok(None)
             }
-            Ok(other) => Ok(other),
-            Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                agent_id.clone(),
-                error,
-            )),
+            Ok(other) => {
+                if density_probe {
+                    info!(
+                        agent_id = %agent_id,
+                        decision = ?other,
+                        elapsed_ms = start.elapsed().as_millis(),
+                        "Density probe: prepare_instance returned retry decision"
+                    );
+                }
+                Ok(other)
+            }
+            Err(error) => {
+                if density_probe {
+                    warn!(
+                        agent_id = %agent_id,
+                        error = %error,
+                        elapsed_ms = start.elapsed().as_millis(),
+                        "Density probe: prepare_instance failed"
+                    );
+                }
+                Err(WorkerExecutorError::failed_to_resume_worker(
+                    agent_id.clone(),
+                    error,
+                ))
+            }
         }
     }
 

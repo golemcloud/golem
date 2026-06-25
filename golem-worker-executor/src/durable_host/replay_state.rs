@@ -30,8 +30,9 @@ use std::collections::HashSet;
 use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -72,11 +73,20 @@ struct InternalReplayState {
 }
 
 impl ReplayState {
+    fn is_density_probe_agent(&self) -> bool {
+        self.owned_agent_id
+            .to_string()
+            .contains("resume-under-saturation")
+    }
+
     pub async fn new(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
     ) -> Result<Self, WorkerExecutorError> {
+        let density_probe = owned_agent_id
+            .to_string()
+            .contains("resume-under-saturation");
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
         let mut result = Self {
@@ -93,6 +103,13 @@ impl ReplayState {
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
+        if density_probe {
+            info!(
+                agent_id = %result.owned_agent_id.agent_id,
+                replay_target = %last_oplog_index,
+                "Density probe: replay state initialized"
+            );
+        }
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
         result.skip_forward().await?;
         Ok(result)
@@ -629,7 +646,43 @@ impl ReplayState {
     }
 
     async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<(OplogIndex, OplogEntry)> {
-        self.oplog.read_many(idx, n).await.into_iter().collect()
+        let density_probe = self.is_density_probe_agent();
+        let start = Instant::now();
+        let result: Vec<(OplogIndex, OplogEntry)> =
+            self.oplog.read_many(idx, n).await.into_iter().collect();
+
+        if density_probe {
+            let elapsed = start.elapsed();
+            let idx_u64 = u64::from(idx);
+            if elapsed.as_millis() >= 500 || idx_u64 % 100 == 0 || idx == self.replay_target.get() {
+                let log = |slow: bool| {
+                    if slow {
+                        warn!(
+                            agent_id = %self.owned_agent_id.agent_id,
+                            idx = %idx,
+                            requested = n,
+                            returned = result.len(),
+                            replay_target = %self.replay_target.get(),
+                            elapsed_ms = elapsed.as_millis(),
+                            "Density probe: slow replay oplog read"
+                        );
+                    } else {
+                        info!(
+                            agent_id = %self.owned_agent_id.agent_id,
+                            idx = %idx,
+                            requested = n,
+                            returned = result.len(),
+                            replay_target = %self.replay_target.get(),
+                            elapsed_ms = elapsed.as_millis(),
+                            "Density probe: replay oplog read progress"
+                        );
+                    }
+                };
+                log(elapsed.as_millis() >= 500);
+            }
+        }
+
+        result
     }
 }
 

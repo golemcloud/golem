@@ -53,7 +53,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, info, span, warn};
+use tracing::{Instrument, Level, Span, debug, span, warn};
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -104,13 +104,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// - Process the retry decision
     pub async fn run(&mut self) {
         loop {
-            if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                info!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    oom_retry_count = self.oom_retry_count,
-                    "Density probe: invocation loop creating instance"
-                );
-            }
             debug!("Invocation queue loop creating the instance");
 
             let (instance, store) = if let Some((instance, store)) = self.create_instance().await {
@@ -120,12 +113,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 break;
             };
 
-            if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                info!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    "Density probe: invocation loop recovering instance state"
-                );
-            }
             debug!("Invocation queue loop preparing the instance");
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
@@ -164,14 +151,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
-            if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                info!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    final_decision = ?final_decision,
-                    cleanup_ephemeral_worker,
-                    "Density probe: invocation loop finished iteration"
-                );
-            }
             self.suspend_worker(&store).await;
 
             if let Some(kind) = final_interrupt {
@@ -226,13 +205,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     continue;
                 }
                 Some(RetryDecision::Delayed(delay)) => {
-                    if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                        info!(
-                            agent_id = %self.owned_agent_id.agent_id(),
-                            delay_ms = delay.as_millis(),
-                            "Density probe: invocation loop sleeping before delayed retry"
-                        );
-                    }
                     debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {
@@ -299,14 +271,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::ReacquirePermits) => {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
-                    if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                        info!(
-                            agent_id = %self.owned_agent_id.agent_id(),
-                            delay = ?delay,
-                            oom_retry_count = self.oom_retry_count,
-                            "Density probe: invocation loop reacquiring permits after retry delay"
-                        );
-                    }
                     debug!(
                         "Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}"
                     );
@@ -389,24 +353,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         match prepare_result {
             Ok(decision) => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    info!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        decision = ?decision,
-                        "Density probe: recovery completed"
-                    );
-                }
                 debug!("Recovery decision from prepare_instance: {decision:?}");
                 decision
             }
             Err(err) => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    warn!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        error = %err,
-                        "Density probe: recovery failed"
-                    );
-                }
                 warn!("Failed to start the worker: {err}");
                 store.data().set_suspended();
 
@@ -477,12 +427,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
     pub async fn run(&mut self) -> InnerInvocationLoopResult {
         debug!("Invocation queue loop started");
-        if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-            info!(
-                agent_id = %self.owned_agent_id.agent_id(),
-                "Density probe: inner invocation loop started"
-            );
-        }
 
         let mut final_decision = None;
         let mut cleanup_ephemeral_worker = false;
@@ -492,13 +436,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup().await {
-            if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                info!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    command = ?cmd,
-                    "Density probe: invocation loop woke up"
-                );
-            }
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.acquire_concurrent_agent_permit().await;
@@ -650,15 +587,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             // Then, try to process a pending invocation
             if let Some(timestamped_invocation) = status.pending_invocations.first() {
                 let idempotency_key = timestamped_invocation.invocation.idempotency_key();
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    info!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        idempotency_key = idempotency_key.map(|key| key.to_string()).unwrap_or_else(|| "-".to_string()),
-                        invocation = %timestamped_invocation.invocation.display_name(),
-                        pending_invocations = status.pending_invocations.len(),
-                        "Density probe: picking pending invocation from status"
-                    );
-                }
                 let invocation_span = if let Some(idempotency_key) = idempotency_key {
                     let spans = self.parent.external_invocation_spans.read().await;
                     spans.get(idempotency_key).cloned()
@@ -781,44 +709,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
     /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
     async fn resume_replay(&self) -> CommandOutcome {
-        if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-            info!(
-                agent_id = %self.owned_agent_id.agent_id(),
-                "Density probe: resuming replay"
-            );
-        }
         let mut store = self.store.lock().await;
 
         let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
         match resume_replay_result {
-            Ok(None) => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    info!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        "Density probe: resume replay completed"
-                    );
-                }
-                CommandOutcome::Continue
-            }
-            Ok(Some(decision)) => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    info!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        decision = ?decision,
-                        "Density probe: resume replay requested retry decision"
-                    );
-                }
-                CommandOutcome::BreakInnerLoop(decision)
-            }
+            Ok(None) => CommandOutcome::Continue,
+            Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
             Err(err) => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    warn!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        error = %err,
-                        "Density probe: resume replay failed"
-                    );
-                }
                 warn!("Failed to resume replay: {err}");
                 store.data().set_suspended();
 
@@ -941,14 +839,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .idempotency_key()
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
-        if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-            info!(
-                agent_id = %self.owned_agent_id.agent_id(),
-                idempotency_key = %idempotency_key,
-                function = %display_name,
-                "Density probe: invoking agent function"
-            );
-        }
 
         let span = span!(
             parent: invocation_span,
@@ -989,28 +879,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    info!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        function = %display_name,
-                        consumed_fuel,
-                        "Density probe: agent invocation succeeded"
-                    );
-                }
                 self.agent_invocation_finished(display_name, invocation_result, consumed_fuel, kind)
                     .await
             }
-            _ => {
-                if super::is_density_probe_agent(&self.owned_agent_id.agent_id()) {
-                    warn!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        function = %display_name,
-                        result = ?result,
-                        "Density probe: agent invocation failed or interrupted"
-                    );
-                }
-                self.agent_invocation_failed(&display_name, result).await
-            }
+            _ => self.agent_invocation_failed(&display_name, result).await,
         }
     }
 
