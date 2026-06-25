@@ -4,6 +4,7 @@ world agent-guest {
   import golem:api/host@1.5.0;
   import golem:core/types@2.0.0;
   import golem:agent/host@2.0.0;
+  import golem:tool/host@0.1.0;
 
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/mysql@1.5.0;
@@ -43,6 +44,7 @@ world agent-guest {
   import wasi:http/outgoing-handler@0.2.3;
 
   include golem:agent/agent-guest@2.0.0;
+  export golem:tool/guest@0.1.0;
 
   export golem:api/save-snapshot@1.5.0;
   export golem:api/load-snapshot@1.5.0;

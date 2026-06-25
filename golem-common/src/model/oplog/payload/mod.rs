@@ -20,6 +20,7 @@ mod tests;
 use crate::model::agent::AgentTypeName;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
+use crate::model::oplog::CardInstallFailure;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
@@ -109,6 +110,9 @@ oplog_payload! {
         },
         GolemApiPromiseId {
             promise_id: PromiseId
+        },
+        GolemApiCard {
+            card_id: Uuid
         },
         GolemApiRevertAgent {
             agent_id: AgentId,
@@ -295,6 +299,12 @@ oplog_payload! {
         },
         GolemApiPromiseResult {
             result: Option<Vec<u8>>
+        },
+        GolemApiCard {
+            result: Result<Uuid, String>
+        },
+        GolemApiInstallCard {
+            result: Result<(), CardInstallFailure>,
         },
         GolemApiUnit {
             result: Result<(), String>,
@@ -545,6 +555,8 @@ pub mod host_functions {
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),
+        (GolemApiDeriveCard => "golem::api", "derive-card", GolemApiCard, GolemApiCard),
+        (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),
         (GolemApiUpdateWorker => "golem::api", "update_worker", GolemApiUpdateAgent, GolemApiUnit),
         (GolemApiGetSelfMetadata => "golem::api", "get_self_metadata", NoInput, GolemApiSelfAgentMetadata),
         (GolemApiGetAgentMetadata => "golem::api", "get_agent_metadata", GolemApiAgentId, GolemApiAgentMetadata),

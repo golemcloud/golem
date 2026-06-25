@@ -1144,8 +1144,57 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
+                    "{pad}queued event:      {}",
+                    format_id(&format!("{:?}", params.queued_event_index))
+                ));
+                logln(format!(
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
+                ));
+            }
+            PublicOplogEntry::CardEventQueued(params) => {
+                logln(format_message_highlight("CARD EVENT QUEUED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.event.card_id())
+                ));
+            }
+            PublicOplogEntry::CardInstalled(params) => {
+                logln(format_message_highlight("CARD INSTALLED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}queued event:      {}",
+                    format_id(&format!("{:?}", params.queued_event_index))
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.card_id)
+                ));
+            }
+            PublicOplogEntry::CardInstallFailed(params) => {
+                logln(format_message_highlight("CARD INSTALL FAILED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}queued event:      {}",
+                    format_id(&params.queued_event_index)
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.card_id)
+                ));
+                logln(format!(
+                    "{pad}reason:            {}",
+                    format_id(&format!("{:?}", params.reason))
                 ));
             }
         }

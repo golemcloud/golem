@@ -11154,6 +11154,13 @@ components:
           type: boolean
       required:
       - canceled
+    CardInstallFailure:
+      type: string
+      enum:
+      - CardRevoked
+      - NotFound
+      - RecipientMismatch
+      - NotPermitted
     CompleteParameters:
       title: CompleteParameters
       type: object
@@ -12070,6 +12077,9 @@ components:
           OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
           SetRetryPolicy: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
           RemoveRetryPolicy: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
+          CardEventQueued: '#/components/schemas/PublicOplogEntry_r#CardEventQueuedParams'
+          CardInstalled: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
+          CardInstallFailed: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
       type: object
       oneOf:
@@ -12114,6 +12124,9 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardEventQueuedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
@@ -12211,6 +12224,42 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CancelledParams'
+    PublicOplogEntry_r#CardEventQueuedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardEventQueued
+            type: string
+            enum:
+            - CardEventQueued
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardEventQueuedParams'
+    PublicOplogEntry_r#CardInstallFailedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardInstallFailed
+            type: string
+            enum:
+            - CardInstallFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardInstallFailedParams'
+    PublicOplogEntry_r#CardInstalledParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardInstalled
+            type: string
+            enum:
+            - CardInstalled
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardInstalledParams'
     PublicOplogEntry_r#CardRevokedParams:
       allOf:
       - type: object
@@ -12631,6 +12680,37 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SuspendParams'
+    PublicQueuedCardEvent:
+      discriminator:
+        propertyName: type
+        mapping:
+          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+    PublicQueuedCardEventCard:
+      title: PublicQueuedCardEventCard
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+      required:
+      - cardId
+    PublicQueuedCardEvent_PublicQueuedCardEventCard:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revoke
+            type: string
+            enum:
+            - Revoke
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicQueuedCardEventCard'
     PublicRetryPolicyState:
       description: |-
         API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
@@ -14691,6 +14771,54 @@ components:
       required:
       - timestamp
       - startIndex
+    r#CardEventQueuedParams:
+      title: r#CardEventQueuedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        event:
+          $ref: '#/components/schemas/PublicQueuedCardEvent'
+      required:
+      - timestamp
+      - event
+    r#CardInstallFailedParams:
+      title: r#CardInstallFailedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        queuedEventIndex:
+          type: integer
+          format: uint64
+        cardId:
+          type: string
+          format: uuid
+        reason:
+          $ref: '#/components/schemas/CardInstallFailure'
+      required:
+      - timestamp
+      - queuedEventIndex
+      - cardId
+      - reason
+    r#CardInstalledParams:
+      title: r#CardInstalledParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        queuedEventIndex:
+          type: integer
+          format: uint64
+        cardId:
+          type: string
+          format: uuid
+      required:
+      - timestamp
+      - cardId
     r#CardRevokedParams:
       title: r#CardRevokedParams
       type: object
@@ -14698,11 +14826,15 @@ components:
         timestamp:
           type: string
           format: date-time
+        queuedEventIndex:
+          type: integer
+          format: uint64
         cardId:
           type: string
           format: uuid
       required:
       - timestamp
+      - queuedEventIndex
       - cardId
     r#ChangePersistenceLevelParams:
       title: r#ChangePersistenceLevelParams

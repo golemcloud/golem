@@ -24,6 +24,7 @@ use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
+use chrono::DateTime;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
@@ -34,6 +35,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::card::{Card, CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::environment::EnvironmentId;
@@ -72,6 +74,7 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
+pub use golem_test_framework::dsl::PrecompiledComponent;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -89,7 +92,7 @@ use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
-use golem_worker_executor::services::card::CardService;
+use golem_worker_executor::services::card::{CardService, NoopCardService};
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, NoOpDirectInvocationAuthService,
@@ -137,7 +140,7 @@ use golem_worker_executor::workerctx::{
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -151,15 +154,13 @@ use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
-use uuid::Uuid;
+use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 
 #[cfg(test)]
 test_r::enable!();
-
-pub use golem_test_framework::dsl::PrecompiledComponent;
 
 /// A handle to either an owned `TempDir` (parent process) or a borrowed
 /// on-disk path (worker process).
@@ -1924,6 +1925,13 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         ))
     }
 
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(TestCardService)
+    }
+
     fn create_additional_deps(
         &self,
         _registry_service: Arc<dyn RegistryService>,
@@ -2043,6 +2051,13 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         ))
     }
 
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(NoopCardService)
+    }
+
     fn create_resource_limits(
         &self,
         _golem_config: &GolemConfig,
@@ -2097,6 +2112,13 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::tool::host::add_to_linker::<
             _,
             HasSelf<DurableWorkerCtx<Context>>,
         >(
@@ -3341,5 +3363,56 @@ impl Rpc for FailingRpc {
                 auth_ctx,
             )
             .await
+    }
+}
+
+pub const TEST_CARD_ID: CardId = CardId(uuid!("b7f515b3-eabb-4a39-8d94-fe6078ed441e"));
+
+pub struct TestCardService;
+
+#[async_trait]
+impl CardService for TestCardService {
+    async fn register_agent(&self, _agent_id: OwnedAgentId) {}
+
+    async fn register_agent_cards(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
+
+    async fn remove_revoked_agent_cards(&self, _agent_id: &OwnedAgentId, _card_ids: &[CardId]) {}
+
+    async fn unregister_agent(&self, _agent_id: &OwnedAgentId) {}
+
+    async fn record_revoked_cards(
+        &self,
+        _card_ids: &[CardId],
+    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
+        HashMap::new()
+    }
+
+    async fn check_cards(
+        &self,
+        _card_ids: Vec<CardId>,
+    ) -> Result<HashSet<CardId>, WorkerExecutorError> {
+        Ok(HashSet::new())
+    }
+
+    async fn get_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
+        if card_ids.contains(&TEST_CARD_ID) {
+            Ok(vec![StoredCard::Concrete(Card {
+                card_id: TEST_CARD_ID,
+                parent_ids: Vec::new(),
+                lower_positive: Vec::new(),
+                lower_negative: Vec::new(),
+                upper_positive: Vec::new(),
+                upper_negative: Vec::new(),
+                created_at: DateTime::from_timestamp_nanos(0),
+                expires_at: None,
+                system_card: false,
+                managed_by: None,
+            })])
+        } else {
+            Ok(Vec::new())
+        }
     }
 }

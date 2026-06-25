@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::wire;
-use crate::model::{AccountId, AgentId, ComponentId, Datetime, EnvironmentId, PromiseId, Uuid};
+use crate::model::{
+    AccountId, AgentId, CardId, ComponentId, Datetime, EnvironmentId, PromiseId, Uuid,
+};
 use chrono::TimeZone;
 
 pub fn uuid_to_wire(uuid: &Uuid) -> wire::Uuid {
@@ -115,6 +117,32 @@ impl From<&wire::AccountId> for AccountId {
 
 impl From<wire::AccountId> for AccountId {
     fn from(value: wire::AccountId) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&CardId> for wire::CardId {
+    fn from(value: &CardId) -> Self {
+        Self {
+            uuid: uuid_to_wire(&value.uuid),
+        }
+    }
+}
+
+impl From<CardId> for wire::CardId {
+    fn from(value: CardId) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&wire::CardId> for CardId {
+    fn from(value: &wire::CardId) -> Self {
+        Self::new(uuid_from_wire(&value.uuid))
+    }
+}
+
+impl From<wire::CardId> for CardId {
+    fn from(value: wire::CardId) -> Self {
         Self::from(&value)
     }
 }

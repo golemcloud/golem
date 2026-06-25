@@ -7,4 +7,5 @@ package golem:common;
 world golem-common-schema {
   import golem:agent/common@2.0.0;
   import golem:api/retry@1.5.0;
+  import golem:tool/common@0.1.0;
 }

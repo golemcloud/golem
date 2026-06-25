@@ -30,9 +30,10 @@ use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
+    BatchGetCardsRequest, BatchGetCardsResponse, BatchGetCardsSuccessResponse,
     BatchGetExistingCardsRequest, BatchGetExistingCardsResponse,
     BatchGetExistingCardsSuccessResponse, BatchUpdateResourceUsageRequest,
-    BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse,
+    BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse, CardData,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
     GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
@@ -52,7 +53,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, authenticate_token_response,
+    UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
     download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
@@ -218,6 +219,31 @@ impl RegistryServiceGrpcApi {
 
         Ok(BatchGetExistingCardsSuccessResponse {
             card_ids: existing.into_iter().map(|id| id.0.into()).collect(),
+        })
+    }
+
+    async fn batch_get_cards_internal(
+        &self,
+        request: BatchGetCardsRequest,
+    ) -> Result<BatchGetCardsSuccessResponse, GrpcApiError> {
+        let card_ids = request
+            .card_ids
+            .into_iter()
+            .map(|id| CardId(id.into()))
+            .collect::<Vec<_>>();
+        let cards = self.card_service.get_cards(card_ids).await?;
+
+        Ok(BatchGetCardsSuccessResponse {
+            cards: cards
+                .into_iter()
+                .map(|card| {
+                    let card_id = card.card_id();
+                    Ok(CardData {
+                        card_id: Some(card_id.0.into()),
+                        card: golem_common::serialization::serialize(&card)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
         })
     }
 
@@ -647,6 +673,28 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(BatchGetExistingCardsResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn batch_get_cards(
+        &self,
+        request: Request<BatchGetCardsRequest>,
+    ) -> Result<Response<BatchGetCardsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("batch_get_cards",);
+
+        let response = match self
+            .batch_get_cards_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => batch_get_cards_response::Result::Success(result),
+            Err(error) => batch_get_cards_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(BatchGetCardsResponse {
             result: Some(response),
         }))
     }

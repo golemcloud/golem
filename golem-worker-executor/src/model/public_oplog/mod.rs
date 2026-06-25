@@ -25,11 +25,12 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    CancelledParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams,
+    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
@@ -819,6 +820,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 data,
                 mime_type,
+                ..
             } => {
                 let bytes: Vec<u8> = oplog_service
                     .download_payload(owned_agent_id, agent_mode, data)
@@ -881,12 +883,43 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::RemoveRetryPolicy { timestamp, name } => Ok(
                 PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams { timestamp, name }),
             ),
-            OplogEntry::CardRevoked { timestamp, card_id } => {
-                Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
+            OplogEntry::CardRevoked {
+                timestamp,
+                queued_event_index,
+                card_id,
+            } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
+                timestamp,
+                queued_event_index,
+                card_id,
+            })),
+            OplogEntry::CardEventQueued { timestamp, event } => {
+                Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
                     timestamp,
-                    card_id,
+                    event: event.into(),
                 }))
             }
+            OplogEntry::CardInstalled {
+                timestamp,
+                queued_event_index,
+                card,
+            } => Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
+                timestamp,
+                queued_event_index,
+                card_id: card.card_id(),
+            })),
+            OplogEntry::CardInstallFailed {
+                timestamp,
+                queued_event_index,
+                card_id,
+                reason,
+            } => Ok(PublicOplogEntry::CardInstallFailed(
+                CardInstallFailedParams {
+                    timestamp,
+                    queued_event_index,
+                    card_id,
+                    reason,
+                },
+            )),
         }
     }
 }

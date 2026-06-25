@@ -94,15 +94,14 @@ impl FileSystem for FileSystemImpl {
         let count1 = rd1.into_iter().count();
         println!("number of entries in root at start: {}", count1);
 
-        let _ = create_dir_all("/test/dir1").unwrap();
-        let _ = create_dir_all("/test/dir2").unwrap();
-        let _ = write("/test/hello.txt", "hello world").unwrap();
+        create_dir_all("/test/dir1").unwrap();
+        create_dir_all("/test/dir2").unwrap();
+        write("/test/hello.txt", "hello world").unwrap();
 
         println!("Created test entries");
 
         let root_entries: Vec<DirEntry> = read_dir("/")
             .unwrap()
-            .into_iter()
             .map(|entry| {
                 let dir_entry = entry.unwrap();
                 DirEntry {
@@ -114,7 +113,6 @@ impl FileSystem for FileSystemImpl {
 
         let test_entries: Vec<DirEntry> = read_dir("/test")
             .unwrap()
-            .into_iter()
             .map(|entry| {
                 let dir_entry = entry.unwrap();
                 DirEntry {
@@ -142,11 +140,11 @@ impl FileSystem for FileSystemImpl {
         println!("file write/read/delete test starting");
         let read_nonexisting_result: Option<String> = read_to_string("testfile.txt").ok();
         println!("read_nonexisting_result: {:?}", read_nonexisting_result);
-        let _ = write("/testfile.txt", "hello world").unwrap();
+        write("/testfile.txt", "hello world").unwrap();
         println!("wrote test file");
         let read_existing_result: Option<String> = read_to_string("/testfile.txt").ok();
         println!("read_existing_result: {:?}", read_existing_result);
-        let _ = remove_file("/testfile.txt").unwrap();
+        remove_file("/testfile.txt").unwrap();
         println!("deleted test file");
         let read_nonexisting_result2: Option<String> = read_to_string("/testfile.txt").ok();
         println!("read_nonexisting_result2: {:?}", read_nonexisting_result2);

@@ -23,16 +23,17 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchGetExistingCardsRequest, BatchUpdateResourceUsageRequest,
-    DownloadComponentRequest, GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
-    GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
-    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest, ResolveAgentTypeByNamesRequest,
-    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, authenticate_token_response,
-    batch_get_existing_cards_response, batch_update_resource_usage_response,
-    download_component_response, get_active_mcp_for_domain_response,
-    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
+    AuthenticateTokenRequest, BatchGetCardsRequest, BatchGetExistingCardsRequest,
+    BatchUpdateResourceUsageRequest, DownloadComponentRequest, GetActiveMcpForDomainRequest,
+    GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
+    GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
+    GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
+    GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
+    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
+    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, download_component_response,
+    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
@@ -47,7 +48,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::card::CardId;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
@@ -112,6 +113,13 @@ pub trait RegistryService: Send + Sync {
         card_ids: Vec<CardId>,
     ) -> Result<Vec<CardId>, RegistryServiceError> {
         Ok(card_ids)
+    }
+
+    async fn batch_get_cards(
+        &self,
+        _card_ids: Vec<CardId>,
+    ) -> Result<Vec<StoredCard>, RegistryServiceError> {
+        Ok(Vec::new())
     }
 
     // components api
@@ -585,6 +593,47 @@ impl RegistryService for GrpcRegistryService {
                 .map(|id| CardId(id.into()))
                 .collect()),
             Some(batch_get_existing_cards_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn batch_get_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<Vec<StoredCard>, RegistryServiceError> {
+        let request_card_ids = card_ids
+            .into_iter()
+            .map(|id| id.0.into())
+            .collect::<Vec<_>>();
+
+        let response = self
+            .client
+            .call("batch_get_cards", move |client| {
+                let request = BatchGetCardsRequest {
+                    card_ids: request_card_ids.clone(),
+                };
+
+                Box::pin(client.batch_get_cards(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(batch_get_cards_response::Result::Success(payload)) => payload
+                .cards
+                .into_iter()
+                .map(|card| {
+                    golem_common::serialization::deserialize(&card.card).map_err(|err| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "failed to deserialize card {}: {err}",
+                            card.card_id
+                                .map(|id| uuid::Uuid::from(id).to_string())
+                                .unwrap_or_else(|| "<missing>".to_string())
+                        ))
+                    })
+                })
+                .collect(),
+            Some(batch_get_cards_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
