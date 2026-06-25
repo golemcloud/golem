@@ -22,8 +22,8 @@ pub use wstd;
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Schema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
+    SchemaType, SchemaValue, SecretRef, TypedSchemaValue,
 };
 pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 
@@ -39,12 +39,14 @@ pub fn decode_schema_graph(
     schema::wit::decode_graph(graph)
 }
 
-pub fn encode_schema_value(value: &SchemaValue) -> schema::wit::wire::SchemaValueTree {
+pub fn encode_schema_value(
+    value: &SchemaValue,
+) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
     schema::wit::encode_value(value)
 }
 
 pub fn decode_schema_value(
-    value: &schema::wit::wire::SchemaValueTree,
+    value: schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, schema::wit::DecodeError> {
     schema::wit::decode_value(value)
 }

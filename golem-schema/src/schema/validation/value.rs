@@ -18,13 +18,18 @@
 use crate::schema::graph::{GraphIndex, SchemaGraph};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
-    SchemaType, SecretSpec, TextRestrictions, UnionBranch, UrlRestrictions,
+    BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, SchemaType,
+    SecretSpec, TextRestrictions, UnionBranch, UrlRestrictions,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue,
-    SecretValuePayload, TextValuePayload,
+    BinaryValuePayload, ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
 };
+// Only the host (and feature-neutral) build inspects a quota-token's snapshot
+// fields; on a guest the value is an opaque owned handle.
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+use crate::schema::schema_type::QuotaTokenSpec;
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+use crate::schema::schema_value::QuotaTokenValuePayload;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
 
@@ -695,7 +700,13 @@ fn check<'a>(
             check_secret(spec, payload, path, errors);
         }
         (SchemaType::QuotaToken { spec, .. }, SchemaValue::QuotaToken(payload)) => {
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             check_quota_token(spec, payload, path, errors);
+            // On a guest the quota-token value is an opaque owned handle with no
+            // readable fields; the resource-name constraint is enforced
+            // host-side when the handle is lifted to its trusted snapshot.
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            let _ = (spec, payload);
         }
 
         (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
@@ -1113,6 +1124,7 @@ fn check_secret(
     }
 }
 
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
 fn check_quota_token(
     spec: &QuotaTokenSpec,
     payload: &QuotaTokenValuePayload,

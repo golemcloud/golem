@@ -42,12 +42,17 @@ pub impl MultimodalModality for TextOrImage with to_modality_value(self) {
 }
 
 ///|
-pub impl MultimodalModality for TextOrImage with from_modality_value(case, payload) {
+pub impl MultimodalModality for TextOrImage with from_modality_value(
+  case,
+  payload,
+) {
   match case {
     0 => Text(@schema.from_value_as(payload))
     1 => Image(@schema.from_value_as(payload))
     other => {
-      let err = @schema.FromSchemaError::out_of_range(other, 2U, "test.TextOrImage")
+      let err = @schema.FromSchemaError::out_of_range(
+        other, 2U, "test.TextOrImage",
+      )
       raise err
     }
   }

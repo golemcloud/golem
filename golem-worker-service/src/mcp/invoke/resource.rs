@@ -23,7 +23,7 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::to_json_value;
+use golem_common::schema::render::json_value::to_json_value_redacted;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
@@ -230,7 +230,7 @@ fn schema_value_to_resource_content(
         };
     }
 
-    let json_value = to_json_value(graph, ty, value).map_err(|e| {
+    let json_value = to_json_value_redacted(graph, ty, value).map_err(|e| {
         internal_error(format!("Failed to serialize component model response: {e}"))
     })?;
     Ok(ResourceContents::TextResourceContents {

@@ -187,6 +187,26 @@ function getTypeFromTsMorphInternal(
     return { kind: 'quota-token', name: aliasName, optional: isOptional };
   }
 
+  if (isExactly(type, wellKnownTypes.sdk.path)) {
+    return { kind: 'path', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactlyBuiltIn(type, wellKnownTypes.sdk.url)) {
+    return { kind: 'url', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactlyBuiltIn(type, wellKnownTypes.sdk.date)) {
+    return { kind: 'datetime', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.duration)) {
+    return { kind: 'duration', name: aliasName, optional: isOptional };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.quantity)) {
+    return { kind: 'quantity', name: aliasName, optional: isOptional, spec: getQuantitySpec(type) };
+  }
+
   if (!containsInvalidTypes(type) && type.isAssignableTo(wellKnownTypes.sdk.principal)) {
     return {
       kind: 'principal',
@@ -507,13 +527,64 @@ function getUnionTypeKindRank(kind: Type.Type['kind']): number {
       return 17;
     case 'principal':
       return 18;
-    case 'alias':
+    case 'path':
       return 19;
-    case 'others':
+    case 'url':
       return 20;
-    case 'unresolved-type':
+    case 'datetime':
       return 21;
+    case 'duration':
+      return 22;
+    case 'quantity':
+      return 23;
+    case 'alias':
+      return 24;
+    case 'others':
+      return 25;
+    case 'unresolved-type':
+      return 26;
   }
+}
+
+function getQuantitySpec(type: TsMorphType): Type.QuantitySpec | undefined {
+  const specType = type.getTypeArguments()[0];
+  if (!specType) return undefined;
+
+  const declaration =
+    specType.getSymbol()?.getDeclarations()[0] ?? specType.getAliasSymbol()?.getDeclarations()[0];
+  if (!declaration) return undefined;
+  const baseUnit = literalProperty(specType, 'baseUnit');
+  const allowedSuffixesType = specType
+    .getProperty('allowedSuffixes')
+    ?.getTypeAtLocation(declaration);
+  const tupleElements = allowedSuffixesType?.getTupleElements();
+  const allowedSuffixes = tupleElements?.map((element) => element.getLiteralValue());
+
+  if (
+    baseUnit === undefined ||
+    tupleElements === undefined ||
+    !allowedSuffixesType?.isTuple() ||
+    allowedSuffixes === undefined ||
+    allowedSuffixes.length !== tupleElements.length ||
+    !allowedSuffixes.every((value): value is string => typeof value === 'string')
+  ) {
+    throw new Error(
+      'Quantity<T> type parameter must have a literal baseUnit and a tuple of string-literal allowedSuffixes',
+    );
+  }
+
+  return {
+    baseUnit,
+    allowedSuffixes,
+  };
+}
+
+function literalProperty(type: TsMorphType, name: string): string | undefined {
+  const declaration =
+    type.getSymbol()?.getDeclarations()[0] ?? type.getAliasSymbol()?.getDeclarations()[0];
+  if (!declaration) return undefined;
+  const value = type.getProperty(name)?.getTypeAtLocation(declaration).getLiteralValue();
+  return typeof value === 'string' ? value : undefined;
 }
 
 // TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types
@@ -1045,7 +1116,36 @@ function isExactly(type: TsMorphType, wellKnown: WellKnown): boolean {
     return false;
   }
 
-  return nominalSymbol === wellKnown.symbol;
+  return (
+    nominalSymbol === wellKnown.symbol || sameSymbolDeclaration(nominalSymbol, wellKnown.symbol)
+  );
+}
+
+function isExactlyBuiltIn(type: TsMorphType, wellKnown: WellKnown): boolean {
+  const nominalSymbol = getNominalSymbol(type);
+  if (nominalSymbol == null || !isExactly(type, wellKnown)) return false;
+  const declarationPaths = nominalSymbol
+    .getDeclarations()
+    .map((declaration) => declaration.getSourceFile().getFilePath());
+  return (
+    declarationPaths.some((filePath) => filePath.includes('/typescript/lib/')) &&
+    declarationPaths.every((filePath) => filePath.includes('/node_modules/'))
+  );
+}
+
+function sameSymbolDeclaration(left: TsMorphSymbol, right: TsMorphSymbol): boolean {
+  return left
+    .getDeclarations()
+    .some((leftDeclaration) =>
+      right
+        .getDeclarations()
+        .some(
+          (rightDeclaration) =>
+            leftDeclaration.getSourceFile().getFilePath() ===
+              rightDeclaration.getSourceFile().getFilePath() &&
+            leftDeclaration.getStart() === rightDeclaration.getStart(),
+        ),
+    );
 }
 
 function isConcreteType(type: TsMorphType): boolean {

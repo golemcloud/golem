@@ -93,7 +93,7 @@ impl<T> Secret<T> {
             &crate::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
         );
         let value =
-            crate::decode_schema_value(&value).expect("failed to decode config schema value");
+            crate::decode_schema_value(value).expect("failed to decode config schema value");
         T::from_value(&value).expect("failed deserializing secret value")
     }
 }

@@ -18,6 +18,26 @@ use chrono::{DateTime, Utc};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
+/// The payload carried by [`SchemaValue::QuotaToken`].
+///
+/// A quota-token is an opaque, unforgeable capability. The representation
+/// differs by build target so that the value can never be inspected or
+/// fabricated by a guest:
+///
+/// - On the host (and in feature-neutral builds) it is the trusted internal
+///   snapshot [`QuotaTokenValuePayload`], converted to/from an owned
+///   `quota-token` handle by a `QuotaTokenResolver` at the WIT boundary.
+/// - On a guest it is an opaque, affine, take-once owned handle
+///   ([`crate::schema::wit::GuestQuotaTokenHandle`]) that the guest can only
+///   hold and transfer, never read.
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+pub type QuotaTokenVariantValue = QuotaTokenValuePayload;
+
+/// The payload carried by [`SchemaValue::QuotaToken`] on a guest: an opaque,
+/// affine owned handle. See [`QuotaTokenVariantValue`] (host build) for details.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub type QuotaTokenVariantValue = crate::schema::wit::GuestQuotaTokenHandle;
+
 /// One node in the recursive in-memory schema-value tree.
 ///
 /// Always travels paired with a [`super::SchemaGraph`] (see
@@ -97,7 +117,7 @@ pub enum SchemaValue {
 
     // Capability nodes
     Secret(SecretValuePayload),
-    QuotaToken(QuotaTokenValuePayload),
+    QuotaToken(QuotaTokenVariantValue),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -185,9 +205,13 @@ pub struct SecretValuePayload {
     pub secret_ref: String,
 }
 
-/// Capability value: quota-token transport is **by snapshot**. The receiver
-/// re-acquires a live lease against `(environment_id, resource_name)` on
-/// demand.
+/// Capability value: the trusted internal/persistent representation of a
+/// quota-token, held only inside `SchemaValue::QuotaToken`. Across a WIT
+/// boundary the token travels as an opaque, unforgeable owned handle
+/// (`quota-token-handle(own<quota-token>)`); the host converts between this
+/// snapshot and a handle through a resolver and the receiver re-acquires a live
+/// lease against `(environment_id, resource_name)` on demand. This snapshot is
+/// never exposed to or constructible by a guest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]

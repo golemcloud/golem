@@ -5229,6 +5229,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "chrono",
  "clap",
  "convert_case 0.11.0",
  "futures",
@@ -5258,6 +5259,7 @@ dependencies = [
  "tokio-tungstenite 0.25.0",
  "tracing",
  "tracing-opentelemetry",
+ "url",
  "uuid",
  "wac-graph",
 ]
@@ -11411,9 +11413,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7edeb708f0d4c7a99a2e5862ed00bebf091693981ef70bcdae4c513b1919b01c"
+checksum = "3b97802faed27e133d390e0a08afa00a112e525f51fb4a0aac320db6f1fb42de"
 dependencies = [
  "anyhow",
  "camino",

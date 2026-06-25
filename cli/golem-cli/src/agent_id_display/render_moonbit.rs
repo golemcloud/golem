@@ -16,6 +16,7 @@ use super::{render_rich_constructor, render_rich_constructor2, resolve_named_ref
 use golem_common::model::agent::text_utils::write_json_escaped;
 use golem_common::schema::canonical;
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::host_managed::HostManagedKind;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, UnionValuePayload};
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -43,6 +44,13 @@ fn render_cm_value_inner(
     def_name: Option<&str>,
     value: &SchemaValue,
 ) {
+    // Host-managed capability values never render their raw payload; classify
+    // via `HostManagedKind` so future capability kinds redact automatically.
+    if let Some(kind) = HostManagedKind::from_value(value) {
+        buf.push_str(kind.redacted_placeholder());
+        return;
+    }
+
     match (ty, value) {
         (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => {
             let _ = write!(buf, "{b}");
@@ -202,10 +210,6 @@ fn render_cm_value_inner(
         (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => {
             let s = canonical::quantity::to_text(q).unwrap_or_else(|_| "<quantity>".to_string());
             render_rich_constructor(buf, "Quantity", &s);
-        }
-        (SchemaType::Secret { .. }, SchemaValue::Secret(_))
-        | (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(_)) => {
-            buf.push_str("<redacted>");
         }
         (SchemaType::Union { spec, .. }, SchemaValue::Union(UnionValuePayload { tag, body })) => {
             if let Some(branch) = spec.branches.iter().find(|b| &b.tag == tag) {

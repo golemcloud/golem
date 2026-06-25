@@ -17,7 +17,9 @@ use super::wit::{decode_tool, encode_tool, wire};
 use super::*;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
-use crate::schema::proptest_strategies::{schema_graph_strategy, schema_value_strategy};
+use crate::schema::proptest_strategies::{
+    schema_graph_strategy, transportable_schema_value_strategy,
+};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use crate::schema::schema_value::SchemaValue;
 use proptest::prelude::*;
@@ -1012,7 +1014,7 @@ fn arb_option_spec() -> impl Strategy<Value = OptionSpec> {
         arb_doc(),
         prop::option::of(arb_ident()),
         arb_option_shape(),
-        prop::option::of(schema_value_strategy()),
+        prop::option::of(transportable_schema_value_strategy()),
         any::<bool>(),
         prop::option::of(arb_ident()),
     )
@@ -1039,7 +1041,7 @@ fn arb_positional() -> impl Strategy<Value = Positional> {
         arb_doc(),
         prop::option::of(arb_ident()),
         arb_schema_type(),
-        prop::option::of(schema_value_strategy()),
+        prop::option::of(transportable_schema_value_strategy()),
         any::<bool>(),
     )
         .prop_map(
@@ -1088,7 +1090,8 @@ fn arb_positionals() -> impl Strategy<Value = Positionals> {
 }
 
 fn arb_value_is_ref() -> impl Strategy<Value = ValueIsRef> {
-    (arb_ident(), schema_value_strategy()).prop_map(|(name, value)| ValueIsRef { name, value })
+    (arb_ident(), transportable_schema_value_strategy())
+        .prop_map(|(name, value)| ValueIsRef { name, value })
 }
 
 fn arb_ref() -> impl Strategy<Value = Ref> {

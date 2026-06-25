@@ -17,7 +17,6 @@
 package golem.schema
 
 import golem.schema.wire._
-import golem.{EnvironmentId, Uuid}
 import zio.test.Assertion._
 import zio.test._
 
@@ -148,15 +147,7 @@ object SchemaModelSpec extends ZIOSpecDefault {
         QuantityValueNode(QuantityValue(1500L, 3, "kg")),
         UnionValue("ssh", StringValue("ssh://host")),
         SecretValue("secret-ref-1"),
-        QuotaTokenValue(
-          QuotaTokenValuePayload(
-            EnvironmentId(Uuid(BigInt(1), BigInt(2))),
-            "tokens",
-            10L,
-            -5L,
-            Datetime(1700000001L, 0)
-          )
-        )
+        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw("quota-token-handle-1"))
       )
     )
   }
@@ -353,6 +344,90 @@ object SchemaModelSpec extends ZIOSpecDefault {
           val bad = WitSchemaValueTree(Vector(WitSchemaValueNode.RecordValue(Vector(9))), 0)
           val res = Try(SchemaWire.schemaValueFromWit(bad))
           assert(res)(isFailure(isSubtype[SchemaDecodeError](anything)))
+        }
+      ),
+      suite("quota-token handle affine semantics")(
+        test("a single quota-token handle round-trips preserving handle identity") {
+          import SchemaValue._
+          val h          = GuestQuotaTokenHandle.fromRaw("raw-1")
+          val value      = QuotaTokenHandle(h)
+          val restored   = SchemaWire.schemaValueFromWit(SchemaWire.schemaValueToWit(value))
+          val sameHandle = restored match {
+            case QuotaTokenHandle(h2) => h2 eq h
+            case _                    => false
+          }
+          assertTrue(restored == value, sameHandle, h.isPresent)
+        },
+        test("encoding an already-transferred quota-token handle fails with SchemaEncodeError") {
+          import SchemaValue._
+          val h = GuestQuotaTokenHandle.fromRaw("raw-1")
+          h.take()
+          val res = Try(SchemaWire.schemaValueToWit(QuotaTokenHandle(h)))
+          assert(res)(isFailure(isSubtype[SchemaEncodeError](anything)))
+        },
+        test("encoding the same quota-token handle twice in one tree fails with SchemaEncodeError") {
+          import SchemaValue._
+          val h     = GuestQuotaTokenHandle.fromRaw("raw-1")
+          val value = RecordValue(List(QuotaTokenHandle(h), QuotaTokenHandle(h)))
+          val res   = Try(SchemaWire.schemaValueToWit(value))
+          assert(res)(isFailure(isSubtype[SchemaEncodeError](anything)))
+        },
+        test("decoding a tree that references one quota-token handle node twice fails and drains it") {
+          val h   = GuestQuotaTokenHandle.fromRaw("raw-1")
+          val bad = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.RecordValue(Vector(1, 1)),
+              WitSchemaValueNode.QuotaTokenHandle(h)
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
+        },
+        test("decoding a tree with an unreferenced quota-token handle node fails and drains it") {
+          val h   = GuestQuotaTokenHandle.fromRaw("raw-1")
+          val bad = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.BoolValue(true),
+              WitSchemaValueNode.QuotaTokenHandle(h)
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
+        },
+        test("decoding a valid root plus an unreachable handle node fails and drains both handles") {
+          // node 0 is a record referencing node 1 (a valid, reachable handle);
+          // node 2 is a second handle unreachable from the root.
+          val reachable   = GuestQuotaTokenHandle.fromRaw("raw-reachable")
+          val unreachable = GuestQuotaTokenHandle.fromRaw("raw-unreachable")
+          val bad         = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.RecordValue(Vector(1)),
+              WitSchemaValueNode.QuotaTokenHandle(reachable),
+              WitSchemaValueNode.QuotaTokenHandle(unreachable)
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
+          assertTrue(!reachable.isPresent, !unreachable.isPresent)
+        },
+        test("decoding fails atomically when a sibling is invalid, draining an already-reached handle") {
+          // Tuple([quota-handle, list-with-out-of-range-child]): the handle is
+          // reached first, then the sibling's child index is rejected. The handle
+          // must be released, not left live in a discarded partial value.
+          val h   = GuestQuotaTokenHandle.fromRaw("raw-1")
+          val bad = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.QuotaTokenHandle(h),
+              WitSchemaValueNode.ListValue(Vector(99))
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
         }
       ),
       suite("GraphEncoder multi-root (agent carrier use case)")(

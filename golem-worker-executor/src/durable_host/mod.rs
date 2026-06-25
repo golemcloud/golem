@@ -3179,8 +3179,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 && !recorded_result.replay_equivalent(&output.result)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("{full_function_name} => {recorded_result:?}"),
-                    format!("{full_function_name} => {:?}", output.result),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        recorded_result.redacted_debug()
+                    ),
+                    format!(
+                        "{full_function_name} => {:?}",
+                        output.result.redacted_debug()
+                    ),
                 ));
             }
         }

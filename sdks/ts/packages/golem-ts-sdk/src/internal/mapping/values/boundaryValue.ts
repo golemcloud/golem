@@ -46,7 +46,6 @@ import {
   unstructuredTextToValue,
 } from '../../schema/rich';
 import { sdkPrincipalFromHost } from '../../../principal';
-import { QuotaToken } from '../../../host/quota';
 import { Config } from '../../../agentConfig';
 
 // ============================================================
@@ -84,11 +83,8 @@ export function precompileOutputCodec(output: RuntimeOutput): void {
 
 export function serializeRuntimeValue(value: any, type: RuntimeTypeInfo): SchemaValue {
   switch (type.tag) {
-    case 'schema': {
-      const toSerialize =
-        type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
-      return serializeGraph(toSerialize, type.graph);
-    }
+    case 'schema':
+      return serializeGraph(value, type.graph);
     case 'unstructured-text':
       return unstructuredTextToValue(value);
     case 'unstructured-binary':
@@ -108,10 +104,8 @@ export function deserializeRuntimeValue(
   type: RuntimeTypeInfo,
 ): any {
   switch (type.tag) {
-    case 'schema': {
-      const result = deserializeGraph(value, type.graph);
-      return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
-    }
+    case 'schema':
+      return deserializeGraph(value, type.graph);
     case 'unstructured-text':
       return unstructuredTextFromValue(parameterName, value, type.languages);
     case 'unstructured-binary':
@@ -273,10 +267,8 @@ export function encodeInputRecordToWit(args: any[], userParams: RuntimeParam[]):
   const fieldIndices = userParams.map((param, i) => {
     const type = param.type as Extract<RuntimeTypeInfo, { tag: 'schema' }>;
     const value = i < args.length ? args[i] : undefined;
-    const toSerialize =
-      type.tsType.kind === 'quota-token' ? (value as QuotaToken)._toRecord() : value;
     const codec = getGraphCodec(type.graph);
-    return codec ? codec.emit(toSerialize, enc.valueNodes) : enc.emitGraph(toSerialize, type.graph);
+    return codec ? codec.emit(value, enc.valueNodes) : enc.emitGraph(value, type.graph);
   });
   const root = enc.pushRecord(fieldIndices);
   return { valueNodes: enc.valueNodes, root };
@@ -329,7 +321,7 @@ export function decodeInputRecordFromWit(
     } else {
       result = dec.readGraph(idx, schemaType.graph);
     }
-    return schemaType.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
+    return result;
   });
 
   if (fieldIndex !== fieldIndices.length) {
@@ -379,10 +371,8 @@ export function encodeOutputToWit(
   }
   const type = output.type;
   if (type.tag === 'schema') {
-    const toSerialize =
-      type.tsType.kind === 'quota-token' ? (returnValue as QuotaToken)._toRecord() : returnValue;
     const codec = getGraphCodec(type.graph);
-    return codec ? codec.encode(toSerialize) : serializeGraphToWit(toSerialize, type.graph);
+    return codec ? codec.encode(returnValue) : serializeGraphToWit(returnValue, type.graph);
   }
   return schemaValueToWit(serializeRuntimeValue(returnValue, type));
 }
@@ -406,8 +396,7 @@ export function decodeOutputFromWit(
   const type = output.type;
   if (type.tag === 'schema') {
     const codec = getGraphCodec(type.graph);
-    const result = codec ? codec.decode(value) : deserializeGraphFromWit(value, type.graph);
-    return type.tsType.kind === 'quota-token' ? QuotaToken._fromRecord(result) : result;
+    return codec ? codec.decode(value) : deserializeGraphFromWit(value, type.graph);
   }
   return deserializeRuntimeValue('returnValue', schemaValueFromWit(value), type);
 }

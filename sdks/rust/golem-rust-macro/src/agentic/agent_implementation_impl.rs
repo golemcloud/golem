@@ -312,6 +312,7 @@ fn build_match_arms(
 
         match_arms.push(quote! {
             #method_name => {
+                drop(method_name);
                 #method_param_extraction
             }
         });
@@ -422,6 +423,10 @@ fn generate_method_param_extraction(
                 )));
             }
         }
+        drop(__input_variant);
+        drop(__param_schemas);
+        drop(__agent_type_name);
+
         #post_method_param_extraction_logic
     }
 }

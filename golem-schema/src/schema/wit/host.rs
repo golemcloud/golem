@@ -25,5 +25,8 @@ pub mod generated {
         require_store_data_send: true,
         anyhow: true,
         wasmtime_crate: ::wasmtime,
+        with: {
+            "golem:core/types@2.0.0.quota-token": crate::schema::wit::QuotaTokenHandleRep,
+        },
     });
 }
