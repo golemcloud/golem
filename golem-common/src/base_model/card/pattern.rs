@@ -14,7 +14,6 @@
 
 use super::class::card_permission_classes;
 use super::class::*;
-use super::owner::*;
 
 macro_rules! define_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {

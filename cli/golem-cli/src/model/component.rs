@@ -23,10 +23,10 @@ use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
-use golem_common::model::card::{CardId, PolymorphicCard, PolymorphicManifestPermissionPattern};
+use golem_common::model::card::PolymorphicManifestPermissionPattern;
 use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
 use golem_common::model::component::{
-    AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision, InitialAgentFile, InstalledPlugin
+    AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
 };
 use golem_common::model::component::{
     AgentFileOptions, AgentFilePath, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
@@ -42,7 +42,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::str::FromStr;
-use golem_common::model::worker::TypedAgentConfigEntry;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -550,7 +549,12 @@ mod tests {
         let context = test_context();
 
         let initial_permission = manifest_card().resolve_recipients(&context);
-        let rendered = initial_permission.lower_bound.positive.into_iter().map(|p| p.render().unwrap()).collect::<Vec<_>>();
+        let rendered = initial_permission
+            .lower_bound
+            .positive
+            .into_iter()
+            .map(|p| p.render().unwrap())
+            .collect::<Vec<_>>();
 
         assert_eq!(
             rendered,

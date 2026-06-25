@@ -167,7 +167,8 @@ impl<'de> Deserialize<'de> for PermissionPattern {
     where
         D: Deserializer<'de>,
     {
-        String::deserialize(deserializer).and_then(|grant| Self::from_str(&grant).map_err(serde::de::Error::custom))
+        String::deserialize(deserializer)
+            .and_then(|grant| Self::from_str(&grant).map_err(serde::de::Error::custom))
     }
 }
 
@@ -200,7 +201,7 @@ impl poem_openapi::types::Type for PermissionPattern {
 #[cfg(feature = "full")]
 impl poem_openapi::types::ParseFromJSON for PermissionPattern {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
-        let value = value.ok_or_else(|| poem_openapi::types::ParseError::expected_input())?;
+        let value = value.ok_or_else(poem_openapi::types::ParseError::expected_input)?;
 
         serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
     }
@@ -237,7 +238,8 @@ impl<'de> Deserialize<'de> for PolymorphicPermissionPattern {
     where
         D: Deserializer<'de>,
     {
-        String::deserialize(deserializer).and_then(|grant| Self::from_str(&grant).map_err(serde::de::Error::custom))
+        String::deserialize(deserializer)
+            .and_then(|grant| Self::from_str(&grant).map_err(serde::de::Error::custom))
     }
 }
 
@@ -270,7 +272,7 @@ impl poem_openapi::types::Type for PolymorphicPermissionPattern {
 #[cfg(feature = "full")]
 impl poem_openapi::types::ParseFromJSON for PolymorphicPermissionPattern {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
-        let value = value.ok_or_else(|| poem_openapi::types::ParseError::expected_input())?;
+        let value = value.ok_or_else(poem_openapi::types::ParseError::expected_input)?;
 
         serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
     }

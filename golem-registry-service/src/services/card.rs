@@ -15,7 +15,9 @@
 use crate::repo::card::CardRepo;
 use crate::repo::model::card::{CardRecord, CardRepoError};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAgentInitial, PolymorphicCard, StoredCard};
+use golem_common::model::card::{
+    CardId, CardManagedBy, CardManagedByAgentInitial, PolymorphicCard, StoredCard,
+};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use std::sync::Arc;
 

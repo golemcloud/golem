@@ -19,7 +19,6 @@ use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 newtype_uuid!(CardId, wit_name: "card-id", wit_owner: "golem:core@2.0.0/types");

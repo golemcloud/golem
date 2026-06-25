@@ -2447,6 +2447,48 @@
       },
       "additionalProperties": false
     },
+    "ComponentLayerManifestInitialCardProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/ComponentLayerManifestInitialCardValue" },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerManifestInitialCardTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestInitialCardValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/ManifestInitialCard" }
+      ]
+    },
+    "ComponentLayerManifestInitialCardTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerOptionalStringOverrideTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
+    },
+    "ComponentLayerManifestInitialCardOverrideTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "value"],
+      "properties": {
+        "type": { "const": "override" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "value": { "$ref": "#/definitions/ManifestInitialCard" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerManifestInitialCardSkipTraceElem": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "skip" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "ComponentLayerCustomCommandsMapProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -2697,6 +2739,24 @@
             { "type": "null" }
           ]
         }
+      },
+      "additionalProperties": false
+    },
+    "ManifestInitialCard": {
+      "type": "object",
+      "required": ["lower_bound", "upper_bound"],
+      "properties": {
+        "lower_bound": { "$ref": "#/definitions/ManifestInitialCardBound" },
+        "upper_bound": { "$ref": "#/definitions/ManifestInitialCardBound" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestInitialCardBound": {
+      "type": "object",
+      "required": ["positive", "negative"],
+      "properties": {
+        "positive": { "type": "array", "items": { "type": "string" } },
+        "negative": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": false
     },

@@ -13,15 +13,20 @@
 // limitations under the License.
 
 use super::class::{card_permission_classes, *};
-use super::pattern::{
-    PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern, PermissionPattern,
+use super::owner::{
+    AccountOwnerPattern, AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
+    ComponentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
+    PolymorphicAccountOwnerPattern, PolymorphicAgentOwnerPattern,
+    PolymorphicApplicationOwnerPattern, PolymorphicComponentOwnerPattern,
+    PolymorphicEmptyOwnerPattern, PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern,
+    ToolOwnerPattern,
 };
-use super::owner::{AccountOwnerPattern, AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern, ComponentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern, PolymorphicAccountOwnerPattern, PolymorphicAgentOwnerPattern, PolymorphicApplicationOwnerPattern, PolymorphicComponentOwnerPattern, PolymorphicEmptyOwnerPattern, PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern, ToolOwnerPattern};
+use super::pattern::{
+    PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
+};
 use super::recipient::{PolymorphicRecipientPattern, RecipientPattern};
 
-pub fn render_permission(
-    permission: &PermissionPattern,
-) -> Result<String, String> {
+pub fn render_permission(permission: &PermissionPattern) -> Result<String, String> {
     macro_rules! render_case {
         ($($variant:ident: $class:ty,)+) => {
             match permission {
@@ -90,7 +95,7 @@ where
     Owner: RenderFragment,
     Recipient: RenderFragment,
     Verb: RenderFragment,
-    Resource: RenderFragment
+    Resource: RenderFragment,
 {
     Ok(format!(
         "{}({}) @ {} : {} : {}",
@@ -103,7 +108,6 @@ where
         resource.render_fragment()?,
     ))
 }
-
 
 trait RenderFragment {
     fn render_fragment(&self) -> Result<String, String>;

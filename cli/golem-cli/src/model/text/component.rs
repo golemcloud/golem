@@ -18,7 +18,7 @@ use crate::model::component::ComponentView;
 use crate::model::masking::{Masked, MaskingConfig, is_sensitive_key, mask_secret};
 use crate::model::text::fmt::*;
 use colored::control::SHOULD_COLORIZE;
-use golem_common::model::card::{PolymorphicCard};
+use golem_common::model::card::PolymorphicCard;
 use golem_common::model::component::ComponentName;
 use serde::Serializer;
 use serde::ser::Error;
@@ -161,7 +161,9 @@ fn push_initial_permission_section(
     let grants = permissions
         .iter()
         .map(|permission| {
-            permission.render().unwrap_or_else(|error| format!("<failed to render grant: {error}>"))
+            permission
+                .render()
+                .unwrap_or_else(|error| format!("<failed to render grant: {error}>"))
         })
         .map(|grant| format!("  - {grant}"))
         .collect::<Vec<_>>()

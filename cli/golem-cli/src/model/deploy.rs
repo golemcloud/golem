@@ -28,7 +28,7 @@ use golem_common::model::agent::{
     AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::model::card::{PolymorphicPermissionPattern};
+use golem_common::model::card::PolymorphicPermissionPattern;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};

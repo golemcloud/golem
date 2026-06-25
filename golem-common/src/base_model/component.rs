@@ -34,7 +34,6 @@ use crate::{
     newtype_uuid,
 };
 use derive_more::Display;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
@@ -350,7 +349,12 @@ mod tests {
         let creation = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
 
         assert_eq!(
-            creation.lower_bound.positive.into_iter().map(|p| p.render().unwrap()).collect::<Vec<_>>(),
+            creation
+                .lower_bound
+                .positive
+                .into_iter()
+                .map(|p| p.render().unwrap())
+                .collect::<Vec<_>>(),
             vec![
                 "environment(?env) @ * : view : *",
                 "component(?component) @ * : view : *",

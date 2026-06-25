@@ -21,7 +21,20 @@ use golem_common::model::card::owner::{
 };
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern, AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern, AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern, BlobResourcePattern, CardId, CardManagedBy, CardManagedByAccountRoot, CardResourcePattern, ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern, EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern, EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern, EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern, EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern, EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern, EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern, FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern, PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern, SystemResourcePattern, SystemVerb, ToolResourcePattern
+    AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
+    AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
+    AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
+    BlobResourcePattern, CardId, CardManagedBy, CardManagedByAccountRoot, CardResourcePattern,
+    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
+    EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
+    EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
+    EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern,
+    EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern,
+    EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
+    FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
+    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
+    SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
 
 pub(super) fn account_root_card_record(
@@ -50,7 +63,9 @@ pub(super) fn account_root_card_record(
         Vec::new(),
         None,
         true,
-        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot { account_id })),
+        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
+            account_id,
+        })),
     )
 }
 
