@@ -7,15 +7,15 @@ extern "wasm" fn mbt_ffi_free(position : Int) =
 #|(func (param i32) local.get 0 call $moonbit.decref)
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 #|(func (param i32) (result i32) (local i32)
 #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
 #| local.tee 1 i32.const 0 call $moonbit.init_array8
 #| local.get 1)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =

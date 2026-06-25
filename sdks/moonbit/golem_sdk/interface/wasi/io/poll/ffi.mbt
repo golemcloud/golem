@@ -9,10 +9,6 @@ fn wasmImportMethodPollableBlock(p0 : Int)  = "wasi:io/poll@0.2.3" "[method]poll
 fn wasmImportPoll(p0 : Int, p1 : Int, p2 : Int)  = "wasi:io/poll@0.2.3" "poll"
 
 ///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-#|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
 extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
 #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
 
@@ -33,4 +29,8 @@ extern "wasm" fn mbt_ffi_ptr2uint_array(ptr : Int, len : Int) -> FixedArray[UInt
 #| local.get 0
 #| local.get 1 call $moonbit.init_array32
 #| local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+#|(func (param i32) local.get 0 call $moonbit.decref)
 

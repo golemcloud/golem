@@ -6110,9 +6110,9 @@ fn __wit_bindgen_lower_t5(ptr : Int, value : @types.Datetime) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t15(ptr : Int, value : @types.SchemaTypeDef) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).id)
+      let ptr0 = mbt_ffi_str2ptr((value).id)
       mbt_ffi_store32((ptr) + 4, (value).id.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       match ((value).name) {
             None => {
@@ -6120,12 +6120,12 @@ fn __wit_bindgen_lower_t15(ptr : Int, value : @types.SchemaTypeDef) -> Unit {
 
                   ()
             }
-            Some(payload0) => {
+            Some(payload1) => {
                   mbt_ffi_store8((ptr) + 8, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 16, payload0.length())
-                  mbt_ffi_store32((ptr) + 12, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 16, payload1.length())
+                  mbt_ffi_store32((ptr) + 12, ptr2)
 
                   ()
             }
@@ -6156,9 +6156,9 @@ fn __wit_bindgen_lower_t16(ptr : Int, value : @types.Role) -> Unit {
             Other(payload2) => {
                   mbt_ffi_store8((ptr) + 0, (3))
 
-                  let ptr = mbt_ffi_str2ptr(payload2)
+                  let ptr3 = mbt_ffi_str2ptr(payload2)
                   mbt_ffi_store32((ptr) + 8, payload2.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr3)
 
                   ()
             }
@@ -6178,9 +6178,9 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 0, (1))
 
-                  let ptr = mbt_ffi_str2ptr(payload0)
+                  let ptr1 = mbt_ffi_str2ptr(payload0)
                   mbt_ffi_store32((ptr) + 8, payload0.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr1)
 
                   ()
             }
@@ -6191,26 +6191,26 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
             let iter_elem : String = ((value).aliases)[(index)]
             let iter_base = address + (index * 8);
 
-            let ptr1 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr1)
-
-      }
-      mbt_ffi_store32((ptr) + 16, ((value).aliases).length())
-      mbt_ffi_store32((ptr) + 12, address)
-
-      let address3 = mbt_ffi_malloc(((value).examples).length() * 8);
-      for index4 = 0; index4 < ((value).examples).length(); index4 = index4 + 1 {
-            let iter_elem : String = ((value).examples)[(index4)]
-            let iter_base = address3 + (index4 * 8);
-
             let ptr2 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32((iter_base) + 4, iter_elem.length())
             mbt_ffi_store32((iter_base) + 0, ptr2)
 
       }
+      mbt_ffi_store32((ptr) + 16, ((value).aliases).length())
+      mbt_ffi_store32((ptr) + 12, address)
+
+      let address4 = mbt_ffi_malloc(((value).examples).length() * 8);
+      for index5 = 0; index5 < ((value).examples).length(); index5 = index5 + 1 {
+            let iter_elem : String = ((value).examples)[(index5)]
+            let iter_base = address4 + (index5 * 8);
+
+            let ptr3 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32((iter_base) + 4, iter_elem.length())
+            mbt_ffi_store32((iter_base) + 0, ptr3)
+
+      }
       mbt_ffi_store32((ptr) + 24, ((value).examples).length())
-      mbt_ffi_store32((ptr) + 20, address3)
+      mbt_ffi_store32((ptr) + 20, address4)
 
       match ((value).deprecated) {
             None => {
@@ -6218,12 +6218,12 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
 
                   ()
             }
-            Some(payload6) => {
+            Some(payload7) => {
                   mbt_ffi_store8((ptr) + 28, (1))
 
-                  let ptr7 = mbt_ffi_str2ptr(payload6)
-                  mbt_ffi_store32((ptr) + 36, payload6.length())
-                  mbt_ffi_store32((ptr) + 32, ptr7)
+                  let ptr8 = mbt_ffi_str2ptr(payload7)
+                  mbt_ffi_store32((ptr) + 36, payload7.length())
+                  mbt_ffi_store32((ptr) + 32, ptr8)
 
                   ()
             }
@@ -6235,9 +6235,9 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
 
                   ()
             }
-            Some(payload9) => {
+            Some(payload10) => {
                   mbt_ffi_store8((ptr) + 40, (1))
-                  __wit_bindgen_lower_t16((ptr) + 44, payload9)
+                  __wit_bindgen_lower_t16((ptr) + 44, payload10)
 
                   ()
             }
@@ -6248,9 +6248,9 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t20(ptr : Int, value : @types.NamedFieldType) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).name)
+      let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
       mbt_ffi_store32((ptr) + 8, (value).body)
       __wit_bindgen_lower_t19((ptr) + 12, (value).metadata)
 
@@ -6259,9 +6259,9 @@ fn __wit_bindgen_lower_t20(ptr : Int, value : @types.NamedFieldType) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t22(ptr : Int, value : @types.VariantCaseType) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).name)
+      let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       match ((value).payload) {
             None => {
@@ -6269,9 +6269,9 @@ fn __wit_bindgen_lower_t22(ptr : Int, value : @types.VariantCaseType) -> Unit {
 
                   ()
             }
-            Some(payload0) => {
+            Some(payload1) => {
                   mbt_ffi_store8((ptr) + 8, (1))
-                  mbt_ffi_store32((ptr) + 12, payload0)
+                  mbt_ffi_store32((ptr) + 12, payload1)
 
                   ()
             }
@@ -6344,9 +6344,9 @@ fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
                         let iter_elem : String = (payload0)[(index)]
                         let iter_base = address + (index * 8);
 
-                        let ptr = mbt_ffi_str2ptr(iter_elem)
+                        let ptr1 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr)
+                        mbt_ffi_store32((iter_base) + 0, ptr1)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload0).length())
@@ -6362,9 +6362,9 @@ fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
 
                   ()
             }
-            Some(payload2) => {
+            Some(payload3) => {
                   mbt_ffi_store8((ptr) + 12, (1))
-                  mbt_ffi_store32((ptr) + 16, (payload2).reinterpret_as_int())
+                  mbt_ffi_store32((ptr) + 16, (payload3).reinterpret_as_int())
 
                   ()
             }
@@ -6376,9 +6376,9 @@ fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
 
                   ()
             }
-            Some(payload4) => {
+            Some(payload5) => {
                   mbt_ffi_store8((ptr) + 20, (1))
-                  mbt_ffi_store32((ptr) + 24, (payload4).reinterpret_as_int())
+                  mbt_ffi_store32((ptr) + 24, (payload5).reinterpret_as_int())
 
                   ()
             }
@@ -6390,12 +6390,12 @@ fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
 
                   ()
             }
-            Some(payload6) => {
+            Some(payload7) => {
                   mbt_ffi_store8((ptr) + 28, (1))
 
-                  let ptr7 = mbt_ffi_str2ptr(payload6)
-                  mbt_ffi_store32((ptr) + 36, payload6.length())
-                  mbt_ffi_store32((ptr) + 32, ptr7)
+                  let ptr8 = mbt_ffi_str2ptr(payload7)
+                  mbt_ffi_store32((ptr) + 36, payload7.length())
+                  mbt_ffi_store32((ptr) + 32, ptr8)
 
                   ()
             }
@@ -6420,9 +6420,9 @@ fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit
                         let iter_elem : String = (payload0)[(index)]
                         let iter_base = address + (index * 8);
 
-                        let ptr = mbt_ffi_str2ptr(iter_elem)
+                        let ptr1 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr)
+                        mbt_ffi_store32((iter_base) + 0, ptr1)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload0).length())
@@ -6438,9 +6438,9 @@ fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit
 
                   ()
             }
-            Some(payload2) => {
+            Some(payload3) => {
                   mbt_ffi_store8((ptr) + 12, (1))
-                  mbt_ffi_store32((ptr) + 16, (payload2).reinterpret_as_int())
+                  mbt_ffi_store32((ptr) + 16, (payload3).reinterpret_as_int())
 
                   ()
             }
@@ -6452,9 +6452,9 @@ fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit
 
                   ()
             }
-            Some(payload4) => {
+            Some(payload5) => {
                   mbt_ffi_store8((ptr) + 20, (1))
-                  mbt_ffi_store32((ptr) + 24, (payload4).reinterpret_as_int())
+                  mbt_ffi_store32((ptr) + 24, (payload5).reinterpret_as_int())
 
                   ()
             }
@@ -6481,9 +6481,9 @@ fn __wit_bindgen_lower_t32(ptr : Int, value : @types.PathSpec) -> Unit {
                         let iter_elem : String = (payload0)[(index)]
                         let iter_base = address + (index * 8);
 
-                        let ptr = mbt_ffi_str2ptr(iter_elem)
+                        let ptr1 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr)
+                        mbt_ffi_store32((iter_base) + 0, ptr1)
 
                   }
                   mbt_ffi_store32((ptr) + 12, (payload0).length())
@@ -6499,21 +6499,21 @@ fn __wit_bindgen_lower_t32(ptr : Int, value : @types.PathSpec) -> Unit {
 
                   ()
             }
-            Some(payload2) => {
+            Some(payload3) => {
                   mbt_ffi_store8((ptr) + 16, (1))
 
-                  let address4 = mbt_ffi_malloc((payload2).length() * 8);
-                  for index5 = 0; index5 < (payload2).length(); index5 = index5 + 1 {
-                        let iter_elem : String = (payload2)[(index5)]
-                        let iter_base = address4 + (index5 * 8);
+                  let address5 = mbt_ffi_malloc((payload3).length() * 8);
+                  for index6 = 0; index6 < (payload3).length(); index6 = index6 + 1 {
+                        let iter_elem : String = (payload3)[(index6)]
+                        let iter_base = address5 + (index6 * 8);
 
-                        let ptr3 = mbt_ffi_str2ptr(iter_elem)
+                        let ptr4 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr3)
+                        mbt_ffi_store32((iter_base) + 0, ptr4)
 
                   }
-                  mbt_ffi_store32((ptr) + 24, (payload2).length())
-                  mbt_ffi_store32((ptr) + 20, address4)
+                  mbt_ffi_store32((ptr) + 24, (payload3).length())
+                  mbt_ffi_store32((ptr) + 20, address5)
 
                   ()
             }
@@ -6538,9 +6538,9 @@ fn __wit_bindgen_lower_t33(ptr : Int, value : @types.UrlRestrictions) -> Unit {
                         let iter_elem : String = (payload0)[(index)]
                         let iter_base = address + (index * 8);
 
-                        let ptr = mbt_ffi_str2ptr(iter_elem)
+                        let ptr1 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr)
+                        mbt_ffi_store32((iter_base) + 0, ptr1)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload0).length())
@@ -6556,21 +6556,21 @@ fn __wit_bindgen_lower_t33(ptr : Int, value : @types.UrlRestrictions) -> Unit {
 
                   ()
             }
-            Some(payload2) => {
+            Some(payload3) => {
                   mbt_ffi_store8((ptr) + 12, (1))
 
-                  let address4 = mbt_ffi_malloc((payload2).length() * 8);
-                  for index5 = 0; index5 < (payload2).length(); index5 = index5 + 1 {
-                        let iter_elem : String = (payload2)[(index5)]
-                        let iter_base = address4 + (index5 * 8);
+                  let address5 = mbt_ffi_malloc((payload3).length() * 8);
+                  for index6 = 0; index6 < (payload3).length(); index6 = index6 + 1 {
+                        let iter_elem : String = (payload3)[(index6)]
+                        let iter_base = address5 + (index6 * 8);
 
-                        let ptr3 = mbt_ffi_str2ptr(iter_elem)
+                        let ptr4 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr3)
+                        mbt_ffi_store32((iter_base) + 0, ptr4)
 
                   }
-                  mbt_ffi_store32((ptr) + 20, (payload2).length())
-                  mbt_ffi_store32((ptr) + 16, address4)
+                  mbt_ffi_store32((ptr) + 20, (payload3).length())
+                  mbt_ffi_store32((ptr) + 16, address5)
 
                   ()
             }
@@ -6583,27 +6583,27 @@ fn __wit_bindgen_lower_t34(ptr : Int, value : @types.QuantityValue) -> Unit {
       mbt_ffi_store64((ptr) + 0, (value).mantissa)
       mbt_ffi_store32((ptr) + 8, (value).scale)
 
-      let ptr = mbt_ffi_str2ptr((value).unit)
+      let ptr0 = mbt_ffi_str2ptr((value).unit)
       mbt_ffi_store32((ptr) + 16, (value).unit.length())
-      mbt_ffi_store32((ptr) + 12, ptr)
+      mbt_ffi_store32((ptr) + 12, ptr0)
 
 }
 
 #doc(hidden)
 fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).base_unit)
+      let ptr0 = mbt_ffi_str2ptr((value).base_unit)
       mbt_ffi_store32((ptr) + 4, (value).base_unit.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       let address = mbt_ffi_malloc(((value).allowed_suffixes).length() * 8);
       for index = 0; index < ((value).allowed_suffixes).length(); index = index + 1 {
             let iter_elem : String = ((value).allowed_suffixes)[(index)]
             let iter_base = address + (index * 8);
 
-            let ptr0 = mbt_ffi_str2ptr(iter_elem)
+            let ptr1 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr0)
+            mbt_ffi_store32((iter_base) + 0, ptr1)
 
       }
       mbt_ffi_store32((ptr) + 12, ((value).allowed_suffixes).length())
@@ -6615,9 +6615,9 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
 
                   ()
             }
-            Some(payload1) => {
+            Some(payload2) => {
                   mbt_ffi_store8((ptr) + 16, (1))
-                  __wit_bindgen_lower_t34((ptr) + 24, payload1)
+                  __wit_bindgen_lower_t34((ptr) + 24, payload2)
 
                   ()
             }
@@ -6629,9 +6629,9 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
 
                   ()
             }
-            Some(payload3) => {
+            Some(payload4) => {
                   mbt_ffi_store8((ptr) + 48, (1))
-                  __wit_bindgen_lower_t34((ptr) + 56, payload3)
+                  __wit_bindgen_lower_t34((ptr) + 56, payload4)
 
                   ()
             }
@@ -6642,9 +6642,9 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t37(ptr : Int, value : @types.FieldDiscriminator) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).field_name)
+      let ptr0 = mbt_ffi_str2ptr((value).field_name)
       mbt_ffi_store32((ptr) + 4, (value).field_name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       match ((value).literal) {
             None => {
@@ -6652,12 +6652,12 @@ fn __wit_bindgen_lower_t37(ptr : Int, value : @types.FieldDiscriminator) -> Unit
 
                   ()
             }
-            Some(payload0) => {
+            Some(payload1) => {
                   mbt_ffi_store8((ptr) + 8, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 16, payload0.length())
-                  mbt_ffi_store32((ptr) + 12, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 16, payload1.length())
+                  mbt_ffi_store32((ptr) + 12, ptr2)
 
                   ()
             }
@@ -6672,51 +6672,51 @@ fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit 
             Prefix(payload) => {
                   mbt_ffi_store8((ptr) + 0, (0))
 
-                  let ptr = mbt_ffi_str2ptr(payload)
+                  let ptr0 = mbt_ffi_str2ptr(payload)
                   mbt_ffi_store32((ptr) + 8, payload.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr0)
 
                   ()
             }
-            Suffix(payload0) => {
+            Suffix(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 8, payload0.length())
-                  mbt_ffi_store32((ptr) + 4, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 8, payload1.length())
+                  mbt_ffi_store32((ptr) + 4, ptr2)
 
                   ()
             }
-            Contains(payload2) => {
+            Contains(payload3) => {
                   mbt_ffi_store8((ptr) + 0, (2))
 
-                  let ptr3 = mbt_ffi_str2ptr(payload2)
-                  mbt_ffi_store32((ptr) + 8, payload2.length())
-                  mbt_ffi_store32((ptr) + 4, ptr3)
+                  let ptr4 = mbt_ffi_str2ptr(payload3)
+                  mbt_ffi_store32((ptr) + 8, payload3.length())
+                  mbt_ffi_store32((ptr) + 4, ptr4)
 
                   ()
             }
-            Regex(payload4) => {
+            Regex(payload5) => {
                   mbt_ffi_store8((ptr) + 0, (3))
 
-                  let ptr5 = mbt_ffi_str2ptr(payload4)
-                  mbt_ffi_store32((ptr) + 8, payload4.length())
-                  mbt_ffi_store32((ptr) + 4, ptr5)
+                  let ptr6 = mbt_ffi_str2ptr(payload5)
+                  mbt_ffi_store32((ptr) + 8, payload5.length())
+                  mbt_ffi_store32((ptr) + 4, ptr6)
 
                   ()
             }
-            FieldEquals(payload6) => {
+            FieldEquals(payload7) => {
                   mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t37((ptr) + 4, payload6)
+                  __wit_bindgen_lower_t37((ptr) + 4, payload7)
 
                   ()
             }
-            FieldAbsent(payload7) => {
+            FieldAbsent(payload8) => {
                   mbt_ffi_store8((ptr) + 0, (5))
 
-                  let ptr8 = mbt_ffi_str2ptr(payload7)
-                  mbt_ffi_store32((ptr) + 8, payload7.length())
-                  mbt_ffi_store32((ptr) + 4, ptr8)
+                  let ptr9 = mbt_ffi_str2ptr(payload8)
+                  mbt_ffi_store32((ptr) + 8, payload8.length())
+                  mbt_ffi_store32((ptr) + 4, ptr9)
 
                   ()
             }
@@ -6727,9 +6727,9 @@ fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit 
 #doc(hidden)
 fn __wit_bindgen_lower_t39(ptr : Int, value : @types.UnionBranch) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).tag)
+      let ptr0 = mbt_ffi_str2ptr((value).tag)
       mbt_ffi_store32((ptr) + 4, (value).tag.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
       mbt_ffi_store32((ptr) + 8, (value).body)
       __wit_bindgen_lower_t38((ptr) + 12, (value).discriminator)
       __wit_bindgen_lower_t19((ptr) + 36, (value).metadata)
@@ -6763,9 +6763,9 @@ fn __wit_bindgen_lower_t42(ptr : Int, value : @types.SecretSpec) -> Unit {
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 0, (1))
 
-                  let ptr = mbt_ffi_str2ptr(payload0)
+                  let ptr1 = mbt_ffi_str2ptr(payload0)
                   mbt_ffi_store32((ptr) + 8, payload0.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr1)
 
                   ()
             }
@@ -6785,9 +6785,9 @@ fn __wit_bindgen_lower_t43(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 0, (1))
 
-                  let ptr = mbt_ffi_str2ptr(payload0)
+                  let ptr1 = mbt_ffi_str2ptr(payload0)
                   mbt_ffi_store32((ptr) + 8, payload0.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr1)
 
                   ()
             }
@@ -6903,105 +6903,105 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
             EnumType(payload17) => {
                   mbt_ffi_store8((ptr) + 0, (16))
 
-                  let address18 = mbt_ffi_malloc((payload17).length() * 8);
-                  for index19 = 0; index19 < (payload17).length(); index19 = index19 + 1 {
-                        let iter_elem : String = (payload17)[(index19)]
-                        let iter_base = address18 + (index19 * 8);
+                  let address19 = mbt_ffi_malloc((payload17).length() * 8);
+                  for index20 = 0; index20 < (payload17).length(); index20 = index20 + 1 {
+                        let iter_elem : String = (payload17)[(index20)]
+                        let iter_base = address19 + (index20 * 8);
 
-                        let ptr = mbt_ffi_str2ptr(iter_elem)
+                        let ptr18 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr)
+                        mbt_ffi_store32((iter_base) + 0, ptr18)
 
                   }
                   mbt_ffi_store32((ptr) + 12, (payload17).length())
-                  mbt_ffi_store32((ptr) + 8, address18)
+                  mbt_ffi_store32((ptr) + 8, address19)
 
                   ()
             }
-            FlagsType(payload20) => {
+            FlagsType(payload21) => {
                   mbt_ffi_store8((ptr) + 0, (17))
 
-                  let address22 = mbt_ffi_malloc((payload20).length() * 8);
-                  for index23 = 0; index23 < (payload20).length(); index23 = index23 + 1 {
-                        let iter_elem : String = (payload20)[(index23)]
-                        let iter_base = address22 + (index23 * 8);
+                  let address23 = mbt_ffi_malloc((payload21).length() * 8);
+                  for index24 = 0; index24 < (payload21).length(); index24 = index24 + 1 {
+                        let iter_elem : String = (payload21)[(index24)]
+                        let iter_base = address23 + (index24 * 8);
 
-                        let ptr21 = mbt_ffi_str2ptr(iter_elem)
+                        let ptr22 = mbt_ffi_str2ptr(iter_elem)
                         mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-                        mbt_ffi_store32((iter_base) + 0, ptr21)
+                        mbt_ffi_store32((iter_base) + 0, ptr22)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload20).length())
-                  mbt_ffi_store32((ptr) + 8, address22)
+                  mbt_ffi_store32((ptr) + 12, (payload21).length())
+                  mbt_ffi_store32((ptr) + 8, address23)
 
                   ()
             }
-            TupleType(payload24) => {
+            TupleType(payload25) => {
                   mbt_ffi_store8((ptr) + 0, (18))
 
-                  let address25 = mbt_ffi_malloc((payload24).length() * 4);
-                  for index26 = 0; index26 < (payload24).length(); index26 = index26 + 1 {
-                        let iter_elem : Int = (payload24)[(index26)]
-                        let iter_base = address25 + (index26 * 4);
+                  let address26 = mbt_ffi_malloc((payload25).length() * 4);
+                  for index27 = 0; index27 < (payload25).length(); index27 = index27 + 1 {
+                        let iter_elem : Int = (payload25)[(index27)]
+                        let iter_base = address26 + (index27 * 4);
                         mbt_ffi_store32((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload24).length())
-                  mbt_ffi_store32((ptr) + 8, address25)
+                  mbt_ffi_store32((ptr) + 12, (payload25).length())
+                  mbt_ffi_store32((ptr) + 8, address26)
 
                   ()
             }
-            ListType(payload27) => {
+            ListType(payload28) => {
                   mbt_ffi_store8((ptr) + 0, (19))
-                  mbt_ffi_store32((ptr) + 8, payload27)
+                  mbt_ffi_store32((ptr) + 8, payload28)
 
                   ()
             }
-            FixedListType(payload28) => {
+            FixedListType(payload29) => {
                   mbt_ffi_store8((ptr) + 0, (20))
-                  __wit_bindgen_lower_t23((ptr) + 8, payload28)
+                  __wit_bindgen_lower_t23((ptr) + 8, payload29)
 
                   ()
             }
-            MapType(payload29) => {
+            MapType(payload30) => {
                   mbt_ffi_store8((ptr) + 0, (21))
-                  __wit_bindgen_lower_t24((ptr) + 8, payload29)
+                  __wit_bindgen_lower_t24((ptr) + 8, payload30)
 
                   ()
             }
-            OptionType(payload30) => {
+            OptionType(payload31) => {
                   mbt_ffi_store8((ptr) + 0, (22))
-                  mbt_ffi_store32((ptr) + 8, payload30)
+                  mbt_ffi_store32((ptr) + 8, payload31)
 
                   ()
             }
-            ResultType(payload31) => {
+            ResultType(payload32) => {
                   mbt_ffi_store8((ptr) + 0, (23))
-                  __wit_bindgen_lower_t25((ptr) + 8, payload31)
+                  __wit_bindgen_lower_t25((ptr) + 8, payload32)
 
                   ()
             }
-            TextType(payload32) => {
+            TextType(payload33) => {
                   mbt_ffi_store8((ptr) + 0, (24))
-                  __wit_bindgen_lower_t28((ptr) + 8, payload32)
+                  __wit_bindgen_lower_t28((ptr) + 8, payload33)
 
                   ()
             }
-            BinaryType(payload33) => {
+            BinaryType(payload34) => {
                   mbt_ffi_store8((ptr) + 0, (25))
-                  __wit_bindgen_lower_t29((ptr) + 8, payload33)
+                  __wit_bindgen_lower_t29((ptr) + 8, payload34)
 
                   ()
             }
-            PathType(payload34) => {
+            PathType(payload35) => {
                   mbt_ffi_store8((ptr) + 0, (26))
-                  __wit_bindgen_lower_t32((ptr) + 8, payload34)
+                  __wit_bindgen_lower_t32((ptr) + 8, payload35)
 
                   ()
             }
-            UrlType(payload35) => {
+            UrlType(payload36) => {
                   mbt_ffi_store8((ptr) + 0, (27))
-                  __wit_bindgen_lower_t33((ptr) + 8, payload35)
+                  __wit_bindgen_lower_t33((ptr) + 8, payload36)
 
                   ()
             }
@@ -7015,42 +7015,42 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
                   ()
             }
-            QuantityType(payload38) => {
+            QuantityType(payload39) => {
                   mbt_ffi_store8((ptr) + 0, (30))
-                  __wit_bindgen_lower_t36((ptr) + 8, payload38)
+                  __wit_bindgen_lower_t36((ptr) + 8, payload39)
 
                   ()
             }
-            UnionType(payload39) => {
+            UnionType(payload40) => {
                   mbt_ffi_store8((ptr) + 0, (31))
-                  __wit_bindgen_lower_t41((ptr) + 8, payload39)
+                  __wit_bindgen_lower_t41((ptr) + 8, payload40)
 
                   ()
             }
-            SecretType(payload40) => {
+            SecretType(payload41) => {
                   mbt_ffi_store8((ptr) + 0, (32))
-                  __wit_bindgen_lower_t42((ptr) + 8, payload40)
+                  __wit_bindgen_lower_t42((ptr) + 8, payload41)
 
                   ()
             }
-            QuotaTokenType(payload41) => {
+            QuotaTokenType(payload42) => {
                   mbt_ffi_store8((ptr) + 0, (33))
-                  __wit_bindgen_lower_t43((ptr) + 8, payload41)
+                  __wit_bindgen_lower_t43((ptr) + 8, payload42)
 
                   ()
             }
-            FutureType(payload42) => {
+            FutureType(payload43) => {
                   mbt_ffi_store8((ptr) + 0, (34))
 
-                  match (payload42) {
+                  match (payload43) {
                         None => {
                               mbt_ffi_store8((ptr) + 8, (0))
 
                               ()
                         }
-                        Some(payload44) => {
+                        Some(payload45) => {
                               mbt_ffi_store8((ptr) + 8, (1))
-                              mbt_ffi_store32((ptr) + 12, payload44)
+                              mbt_ffi_store32((ptr) + 12, payload45)
 
                               ()
                         }
@@ -7058,18 +7058,18 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
                   ()
             }
-            StreamType(payload45) => {
+            StreamType(payload46) => {
                   mbt_ffi_store8((ptr) + 0, (35))
 
-                  match (payload45) {
+                  match (payload46) {
                         None => {
                               mbt_ffi_store8((ptr) + 8, (0))
 
                               ()
                         }
-                        Some(payload47) => {
+                        Some(payload48) => {
                               mbt_ffi_store8((ptr) + 8, (1))
-                              mbt_ffi_store32((ptr) + 12, payload47)
+                              mbt_ffi_store32((ptr) + 12, payload48)
 
                               ()
                         }
@@ -7190,9 +7190,9 @@ fn __wit_bindgen_lower_t55(ptr : Int, value : @types.ResultValuePayload) -> Unit
 #doc(hidden)
 fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).text)
+      let ptr0 = mbt_ffi_str2ptr((value).text)
       mbt_ffi_store32((ptr) + 4, (value).text.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       match ((value).language) {
             None => {
@@ -7200,12 +7200,12 @@ fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
 
                   ()
             }
-            Some(payload0) => {
+            Some(payload1) => {
                   mbt_ffi_store8((ptr) + 8, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 16, payload0.length())
-                  mbt_ffi_store32((ptr) + 12, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 16, payload1.length())
+                  mbt_ffi_store32((ptr) + 12, ptr2)
 
                   ()
             }
@@ -7216,10 +7216,10 @@ fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t58(ptr : Int, value : @types.BinaryValuePayload) -> Unit {
 
-      let ptr = mbt_ffi_bytes2ptr((value).bytes)
+      let ptr0 = mbt_ffi_bytes2ptr((value).bytes)
 
       mbt_ffi_store32((ptr) + 4, (value).bytes.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       match ((value).mime_type) {
             None => {
@@ -7227,12 +7227,12 @@ fn __wit_bindgen_lower_t58(ptr : Int, value : @types.BinaryValuePayload) -> Unit
 
                   ()
             }
-            Some(payload0) => {
+            Some(payload1) => {
                   mbt_ffi_store8((ptr) + 8, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 16, payload0.length())
-                  mbt_ffi_store32((ptr) + 12, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 16, payload1.length())
+                  mbt_ffi_store32((ptr) + 12, ptr2)
 
                   ()
             }
@@ -7249,9 +7249,9 @@ fn __wit_bindgen_lower_t59(ptr : Int, value : @types.DurationValuePayload) -> Un
 #doc(hidden)
 fn __wit_bindgen_lower_t60(ptr : Int, value : @types.UnionValuePayload) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).tag)
+      let ptr0 = mbt_ffi_str2ptr((value).tag)
       mbt_ffi_store32((ptr) + 4, (value).tag.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
       mbt_ffi_store32((ptr) + 8, (value).body)
 
 }
@@ -7259,9 +7259,9 @@ fn __wit_bindgen_lower_t60(ptr : Int, value : @types.UnionValuePayload) -> Unit 
 #doc(hidden)
 fn __wit_bindgen_lower_t61(ptr : Int, value : @types.SecretValuePayload) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).secret_ref)
+      let ptr0 = mbt_ffi_str2ptr((value).secret_ref)
       mbt_ffi_store32((ptr) + 4, (value).secret_ref.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
 }
 
@@ -7344,126 +7344,126 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             StringValue(payload11) => {
                   mbt_ffi_store8((ptr) + 0, (12))
 
-                  let ptr = mbt_ffi_str2ptr(payload11)
+                  let ptr12 = mbt_ffi_str2ptr(payload11)
                   mbt_ffi_store32((ptr) + 12, payload11.length())
-                  mbt_ffi_store32((ptr) + 8, ptr)
+                  mbt_ffi_store32((ptr) + 8, ptr12)
 
                   ()
             }
-            RecordValue(payload12) => {
+            RecordValue(payload13) => {
                   mbt_ffi_store8((ptr) + 0, (13))
 
-                  let address = mbt_ffi_malloc((payload12).length() * 4);
-                  for index = 0; index < (payload12).length(); index = index + 1 {
-                        let iter_elem : Int = (payload12)[(index)]
+                  let address = mbt_ffi_malloc((payload13).length() * 4);
+                  for index = 0; index < (payload13).length(); index = index + 1 {
+                        let iter_elem : Int = (payload13)[(index)]
                         let iter_base = address + (index * 4);
                         mbt_ffi_store32((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload12).length())
+                  mbt_ffi_store32((ptr) + 12, (payload13).length())
                   mbt_ffi_store32((ptr) + 8, address)
 
                   ()
             }
-            VariantValue(payload13) => {
+            VariantValue(payload14) => {
                   mbt_ffi_store8((ptr) + 0, (14))
-                  __wit_bindgen_lower_t53((ptr) + 8, payload13)
+                  __wit_bindgen_lower_t53((ptr) + 8, payload14)
 
                   ()
             }
-            EnumValue(payload14) => {
+            EnumValue(payload15) => {
                   mbt_ffi_store8((ptr) + 0, (15))
-                  mbt_ffi_store32((ptr) + 8, (payload14).reinterpret_as_int())
+                  mbt_ffi_store32((ptr) + 8, (payload15).reinterpret_as_int())
 
                   ()
             }
-            FlagsValue(payload15) => {
+            FlagsValue(payload16) => {
                   mbt_ffi_store8((ptr) + 0, (16))
 
-                  let address16 = mbt_ffi_malloc((payload15).length() * 1);
-                  for index17 = 0; index17 < (payload15).length(); index17 = index17 + 1 {
-                        let iter_elem : Bool = (payload15)[(index17)]
-                        let iter_base = address16 + (index17 * 1);
+                  let address17 = mbt_ffi_malloc((payload16).length() * 1);
+                  for index18 = 0; index18 < (payload16).length(); index18 = index18 + 1 {
+                        let iter_elem : Bool = (payload16)[(index18)]
+                        let iter_base = address17 + (index18 * 1);
                         mbt_ffi_store8((iter_base) + 0, (if iter_elem { 1 } else { 0 }))
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload15).length())
-                  mbt_ffi_store32((ptr) + 8, address16)
+                  mbt_ffi_store32((ptr) + 12, (payload16).length())
+                  mbt_ffi_store32((ptr) + 8, address17)
 
                   ()
             }
-            TupleValue(payload18) => {
+            TupleValue(payload19) => {
                   mbt_ffi_store8((ptr) + 0, (17))
 
-                  let address19 = mbt_ffi_malloc((payload18).length() * 4);
-                  for index20 = 0; index20 < (payload18).length(); index20 = index20 + 1 {
-                        let iter_elem : Int = (payload18)[(index20)]
-                        let iter_base = address19 + (index20 * 4);
+                  let address20 = mbt_ffi_malloc((payload19).length() * 4);
+                  for index21 = 0; index21 < (payload19).length(); index21 = index21 + 1 {
+                        let iter_elem : Int = (payload19)[(index21)]
+                        let iter_base = address20 + (index21 * 4);
                         mbt_ffi_store32((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload18).length())
-                  mbt_ffi_store32((ptr) + 8, address19)
+                  mbt_ffi_store32((ptr) + 12, (payload19).length())
+                  mbt_ffi_store32((ptr) + 8, address20)
 
                   ()
             }
-            ListValue(payload21) => {
+            ListValue(payload22) => {
                   mbt_ffi_store8((ptr) + 0, (18))
 
-                  let address22 = mbt_ffi_malloc((payload21).length() * 4);
-                  for index23 = 0; index23 < (payload21).length(); index23 = index23 + 1 {
-                        let iter_elem : Int = (payload21)[(index23)]
-                        let iter_base = address22 + (index23 * 4);
+                  let address23 = mbt_ffi_malloc((payload22).length() * 4);
+                  for index24 = 0; index24 < (payload22).length(); index24 = index24 + 1 {
+                        let iter_elem : Int = (payload22)[(index24)]
+                        let iter_base = address23 + (index24 * 4);
                         mbt_ffi_store32((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload21).length())
-                  mbt_ffi_store32((ptr) + 8, address22)
+                  mbt_ffi_store32((ptr) + 12, (payload22).length())
+                  mbt_ffi_store32((ptr) + 8, address23)
 
                   ()
             }
-            FixedListValue(payload24) => {
+            FixedListValue(payload25) => {
                   mbt_ffi_store8((ptr) + 0, (19))
 
-                  let address25 = mbt_ffi_malloc((payload24).length() * 4);
-                  for index26 = 0; index26 < (payload24).length(); index26 = index26 + 1 {
-                        let iter_elem : Int = (payload24)[(index26)]
-                        let iter_base = address25 + (index26 * 4);
+                  let address26 = mbt_ffi_malloc((payload25).length() * 4);
+                  for index27 = 0; index27 < (payload25).length(); index27 = index27 + 1 {
+                        let iter_elem : Int = (payload25)[(index27)]
+                        let iter_base = address26 + (index27 * 4);
                         mbt_ffi_store32((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload24).length())
-                  mbt_ffi_store32((ptr) + 8, address25)
+                  mbt_ffi_store32((ptr) + 12, (payload25).length())
+                  mbt_ffi_store32((ptr) + 8, address26)
 
                   ()
             }
-            MapValue(payload27) => {
+            MapValue(payload28) => {
                   mbt_ffi_store8((ptr) + 0, (20))
 
-                  let address28 = mbt_ffi_malloc((payload27).length() * 8);
-                  for index29 = 0; index29 < (payload27).length(); index29 = index29 + 1 {
-                        let iter_elem : @types.MapEntry = (payload27)[(index29)]
-                        let iter_base = address28 + (index29 * 8);
+                  let address29 = mbt_ffi_malloc((payload28).length() * 8);
+                  for index30 = 0; index30 < (payload28).length(); index30 = index30 + 1 {
+                        let iter_elem : @types.MapEntry = (payload28)[(index30)]
+                        let iter_base = address29 + (index30 * 8);
                         __wit_bindgen_lower_t54((iter_base) + 0, iter_elem)
 
                   }
-                  mbt_ffi_store32((ptr) + 12, (payload27).length())
-                  mbt_ffi_store32((ptr) + 8, address28)
+                  mbt_ffi_store32((ptr) + 12, (payload28).length())
+                  mbt_ffi_store32((ptr) + 8, address29)
 
                   ()
             }
-            OptionValue(payload30) => {
+            OptionValue(payload31) => {
                   mbt_ffi_store8((ptr) + 0, (21))
 
-                  match (payload30) {
+                  match (payload31) {
                         None => {
                               mbt_ffi_store8((ptr) + 8, (0))
 
                               ()
                         }
-                        Some(payload32) => {
+                        Some(payload33) => {
                               mbt_ffi_store8((ptr) + 8, (1))
-                              mbt_ffi_store32((ptr) + 12, payload32)
+                              mbt_ffi_store32((ptr) + 12, payload33)
 
                               ()
                         }
@@ -7471,76 +7471,76 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
 
                   ()
             }
-            ResultValue(payload33) => {
+            ResultValue(payload34) => {
                   mbt_ffi_store8((ptr) + 0, (22))
-                  __wit_bindgen_lower_t55((ptr) + 8, payload33)
+                  __wit_bindgen_lower_t55((ptr) + 8, payload34)
 
                   ()
             }
-            TextValue(payload34) => {
+            TextValue(payload35) => {
                   mbt_ffi_store8((ptr) + 0, (23))
-                  __wit_bindgen_lower_t56((ptr) + 8, payload34)
+                  __wit_bindgen_lower_t56((ptr) + 8, payload35)
 
                   ()
             }
-            BinaryValue(payload35) => {
+            BinaryValue(payload36) => {
                   mbt_ffi_store8((ptr) + 0, (24))
-                  __wit_bindgen_lower_t58((ptr) + 8, payload35)
+                  __wit_bindgen_lower_t58((ptr) + 8, payload36)
 
                   ()
             }
-            PathValue(payload36) => {
+            PathValue(payload37) => {
                   mbt_ffi_store8((ptr) + 0, (25))
 
-                  let ptr37 = mbt_ffi_str2ptr(payload36)
-                  mbt_ffi_store32((ptr) + 12, payload36.length())
-                  mbt_ffi_store32((ptr) + 8, ptr37)
+                  let ptr38 = mbt_ffi_str2ptr(payload37)
+                  mbt_ffi_store32((ptr) + 12, payload37.length())
+                  mbt_ffi_store32((ptr) + 8, ptr38)
 
                   ()
             }
-            UrlValue(payload38) => {
+            UrlValue(payload39) => {
                   mbt_ffi_store8((ptr) + 0, (26))
 
-                  let ptr39 = mbt_ffi_str2ptr(payload38)
-                  mbt_ffi_store32((ptr) + 12, payload38.length())
-                  mbt_ffi_store32((ptr) + 8, ptr39)
+                  let ptr40 = mbt_ffi_str2ptr(payload39)
+                  mbt_ffi_store32((ptr) + 12, payload39.length())
+                  mbt_ffi_store32((ptr) + 8, ptr40)
 
                   ()
             }
-            DatetimeValue(payload40) => {
+            DatetimeValue(payload41) => {
                   mbt_ffi_store8((ptr) + 0, (27))
-                  __wit_bindgen_lower_t5((ptr) + 8, payload40)
+                  __wit_bindgen_lower_t5((ptr) + 8, payload41)
 
                   ()
             }
-            DurationValue(payload41) => {
+            DurationValue(payload42) => {
                   mbt_ffi_store8((ptr) + 0, (28))
-                  __wit_bindgen_lower_t59((ptr) + 8, payload41)
+                  __wit_bindgen_lower_t59((ptr) + 8, payload42)
 
                   ()
             }
-            QuantityValueNode(payload42) => {
+            QuantityValueNode(payload43) => {
                   mbt_ffi_store8((ptr) + 0, (29))
-                  __wit_bindgen_lower_t34((ptr) + 8, payload42)
+                  __wit_bindgen_lower_t34((ptr) + 8, payload43)
 
                   ()
             }
-            UnionValue(payload43) => {
+            UnionValue(payload44) => {
                   mbt_ffi_store8((ptr) + 0, (30))
-                  __wit_bindgen_lower_t60((ptr) + 8, payload43)
+                  __wit_bindgen_lower_t60((ptr) + 8, payload44)
 
                   ()
             }
-            SecretValue(payload44) => {
+            SecretValue(payload45) => {
                   mbt_ffi_store8((ptr) + 0, (31))
-                  __wit_bindgen_lower_t61((ptr) + 8, payload44)
+                  __wit_bindgen_lower_t61((ptr) + 8, payload45)
 
                   ()
             }
-            QuotaTokenHandle(payload45) => {
+            QuotaTokenHandle(payload46) => {
                   mbt_ffi_store8((ptr) + 0, (32))
 
-                  let @types.QuotaToken(handle) = payload45
+                  let @types.QuotaToken(handle) = payload46
                   mbt_ffi_store32((ptr) + 8, handle)
 
                   ()
@@ -7594,9 +7594,9 @@ fn __wit_bindgen_lower_t372(ptr : Int, value : @common.FieldSource) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t373(ptr : Int, value : @common.NamedField) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).name)
+      let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
       __wit_bindgen_lower_t372((ptr) + 8, (value).source)
       mbt_ffi_store32((ptr) + 12, (value).schema)
       __wit_bindgen_lower_t19((ptr) + 16, (value).metadata)
@@ -7684,9 +7684,9 @@ fn __wit_bindgen_lower_t380(ptr : Int, value : @common.CorsOptions) -> Unit {
             let iter_elem : String = ((value).allowed_patterns)[(index)]
             let iter_base = address + (index * 8);
 
-            let ptr = mbt_ffi_str2ptr(iter_elem)
+            let ptr0 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr)
+            mbt_ffi_store32((iter_base) + 0, ptr0)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).allowed_patterns).length())
@@ -7746,9 +7746,9 @@ fn __wit_bindgen_lower_t381(ptr : Int, value : @common.HttpMethod) -> Unit {
             Custom(payload8) => {
                   mbt_ffi_store8((ptr) + 0, (9))
 
-                  let ptr = mbt_ffi_str2ptr(payload8)
+                  let ptr9 = mbt_ffi_str2ptr(payload8)
                   mbt_ffi_store32((ptr) + 8, payload8.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr9)
 
                   ()
             }
@@ -7759,9 +7759,9 @@ fn __wit_bindgen_lower_t381(ptr : Int, value : @common.HttpMethod) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t383(ptr : Int, value : @common.PathVariable) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).variable_name)
+      let ptr0 = mbt_ffi_str2ptr((value).variable_name)
       mbt_ffi_store32((ptr) + 4, (value).variable_name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
 }
 
@@ -7772,27 +7772,27 @@ fn __wit_bindgen_lower_t384(ptr : Int, value : @common.PathSegment) -> Unit {
             Literal(payload) => {
                   mbt_ffi_store8((ptr) + 0, (0))
 
-                  let ptr = mbt_ffi_str2ptr(payload)
+                  let ptr0 = mbt_ffi_str2ptr(payload)
                   mbt_ffi_store32((ptr) + 8, payload.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr0)
 
                   ()
             }
-            SystemVariable(payload0) => {
+            SystemVariable(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (1))
-                  mbt_ffi_store8((ptr) + 4, payload0.ordinal())
+                  mbt_ffi_store8((ptr) + 4, payload1.ordinal())
 
                   ()
             }
-            PathVariable(payload1) => {
+            PathVariable(payload2) => {
                   mbt_ffi_store8((ptr) + 0, (2))
-                  __wit_bindgen_lower_t383((ptr) + 4, payload1)
+                  __wit_bindgen_lower_t383((ptr) + 4, payload2)
 
                   ()
             }
-            RemainingPathVariable(payload2) => {
+            RemainingPathVariable(payload3) => {
                   mbt_ffi_store8((ptr) + 0, (3))
-                  __wit_bindgen_lower_t383((ptr) + 4, payload2)
+                  __wit_bindgen_lower_t383((ptr) + 4, payload3)
 
                   ()
             }
@@ -7803,26 +7803,26 @@ fn __wit_bindgen_lower_t384(ptr : Int, value : @common.PathSegment) -> Unit {
 #doc(hidden)
 fn __wit_bindgen_lower_t385(ptr : Int, value : @common.HeaderVariable) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).header_name)
+      let ptr0 = mbt_ffi_str2ptr((value).header_name)
       mbt_ffi_store32((ptr) + 4, (value).header_name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
-      let ptr0 = mbt_ffi_str2ptr((value).variable_name)
+      let ptr1 = mbt_ffi_str2ptr((value).variable_name)
       mbt_ffi_store32((ptr) + 12, (value).variable_name.length())
-      mbt_ffi_store32((ptr) + 8, ptr0)
+      mbt_ffi_store32((ptr) + 8, ptr1)
 
 }
 
 #doc(hidden)
 fn __wit_bindgen_lower_t386(ptr : Int, value : @common.QueryVariable) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).query_param_name)
+      let ptr0 = mbt_ffi_str2ptr((value).query_param_name)
       mbt_ffi_store32((ptr) + 4, (value).query_param_name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
-      let ptr0 = mbt_ffi_str2ptr((value).variable_name)
+      let ptr1 = mbt_ffi_str2ptr((value).variable_name)
       mbt_ffi_store32((ptr) + 12, (value).variable_name.length())
-      mbt_ffi_store32((ptr) + 8, ptr0)
+      mbt_ffi_store32((ptr) + 8, ptr1)
 
 }
 
@@ -7927,13 +7927,13 @@ fn __wit_bindgen_lower_t393(ptr : Int, value : @common.HttpEndpointDetails) -> U
 #doc(hidden)
 fn __wit_bindgen_lower_t397(ptr : Int, value : @common.AgentMethod) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).name)
+      let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
-      let ptr0 = mbt_ffi_str2ptr((value).description)
+      let ptr1 = mbt_ffi_str2ptr((value).description)
       mbt_ffi_store32((ptr) + 12, (value).description.length())
-      mbt_ffi_store32((ptr) + 8, ptr0)
+      mbt_ffi_store32((ptr) + 8, ptr1)
 
       let address = mbt_ffi_malloc(((value).http_endpoint).length() * 48);
       for index = 0; index < ((value).http_endpoint).length(); index = index + 1 {
@@ -7951,12 +7951,12 @@ fn __wit_bindgen_lower_t397(ptr : Int, value : @common.AgentMethod) -> Unit {
 
                   ()
             }
-            Some(payload1) => {
+            Some(payload2) => {
                   mbt_ffi_store8((ptr) + 24, (1))
 
-                  let ptr2 = mbt_ffi_str2ptr(payload1)
-                  mbt_ffi_store32((ptr) + 32, payload1.length())
-                  mbt_ffi_store32((ptr) + 28, ptr2)
+                  let ptr3 = mbt_ffi_str2ptr(payload2)
+                  mbt_ffi_store32((ptr) + 32, payload2.length())
+                  mbt_ffi_store32((ptr) + 28, ptr3)
 
                   ()
             }
@@ -7970,9 +7970,9 @@ fn __wit_bindgen_lower_t397(ptr : Int, value : @common.AgentMethod) -> Unit {
 
                   ()
             }
-            Some(payload4) => {
+            Some(payload5) => {
                   mbt_ffi_store8((ptr) + 56, (1))
-                  __wit_bindgen_lower_t378((ptr) + 64, payload4)
+                  __wit_bindgen_lower_t378((ptr) + 64, payload5)
 
                   ()
             }
@@ -7992,17 +7992,17 @@ fn __wit_bindgen_lower_t403(ptr : Int, value : @common.AgentConstructor) -> Unit
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 0, (1))
 
-                  let ptr = mbt_ffi_str2ptr(payload0)
+                  let ptr1 = mbt_ffi_str2ptr(payload0)
                   mbt_ffi_store32((ptr) + 8, payload0.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr1)
 
                   ()
             }
       }
 
-      let ptr1 = mbt_ffi_str2ptr((value).description)
+      let ptr2 = mbt_ffi_str2ptr((value).description)
       mbt_ffi_store32((ptr) + 16, (value).description.length())
-      mbt_ffi_store32((ptr) + 12, ptr1)
+      mbt_ffi_store32((ptr) + 12, ptr2)
 
       match ((value).prompt_hint) {
             None => {
@@ -8010,12 +8010,12 @@ fn __wit_bindgen_lower_t403(ptr : Int, value : @common.AgentConstructor) -> Unit
 
                   ()
             }
-            Some(payload3) => {
+            Some(payload4) => {
                   mbt_ffi_store8((ptr) + 20, (1))
 
-                  let ptr4 = mbt_ffi_str2ptr(payload3)
-                  mbt_ffi_store32((ptr) + 28, payload3.length())
-                  mbt_ffi_store32((ptr) + 24, ptr4)
+                  let ptr5 = mbt_ffi_str2ptr(payload4)
+                  mbt_ffi_store32((ptr) + 28, payload4.length())
+                  mbt_ffi_store32((ptr) + 24, ptr5)
 
                   ()
             }
@@ -8027,9 +8027,9 @@ fn __wit_bindgen_lower_t403(ptr : Int, value : @common.AgentConstructor) -> Unit
 #doc(hidden)
 fn __wit_bindgen_lower_t405(ptr : Int, value : @common.AgentDependency) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).type_name)
+      let ptr0 = mbt_ffi_str2ptr((value).type_name)
       mbt_ffi_store32((ptr) + 4, (value).type_name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
       match ((value).description) {
             None => {
@@ -8037,12 +8037,12 @@ fn __wit_bindgen_lower_t405(ptr : Int, value : @common.AgentDependency) -> Unit 
 
                   ()
             }
-            Some(payload0) => {
+            Some(payload1) => {
                   mbt_ffi_store8((ptr) + 8, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 16, payload0.length())
-                  mbt_ffi_store32((ptr) + 12, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 16, payload1.length())
+                  mbt_ffi_store32((ptr) + 12, ptr2)
 
                   ()
             }
@@ -8115,9 +8115,9 @@ fn __wit_bindgen_lower_t409(ptr : Int, value : @common.AgentConfigDeclaration) -
             let iter_elem : String = ((value).path)[(index)]
             let iter_base = address + (index * 8);
 
-            let ptr = mbt_ffi_str2ptr(iter_elem)
+            let ptr0 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr)
+            mbt_ffi_store32((iter_base) + 0, ptr0)
 
       }
       mbt_ffi_store32((ptr) + 8, ((value).path).length())
@@ -8129,17 +8129,17 @@ fn __wit_bindgen_lower_t409(ptr : Int, value : @common.AgentConfigDeclaration) -
 #doc(hidden)
 fn __wit_bindgen_lower_t413(ptr : Int, value : @common.AgentType) -> Unit {
 
-      let ptr = mbt_ffi_str2ptr((value).type_name)
+      let ptr0 = mbt_ffi_str2ptr((value).type_name)
       mbt_ffi_store32((ptr) + 4, (value).type_name.length())
-      mbt_ffi_store32((ptr) + 0, ptr)
+      mbt_ffi_store32((ptr) + 0, ptr0)
 
-      let ptr0 = mbt_ffi_str2ptr((value).description)
+      let ptr1 = mbt_ffi_str2ptr((value).description)
       mbt_ffi_store32((ptr) + 12, (value).description.length())
-      mbt_ffi_store32((ptr) + 8, ptr0)
+      mbt_ffi_store32((ptr) + 8, ptr1)
 
-      let ptr1 = mbt_ffi_str2ptr((value).source_language)
+      let ptr2 = mbt_ffi_str2ptr((value).source_language)
       mbt_ffi_store32((ptr) + 20, (value).source_language.length())
-      mbt_ffi_store32((ptr) + 16, ptr1)
+      mbt_ffi_store32((ptr) + 16, ptr2)
       __wit_bindgen_lower_t51((ptr) + 24, (value).schema)
       __wit_bindgen_lower_t403((ptr) + 44, (value).constructor_)
 
@@ -8153,15 +8153,15 @@ fn __wit_bindgen_lower_t413(ptr : Int, value : @common.AgentType) -> Unit {
       mbt_ffi_store32((ptr) + 92, ((value).methods).length())
       mbt_ffi_store32((ptr) + 88, address)
 
-      let address2 = mbt_ffi_malloc(((value).dependencies).length() * 92);
-      for index3 = 0; index3 < ((value).dependencies).length(); index3 = index3 + 1 {
-            let iter_elem : @common.AgentDependency = ((value).dependencies)[(index3)]
-            let iter_base = address2 + (index3 * 92);
+      let address3 = mbt_ffi_malloc(((value).dependencies).length() * 92);
+      for index4 = 0; index4 < ((value).dependencies).length(); index4 = index4 + 1 {
+            let iter_elem : @common.AgentDependency = ((value).dependencies)[(index4)]
+            let iter_base = address3 + (index4 * 92);
             __wit_bindgen_lower_t405((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 100, ((value).dependencies).length())
-      mbt_ffi_store32((ptr) + 96, address2)
+      mbt_ffi_store32((ptr) + 96, address3)
       mbt_ffi_store8((ptr) + 104, (value).mode.ordinal())
 
       match ((value).http_mount) {
@@ -8170,24 +8170,24 @@ fn __wit_bindgen_lower_t413(ptr : Int, value : @common.AgentType) -> Unit {
 
                   ()
             }
-            Some(payload4) => {
+            Some(payload5) => {
                   mbt_ffi_store8((ptr) + 108, (1))
-                  __wit_bindgen_lower_t390((ptr) + 112, payload4)
+                  __wit_bindgen_lower_t390((ptr) + 112, payload5)
 
                   ()
             }
       }
       __wit_bindgen_lower_t407((ptr) + 144, (value).snapshotting)
 
-      let address5 = mbt_ffi_malloc(((value).config).length() * 16);
-      for index6 = 0; index6 < ((value).config).length(); index6 = index6 + 1 {
-            let iter_elem : @common.AgentConfigDeclaration = ((value).config)[(index6)]
-            let iter_base = address5 + (index6 * 16);
+      let address6 = mbt_ffi_malloc(((value).config).length() * 16);
+      for index7 = 0; index7 < ((value).config).length(); index7 = index7 + 1 {
+            let iter_elem : @common.AgentConfigDeclaration = ((value).config)[(index7)]
+            let iter_base = address6 + (index7 * 16);
             __wit_bindgen_lower_t409((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 172, ((value).config).length())
-      mbt_ffi_store32((ptr) + 168, address5)
+      mbt_ffi_store32((ptr) + 168, address6)
 
 }
 
@@ -8198,42 +8198,42 @@ fn __wit_bindgen_lower_t416(ptr : Int, value : @common.AgentError) -> Unit {
             InvalidInput(payload) => {
                   mbt_ffi_store8((ptr) + 0, (0))
 
-                  let ptr = mbt_ffi_str2ptr(payload)
+                  let ptr0 = mbt_ffi_str2ptr(payload)
                   mbt_ffi_store32((ptr) + 8, payload.length())
-                  mbt_ffi_store32((ptr) + 4, ptr)
+                  mbt_ffi_store32((ptr) + 4, ptr0)
 
                   ()
             }
-            InvalidMethod(payload0) => {
+            InvalidMethod(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (1))
 
-                  let ptr1 = mbt_ffi_str2ptr(payload0)
-                  mbt_ffi_store32((ptr) + 8, payload0.length())
-                  mbt_ffi_store32((ptr) + 4, ptr1)
+                  let ptr2 = mbt_ffi_str2ptr(payload1)
+                  mbt_ffi_store32((ptr) + 8, payload1.length())
+                  mbt_ffi_store32((ptr) + 4, ptr2)
 
                   ()
             }
-            InvalidType(payload2) => {
+            InvalidType(payload3) => {
                   mbt_ffi_store8((ptr) + 0, (2))
 
-                  let ptr3 = mbt_ffi_str2ptr(payload2)
-                  mbt_ffi_store32((ptr) + 8, payload2.length())
-                  mbt_ffi_store32((ptr) + 4, ptr3)
+                  let ptr4 = mbt_ffi_str2ptr(payload3)
+                  mbt_ffi_store32((ptr) + 8, payload3.length())
+                  mbt_ffi_store32((ptr) + 4, ptr4)
 
                   ()
             }
-            InvalidAgentId(payload4) => {
+            InvalidAgentId(payload5) => {
                   mbt_ffi_store8((ptr) + 0, (3))
 
-                  let ptr5 = mbt_ffi_str2ptr(payload4)
-                  mbt_ffi_store32((ptr) + 8, payload4.length())
-                  mbt_ffi_store32((ptr) + 4, ptr5)
+                  let ptr6 = mbt_ffi_str2ptr(payload5)
+                  mbt_ffi_store32((ptr) + 8, payload5.length())
+                  mbt_ffi_store32((ptr) + 4, ptr6)
 
                   ()
             }
-            CustomError(payload6) => {
+            CustomError(payload7) => {
                   mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t69((ptr) + 4, payload6)
+                  __wit_bindgen_lower_t69((ptr) + 4, payload7)
 
                   ()
             }
@@ -8242,80 +8242,8 @@ fn __wit_bindgen_lower_t416(ptr : Int, value : @common.AgentError) -> Unit {
 }
 
 ///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
-#|(func (param i32) (param i32) (result i32)
-#| local.get 0
-#| local.get 1 call $moonbit.init_array16
-#| local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load16_s)
-
-///|
-extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load16_u)
-
-///|
 extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
 #|(func (param i32) (result i32) local.get 0 i32.load8_s)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-#|(func (param i32) (result i32) local.get 0)
-
-///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-#|(func (param i32) (result i32) local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.extend8_s)
-
-///|
-extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
-#|(func (param i32) (result f64) local.get 0 f64.load)
-
-///|
-extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
-#|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
-
-///|
-extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
-
-///|
-extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
-#|(func (param i32) (result f32) local.get 0 f32.load)
-
-///|
-extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
-#|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
-
-///|
-extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-#|(func (param i32) (result i32) (local i32)
-#| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-#| local.tee 1 i32.const 0 call $moonbit.init_array8
-#| local.get 1)
-
-///|
-extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
-#|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
 
 ///|
 extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
@@ -8329,6 +8257,26 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
 #| local.get 0)
 
 ///|
+extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
+#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
+
+///|
+extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
+#|(func (param i32) (result f64) local.get 0 f64.load)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+#|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
+#|(func (param i32) (param i32) (result i32)
+#| local.get 0
+#| local.get 1 call $moonbit.init_array16
+#| local.get 0)
+
+///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
 #|(func (param i32) local.get 0 call $moonbit.decref)
 
@@ -8339,4 +8287,56 @@ extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
 ///|
 extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
 #|(func (param i32) (result i32) local.get 0 i32.extend16_s)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
+#|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
+extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
+#|(func (param i32) (result f32) local.get 0 f32.load)
+
+///|
+extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load16_s)
+
+///|
+extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
+#|(func (param i32) (result i32) (local i32)
+#| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+#| local.tee 1 i32.const 0 call $moonbit.init_array8
+#| local.get 1)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
+///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+#|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load16_u)
+
+///|
+extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
+#|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
+
+///|
+extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
+#|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
+
+///|
+extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.extend8_s)
 
