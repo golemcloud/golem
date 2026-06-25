@@ -1257,6 +1257,20 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         &self,
         ctx: &mut impl DurabilityHost,
     ) -> Result<HostResponse, WorkerExecutorError> {
+        if self.durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
+            warn!(
+                interface = Pair::INTERFACE,
+                function = Pair::FUNCTION,
+                fqfn = Pair::FQFN,
+                durable_function_type = ?self.function_type,
+                begin_index = %self.begin_index,
+                is_live = self.durable_execution_state.is_live,
+                persistence_level = ?self.durable_execution_state.persistence_level,
+                snapshotting_mode = ?self.durable_execution_state.snapshotting_mode,
+                "Attempting to replay a durable host function in a PersistNothing block"
+            );
+        }
+
         let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
 
         let function_name = Pair::FQFN;
