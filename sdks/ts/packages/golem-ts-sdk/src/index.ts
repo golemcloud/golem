@@ -97,7 +97,7 @@ async function initialize(
   }
 }
 
-async function invoke(
+async function invokeAgent(
   methodName: string,
   input: SchemaValueTree,
   principal: Principal,
@@ -115,7 +115,29 @@ async function invoke(
   }
 }
 
-async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
+async function discoverTools(): Promise<bindings.golemTool010Guest.Tool[]> {
+  return [];
+}
+
+async function getTool(name: string): Promise<bindings.golemTool010Guest.Tool> {
+  throw { tag: 'invalid-tool-name', val: name } satisfies bindings.golemTool010Guest.ToolError;
+}
+
+async function invokeTool(
+  toolName: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _commandPath: string[],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _input: bindings.golemTool010Guest.TypedSchemaValue,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _stdin: bindings.golemTool010Guest.InputStream | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _principal: Principal,
+): Promise<bindings.golemTool010Guest.InvocationResult> {
+  throw { tag: 'invalid-tool-name', val: toolName } satisfies bindings.golemTool010Guest.ToolError;
+}
+
+async function discoverAgentTypes(): Promise<bindings.golemAgent200Guest.AgentType[]> {
   try {
     // Check if there were any validation errors during agent registration
     const validationError = getAgentValidationError();
@@ -391,11 +413,17 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   }
 }
 
-export const guest: typeof bindings.guest = {
+export const golemAgent200Guest: typeof bindings.golemAgent200Guest = {
   initialize,
   discoverAgentTypes,
-  invoke,
+  invoke: invokeAgent,
   getDefinition,
+};
+
+export const golemTool010Guest: typeof bindings.golemTool010Guest = {
+  discoverTools,
+  getTool,
+  invoke: invokeTool,
 };
 
 export const saveSnapshot: typeof bindings.saveSnapshot = {

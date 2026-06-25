@@ -42,6 +42,7 @@ mod principal_serde;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
+mod tool_impl;
 mod unstructured_binary;
 mod unstructured_text;
 mod webhook;

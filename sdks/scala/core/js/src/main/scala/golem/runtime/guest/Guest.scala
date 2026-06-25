@@ -115,7 +115,7 @@ object Guest {
       }
     }
 
-  private def invoke(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Any] =
+  private def invokeAgent(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
       js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Any]]
     } else {
@@ -148,6 +148,18 @@ object Guest {
         )
       resultPromise.`catch`[js.Any](onRejected)
     }
+
+  private def invalidToolName(name: String): js.Dynamic =
+    js.Dynamic.literal("tag" -> "invalid-tool-name", "val" -> name)
+
+  private def discoverTools(): js.Promise[js.Array[js.Any]] =
+    js.Promise.resolve[js.Array[js.Any]](new js.Array[js.Any]())
+
+  private def getTool(name: String): js.Promise[js.Any] =
+    js.Promise.reject(invalidToolName(name)).asInstanceOf[js.Promise[js.Any]]
+
+  private def invokeTool(toolName: String): js.Promise[js.Any] =
+    js.Promise.reject(invalidToolName(toolName)).asInstanceOf[js.Promise[js.Any]]
 
   private def getDefinition(): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
@@ -186,17 +198,33 @@ object Guest {
     out
   }
 
-  @JSExportTopLevel("guest")
-  val guest: js.Dynamic =
+  @JSExportTopLevel("golemAgent200Guest")
+  val golemAgent200Guest: js.Dynamic =
     js.Dynamic.literal(
       "initialize" -> ((agentTypeName: String, input: js.Dynamic, principal: js.Dynamic) =>
         initialize(agentTypeName, input, principal)
       ),
       "invoke" -> ((methodName: String, input: js.Dynamic, principal: js.Dynamic) =>
-        invoke(methodName, input, principal)
+        invokeAgent(methodName, input, principal)
       ),
       "getDefinition"      -> (() => getDefinition()),
       "discoverAgentTypes" -> (() => discoverAgentTypes())
+    )
+
+  @JSExportTopLevel("golemTool010Guest")
+  val golemTool010Guest: js.Dynamic =
+    js.Dynamic.literal(
+      "discoverTools" -> (() => discoverTools()),
+      "getTool"       -> ((name: String) => getTool(name)),
+      "invoke" -> (
+        (
+          toolName: String,
+          _commandPath: js.Array[String],
+          _input: js.Dynamic,
+          _stdin: js.UndefOr[js.Any],
+          _principal: js.Dynamic
+        ) => invokeTool(toolName)
+      )
     )
 
   @JSExportTopLevel("saveSnapshot")
