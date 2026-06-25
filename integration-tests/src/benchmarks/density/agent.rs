@@ -111,6 +111,14 @@ const RESUME_WARMUP_CONCURRENCY: usize = 250;
 /// cleanup. Deleting a worker can load it first, so use a lower cap than create
 /// to avoid turning cleanup itself into another saturation event.
 const DELETE_CONCURRENCY: usize = 25;
+
+/// After a workflow-driven or deliberate executor restart, Kubernetes rollout
+/// readiness can become true before the end-to-end invocation path is usable
+/// again. Cells wait for this unmeasured canary before starting measurement.
+const INVOCATION_PATH_CANARY_BUDGET: Duration = Duration::from_secs(120);
+const INVOCATION_PATH_CANARY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+const INVOCATION_PATH_CANARY_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 /// Fraction of a ramp batch that must fail at the transport level (request
 /// could not be sent / no round-trip) before the batch is judged as the
 /// executor being unreachable. A single transient send failure must not end a
@@ -742,6 +750,7 @@ pub async fn run_cell(
 
     let user = manifest.user_context(deps);
     let components = resolve_components(config, manifest, &user).await?;
+    wait_for_invocation_path(config, &user, &components, "cell-start").await?;
 
     let mut outcome = match config.scenario {
         Scenario::ResumeUnderSaturation => {
@@ -999,6 +1008,63 @@ async fn invoke_agent_indices(
         .await;
     attempts.sort_by_key(|(index, _)| *index);
     attempts
+}
+
+async fn wait_for_invocation_path(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    label: &str,
+) -> anyhow::Result<()> {
+    let component = components
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no component available for restart canary"))?;
+    let agent = agent_id!(
+        EPHEMERAL_AGENT_TYPE,
+        format!("{}-invocation-path-canary-{label}", config.cell_name())
+    );
+    let deadline = Instant::now() + INVOCATION_PATH_CANARY_BUDGET;
+    let mut attempt = 0u32;
+
+    loop {
+        attempt += 1;
+        let result = tokio::time::timeout(
+            INVOCATION_PATH_CANARY_ATTEMPT_TIMEOUT,
+            user.invoke_and_await_agent(component, &agent, "increment", data_value!()),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(_)) => {
+                info!(
+                    "Density-agent[{}]: invocation path ready for {label} after {attempt} canary attempt(s)",
+                    config.cell_name()
+                );
+                return Ok(());
+            }
+            Ok(Err(err)) => {
+                warn!(
+                    "Density-agent[{}]: invocation-path canary for {label} attempt {attempt} failed: {err:?}",
+                    config.cell_name()
+                );
+            }
+            Err(_) => {
+                warn!(
+                    "Density-agent[{}]: invocation-path canary for {label} attempt {attempt} timed out after {:?}",
+                    config.cell_name(),
+                    INVOCATION_PATH_CANARY_ATTEMPT_TIMEOUT
+                );
+            }
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "invocation path for {label} did not become ready within {:?}",
+                INVOCATION_PATH_CANARY_BUDGET
+            );
+        }
+        tokio::time::sleep(INVOCATION_PATH_CANARY_RETRY_DELAY).await;
+    }
 }
 
 fn batch_connection_alive(attempts: &[&AttemptOutcome]) -> bool {
@@ -1441,6 +1507,8 @@ async fn run_resume_cell(
         }
 
         probe.restart_executor().await?;
+        let canary_label = format!("post-restart-{target}");
+        wait_for_invocation_path(config, user, components, &canary_label).await?;
 
         info!(
             "Density-agent[{}]: reviving {target} warmed agents concurrently",
