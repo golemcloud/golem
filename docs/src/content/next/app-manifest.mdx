@@ -119,7 +119,19 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer",
   }}>
-    ***Optional local server defaults*** used by `golem server run` and by local deployment subdomain expansion.
+    ***Optional local server defaults*** used by `golem server run` and by local deployment subdomain expansion. CLI flags passed to `golem server run` override these values. Path values are resolved relative to the manifest that declares `localServer`.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.routerAddr",
+  }}>
+    ***Optional bind address*** for the local server's main API. Defaults to `0.0.0.0`.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.routerPort",
+  }}>
+    ***Optional port*** for the local server's main API. Defaults to `9881`.
   </Field>
 
   <Field meta={{
@@ -132,6 +144,24 @@ Available naming related string transforming functions:
     path: "localServer.mcpPort",
   }}>
     ***Optional MCP server port*** for local MCP requests. Defaults to `9007`; MCP deployments using `subdomain` resolve to `<subdomain>.localhost:<mcpPort>`.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.portsFile",
+  }}>
+    ***Optional path*** where the local server writes the actually-bound ports as JSON on startup. Useful with port `0` to capture OS-assigned free ports.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.dataDir",
+  }}>
+    ***Optional directory*** used for local server data. Defaults to `$XDG_STATE_HOME/golem`.
+  </Field>
+
+  <Field meta={{
+    path: "localServer.agentFilesystemRoot",
+  }}>
+    ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_name>/`.
   </Field>
 
   <Field meta={{
@@ -167,7 +197,7 @@ Available naming related string transforming functions:
     path: "httpApi.deployments.<environment-name>[*].subdomain",
     since: Release.R_1_5_0
   }}>
-    ***Built-in server subdomain*** for the deployment. Must be a single DNS label. In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Define exactly one of `domain` or `subdomain`.
+    ***Built-in server subdomain*** for the deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set. In a cloud environment it resolves to `<subdomain>.apps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
   </Field>
 
   <Field meta={{
@@ -230,7 +260,7 @@ Available naming related string transforming functions:
     path: "mcp.deployments.<environment-name>[*].subdomain",
     since: Release.R_1_5_0
   }}>
-    ***Built-in server subdomain*** for the MCP deployment. Must be a single DNS label. In a local environment it resolves to `<subdomain>.localhost:9007` by default, or `<subdomain>.localhost:<mcpPort>` when `localServer.mcpPort` is set. In a cloud environment it resolves to `<subdomain>.mcps.golem.cloud`. Define exactly one of `domain` or `subdomain`.
+    ***Built-in server subdomain*** for the MCP deployment. Must be a single DNS label (lowercase letters, digits, and hyphens only). In a local environment it resolves to `<subdomain>.localhost:9007` by default, or `<subdomain>.localhost:<mcpPort>` when `localServer.mcpPort` is set. In a cloud environment it resolves to `<subdomain>.mcps.golem.cloud`. Cannot be used with custom server environments — use `domain` instead. Define exactly one of `domain` or `subdomain`.
   </Field>
 
   <Field meta={{

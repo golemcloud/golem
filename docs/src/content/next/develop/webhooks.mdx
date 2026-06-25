@@ -165,9 +165,9 @@ httpApi:
   deployments:
     local:
     - subdomain: my-app  # resolves to my-app.localhost:9006 by default
-      webhookUrl: http://my-app.localhost:9006
+      webhookUrl: "/my-custom-webhooks/"  # optional path prefix; defaults to /webhooks
       agents:
         WebhookAgent: {}
 ```
 
-The `webhookUrl` field sets the base URL that Golem uses when generating webhook URLs. This should match the publicly accessible address of your deployment so that external systems can reach the webhook endpoints.
+The `webhookUrl` field sets the path prefix that Golem uses when generating webhook URLs (defaults to `/webhooks`). It is combined with the agent's `webhookSuffix` and the generated webhook ID to form the full callback URL, for example `http://my-app.localhost:9006/my-custom-webhooks/webhook-agent/<id>`.
