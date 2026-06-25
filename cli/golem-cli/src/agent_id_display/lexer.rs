@@ -532,11 +532,59 @@ impl<'a> Lexer<'a> {
                 message: "incomplete \\uXXXX escape".into(),
             });
         }
-        let hex = &self.input[self.pos..self.pos + 4];
+        // Parse the four bytes directly rather than slicing `self.input`. The
+        // bytes following `\u` may be multi-byte UTF-8 (e.g. `'\u€€'`), in which
+        // case `self.pos + 4` does not land on a char boundary and a string
+        // slice would panic. Hex digits are ASCII, so byte-wise parsing is
+        // boundary-agnostic.
+        let bytes = self.bytes();
+        let mut value: u16 = 0;
+        for &b in &bytes[self.pos..self.pos + 4] {
+            let digit = match b {
+                b'0'..=b'9' => b - b'0',
+                b'a'..=b'f' => b - b'a' + 10,
+                b'A'..=b'F' => b - b'A' + 10,
+                _ => {
+                    return Err(LexError {
+                        position: esc_pos,
+                        message: format!(
+                            "invalid hex in \\u{}",
+                            String::from_utf8_lossy(&bytes[self.pos..self.pos + 4])
+                        ),
+                    });
+                }
+            };
+            value = value * 16 + digit as u16;
+        }
         self.pos += 4;
-        u16::from_str_radix(hex, 16).map_err(|_| LexError {
-            position: esc_pos,
-            message: format!("invalid hex in \\u{hex}"),
-        })
+        Ok(value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn read_hex4_does_not_panic_on_multibyte_input_after_u_escape() {
+        // `'\u€€'` — backslash-u followed by two euro signs (each 3 bytes).
+        // The length check passes (6 >= 4 bytes after `\u`), but `pos + 4`
+        // lands mid-codepoint. Previously this panicked with
+        // "byte index N is not a char boundary"; it must report a LexError.
+        let input = "'\\u€€'";
+        let mut lexer = Lexer::new(input);
+        let token = lexer.next_token();
+        assert!(
+            token.is_err(),
+            "expected a LexError for non-hex characters after \\u, got {:?}",
+            token
+        );
+        let err = token.unwrap_err();
+        assert!(
+            err.message.contains("invalid hex") || err.message.contains("incomplete"),
+            "unexpected error message: {err}"
+        );
+    }
+}
+
