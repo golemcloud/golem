@@ -297,64 +297,59 @@ impl From<&wire::CommandAnnotations> for CommandAnnotations {
     }
 }
 
-// Constraints, refs, and `value-is` literals are infallible and context-free in
-// the native -> wire direction (encoding a `SchemaValue` cannot fail), so the
-// encode side is expressed as `From` impls. The wire -> native direction stays
-// as functions (see `decode_constraint`) because decoding a `SchemaValue` is
-// fallible.
+// Constraints, refs, and `value-is` literals are context-free in the native
+// -> wire direction, but encoding an embedded `SchemaValue` (a `value-is`
+// literal) is fallible: `encode_value` refuses non-transportable capability
+// values such as a `QuotaToken`. The encode side therefore threads `Result`
+// like the rest of the file; the wire -> native direction is fallible too (see
+// `decode_constraint`).
 
-impl From<&Constraint> for wire::Constraint {
-    fn from(c: &Constraint) -> Self {
-        match c {
-            Constraint::RequiresAll(rs) => wire::Constraint::RequiresAll(encode_refs(rs)),
-            Constraint::AllOrNone(rs) => wire::Constraint::AllOrNone(encode_refs(rs)),
-            Constraint::RequiresAny(rs) => wire::Constraint::RequiresAny(encode_refs(rs)),
-            Constraint::MutexGroups(gs) => {
-                wire::Constraint::MutexGroups(gs.iter().map(wire::RefGroup::from).collect())
-            }
-            Constraint::Implies(i) => wire::Constraint::Implies(wire::ImpliesC {
-                lhs_quant: wire::Quantifier::from(&i.lhs_quant),
-                lhs: encode_refs(&i.lhs),
-                rhs_quant: wire::Quantifier::from(&i.rhs_quant),
-                rhs: encode_refs(&i.rhs),
-            }),
-            Constraint::Forbids(f) => wire::Constraint::Forbids(wire::ForbidsC {
-                lhs_quant: wire::Quantifier::from(&f.lhs_quant),
-                lhs: encode_refs(&f.lhs),
-                rhs: encode_refs(&f.rhs),
-            }),
-        }
-    }
+fn encode_constraint(c: &Constraint) -> Result<wire::Constraint, ToolWitError> {
+    Ok(match c {
+        Constraint::RequiresAll(rs) => wire::Constraint::RequiresAll(encode_refs(rs)?),
+        Constraint::AllOrNone(rs) => wire::Constraint::AllOrNone(encode_refs(rs)?),
+        Constraint::RequiresAny(rs) => wire::Constraint::RequiresAny(encode_refs(rs)?),
+        Constraint::MutexGroups(gs) => wire::Constraint::MutexGroups(
+            gs.iter()
+                .map(encode_ref_group)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Constraint::Implies(i) => wire::Constraint::Implies(wire::ImpliesC {
+            lhs_quant: wire::Quantifier::from(&i.lhs_quant),
+            lhs: encode_refs(&i.lhs)?,
+            rhs_quant: wire::Quantifier::from(&i.rhs_quant),
+            rhs: encode_refs(&i.rhs)?,
+        }),
+        Constraint::Forbids(f) => wire::Constraint::Forbids(wire::ForbidsC {
+            lhs_quant: wire::Quantifier::from(&f.lhs_quant),
+            lhs: encode_refs(&f.lhs)?,
+            rhs: encode_refs(&f.rhs)?,
+        }),
+    })
 }
 
-impl From<&RefGroup> for wire::RefGroup {
-    fn from(g: &RefGroup) -> Self {
-        wire::RefGroup {
-            refs: encode_refs(&g.refs),
-        }
-    }
+fn encode_ref_group(g: &RefGroup) -> Result<wire::RefGroup, ToolWitError> {
+    Ok(wire::RefGroup {
+        refs: encode_refs(&g.refs)?,
+    })
 }
 
-impl From<&Ref> for wire::Ref {
-    fn from(r: &Ref) -> Self {
-        match r {
-            Ref::Present(name) => wire::Ref::Present(name.clone()),
-            Ref::ValueIs(v) => wire::Ref::ValueIs(wire::ValueIsRef::from(v)),
-        }
-    }
+fn encode_ref(r: &Ref) -> Result<wire::Ref, ToolWitError> {
+    Ok(match r {
+        Ref::Present(name) => wire::Ref::Present(name.clone()),
+        Ref::ValueIs(v) => wire::Ref::ValueIs(encode_value_is_ref(v)?),
+    })
 }
 
-impl From<&ValueIsRef> for wire::ValueIsRef {
-    fn from(v: &ValueIsRef) -> Self {
-        wire::ValueIsRef {
-            name: v.name.clone(),
-            value: encode_value(&v.value),
-        }
-    }
+fn encode_value_is_ref(v: &ValueIsRef) -> Result<wire::ValueIsRef, ToolWitError> {
+    Ok(wire::ValueIsRef {
+        name: v.name.clone(),
+        value: encode_value(&v.value)?,
+    })
 }
 
-fn encode_refs(rs: &[Ref]) -> Vec<wire::Ref> {
-    rs.iter().map(wire::Ref::from).collect()
+fn encode_refs(rs: &[Ref]) -> Result<Vec<wire::Ref>, ToolWitError> {
+    rs.iter().map(encode_ref).collect()
 }
 
 // ============================================================
@@ -429,7 +424,11 @@ fn encode_command_body(
             .map(|o| encode_option_spec(enc, o))
             .collect::<Result<Vec<_>, _>>()?,
         flags: b.flags.iter().map(wire::FlagSpec::from).collect(),
-        constraints: b.constraints.iter().map(wire::Constraint::from).collect(),
+        constraints: b
+            .constraints
+            .iter()
+            .map(encode_constraint)
+            .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(wire::StreamSpec::from),
         stdout: b.stdout.as_ref().map(wire::StreamSpec::from),
         result: b
@@ -473,7 +472,7 @@ fn encode_positional(
         doc: wire::Doc::from(&p.doc),
         value_name: p.value_name.clone(),
         type_: enc.encode_type(&p.type_)?,
-        default: p.default.as_ref().map(encode_value),
+        default: p.default.as_ref().map(encode_value).transpose()?,
         required: p.required,
     })
 }
@@ -505,7 +504,7 @@ fn encode_option_spec(
         doc: wire::Doc::from(&o.doc),
         value_name: o.value_name.clone(),
         shape: encode_option_shape(enc, &o.shape)?,
-        default: o.default.as_ref().map(encode_value),
+        default: o.default.as_ref().map(encode_value).transpose()?,
         required: o.required,
         env_var: o.env_var.clone(),
     })
