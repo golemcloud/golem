@@ -5592,7 +5592,12 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
 macro_rules! get_oplog_entry {
     ($replay_state:expr, $($cases:path),+) => {
         loop {
-            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await?;
+            let Some((oplog_index, oplog_entry)) = $replay_state.get_oplog_entry().await else {
+                break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                    stringify!($($cases |)+),
+                    "End of replay",
+                ));
+            };
             match oplog_entry {
                 $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));

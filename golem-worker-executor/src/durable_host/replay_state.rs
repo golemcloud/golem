@@ -37,6 +37,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use uuid::Uuid;
+use log::debug;
 
 const CHUNK_SIZE: u64 = 1024;
 
@@ -197,6 +198,7 @@ impl ReplayState {
         replay_target: OplogIndex,
     ) -> Self {
         let (start_index, initial_skipped_region) = Self::first_non_skipped_entry(&skipped_regions);
+        debug!("Creating replay state starting from index {start_index}");
         let initial_oplog_chunk = Arc::new(Vec::new());
         let initial_oplog_chunk_region = OplogRegion {
             start: OplogIndex::NONE,
@@ -234,6 +236,7 @@ impl ReplayState {
     }
 
     pub fn drop_override_and_restart(&mut self) {
+        debug!("called drop_override_and_restart()");
         let owned_agent_id = self.owned_agent_id.clone();
         let oplog = self.oplog.clone();
         let mut skipped_regions = self.skipped_regions.clone();
@@ -245,27 +248,39 @@ impl ReplayState {
     }
 
     pub fn last_replayed_index(&self) -> OplogIndex {
+        debug!("called last_replayed_index()");
+
         self.committed.current_oplog_index
     }
 
     pub fn last_replayed_non_hint_index(&self) -> OplogIndex {
+        debug!("called last_replayed_non_hint_index()");
+
         self.committed.last_read_non_hint_oplog_index
     }
 
     pub fn replay_target(&self) -> OplogIndex {
+        debug!("called replay_target()");
+
         self.replay_target
     }
 
     pub fn set_replay_target(&mut self, new_target: OplogIndex) {
+        debug!("called set_replay_target({new_target})");
+
         self.replay_target = new_target
     }
 
     pub fn is_in_skipped_region(&self, oplog_index: OplogIndex) -> bool {
+        debug!("called is_in_skipped_region({oplog_index})");
+
         self.skipped_regions.is_in_deleted_region(oplog_index)
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
+        debug!("called is_live()");
+
         self.committed.current_oplog_index >= self.replay_target
     }
 
@@ -275,6 +290,8 @@ impl ReplayState {
 
     /// Returns whether we are in replay mode where we are replaying old calls.
     pub fn is_replay(&self) -> bool {
+        debug!("called is_replay()");
+
         !self.is_live()
     }
 
@@ -283,11 +300,16 @@ impl ReplayState {
     }
 
     pub async fn take_new_replay_events(&mut self) -> Vec<ReplayEvent> {
+        debug!("called take_new_replay_events()");
+        // If we are at the last non-hint entry we have
+        self.try_get_oplog_entry(|_| false).await;
         std::mem::take(&mut self.committed.replay_events)
     }
 
     /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
+        debug!("called seen_log()");
+
         !self.committed.seen_logs.is_empty() && {
             let hash = Self::hash_log_entry(level, context, message);
             self.committed.seen_logs.contains(&hash)
@@ -296,6 +318,8 @@ impl ReplayState {
 
     /// Removes a seen log from the set. If the set becomes empty, `seen_log` becomes a cheap operation
     pub async fn remove_seen_log(&mut self, level: LogLevel, context: &str, message: &str) {
+        debug!("called remove_seen_log()");
+
         if !self.committed.seen_logs.is_empty() {
             let hash = Self::hash_log_entry(level, context, message);
             self.committed.seen_logs.remove(&hash);
@@ -316,40 +340,35 @@ impl ReplayState {
     pub async fn try_get_oplog_entry(
         &mut self,
         condition: impl FnOnce(&OplogEntry) -> bool,
-    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        if !self.is_replay() {
-            return Ok(None);
+    ) -> Option<(OplogIndex, OplogEntry)> {
+        debug!("called try_get_oplog_entry()");
+
+        if self.is_live() {
+            return None;
         }
 
         self.advance_to_next_non_hint_entry().await;
+        if self.pending_is_live() {
+            self.commit().await;
+            return None;
+        }
+
         let (index, entry) = self.get_current_entry().await;
 
         if condition(entry) {
             let entry = entry.clone();
             self.commit().await;
-            Ok(Some((index, entry)))
+            Some((index, entry))
         } else {
             self.revert_to_last_commit();
-            Ok(None)
+            None
         }
     }
 
-    /// Reads the next oplog entry, and skips every hint entry following it.
-    /// Returns the oplog index of the entry read, no matter how many more hint entries
-    /// were read.
-    ///
-    /// Returns an error if the underlying read fails (e.g. missing oplog entry,
-    /// corrupted GolemApiFork payload) so the worker can fail the agent with a
-    /// non-retriable trap rather than panicking the executor.
     pub async fn get_oplog_entry(
         &mut self,
-    ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        // The closure always returns true, so the outer Option is always Some(...)
-        // when the underlying read succeeds.
-        Ok(self
-            .try_get_oplog_entry(|_| true)
-            .await?
-            .expect("try_get_oplog_entry with always-true predicate must return Some"))
+    ) -> Option<(OplogIndex, OplogEntry)> {
+        self.try_get_oplog_entry(|_| true).await
     }
 
     pub async fn lookup_oplog_entry(
@@ -357,6 +376,8 @@ impl ReplayState {
         begin_idx: OplogIndex,
         check: impl Fn(&OplogEntry, OplogIndex) -> bool,
     ) -> Option<OplogIndex> {
+        debug!("called lookup_oplog_entry()");
+
         match self
             .lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
             .await
@@ -372,6 +393,8 @@ impl ReplayState {
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
     ) -> OplogEntryLookupResult {
+        debug!("called lookup_oplog_entry_with_condition()");
+
         self.lookup_oplog_entry_with_condition_and_state(
             begin_idx,
             |entry, idx, ()| end_check(entry, idx),
@@ -392,6 +415,8 @@ impl ReplayState {
         mut state: State,
         mut update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
     ) -> OplogEntryLookupResult {
+        debug!("called lookup_oplog_entry_with_condition_and_state()");
+
         let mut violation = false;
         while self.is_replay() {
             self.advance_to_next_non_hint_entry().await;
@@ -424,66 +449,68 @@ impl ReplayState {
     pub async fn get_oplog_entry_agent_invocation_started(
         &mut self,
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
-        if self.is_replay() {
-            let (_, oplog_entry) = self.get_oplog_entry().await?;
-            match oplog_entry {
-                OplogEntry::AgentInvocationStarted {
+        debug!("called get_oplog_entry_agent_invocation_started()");
+
+        let Some((_, oplog_entry)) = self.get_oplog_entry().await else {
+            return Ok(None);
+        };
+
+        match oplog_entry {
+            OplogEntry::AgentInvocationStarted {
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context: spans,
+                ..
+            } => {
+                let invocation_payload =
+                    self.oplog.download_payload(payload).await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "failed to deserialize agent invocation payload: {err}"
+                        ))
+                    })?;
+
+                let invocation_context =
+                    InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
+
+                Ok(Some(AgentInvocationStartedEntry {
                     idempotency_key,
-                    payload,
-                    trace_id,
-                    trace_states,
-                    invocation_context: spans,
-                    ..
-                } => {
-                    let invocation_payload =
-                        self.oplog.download_payload(payload).await.map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to deserialize agent invocation payload: {err}"
-                            ))
-                        })?;
-
-                    let invocation_context =
-                        InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
-
-                    Ok(Some(AgentInvocationStartedEntry {
-                        idempotency_key,
-                        invocation_payload,
-                        invocation_context,
-                    }))
-                }
-                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "AgentInvocationStarted",
-                    format!("{oplog_entry:?}"),
-                )),
+                    invocation_payload,
+                    invocation_context,
+                }))
             }
-        } else {
-            Ok(None)
+            _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "AgentInvocationStarted",
+                format!("{oplog_entry:?}"),
+            )),
         }
     }
 
     pub async fn get_oplog_entry_agent_invocation_finished(
         &mut self,
     ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
-        if self.is_replay() {
-            let (_, oplog_entry) = self.get_oplog_entry().await?;
-            match oplog_entry {
-                OplogEntry::AgentInvocationFinished { result, .. } => {
-                    let result: AgentInvocationResult =
-                        self.oplog.download_payload(result).await.map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to deserialize agent invocation result payload: {err}"
-                            ))
-                        })?;
+        debug!("called get_oplog_entry_agent_invocation_finished()");
 
-                    Ok(Some(result))
-                }
-                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "AgentInvocationFinished",
-                    format!("{oplog_entry:?}"),
-                )),
+        let Some((_, oplog_entry)) = self.get_oplog_entry().await else {
+            return Ok(None);
+        };
+
+        match oplog_entry {
+            OplogEntry::AgentInvocationFinished { result, .. } => {
+                let result: AgentInvocationResult =
+                    self.oplog.download_payload(result).await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "failed to deserialize agent invocation result payload: {err}"
+                        ))
+                    })?;
+
+                Ok(Some(result))
             }
-        } else {
-            Ok(None)
+            _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "AgentInvocationFinished",
+                format!("{oplog_entry:?}"),
+            )),
         }
     }
 
@@ -518,6 +545,8 @@ impl ReplayState {
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
     ) -> Result<ReplayCallHandle, WorkerExecutorError> {
+        debug!("called claim_concurrent_start()");
+
         let claimed = self.claim_any_concurrent_start().await?;
         let validation_error = if &claimed.function_name != expected_function_name {
             Some(WorkerExecutorError::unexpected_oplog_entry(
@@ -561,15 +590,13 @@ impl ReplayState {
     pub async fn claim_any_concurrent_start(
         &mut self,
     ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let read = self
+        debug!("called claim_any_concurrent_start()");
+
+        let Some((start_idx, entry)) = self
             .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::Start { .. }))
-            .await?;
-        let (start_idx, entry) = read.ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
-                "Start",
-                "a non-Start entry (end of replay, or concurrent interleaving)".to_string(),
-            )
-        })?;
+            .await else {
+                return Err(WorkerExecutorError::unexpected_oplog_entry("Start", "End of replay"))
+            };
         match entry {
             OplogEntry::Start {
                 timestamp,
@@ -610,6 +637,8 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<Resolution, WorkerExecutorError> {
+        debug!("called await_resolution()");
+
         let start_idx = handle.start_idx();
         match self.await_resolution_outcome(handle).await? {
             ResolutionOutcome::Resolved(resolution) => Ok(resolution),
@@ -630,6 +659,8 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
+        debug!("called await_resolution_outcome()");
+
         let (start_idx, mut receiver) = handle.into_parts();
         loop {
             match receiver.try_recv() {
@@ -658,7 +689,7 @@ impl ReplayState {
                 .try_get_oplog_entry(|entry| {
                     matches!(entry, OplogEntry::End { .. } | OplogEntry::Cancelled { .. })
                 })
-                .await?;
+                .await;
             if consumed.is_none() {
                 // The next non-hint entry is not an End/Cancelled (e.g. an unclaimed `Start` or a
                 // scope/persistence marker). Crossing it would corrupt the cursor shared with
@@ -791,6 +822,7 @@ impl ReplayState {
             self.advance_to_next_non_skipped_entry().await;
             let in_persist_nothing_region = self.pending.in_persist_nothing_region;
             let (idx, entry) = self.get_current_entry().await;
+            tracing::debug!("advance_to_next_non_hint_entry: Current entry is {entry:?}");
 
             let entry_is_hint = entry.is_hint();
 
@@ -884,7 +916,8 @@ impl ReplayState {
             if !entry_is_hint && !self.pending.in_persist_nothing_region {
                 break;
             };
-            self.pending.current_oplog_index = self.pending.current_oplog_index.next()
+            self.pending.current_oplog_index = self.pending.current_oplog_index.next();
+            debug!("set current index to {}", self.pending.current_oplog_index);
         }
 
         self.pending.last_read_non_hint_oplog_index = self.pending.current_oplog_index;

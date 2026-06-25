@@ -68,7 +68,7 @@ use raw_imports::*;
 oplog_entry! {
     /// The first entry of every oplog
     Create {
-        hint: false
+        hint: true
         wit_raw_type: "raw-create-parameters"
         wit_public_type: "create-parameters"
         raw {

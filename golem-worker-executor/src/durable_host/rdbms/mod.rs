@@ -1059,14 +1059,14 @@ where
             .state
             .replay_state
             .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
-            .await?;
+            .await;
 
         if pre_rollback.is_some() {
             let rolled_back = ctx
                 .state
                 .replay_state
                 .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
-                .await?;
+                .await;
 
             if rolled_back.is_some() {
                 // The rollback was recorded in a previous incarnation. The marker and its scope
@@ -1077,7 +1077,7 @@ where
                     .state
                     .replay_state
                     .try_get_oplog_entry(|e| e.is_end_remote_write(entry.begin_index))
-                    .await?;
+                    .await;
                 if end.is_none() {
                     return Err(anyhow!(
                         "Missing transaction scope End for begin index {} during rollback replay",
