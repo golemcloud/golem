@@ -2625,9 +2625,11 @@ mod app_builder {
             apps: Vec<app_raw::ApplicationWithSource>,
         ) -> ValidatedResult<Application> {
             let mut validation = ValidationBuilder::default();
-            let mut builder = Self::default();
-            builder.environments = environments.clone().into_iter().collect();
-            builder.deployment_domain_local_server = local_server;
+            let mut builder = Self {
+                environments: environments.clone().into_iter().collect(),
+                deployment_domain_local_server: local_server,
+                ..Self::default()
+            };
 
             match Ok::<&PathBuf, anyhow::Error>(&app_root_dir).and_then(|app_root_dir| {
                 Ok((
