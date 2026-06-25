@@ -112,28 +112,70 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
             .await
             .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
+        let density_probe = is_density_probe_agent(self);
+        if density_probe {
+            info!(
+                agent_id = %self,
+                description = description.as_ref(),
+                "Density probe: routing agent call"
+            );
+        }
+
         tracing::debug!("Routing agent call for {self}");
 
         match routing_table.lookup(self) {
-            None => Ok((None, None)),
+            None => {
+                if density_probe {
+                    warn!(
+                        agent_id = %self,
+                        description = description.as_ref(),
+                        "Density probe: no active shard route for agent"
+                    );
+                }
+                Ok((None, None))
+            }
             Some(pod) => {
                 let clients = context.worker_executor_clients();
 
                 tracing::debug!("Calling agent {self} on pod: {pod:?}");
+                if density_probe {
+                    info!(
+                        agent_id = %self,
+                        pod = ?pod,
+                        description = description.as_ref(),
+                        "Density probe: selected executor pod"
+                    );
+                }
 
-                Ok((
-                    Some(
-                        clients
-                            .call(description, pod.uri(clients.uses_tls()), f)
-                            .await
-                            .map_err(|err| {
-                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    err, *pod,
-                                )
-                            })?,
-                    ),
-                    Some(*pod),
-                ))
+                let result = clients
+                    .call(description.as_ref(), pod.uri(clients.uses_tls()), f)
+                    .await;
+
+                match result {
+                    Ok(out) => {
+                        if density_probe {
+                            info!(
+                                agent_id = %self,
+                                pod = ?pod,
+                                description = description.as_ref(),
+                                "Density probe: executor call returned"
+                            );
+                        }
+                        Ok((Some(out), Some(*pod)))
+                    }
+                    Err(err) => {
+                        if density_probe {
+                            warn!(
+                                agent_id = %self,
+                                pod = ?pod,
+                                description = description.as_ref(),
+                                error = %err,
+                                "Density probe: executor call failed"
+                            );
+                        }
+                        Err(CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(err, *pod))
+                    }
+                }
             }
         }
     }
@@ -141,6 +183,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
     fn tracing_kind(&self) -> &'static str {
         "AgentId"
     }
+}
+
+fn is_density_probe_agent(agent_id: &AgentId) -> bool {
+    agent_id.to_string().contains("resume-under-saturation")
 }
 
 pub struct RandomExecutor;

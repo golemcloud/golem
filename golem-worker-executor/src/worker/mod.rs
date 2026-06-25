@@ -457,8 +457,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let mut instance_guard = this.lock_non_stopping_worker().await;
+        let density_probe = is_density_probe_agent(&this.agent_id());
+        if density_probe {
+            info!(
+                agent_id = %this.agent_id(),
+                instance_state = ?*instance_guard,
+                "Density probe: start_if_needed checking worker state"
+            );
+        }
         match &*instance_guard {
             WorkerInstance::Unloaded { .. } => {
+                if density_probe {
+                    info!(
+                        agent_id = %this.agent_id(),
+                        oom_retry_count,
+                        "Density probe: transitioning unloaded worker to waiting for permit"
+                    );
+                }
                 this.mark_as_loading();
                 crate::metrics::workers::inc_worker_waiting_for_memory();
                 crate::metrics::wasm::record_worker_resident_linear_memory(
@@ -475,7 +490,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
                 Ok(true)
             }
-            WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => Ok(false),
+            WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => {
+                if density_probe {
+                    info!(
+                        agent_id = %this.agent_id(),
+                        "Density probe: worker already starting or running"
+                    );
+                }
+                Ok(false)
+            }
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             )),
@@ -682,6 +705,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 WorkerExecutorError::invalid_request("Invocation has no idempotency key")
             })?
             .clone();
+        let density_probe = is_density_probe_agent(&self.agent_id());
+        if density_probe {
+            info!(
+                agent_id = %self.agent_id(),
+                idempotency_key = %idempotency_key,
+                invocation = %invocation.display_name(),
+                "Density probe: worker invoke received"
+            );
+        }
 
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
@@ -694,6 +726,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
+                if density_probe {
+                    info!(
+                        agent_id = %self.agent_id(),
+                        idempotency_key = %idempotency_key,
+                        invocation = %invocation.display_name(),
+                        "Density probe: enqueueing new invocation"
+                    );
+                }
                 self.enqueue_worker_invocation(invocation).await?;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
@@ -3451,6 +3491,10 @@ fn is_snapshot_capable_oplog_processor(
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> bool {
     metadata.has_oplog_processor() && metadata.has_save_snapshot() && metadata.has_load_snapshot()
+}
+
+fn is_density_probe_agent(agent_id: &AgentId) -> bool {
+    agent_id.to_string().contains("resume-under-saturation")
 }
 
 #[derive(Debug)]
