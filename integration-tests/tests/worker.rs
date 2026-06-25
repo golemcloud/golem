@@ -26,6 +26,9 @@ use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
@@ -53,6 +56,53 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
+
+fn permission_share_data(permission: &str) -> PermissionShareData {
+    PermissionShareData {
+        lower_positive: vec![permission.to_string()],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    }
+}
+
+/// REST/JSON invocation of a method whose only declared input is the
+/// auto-injected `principal` field. The caller supplies no parameters (the
+/// host injects the principal out of band), so the invocation must succeed —
+/// the same way the gRPC executor path and the HTTP gateway path already do.
+///
+/// `ReadonlyAgent::get_count_for(&self, _principal: Principal) -> u64` declares
+/// a single auto-injected principal field and no user-supplied parameters, so
+/// the caller sends an empty parameter record. This guards against the
+/// worker-service REST path validating method parameters against the *full*
+/// input schema (including auto-injected fields) instead of only the
+/// user-supplied ones.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn rest_invoke_of_principal_only_method_succeeds(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_rust_release")
+        .name("golem-it:agent-sdk-rust")
+        .store()
+        .await?;
+    let agent_id = agent_id!("ReadonlyAgent", "rest-principal-1");
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = user
+        .invoke_and_await_agent(&component, &agent_id, "get_count_for", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(result, SchemaValue::U64(0));
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]
@@ -129,6 +179,138 @@ async fn dynamic_worker_creation(
             }))
         })
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn card_host_api_roundtrip(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "card-host-api-roundtrip");
+    let _agent_id = user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = user
+        .invoke_and_await_agent(&component, &agent_id, "card_api_roundtrip", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+            ]
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn card_host_api_observes_revocation(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let target = deps.user().await?;
+    let (_, target_env) = target.app_and_env().await?;
+
+    let share = owner
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: target.account_email.clone(),
+                name: PermissionShareName("card-host-api-revocation".to_string()),
+                data: permission_share_data(&format!(
+                    "application({}/card-host-api-revocation) @ {} : view :",
+                    owner.account_email.as_str(),
+                    target.account_email.as_str()
+                )),
+            },
+        )
+        .await?;
+    let card_id = share
+        .current_card_id
+        .ok_or_else(|| anyhow!("permission share did not create a card"))?;
+    let (high_bits, low_bits) = card_id.0.as_u64_pair();
+
+    let component = target
+        .component(&target_env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "card-host-api-revocation");
+    let _agent_id = target.start_agent(&component.id, agent_id.clone()).await?;
+
+    let install_result = target
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "install_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected install return value"))?;
+    assert_eq!(install_result, SchemaValue::Bool(true));
+
+    let derive_before_revoke = target
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "derive_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected derive return value"))?;
+    assert_eq!(derive_before_revoke, SchemaValue::Bool(true));
+
+    owner
+        .registry_service_client()
+        .await
+        .delete_permission_share(&share.id.0, share.revision.into())
+        .await?;
+
+    let mut revoked_observed = false;
+    for _ in 0..40 {
+        let derive_after_revoke = target
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "derive_card_by_id",
+                data_value!(high_bits, low_bits),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected derive return value"))?;
+        if derive_after_revoke == SchemaValue::Bool(false) {
+            revoked_observed = true;
+            break;
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    assert!(revoked_observed, "revoked card remained installed");
 
     Ok(())
 }

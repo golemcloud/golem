@@ -26,6 +26,9 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::text::diff::log_unified_diff;
+use crate::model::text::environment::{
+    EnvironmentListView, EnvironmentSyncDeploymentOptionsResult,
+};
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::EnvironmentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -64,12 +67,16 @@ impl EnvironmentCommandHandler {
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        if !self
+        let updated = self
             .ensure_environment_deployment_options(&environment)
-            .await?
-        {
+            .await?;
+        if !updated {
             log_skipping_up_to_date("updating environment deployment options");
         }
+
+        self.ctx
+            .log_handler()
+            .log_output(EnvironmentSyncDeploymentOptionsResult { updated })?;
 
         Ok(())
     }
@@ -85,14 +92,17 @@ impl EnvironmentCommandHandler {
             .map_service_error()?
             .values;
 
-        if env_summaries.is_empty() {
+        if env_summaries.is_empty() && !self.ctx.format().is_structured() {
             logln(format!(
                 "No application environments are available. Use '{}' to create one.",
                 "golem deploy".log_color_highlight()
             ));
-        } else {
-            self.ctx.log_handler().log_view(&env_summaries)?;
+            return Ok(());
         }
+
+        self.ctx.log_handler().log_output(EnvironmentListView {
+            environments: env_summaries,
+        })?;
 
         Ok(())
     }
@@ -479,7 +489,9 @@ impl EnvironmentCommandHandler {
                     .to_string(),
             );
             logln("");
-            self.ctx.log_handler().log_view(&env_summaries)?;
+            log_text_view(&EnvironmentListView {
+                environments: env_summaries,
+            });
         }
 
         Ok(())

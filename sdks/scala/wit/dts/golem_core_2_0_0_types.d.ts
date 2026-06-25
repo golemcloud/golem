@@ -80,6 +80,12 @@ declare module 'golem:core/types@2.0.0' {
     uuid: Uuid;
   };
   /**
+   * Represents a Golem permission card
+   */
+  export type CardId = {
+    uuid: Uuid;
+  };
+  /**
    * An index into the persistent log storing all performed operations of an agent
    */
   export type OplogIndex = bigint;

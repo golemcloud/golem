@@ -85,7 +85,7 @@ app: demo
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].path, source);
         assert!(steps[0].new.contains("manifestVersion: 1.6.0"));
-        assert!(steps[0].new.contains("/1.6.0-dev.1/golem.schema.json"));
+        assert!(steps[0].new.contains("/1.6.0-dev.2/golem.schema.json"));
         assert!(!steps[0].new.contains("/1.5.0/golem.schema.json"));
     }
 

@@ -91,6 +91,11 @@ interface types {
         uuid: uuid,
     }
 
+    /// Represents a Golem permission card
+    record card-id {
+        uuid: uuid,
+    }
+
     /// An index into the persistent log storing all performed operations of an agent
     type oplog-index = u64;
 

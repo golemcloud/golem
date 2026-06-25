@@ -81,9 +81,10 @@ mod flag {
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
+    pub static OUTPUT_DIR: &str = "--output-dir";
     pub static RESET: &str = "--reset";
     pub static SCRIPT: &str = "--script";
-    pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static SHOW_SECRETS: &str = "--show-secrets";
     pub static STEP: &str = "--step";
     pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
@@ -396,6 +397,21 @@ impl TestContext {
             .as_ref()
             .map(|ports| ports.custom_request_port)
             .unwrap_or(9006)
+    }
+
+    #[allow(dead_code)]
+    fn router_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .expect("start_server must be called before router_port")
+            .router_port
+    }
+
+    /// Base URL of the local worker service (the external invocation REST API),
+    /// as discovered from the test server's random router port.
+    #[allow(dead_code)]
+    fn worker_service_url(&self) -> String {
+        format!("http://localhost:{}", self.router_port())
     }
 
     fn rewrite_local_http_domain_ports(&self) {

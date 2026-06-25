@@ -25,7 +25,7 @@ pub use golem_schema::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
     SchemaType, SchemaValue, SecretRef, TypedSchemaValue,
 };
-pub use golem_schema::{AgentId, ComponentId, EnvironmentId, PromiseId};
+pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 
 pub fn encode_schema_graph(
     graph: &SchemaGraph,
@@ -333,6 +333,18 @@ fn wire_component_id_to_schema(value: schema::wit::wire::ComponentId) -> Compone
     }
 }
 
+fn schema_card_id_to_wire(value: CardId) -> schema::wit::wire::CardId {
+    schema::wit::wire::CardId {
+        uuid: schema_uuid_to_wire(value.uuid),
+    }
+}
+
+fn wire_card_id_to_schema(value: schema::wit::wire::CardId) -> CardId {
+    CardId {
+        uuid: wire_uuid_to_schema(value.uuid),
+    }
+}
+
 fn schema_agent_id_to_wire(value: AgentId) -> schema::wit::wire::AgentId {
     schema::wit::wire::AgentId {
         component_id: schema_component_id_to_wire(value.component_id),
@@ -404,6 +416,54 @@ impl From<PersistenceLevel> for host_api::PersistenceLevel {
 pub enum UpdateMode {
     Automatic,
     SnapshotBased,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+pub struct Card {
+    pub card_id: CardId,
+}
+
+impl From<host_api::Card> for Card {
+    fn from(value: host_api::Card) -> Self {
+        Self {
+            card_id: wire_card_id_to_schema(value.card_id),
+        }
+    }
+}
+
+impl From<Card> for host_api::Card {
+    fn from(value: Card) -> Self {
+        Self {
+            card_id: schema_card_id_to_wire(value.card_id),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+pub enum CardInstallError {
+    Revoked,
+    NotFound,
+    NotPermitted,
+}
+
+impl From<host_api::CardInstallError> for CardInstallError {
+    fn from(value: host_api::CardInstallError) -> Self {
+        match value {
+            host_api::CardInstallError::Revoked => Self::Revoked,
+            host_api::CardInstallError::NotFound => Self::NotFound,
+            host_api::CardInstallError::NotPermitted => Self::NotPermitted,
+        }
+    }
+}
+
+impl From<CardInstallError> for host_api::CardInstallError {
+    fn from(value: CardInstallError) -> Self {
+        match value {
+            CardInstallError::Revoked => Self::Revoked,
+            CardInstallError::NotFound => Self::NotFound,
+            CardInstallError::NotPermitted => Self::NotPermitted,
+        }
+    }
 }
 
 impl From<host_api::UpdateMode> for UpdateMode {
@@ -1019,6 +1079,20 @@ pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(host_api::generate_idempotency_key())
+}
+
+pub fn self_card() -> Option<Card> {
+    host_api::self_card().map(Into::into)
+}
+
+pub fn derive_card(card: Card) -> Result<Card, String> {
+    let card = host_api::Card::from(card);
+    host_api::derive_card(card).map(Into::into)
+}
+
+pub fn install_card(card: Card) -> Result<(), CardInstallError> {
+    let card = host_api::Card::from(card);
+    host_api::install_card(card).map_err(Into::into)
 }
 
 pub struct AtomicOperationGuard {

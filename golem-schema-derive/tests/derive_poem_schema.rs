@@ -26,7 +26,7 @@
 //!    generated `MetaSchema` (a small subset validator), so the schema can't
 //!    silently drift from the wire format.
 
-#![allow(dead_code)]
+#![allow(dead_code, unreachable_code, clippy::diverging_sub_expression)]
 
 use golem_schema_derive::PoemSchema;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
@@ -114,6 +114,39 @@ enum InputLike {
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 enum NullableContentLike {
     Maybe(Option<String>),
+}
+
+/// Internally-tagged enum, mirrors `ResultValuePayload`
+/// (`tag = "tag", rename_all = "kebab-case"`): each variant serializes as an
+/// object carrying the tag inline alongside its own fields
+/// (`{ "tag": "ok", "value": ... }`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+#[serde(tag = "tag", rename_all = "kebab-case")]
+enum ResultLike {
+    Ok { value: Option<String> },
+    Err { value: Option<String> },
+}
+
+/// Internally-tagged enum with a unit variant, to verify a unit branch carries
+/// only the tag (`{ "tag": "pending" }`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+#[serde(tag = "tag", rename_all = "kebab-case")]
+enum InternalUnitLike {
+    Pending,
+    Done { code: u32 },
+}
+
+/// Struct with a tuple-bearing field, mirrors `SchemaValue::Map`
+/// (`entries: Vec<(SchemaValue, SchemaValue)>`): serde serializes the entries
+/// as an array of two-element arrays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+struct MapLike {
+    entries: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+struct HeterogeneousTupleLike {
+    entry: (String, u32),
 }
 
 // ----------------------------------------------------------------------
@@ -276,6 +309,109 @@ fn adjacent_newtype_variant_over_option_is_nullable() {
         validate(&registry, &NullableContentLike::schema_ref(), &json)
             .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
     }
+}
+
+#[test]
+fn internally_tagged_enum_is_one_of_objects_with_inline_tag() {
+    let registry = register::<ResultLike>();
+    let meta = schema(&registry, "ResultLike");
+    assert_eq!(meta.ty, "object");
+    assert_eq!(meta.one_of.len(), 2, "one branch per variant");
+
+    // `Ok { value: Option<String> }` -> object whose tag is inline alongside
+    // the variant's own `value` field; the tag is required, `value` is not (it
+    // is `Option`), and `value` is nullable.
+    let ok = inline(&meta.one_of[0]);
+    assert_eq!(ok.required, vec!["tag"], "only the tag is required");
+    let tag = inline(prop(ok, "tag"));
+    assert_eq!(tag.ty, "string");
+    assert_eq!(tag.enum_items, vec![json!("ok")]);
+    assert!(
+        inline(prop(ok, "value")).nullable,
+        "Option field must be nullable"
+    );
+
+    // Both serde encodings validate.
+    for value in [
+        ResultLike::Ok {
+            value: Some("x".to_string()),
+        },
+        ResultLike::Err { value: None },
+    ] {
+        let json = serde_json::to_value(&value).unwrap();
+        validate(&registry, &ResultLike::schema_ref(), &json)
+            .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
+    }
+}
+
+#[test]
+fn internally_tagged_unit_variant_carries_only_tag() {
+    let registry = register::<InternalUnitLike>();
+    let meta = schema(&registry, "InternalUnitLike");
+    assert_eq!(meta.one_of.len(), 2);
+
+    let pending = inline(&meta.one_of[0]);
+    assert_eq!(pending.required, vec!["tag"]);
+    assert!(
+        pending.properties.iter().all(|(k, _)| *k == "tag"),
+        "unit variant must carry only the tag property"
+    );
+    assert_eq!(
+        inline(prop(pending, "tag")).enum_items,
+        vec![json!("pending")]
+    );
+
+    let done = inline(&meta.one_of[1]);
+    assert_eq!(done.required, vec!["tag", "code"]);
+
+    for value in [
+        InternalUnitLike::Pending,
+        InternalUnitLike::Done { code: 7 },
+    ] {
+        let json = serde_json::to_value(&value).unwrap();
+        validate(&registry, &InternalUnitLike::schema_ref(), &json)
+            .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
+    }
+}
+
+#[test]
+fn tuple_field_is_fixed_length_array() {
+    let registry = register::<MapLike>();
+    let meta = schema(&registry, "MapLike");
+
+    // `entries: Vec<(String, String)>` -> array of two-element arrays.
+    let entries = inline(prop(meta, "entries"));
+    assert_eq!(entries.ty, "array");
+    let entry = inline(entries.items.as_ref().expect("entries has items"));
+    assert_eq!(entry.ty, "array");
+    assert_eq!(entry.min_items, Some(2));
+    assert_eq!(entry.max_items, Some(2));
+    assert_eq!(
+        inline(entry.items.as_ref().expect("tuple has items")).ty,
+        "string"
+    );
+
+    let value = MapLike {
+        entries: vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+        ],
+    };
+    let json = serde_json::to_value(&value).unwrap();
+    validate(&registry, &MapLike::schema_ref(), &json)
+        .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
+}
+
+#[test]
+#[should_panic(expected = "PoemSchema does not support heterogeneous tuple schemas yet")]
+fn heterogeneous_tuple_field_panics() {
+    let registry = register::<HeterogeneousTupleLike>();
+    let meta = schema(&registry, "HeterogeneousTupleLike");
+    let entry = inline(prop(meta, "entry"));
+    assert!(
+        entry.items.is_some(),
+        "evaluating heterogeneous tuple items must panic"
+    );
 }
 
 // ----------------------------------------------------------------------

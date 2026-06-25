@@ -25,6 +25,9 @@ use crate::log::log_error;
 use crate::log::{LogColorize, log_action, log_warn_action};
 use crate::model::ProfileView;
 use crate::model::format::Format;
+use crate::model::text::profile::{
+    ProfileCreateResult, ProfileDeleteResult, ProfileListView, ProfileSwitchResult,
+};
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -127,8 +130,14 @@ impl ProfileCommandHandler {
                     name.0.log_color_highlight()
                 ),
             );
-            Config::set_active_profile_name(name, self.ctx.config_dir())?;
+            Config::set_active_profile_name(name.clone(), self.ctx.config_dir())?;
         };
+
+        self.ctx.log_handler().log_output(ProfileCreateResult {
+            created: true,
+            profile: name,
+            set_active,
+        })?;
 
         Ok(())
     }
@@ -146,7 +155,9 @@ impl ProfileCommandHandler {
             })
             .collect::<Vec<_>>();
 
-        self.ctx.log_handler().log_view(&profiles)?;
+        self.ctx
+            .log_handler()
+            .log_output(ProfileListView { profiles })?;
 
         Ok(())
     }
@@ -158,6 +169,11 @@ impl ProfileCommandHandler {
             "Switched",
             format!("to profile: {}", profile_name.0.log_color_highlight()),
         );
+
+        self.ctx.log_handler().log_output(ProfileSwitchResult {
+            switched: true,
+            profile: profile_name,
+        })?;
 
         Ok(())
     }
@@ -184,7 +200,7 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ProfileView::from_profile(&default_profile_name, profile))?;
+            .log_output(ProfileView::from_profile(&default_profile_name, profile))?;
 
         Ok(())
     }
@@ -216,6 +232,11 @@ impl ProfileCommandHandler {
             "Deleted",
             format!("profile {}", profile_name.0.log_color_highlight()),
         );
+
+        self.ctx.log_handler().log_output(ProfileDeleteResult {
+            deleted: true,
+            profile: profile_name,
+        })?;
 
         Ok(())
     }

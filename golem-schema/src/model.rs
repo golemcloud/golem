@@ -37,7 +37,9 @@ pub type Datetime = chrono::DateTime<chrono::Utc>;
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.EnvironmentId")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct EnvironmentId {
     pub uuid: Uuid,
 }
@@ -76,6 +78,7 @@ impl From<EnvironmentId> for Uuid {
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.ComponentId")]
 pub struct ComponentId {
     pub uuid: Uuid,
@@ -115,6 +118,7 @@ impl From<ComponentId> for Uuid {
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.AccountId")]
 pub struct AccountId {
     pub uuid: Uuid,
@@ -138,10 +142,50 @@ impl From<AccountId> for Uuid {
     }
 }
 
+/// Native counterpart of `golem:core/types@2.0.0::card-id`.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[schema(named = "golem.core.CardId")]
+pub struct CardId {
+    pub uuid: Uuid,
+}
+
+impl CardId {
+    pub fn new(uuid: Uuid) -> Self {
+        Self { uuid }
+    }
+}
+
+impl From<Uuid> for CardId {
+    fn from(uuid: Uuid) -> Self {
+        Self::new(uuid)
+    }
+}
+
+impl From<CardId> for Uuid {
+    fn from(value: CardId) -> Self {
+        value.uuid
+    }
+}
+
 /// Native counterpart of `golem:core/types@2.0.0::agent-id`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.AgentId")]
 pub struct AgentId {
     pub component_id: ComponentId,
@@ -164,6 +208,7 @@ pub type OplogIndex = u64;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "golem.core.PromiseId")]
 pub struct PromiseId {
     pub agent_id: AgentId,

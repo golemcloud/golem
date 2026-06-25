@@ -58,6 +58,11 @@ pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 /// constructor/method [`InputSchema`] and its owning [`SchemaGraph`] into a
 /// validated [`TypedSchemaValue`].
 ///
+/// The caller only provides the [`FieldSource::UserSupplied`] fields;
+/// auto-injected fields (e.g. the principal) are filled by the host out of
+/// band and are excluded from the synthesized record schema, so the incoming
+/// value must contain exactly the user-supplied fields.
+///
 /// The synthesized input record is the single root of the returned value, so
 /// its `defs` are projected to exactly the named-type definitions reachable
 /// from that root (see [`SchemaGraph`] and [`reachable_defs`]). This keeps the
@@ -72,9 +77,14 @@ pub fn json_input_schema_value_to_typed_schema_value(
 ) -> Result<TypedSchemaValue, String> {
     let value: SchemaValue =
         serde_json::from_value(json).map_err(|e| format!("invalid schema value: {e}"))?;
+    // Only user-supplied fields are part of the caller's input; auto-injected
+    // fields (e.g. the principal) are filled by the host out of band and are
+    // not present in the incoming value, so they are excluded from the record
+    // schema the value is validated against.
     let fields = input_schema
         .fields()
         .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),

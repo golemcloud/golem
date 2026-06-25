@@ -110,6 +110,8 @@ components:
 
 Use presets and environments to vary plugin parameters across deployment targets:
 
+CLI outputs mask plugin parameter values by sensitive-looking parameter names. If a plugin parameter contains a secret, use a name containing words such as `secret`, `token`, `password`, or `key` so commands like `component get`, `component manifest-trace`, and `deploy` mask it by default.
+
 ```yaml
 components:
   my-app:service:

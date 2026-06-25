@@ -77,6 +77,7 @@ impl From<&str> for TypeId {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
 #[schema(named = "metadata-envelope")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct MetadataEnvelope {

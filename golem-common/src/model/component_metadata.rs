@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component::ComponentName;
-use super::environment::EnvironmentName;
 pub use super::parsed_function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
@@ -31,9 +29,9 @@ use crate::model::card::owner::{
 };
 use crate::model::card::recipient::RecipientPattern;
 use crate::model::card::{
-    AgentResourcePattern, AgentVerb, ComponentResourcePattern, ComponentVerb,
-    EnvironmentResourcePattern, EnvironmentVerb, PolymorphicClassPermissionPattern,
-    PolymorphicPermissionPattern,
+    AgentResourcePattern, AgentVerb, CardId, ComponentResourcePattern, ComponentVerb,
+    EnvironmentResourcePattern, EnvironmentVerb, PolymorphicCard,
+    PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
 };
 use crate::model::component::InstalledPlugin;
 use crate::schema::agent::AgentTypeSchema;
@@ -99,7 +97,7 @@ impl ComponentMetadata {
 
     pub fn with_agent_initial_permissions(
         &self,
-        agent_type_initial_permissions: BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>,
+        agent_type_initial_permissions: BTreeMap<AgentTypeName, PolymorphicCard>,
     ) -> Self {
         let data = self.data.as_ref();
         Self {
@@ -153,16 +151,14 @@ impl ComponentMetadata {
         self.data.agent_type_provision_configs.get(name)
     }
 
-    pub fn agent_type_initial_permission_template(
+    pub fn agent_type_initial_permission_card(
         &self,
         name: &AgentTypeName,
-    ) -> Option<&AgentInitialPermissionTemplate> {
+    ) -> Option<&PolymorphicCard> {
         self.data.agent_type_initial_permissions.get(name)
     }
 
-    pub fn agent_type_initial_permission_templates(
-        &self,
-    ) -> &BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
+    pub fn agent_type_initial_permission_cards(&self) -> &BTreeMap<AgentTypeName, PolymorphicCard> {
         &self.data.agent_type_initial_permissions
     }
 
@@ -495,36 +491,35 @@ impl RawComponentMetadata {
     }
 }
 
-impl AgentInitialPermissionTemplate {
-    pub fn default_for(
-        _environment_name: &EnvironmentName,
-        _component_name: &ComponentName,
-    ) -> Self {
-        let recipient = RecipientPattern::Any;
-        Self {
-            card_id: crate::model::card::CardId::new(),
-            lower_positive: vec![
-                PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
-                    owner: PolymorphicEnvironmentOwnerPattern::Env,
-                    recipient: recipient.clone(),
-                    verb: Some(EnvironmentVerb::View),
-                    resource: EnvironmentResourcePattern::Any,
-                }),
-                PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
-                    owner: PolymorphicComponentOwnerPattern::Component,
-                    recipient: recipient.clone(),
-                    verb: Some(ComponentVerb::View),
-                    resource: ComponentResourcePattern::Any,
-                }),
-                agent_permission(AgentVerb::View, recipient.clone()),
-                agent_permission(AgentVerb::Invoke, recipient.clone()),
-                agent_permission(AgentVerb::Resume, recipient.clone()),
-                agent_permission(AgentVerb::UpdateRevision, recipient),
-            ],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }
+pub fn default_agent_initial_card() -> PolymorphicCard {
+    let recipient = RecipientPattern::Any;
+    PolymorphicCard {
+        card_id: CardId::new(),
+        parent_ids: Vec::new(),
+        lower_positive: vec![
+            PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
+                owner: PolymorphicEnvironmentOwnerPattern::Env,
+                recipient: recipient.clone(),
+                verb: Some(EnvironmentVerb::View),
+                resource: EnvironmentResourcePattern::Any,
+            }),
+            PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
+                owner: PolymorphicComponentOwnerPattern::Component,
+                recipient: recipient.clone(),
+                verb: Some(ComponentVerb::View),
+                resource: ComponentResourcePattern::Any,
+            }),
+            agent_permission(AgentVerb::View, recipient.clone()),
+            agent_permission(AgentVerb::Invoke, recipient.clone()),
+            agent_permission(AgentVerb::Resume, recipient.clone()),
+            agent_permission(AgentVerb::UpdateRevision, recipient),
+        ],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
     }
 }
 
@@ -760,8 +755,7 @@ mod protobuf {
                     .agent_type_initial_permissions
                     .into_iter()
                     .map(|(k, v)| {
-                        crate::serialization::deserialize(&v)
-                            .map(|template| (AgentTypeName(k), template))
+                        crate::serialization::deserialize(&v).map(|card| (AgentTypeName(k), card))
                     })
                     .collect::<Result<_, _>>()?,
             })
@@ -832,8 +826,8 @@ mod protobuf {
                     .into_iter()
                     .map(|(k, v)| {
                         crate::serialization::serialize(&v)
-                            .map(|template| (k.0, template))
-                            .expect("failed to serialize agent initial permission template")
+                            .map(|card| (k.0, card))
+                            .expect("failed to serialize agent initial permission card")
                     })
                     .collect(),
             }
@@ -916,8 +910,6 @@ mod tests {
     use crate::component_introspection::{ExportedInstance, TopLevelExport};
     use crate::model::agent::AgentTypeName;
     use crate::model::card::CardId;
-    use crate::model::component::ComponentName;
-    use crate::model::environment::EnvironmentName;
     use test_r::test;
 
     fn instance_export(name: &str) -> TopLevelExport {
@@ -1006,11 +998,8 @@ mod tests {
     fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
         let agent_type = AgentTypeName("Cart".to_string());
         let card_id = CardId::new();
-        let mut template = AgentInitialPermissionTemplate::default_for(
-            &EnvironmentName::try_from("prod").unwrap(),
-            &ComponentName("cart-svc".to_string()),
-        );
-        template.card_id = card_id;
+        let mut card = default_agent_initial_card();
+        card.card_id = card_id;
 
         let metadata = ComponentMetadata::from_parts(
             KnownExports::default(),
@@ -1020,14 +1009,14 @@ mod tests {
             Vec::new(),
             BTreeMap::new(),
         )
-        .with_agent_initial_permissions(BTreeMap::from([(agent_type.clone(), template.clone())]));
+        .with_agent_initial_permissions(BTreeMap::from([(agent_type.clone(), card.clone())]));
 
         let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
         let decoded = ComponentMetadata::try_from(proto).unwrap();
 
         assert_eq!(
-            decoded.agent_type_initial_permission_template(&agent_type),
-            Some(&template)
+            decoded.agent_type_initial_permission_card(&agent_type),
+            Some(&card)
         );
     }
 }

@@ -958,6 +958,6 @@ app: demo
 
         let upgraded = std::fs::read_to_string(manifest).unwrap();
         assert!(upgraded.contains("manifestVersion: 1.6.0"));
-        assert!(upgraded.contains("/1.6.0-dev.1/golem.schema.json"));
+        assert!(upgraded.contains("/1.6.0-dev.2/golem.schema.json"));
     }
 }

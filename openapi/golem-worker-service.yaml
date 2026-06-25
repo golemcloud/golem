@@ -3194,18 +3194,31 @@ components:
     BinaryRestrictions:
       type: object
       properties:
-        mime_types:
+        mimeTypes:
           type: array
           items:
             type: string
           nullable: true
-        min_bytes:
+        minBytes:
           type: integer
           format: uint32
           nullable: true
-        max_bytes:
+        maxBytes:
           type: integer
           format: uint32
+          nullable: true
+    BinaryValuePayload:
+      type: object
+      required:
+      - bytes
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
           nullable: true
     CancelInvocationResponse:
       type: object
@@ -3215,6 +3228,13 @@ components:
       properties:
         canceled:
           type: boolean
+    CardInstallFailure:
+      type: string
+      enum:
+      - CardRevoked
+      - NotFound
+      - RecipientMismatch
+      - NotPermitted
     CompleteParameters:
       type: object
       title: CompleteParameters
@@ -3362,13 +3382,29 @@ components:
           value:
             type: object
             required:
-            - field_name
+            - fieldName
             properties:
-              field_name:
+              fieldName:
                 type: string
+    DurationValuePayload:
+      type: object
+      required:
+      - nanoseconds
+      properties:
+        nanoseconds:
+          type: integer
+          format: int64
     Empty:
       type: object
       title: Empty
+    EnvironmentId:
+      type: object
+      required:
+      - uuid
+      properties:
+        uuid:
+          type: string
+          format: uuid
     ErrorBody:
       type: object
       title: ErrorBody
@@ -3442,9 +3478,9 @@ components:
     FieldDiscriminator:
       type: object
       required:
-      - field_name
+      - fieldName
       properties:
-        field_name:
+        fieldName:
           type: string
         literal:
           type: string
@@ -3687,12 +3723,12 @@ components:
           $ref: '#/components/schemas/PathDirection'
         kind:
           $ref: '#/components/schemas/PathKind'
-        allowed_mime_types:
+        allowedMimeTypes:
           type: array
           items:
             type: string
           nullable: true
-        allowed_extensions:
+        allowedExtensions:
           type: array
           items:
             type: string
@@ -4114,6 +4150,9 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardEventQueuedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
       discriminator:
         propertyName: type
@@ -4159,6 +4198,9 @@ components:
           OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
           SetRetryPolicy: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
           RemoveRetryPolicy: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
+          CardEventQueued: '#/components/schemas/PublicOplogEntry_r#CardEventQueuedParams'
+          CardInstalled: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
+          CardInstallFailed: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
     PublicOplogEntryWithIndex:
       type: object
@@ -4256,6 +4298,42 @@ components:
             - Cancelled
             example: Cancelled
       - $ref: '#/components/schemas/r#CancelledParams'
+    PublicOplogEntry_r#CardEventQueuedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardEventQueued
+            example: CardEventQueued
+      - $ref: '#/components/schemas/r#CardEventQueuedParams'
+    PublicOplogEntry_r#CardInstallFailedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardInstallFailed
+            example: CardInstallFailed
+      - $ref: '#/components/schemas/r#CardInstallFailedParams'
+    PublicOplogEntry_r#CardInstalledParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CardInstalled
+            example: CardInstalled
+      - $ref: '#/components/schemas/r#CardInstalledParams'
     PublicOplogEntry_r#CardRevokedParams:
       allOf:
       - type: object
@@ -4676,6 +4754,37 @@ components:
             - Suspend
             example: Suspend
       - $ref: '#/components/schemas/r#SuspendParams'
+    PublicQueuedCardEvent:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      discriminator:
+        propertyName: type
+        mapping:
+          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+    PublicQueuedCardEventCard:
+      type: object
+      title: PublicQueuedCardEventCard
+      required:
+      - cardId
+      properties:
+        cardId:
+          type: string
+          format: uuid
+    PublicQueuedCardEvent_PublicQueuedCardEventCard:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Revoke
+            example: Revoke
+      - $ref: '#/components/schemas/PublicQueuedCardEventCard'
     PublicRetryPolicyState:
       type: object
       description: |-
@@ -5003,11 +5112,11 @@ components:
     QuantitySpec:
       type: object
       required:
-      - base_unit
+      - baseUnit
       properties:
-        base_unit:
+        baseUnit:
           type: string
-        allowed_suffixes:
+        allowedSuffixes:
           type: array
           items:
             type: string
@@ -5039,9 +5148,31 @@ components:
     QuotaTokenSpec:
       type: object
       properties:
-        resource_name:
+        resourceName:
           type: string
           nullable: true
+    QuotaTokenValuePayload:
+      type: object
+      required:
+      - environmentId
+      - resourceName
+      - expectedUse
+      - lastCredit
+      - lastCreditAt
+      properties:
+        environmentId:
+          $ref: '#/components/schemas/EnvironmentId'
+        resourceName:
+          type: string
+        expectedUse:
+          type: integer
+          format: uint64
+        lastCredit:
+          type: integer
+          format: int64
+        lastCreditAt:
+          type: string
+          format: date-time
     RawSnapshotData:
       type: object
       title: RawSnapshotData
@@ -5069,6 +5200,35 @@ components:
           allOf:
           - $ref: '#/components/schemas/SchemaType'
           - nullable: true
+    ResultValuePayload:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - tag
+        properties:
+          tag:
+            type: string
+            enum:
+            - ok
+          value:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/SchemaValue'
+            - nullable: true
+      - type: object
+        required:
+        - tag
+        properties:
+          tag:
+            type: string
+            enum:
+            - err
+          value:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/SchemaValue'
+            - nullable: true
     ResumeResponse:
       type: object
       title: ResumeResponse
@@ -5822,12 +5982,467 @@ components:
           $ref: '#/components/schemas/SchemaType'
     SchemaValue:
       type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool
+          value:
+            type: boolean
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s8
+          value:
+            type: integer
+            format: int8
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s16
+          value:
+            type: integer
+            format: int16
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s32
+          value:
+            type: integer
+            format: int32
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - s64
+          value:
+            type: integer
+            format: int64
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u8
+          value:
+            type: integer
+            format: uint8
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u16
+          value:
+            type: integer
+            format: uint16
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u32
+          value:
+            type: integer
+            format: uint32
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - u64
+          value:
+            type: integer
+            format: uint64
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - f32
+          value:
+            type: number
+            format: float
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - f64
+          value:
+            type: number
+            format: double
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - char
+          value:
+            type: char
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - string
+          value:
+            type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - record
+          value:
+            type: object
+            required:
+            - fields
+            properties:
+              fields:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - variant
+          value:
+            $ref: '#/components/schemas/VariantValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - enum
+          value:
+            type: object
+            required:
+            - case
+            properties:
+              case:
+                type: integer
+                format: uint32
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - flags
+          value:
+            type: object
+            required:
+            - bits
+            properties:
+              bits:
+                type: array
+                items:
+                  type: boolean
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - tuple
+          value:
+            type: object
+            required:
+            - elements
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - list
+          value:
+            type: object
+            required:
+            - elements
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - fixed-list
+          value:
+            type: object
+            required:
+            - elements
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchemaValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - map
+          value:
+            type: object
+            required:
+            - entries
+            properties:
+              entries:
+                type: array
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/SchemaValue'
+                  maxItems: 2
+                  minItems: 2
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - option
+          value:
+            type: object
+            properties:
+              inner:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/SchemaValue'
+                - nullable: true
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - result
+          value:
+            $ref: '#/components/schemas/ResultValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - text
+          value:
+            $ref: '#/components/schemas/TextValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - binary
+          value:
+            $ref: '#/components/schemas/BinaryValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - path
+          value:
+            type: object
+            required:
+            - path
+            properties:
+              path:
+                type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - url
+          value:
+            type: object
+            required:
+            - url
+            properties:
+              url:
+                type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - datetime
+          value:
+            type: object
+            required:
+            - value
+            properties:
+              value:
+                type: string
+                format: date-time
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - duration
+          value:
+            $ref: '#/components/schemas/DurationValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - quantity
+          value:
+            $ref: '#/components/schemas/QuantityValue'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - union
+          value:
+            $ref: '#/components/schemas/UnionValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - secret
+          value:
+            $ref: '#/components/schemas/SecretValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - quota-token
+          value:
+            $ref: '#/components/schemas/QuotaTokenValuePayload'
     SecretSpec:
       type: object
       properties:
         category:
           type: string
           nullable: true
+    SecretValuePayload:
+      type: object
+      required:
+      - secretRef
+      properties:
+        secretRef:
+          type: string
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -5879,15 +6494,25 @@ components:
           items:
             type: string
           nullable: true
-        min_length:
+        minLength:
           type: integer
           format: uint32
           nullable: true
-        max_length:
+        maxLength:
           type: integer
           format: uint32
           nullable: true
         regex:
+          type: string
+          nullable: true
+    TextValuePayload:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+        language:
           type: string
           nullable: true
     TypedAgentConfigEntry:
@@ -5937,6 +6562,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/UnionBranch'
+    UnionValuePayload:
+      type: object
+      required:
+      - tag
+      - body
+      properties:
+        tag:
+          type: string
+        body:
+          $ref: '#/components/schemas/SchemaValue'
     UpdateRecord:
       type: object
       oneOf:
@@ -6006,12 +6641,12 @@ components:
     UrlRestrictions:
       type: object
       properties:
-        allowed_schemes:
+        allowedSchemes:
           type: array
           items:
             type: string
           nullable: true
-        allowed_hosts:
+        allowedHosts:
           type: array
           items:
             type: string
@@ -6030,6 +6665,19 @@ components:
           - nullable: true
         metadata:
           $ref: '#/components/schemas/MetadataEnvelope'
+    VariantValuePayload:
+      type: object
+      required:
+      - case
+      properties:
+        case:
+          type: integer
+          format: uint32
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
     VersionInfo:
       type: object
       title: VersionInfo
@@ -6197,9 +6845,41 @@ components:
           format: uint64
         partial:
           $ref: '#/components/schemas/TypedSchemaValue'
-    r#CardRevokedParams:
+    r#CardEventQueuedParams:
       type: object
-      title: r#CardRevokedParams
+      title: r#CardEventQueuedParams
+      required:
+      - timestamp
+      - event
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        event:
+          $ref: '#/components/schemas/PublicQueuedCardEvent'
+    r#CardInstallFailedParams:
+      type: object
+      title: r#CardInstallFailedParams
+      required:
+      - timestamp
+      - queuedEventIndex
+      - cardId
+      - reason
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        queuedEventIndex:
+          type: integer
+          format: uint64
+        cardId:
+          type: string
+          format: uuid
+        reason:
+          $ref: '#/components/schemas/CardInstallFailure'
+    r#CardInstalledParams:
+      type: object
+      title: r#CardInstalledParams
       required:
       - timestamp
       - cardId
@@ -6207,6 +6887,26 @@ components:
         timestamp:
           type: string
           format: date-time
+        queuedEventIndex:
+          type: integer
+          format: uint64
+        cardId:
+          type: string
+          format: uuid
+    r#CardRevokedParams:
+      type: object
+      title: r#CardRevokedParams
+      required:
+      - timestamp
+      - queuedEventIndex
+      - cardId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        queuedEventIndex:
+          type: integer
+          format: uint64
         cardId:
           type: string
           format: uuid

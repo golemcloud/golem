@@ -17,6 +17,7 @@ pub mod app;
 pub mod app_raw;
 pub mod cascade;
 pub mod cli_command_metadata;
+pub mod cli_output;
 pub mod component;
 pub mod config;
 pub mod deploy;
@@ -24,6 +25,7 @@ pub mod environment;
 pub mod format;
 pub mod http_api;
 pub mod invoke_result_view;
+pub mod masking;
 pub mod plugin;
 pub mod plugin_manifest;
 pub mod repl;
@@ -111,8 +113,10 @@ impl GuestLanguage {
 
     pub fn supports_bridge_generation(&self) -> bool {
         match self {
-            GuestLanguage::Rust | GuestLanguage::TypeScript => true,
-            GuestLanguage::Scala | GuestLanguage::MoonBit => false,
+            GuestLanguage::Rust
+            | GuestLanguage::TypeScript
+            | GuestLanguage::Scala
+            | GuestLanguage::MoonBit => true,
         }
     }
 
@@ -241,6 +245,7 @@ impl FromStr for PathBufOrStdin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileView {
     pub is_active: bool,
     pub name: ProfileName,

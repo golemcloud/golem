@@ -469,7 +469,38 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::CardRevoked(params) => {
             let _ = writeln!(result, "CARD REVOKED");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}queued event:      {:?}",
+                &params.queued_event_index
+            );
             let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+        }
+        PublicOplogEntry::CardEventQueued(params) => {
+            let _ = writeln!(result, "CARD EVENT QUEUED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}card id:           {}", params.event.card_id());
+        }
+        PublicOplogEntry::CardInstalled(params) => {
+            let _ = writeln!(result, "CARD INSTALLED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}queued event:      {:?}",
+                &params.queued_event_index
+            );
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+        }
+        PublicOplogEntry::CardInstallFailed(params) => {
+            let _ = writeln!(result, "CARD INSTALL FAILED");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}queued event:      {}",
+                &params.queued_event_index
+            );
+            let _ = writeln!(result, "{pad}card id:           {}", &params.card_id);
+            let _ = writeln!(result, "{pad}reason:            {:?}", &params.reason);
         }
     }
 

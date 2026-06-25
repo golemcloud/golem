@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_schema_derive::PoemSchema;
-
-#[derive(PoemSchema)]
-#[serde(tag = "kind")]
-enum Bad {
-    A { x: u32 },
-    B { y: String },
-}
-
-fn main() {}
+///|
+/// Error raised by the generated bridge client and its runtime on a wire-shape
+/// mismatch, a failed HTTP request, or a protocol decoding failure.
+pub(all) suberror BridgeError { BridgeError(String) } derive(Debug, Eq)

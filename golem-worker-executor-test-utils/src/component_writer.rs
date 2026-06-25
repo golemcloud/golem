@@ -19,9 +19,10 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::card::PolymorphicCard;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{
-    ComponentMetadata, LinearMemory, RawComponentMetadata,
+    ComponentMetadata, LinearMemory, RawComponentMetadata, default_agent_initial_card,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
@@ -194,6 +195,8 @@ impl FileSystemComponentWriter {
             .map_err(|err| anyhow!("Failed to read component size: {err:#}"))?
             .len();
 
+        let agent_type_initial_permissions = default_initial_permissions(&agent_types);
+
         let metadata = LocalFileSystemComponentMetadata {
             account_id,
             environment_id,
@@ -211,6 +214,7 @@ impl FileSystemComponentWriter {
             root_package_name,
             root_package_version,
             wasm_hash,
+            agent_type_initial_permissions,
             final_hash: Hash::empty(),
         }
         .with_updated_hash()?;
@@ -590,6 +594,7 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub wasm_filename: String,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentTypeSchema>,
+    pub agent_type_initial_permissions: BTreeMap<AgentTypeName, PolymorphicCard>,
     pub target_path: PathBuf,
 
     pub root_package_name: Option<String>,
@@ -628,11 +633,21 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.root_package_version,
                 value.agent_types,
                 value.agent_type_provision_configs,
-            ),
+            )
+            .with_agent_initial_permissions(value.agent_type_initial_permissions),
             created_at: Default::default(),
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,
             object_store_key: "".to_string(),
         }
     }
+}
+
+fn default_initial_permissions(
+    agent_types: &[AgentTypeSchema],
+) -> BTreeMap<AgentTypeName, PolymorphicCard> {
+    agent_types
+        .iter()
+        .map(|agent_type| (agent_type.type_name.clone(), default_agent_initial_card()))
+        .collect()
 }

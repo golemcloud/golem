@@ -76,10 +76,10 @@ manifestVersion: 1.5.0
 app: demo
 "#;
 
-    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.2");
 
     assert!(updated.contains("# custom header"));
-    assert!(updated.contains("https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json"));
+    assert!(updated.contains("https://schema.golem.cloud/app/golem/1.6.0-dev.2/golem.schema.json"));
     assert!(!updated.contains("https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json"));
 }
 
@@ -92,9 +92,9 @@ manifestVersion: 1.5.0
 app: demo
 "#;
 
-    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.2");
 
-    assert_eq!(updated.matches("/1.6.0-dev.1/golem.schema.json").count(), 3);
+    assert_eq!(updated.matches("/1.6.0-dev.2/golem.schema.json").count(), 3);
     assert!(!updated.contains("/1.5.0/golem.schema.json"));
     assert!(updated.contains("# yaml-language-server: $schema = https://"));
     assert!(updated.contains("# yaml-language-server:$schema=https://"));
@@ -114,11 +114,11 @@ customCommands:
         echo docs
 "#;
 
-    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.2");
 
     assert!(
         updated.contains(
-            "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.1/golem.schema.json"
+            "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.2/golem.schema.json"
         )
     );
     assert!(
@@ -131,7 +131,7 @@ customCommands:
 fn golem_yaml_leaves_missing_schema_references_missing() {
     let source = "manifestVersion: 1.5.0\napp: demo\n";
 
-    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.1");
+    let updated = golem_yaml::update_existing_schema_references(source, "1.6.0-dev.2");
 
     assert_eq!(updated, source);
 }
