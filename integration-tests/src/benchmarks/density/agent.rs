@@ -373,6 +373,90 @@ impl ExecutorProbe {
         info!("density: worker-executor scale restart complete");
         Ok(())
     }
+
+    async fn restart_worker_service(&self) -> anyhow::Result<()> {
+        info!(
+            "density: scaling worker-service deployment down in namespace {}",
+            self.namespace
+        );
+        let scale_down = tokio::process::Command::new("kubectl")
+            .args([
+                "scale",
+                "deployment/worker-service",
+                "--replicas=0",
+                "-n",
+                &self.namespace,
+            ])
+            .output()
+            .await?;
+        if !scale_down.status.success() {
+            anyhow::bail!(
+                "kubectl scale worker-service down failed: {}",
+                String::from_utf8_lossy(&scale_down.stderr)
+            );
+        }
+
+        let wait_down = tokio::process::Command::new("kubectl")
+            .args([
+                "wait",
+                "--for=delete",
+                "pod",
+                "-l",
+                "app=worker-service",
+                "-n",
+                &self.namespace,
+                "--timeout=300s",
+            ])
+            .output()
+            .await?;
+        if !wait_down.status.success() {
+            anyhow::bail!(
+                "kubectl wait for worker-service scale-down failed: {}",
+                String::from_utf8_lossy(&wait_down.stderr)
+            );
+        }
+
+        info!(
+            "density: scaling worker-service deployment up in namespace {}",
+            self.namespace
+        );
+        let scale_up = tokio::process::Command::new("kubectl")
+            .args([
+                "scale",
+                "deployment/worker-service",
+                "--replicas=1",
+                "-n",
+                &self.namespace,
+            ])
+            .output()
+            .await?;
+        if !scale_up.status.success() {
+            anyhow::bail!(
+                "kubectl scale worker-service up failed: {}",
+                String::from_utf8_lossy(&scale_up.stderr)
+            );
+        }
+
+        let status = tokio::process::Command::new("kubectl")
+            .args([
+                "rollout",
+                "status",
+                "deployment/worker-service",
+                "-n",
+                &self.namespace,
+                "--timeout=300s",
+            ])
+            .output()
+            .await?;
+        if !status.status.success() {
+            anyhow::bail!(
+                "kubectl rollout status failed after worker-service restart: {}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+        }
+        info!("density: worker-service scale restart complete");
+        Ok(())
+    }
 }
 
 /// The component an agent at `index` uses, plus its agent id, for this cell's
@@ -1585,6 +1669,7 @@ async fn run_resume_cell(
         warm_resume_canary_agent(config, user, components, target, timeout.current).await?;
 
         probe.restart_executor().await?;
+        probe.restart_worker_service().await?;
         wait_for_resume_canary_agent(config, user, components, target).await?;
 
         info!(
