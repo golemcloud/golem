@@ -15671,8 +15671,8 @@ components:
           $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
       required:
       - currentRevision
-    AgentTypeInitialPermission:
-      title: AgentTypeInitialPermission
+    AgentTypeInitialPermissions:
+      title: AgentTypeInitialPermissions
       type: object
       properties:
         lowerBound:
@@ -15680,7 +15680,7 @@ components:
             negative: []
             positive: []
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermissionBound'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionsBound'
           - default:
               negative: []
               positive: []
@@ -15689,12 +15689,12 @@ components:
             negative: []
             positive: []
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermissionBound'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionsBound'
           - default:
               negative: []
               positive: []
-    AgentTypeInitialPermissionBound:
-      title: AgentTypeInitialPermissionBound
+    AgentTypeInitialPermissionsBound:
+      title: AgentTypeInitialPermissionsBound
       type: object
       properties:
         positive:
@@ -15714,7 +15714,7 @@ components:
         in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
       type: object
       properties:
-        initialPermission:
+        initialPermissions:
           $ref: '#/components/schemas/PolymorphicCard'
         env:
           type: object
@@ -15733,7 +15733,7 @@ components:
           items:
             $ref: '#/components/schemas/InitialAgentFile'
       required:
-      - initialPermission
+      - initialPermissions
       - env
       - config
       - plugins
@@ -15742,8 +15742,8 @@ components:
       title: AgentTypeProvisionConfigCreation
       type: object
       properties:
-        initialPermission:
-          $ref: '#/components/schemas/AgentTypeInitialPermission'
+        initialPermissions:
+          $ref: '#/components/schemas/AgentTypeInitialPermissions'
         env:
           default: {}
           type: object
@@ -15766,14 +15766,14 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/AgentFileOptions'
       required:
-      - initialPermission
+      - initialPermissions
     AgentTypeProvisionConfigUpdate:
       title: AgentTypeProvisionConfigUpdate
       type: object
       properties:
-        initialPermission:
+        initialPermissions:
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermission'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissions'
           - {}
         env:
           type: object

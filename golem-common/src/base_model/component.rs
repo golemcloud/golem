@@ -27,7 +27,6 @@ use crate::model::agent::AgentTypeName;
 use crate::model::card::recipient::RecipientPattern;
 use crate::model::card::{
     PolymorphicCard, PolymorphicPermissionPattern, default_agent_initial_permission_grants,
-    render_polymorphic_permission,
 };
 use crate::schema::agent::AgentTypeSchema;
 use crate::{

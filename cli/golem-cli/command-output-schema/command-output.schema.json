@@ -2164,7 +2164,8 @@
         "pluginsMergeMode": { "$ref": "#/definitions/VecMergeMode" },
         "plugins": { "$ref": "#/definitions/ComponentLayerManifestPluginVecProperty" },
         "filesMergeMode": { "$ref": "#/definitions/VecMergeMode" },
-        "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" }
+        "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
+        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" }
       },
       "additionalProperties": false
     },
@@ -2743,7 +2744,7 @@
     },
     "AgentTypeProvisionConfig": {
       "type": "object",
-      "required": ["env", "config", "plugins", "files"],
+      "required": ["env", "config", "plugins", "files", "initialPermissions"],
       "properties": {
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "config": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
@@ -2800,10 +2801,8 @@
       "enum": ["read-only", "read-write"]
     },
     "CardId": {
-      "type": "object",
-      "required": ["uuid"],
-      "properties": { "uuid": { "type": "string" } },
-      "additionalProperties": false
+      "type": "string",
+      "format": "uuid"
     },
     "PolymorphicCardPermissionPattern": {
       "type": "string",
@@ -2811,7 +2810,7 @@
     },
     "PolymorphicCard": {
       "type": "object",
-      "required": [ "cardId", "parenIds", "lowerPositive", "lowerNegative", "upperPositive", "upperNegative", "createdAt", "systemCard" ],
+      "required": [ "cardId", "parentIds", "lowerPositive", "lowerNegative", "upperPositive", "upperNegative", "createdAt", "systemCard" ],
       "properties": {
         "cardId": { "$ref": "#/definitions/CardId" },
         "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } },
@@ -2820,7 +2819,7 @@
         "upperPositive": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
         "upperNegative": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
         "createdAt": { "type": "string" },
-        "expiresAt": { "type": "string" },
+        "expiresAt": { "type": [ "string", "null" ] },
         "systemCard": { "type": "boolean" }
       },
       "additionalProperties": false

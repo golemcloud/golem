@@ -28,7 +28,7 @@ use golem_common::model::agent::{
     AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::model::card::{PolymorphicPermissionPattern, render_polymorphic_permission};
+use golem_common::model::card::{PolymorphicPermissionPattern};
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
@@ -1040,7 +1040,7 @@ fn display_initial_permission(
 fn render_permissions(permissions: &[PolymorphicPermissionPattern]) -> anyhow::Result<Vec<String>> {
     permissions
         .iter()
-        .map(render_polymorphic_permission)
+        .map(|p| p.render())
         .collect::<Result<Vec<_>, _>>()
         .map_err(anyhow::Error::msg)
 }
