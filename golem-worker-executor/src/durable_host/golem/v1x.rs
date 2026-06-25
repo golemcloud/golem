@@ -22,7 +22,8 @@ use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x::host::{
-    AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult, HostGetPromiseResultWithStore,
+    AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
+    HostGetPromiseResultWithStore,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
@@ -243,8 +244,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok(()) => true,
                 Err(WorkerExecutorError::InvalidShardId { .. }) => false,
                 Err(other) => {
-                    handle.abandon_for_trap();
-                    return Err(other.into());
+                    return Err(handle.trap(other));
                 }
             };
 
@@ -257,8 +257,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 {
                     Ok(completed) => completed,
                     Err(err) => {
-                        handle.abandon_for_trap();
-                        return Err(err.into());
+                        return Err(handle.trap(err));
                     }
                 }
             } else {
@@ -271,8 +270,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 {
                     Ok(completed) => completed,
                     Err(err) => {
-                        handle.abandon_for_trap();
-                        return Err(err.into());
+                        return Err(handle.trap(err));
                     }
                 }
             };
@@ -461,10 +459,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
+        let begin_index = OplogIndex::from_u64(begin);
         if self.state.is_live() {
+            // Atomic-region legality under overlap: an atomic region must not be closed while
+            // durable calls initiated inside it are still in flight. Their `End`/`Cancelled` is
+            // recorded later and must still be able to mark side effects and unregister against the
+            // region that made them retry-relevant; removing the region first would lose that
+            // membership. A region is closed only once all its member calls have completed.
+            if self.state.atomic_region_has_in_flight_calls(begin_index) {
+                return Err(anyhow!(
+                    "Cannot end atomic region {begin_index}: durable calls initiated in it are still in flight"
+                ));
+            }
             self.state
                 .oplog
-                .add(OplogEntry::end_atomic_region(OplogIndex::from_u64(begin)))
+                .add(OplogEntry::end_atomic_region(begin_index))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
@@ -472,7 +481,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         self.state
             .active_atomic_regions
-            .retain(|region| region.begin_index != OplogIndex::from_u64(begin));
+            .retain(|region| region.begin_index != begin_index);
 
         Ok(())
     }
@@ -1000,8 +1009,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 ) {
                     Ok(parsed) => parsed.to_string(),
                     Err(err) => {
-                        handle.abandon_for_trap();
-                        return Err(anyhow!(err));
+                        return Err(handle.trap(anyhow!(err)));
                     }
                 }
             } else {
@@ -1174,7 +1182,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
-
     async fn drop(&mut self, resource: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::promise-result", "drop");
         let resource_rep = resource.rep();
@@ -1204,7 +1211,6 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 }
-
 
 impl<Ctx: WorkerCtx> HostGetPromiseResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn get<T: Send>(

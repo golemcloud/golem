@@ -508,16 +508,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             {
                 Ok(webhook_url) => webhook_url,
                 Err(err) => {
-                    handle.abandon_for_trap();
-                    return Err(err.into());
+                    return Err(handle.trap(err));
                 }
             };
 
             let Some(webhook_url) = webhook_url else {
-                handle.abandon_for_trap();
-                return Err(anyhow!(
+                return Err(handle.trap(anyhow!(
                     "Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"
-                ));
+                )));
             };
 
             handle

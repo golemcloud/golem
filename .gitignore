@@ -16,6 +16,11 @@ test-components/*/**/*.wasm
 # build-concurrent-delivery-order-component cargo-make task) so the Seam 3
 # runtime delivery-order test can run without the WASM build toolchain.
 !test-components/concurrent-delivery-order/concurrent_delivery_order.wasm
+# Exception: this minimal component-model-async fixture is committed (see the
+# build-concurrent-runtime-events-component cargo-make task) so the Seam 3
+# runtime cancellation / End-before-set_event tests can run without the WASM
+# build toolchain.
+!test-components/concurrent-runtime-events/concurrent_runtime_events.wasm
 test-components/c-1/c_api*
 test-components/csharp-1/bin/
 test-components/csharp-1/obj/

@@ -26,6 +26,7 @@ pub mod api;
 pub mod blobstore;
 pub mod compatibility;
 pub mod concurrent_delivery_order;
+pub mod concurrent_runtime_events;
 pub mod durability;
 pub mod fuel;
 pub mod hot_update;

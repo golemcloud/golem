@@ -1,3 +1,7 @@
+import {
+  "moonbitlang/core/deque" @deque,
+}
+
 warnings = "-44-55"
 
 options(

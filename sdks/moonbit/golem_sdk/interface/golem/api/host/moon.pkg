@@ -1,6 +1,6 @@
 import {
+  "golemcloud/golem_sdk/ffi" @ffi,
   "golemcloud/golem_sdk/interface/golem/core/types" @types,
-  "golemcloud/golem_sdk/interface/wasi/io/poll" @poll,
 }
 
 warnings = "-44"

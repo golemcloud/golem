@@ -175,6 +175,181 @@ pub fn find_semantic_trap_retry_override(
         .map(|m| m.payload.clone())
 }
 
+/// Call-owned trap classification carried with a hard (non-semantic) host-call trap.
+///
+/// When a durable call abandons for a trap, the call's own retry point and atomic-region membership
+/// are attached to the escaping error (via the `DurableCallTrapContextMarker` wrapper). The
+/// post-trap recovery path then groups the failure against the *call's* scope rather than the
+/// ambient/global worker state, which an overlapping sibling call can clobber once concurrent
+/// durable calls truly overlap.
+///
+/// Both fields are a *pure* function of the call's execution scope captured at initiation (no
+/// ambient/`ctx` read), so the context can be built at the trap egress point with no early snapshot
+/// and is immune to sibling activity. The only load-bearing field is `retry_from`; `in_atomic_region`
+/// is carried for completeness/future use (see its doc). The persisted
+/// `OplogEntry::Error.inside_atomic_region` side-effect flag is deliberately *not* part of this
+/// context: it only modulates `AgentError::DeterministicTrap` retriability, and a host-call trap (the
+/// only thing carrying this marker) is never a deterministic wasm trap, so it is sourced from ambient
+/// state in `TrapType::from_error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DurableCallTrapContext {
+    /// The retry point owned by the trapping call: its enclosing atomic region begin index if any,
+    /// otherwise its enclosing durable scope `Start` or its own `Start` (i.e.
+    /// `execution_scope.atomic_region.unwrap_or(retry_from)`).
+    pub retry_from: OplogIndex,
+    /// Whether the trapping call was initiated inside an atomic region (membership). Pure function of
+    /// the call's execution scope, so it needs no early snapshot and cannot be made stale by a
+    /// sibling. Currently inert for any marked error: it only feeds `TrapType::Error.in_atomic_region`,
+    /// which `fixed_decision_for_trap_type` consults solely for `AgentError::DeterministicTrap`, and a
+    /// host-call trap is never a deterministic wasm trap. Kept so a future FU1 (atomic-region legality
+    /// under overlap) has the call's own membership available.
+    pub in_atomic_region: bool,
+}
+
+/// Marker error wrapping a [`DurableCallTrapContext`] together with the original failure. Mirrors
+/// [`SemanticTrapRetryOverrideMarker`]: it is the *head* of the resulting `anyhow::Error` chain and
+/// exposes the original failure through `source()`, so `TrapType::from_error` (and any nested
+/// semantic-override / classification lookups) still walk past it via `.chain()`.
+#[derive(Debug)]
+pub struct DurableCallTrapContextMarker {
+    pub payload: DurableCallTrapContext,
+    pub inner: anyhow::Error,
+}
+
+impl std::fmt::Display for DurableCallTrapContextMarker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "durable-call-trap-context(retry_from={}, in_atomic_region={})",
+            self.payload.retry_from, self.payload.in_atomic_region
+        )
+    }
+}
+
+impl std::error::Error for DurableCallTrapContextMarker {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(AsRef::<dyn std::error::Error + Send + Sync + 'static>::as_ref(&self.inner))
+    }
+}
+
+/// Wraps `inner` with a [`DurableCallTrapContextMarker`] carrying `payload`, returning the new head
+/// of the error chain. Idempotent in spirit: re-wrapping is harmless because
+/// [`find_durable_call_trap_context`] returns the *outermost* (most specific) marker it encounters.
+pub fn mark_durable_call_trap_context(
+    inner: anyhow::Error,
+    payload: DurableCallTrapContext,
+) -> anyhow::Error {
+    anyhow::Error::new(DurableCallTrapContextMarker { payload, inner })
+}
+
+/// Searches an `anyhow::Error` for a `DurableCallTrapContextMarker` and returns a copy of its
+/// payload.
+pub fn find_durable_call_trap_context(error: &anyhow::Error) -> Option<DurableCallTrapContext> {
+    error
+        .chain()
+        .find_map(|e| e.downcast_ref::<DurableCallTrapContextMarker>())
+        .map(|m| m.payload)
+}
+
+/// An error type that can carry a [`DurableCallTrapContextMarker`] in its chain, used as the error
+/// bound of the Shape-A `CallHandle::run` combinator.
+///
+/// Implemented only for `anyhow::Error` / `wasmtime::Error` (which preserve the marker chain). It is
+/// deliberately **not** implemented for typed errors such as `WorkerExecutorError`: converting a
+/// marked `anyhow::Error` into a typed error would silently drop the marker and reintroduce the
+/// ambient-fallback misclassification under overlap. So a `run` call site that wants a typed error
+/// must instead return `wasmtime::Result`/`anyhow::Result` and map the error at the boundary.
+pub trait DurableCallTrapError: From<WorkerExecutorError> + Into<anyhow::Error> {
+    /// Re-wraps a marked `anyhow::Error` (produced by [`CallHandle::trap`]) back into this error
+    /// type, preserving the marker chain.
+    fn from_durable_call_trap(error: anyhow::Error) -> Self;
+}
+
+impl DurableCallTrapError for anyhow::Error {
+    fn from_durable_call_trap(error: anyhow::Error) -> Self {
+        error
+    }
+}
+
+impl DurableCallTrapError for wasmtime::Error {
+    fn from_durable_call_trap(error: anyhow::Error) -> Self {
+        wasmtime::Error::from_anyhow(error)
+    }
+}
+
+/// A failure escaping a live *terminal* durable-call step — `CallHandle::complete` /
+/// `complete_access` / `cancel` / `cancel_access` and the dropped-call cancellation drain — paired
+/// with that call's own [`DurableCallTrapContext`].
+///
+/// It is a *conversion carrier*, deliberately **not** a `std::error::Error`: converting it into a
+/// marker-preserving error type (`anyhow::Error` / `wasmtime::Error` /
+/// `wasmtime_wasi::p2::StreamError`) attaches the call-owned trap marker via
+/// [`mark_durable_call_trap_context`], so post-trap retry grouping stays owned by the failing call
+/// rather than falling back to ambient worker state an overlapping sibling could have clobbered. If
+/// it implemented `std::error::Error`, the upstream blanket `From<E: Error>` conversions for
+/// `anyhow::Error` / `wasmtime::Error` would collide with (or silently bypass) the marker-adding
+/// `From` impls below.
+#[derive(Debug)]
+pub struct TerminalCallError {
+    pub source: WorkerExecutorError,
+    pub context: DurableCallTrapContext,
+}
+
+impl TerminalCallError {
+    pub fn new(source: WorkerExecutorError, context: DurableCallTrapContext) -> Self {
+        Self { source, context }
+    }
+
+    /// Converts into an `anyhow::Error` carrying this call's trap marker, keeping the original
+    /// `WorkerExecutorError` reachable as the root cause so `TrapType::from_error` can still
+    /// downcast it (e.g. for `ReadOnlyViolation` / unexpected-oplog-entry classification).
+    pub fn into_marked_anyhow(self) -> anyhow::Error {
+        let inner = anyhow::Error::new(self.source);
+        debug_assert!(
+            inner
+                .root_cause()
+                .downcast_ref::<wasmtime::Trap>()
+                .is_none(),
+            "TerminalCallError must not wrap a deterministic wasm trap"
+        );
+        mark_durable_call_trap_context(inner, self.context)
+    }
+}
+
+impl std::fmt::Display for TerminalCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
+    }
+}
+
+impl From<TerminalCallError> for anyhow::Error {
+    fn from(error: TerminalCallError) -> Self {
+        error.into_marked_anyhow()
+    }
+}
+
+impl From<TerminalCallError> for wasmtime::Error {
+    fn from(error: TerminalCallError) -> Self {
+        wasmtime::Error::from_anyhow(error.into_marked_anyhow())
+    }
+}
+
+impl From<TerminalCallError> for wasmtime_wasi::p2::StreamError {
+    fn from(error: TerminalCallError) -> Self {
+        wasmtime_wasi::p2::StreamError::Trap(wasmtime::Error::from_anyhow(
+            error.into_marked_anyhow(),
+        ))
+    }
+}
+
+impl From<TerminalCallError> for wasmtime_wasi::p2::SocketError {
+    fn from(error: TerminalCallError) -> Self {
+        // `TrappableError::trap` takes `impl Into<wasmtime::Error>`, so the marker is attached via the
+        // `From<TerminalCallError> for wasmtime::Error` impl above.
+        wasmtime_wasi::p2::SocketError::trap(error)
+    }
+}
+
 /// Result of `try_trigger_retry_or_loop`: tells the host function caller what to do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InternalRetryResult {
@@ -229,10 +404,20 @@ pub trait InFunctionRetryHost {
     /// Returns the current durable execution state.
     fn durable_execution_state(&self) -> DurableExecutionState;
 
+    /// Whether the atomic region identified by `begin_index` has recorded side effects. Lets a
+    /// scoped retry host classify against the *call's* own region rather than the ambient state.
+    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool;
+
+    /// The `inside_atomic_region` flag to persist with an in-function retry `Error` entry: whether
+    /// the retry's owning atomic region had side effects. For a scoped call this is the call's own
+    /// region; for an unscoped/legacy caller it falls back to the ambient outermost-region state.
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool;
+
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     );
 }
@@ -476,7 +661,8 @@ impl InFunctionRetryState {
             return AsyncRetryDecision::FallBackToTrap;
         }
 
-        ctx.append_retry_error_entry(retry_point, retry_policy_state)
+        let inside_atomic_region = ctx.retry_context_atomic_region_had_side_effects();
+        ctx.append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
             .await;
         self.retry_count += 1;
 
@@ -893,13 +1079,23 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         }
     }
 
+    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
+        self.state.atomic_region_has_side_effects_for(begin_index)
+    }
+
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+        // Unscoped/legacy retry path: fall back to the ambient outermost active region. A scoped
+        // call uses `ScopedRetryHost`, which classifies against its own initiating region instead.
+        self.state.outermost_atomic_region_has_side_effects()
+    }
+
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
         use golem_common::model::oplog::AgentError;
-        let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
@@ -1419,16 +1615,27 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         }
     }
 
+    fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
+        // Spawned tasks are never inside atomic regions
+        false
+    }
+
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+        // Spawned tasks are never inside atomic regions
+        false
+    }
+
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
-            false, // spawned tasks are never inside atomic regions
+            inside_atomic_region,
             retry_policy_state.clone(),
         );
         self.worker.add_and_commit_oplog(entry).await;
@@ -1607,9 +1814,18 @@ mod tests {
             MockDurabilityHost::durable_execution_state(self)
         }
 
+        fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
+            self.in_atomic_region
+        }
+
+        fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+            self.in_atomic_region
+        }
+
         async fn append_retry_error_entry(
             &mut self,
             _retry_from: OplogIndex,
+            _inside_atomic_region: bool,
             retry_policy_state: Option<RetryPolicyState>,
         ) {
             self.retry_entries_appended += 1;
@@ -2653,6 +2869,90 @@ mod tests {
 
         let with_context = bare.context("escalated to trap");
         assert!(find_semantic_trap_retry_override(&with_context).is_none());
+    }
+
+    /// Every terminal-step conversion (`complete` / `complete_access` / `cancel` / the dropped-call
+    /// drain) funnels through [`TerminalCallError::into_marked_anyhow`]. That single funnel must
+    /// preserve *both* halves of the carrier: the call-owned [`DurableCallTrapContext`] (so
+    /// `TrapType::from_error` groups the failure against the call's own scope) *and* the original
+    /// `WorkerExecutorError` as the reachable root cause (so the same path can still downcast it to
+    /// classify e.g. `ReadOnlyViolation` / unexpected-oplog-entry failures).
+    #[test]
+    fn terminal_call_error_preserves_marker_and_inner_worker_executor_error() {
+        let context = DurableCallTrapContext {
+            retry_from: OplogIndex::from_u64(17),
+            in_atomic_region: true,
+        };
+        let terminal = TerminalCallError::new(
+            WorkerExecutorError::ReadOnlyViolation {
+                method: "agent::read-only-method".to_string(),
+                host_function: "test:host-function".to_string(),
+            },
+            context,
+        );
+
+        let error = terminal.into_marked_anyhow();
+
+        // (1) The call-owned marker is recoverable verbatim.
+        let marker = find_durable_call_trap_context(&error)
+            .expect("terminal failure must carry its call-owned trap context");
+        assert_eq!(marker, context);
+
+        // (2) The original WorkerExecutorError is still the root cause and downcastable from the
+        //     chain, so classification on the trap path keeps working.
+        let inner = error
+            .root_cause()
+            .downcast_ref::<WorkerExecutorError>()
+            .expect("inner WorkerExecutorError must remain reachable as the root cause");
+        match inner {
+            WorkerExecutorError::ReadOnlyViolation {
+                method,
+                host_function,
+            } => {
+                assert_eq!(method, "agent::read-only-method");
+                assert_eq!(host_function, "test:host-function");
+            }
+            other => panic!("expected ReadOnlyViolation root cause, got {other:?}"),
+        }
+    }
+
+    /// Terminal-step failures don't always reach the invocation loop as an `anyhow::Error` directly:
+    /// the stream paths in `io/streams.rs` carry them as `wasmtime_wasi::p2::StreamError::Trap`, and
+    /// other host paths as `wasmtime::Error`, before the loop converts back to `anyhow::Error` for
+    /// `TrapType::from_error`. Those explicit `From<TerminalCallError>` funnels must preserve the
+    /// call-owned marker across the round trip, otherwise the marker would silently vanish on exactly
+    /// those surfaces and the classifier would fall back to ambient state.
+    #[test]
+    fn terminal_call_error_marker_survives_wasmtime_and_stream_conversions() {
+        let context = DurableCallTrapContext {
+            retry_from: OplogIndex::from_u64(23),
+            in_atomic_region: false,
+        };
+
+        // wasmtime::Error funnel -> back to anyhow (as the invocation loop does).
+        let via_wasmtime: wasmtime::Error =
+            TerminalCallError::new(WorkerExecutorError::runtime("boom"), context).into();
+        let back: anyhow::Error = via_wasmtime.into();
+        assert_eq!(
+            find_durable_call_trap_context(&back),
+            Some(context),
+            "marker must survive the wasmtime::Error round trip"
+        );
+
+        // StreamError::Trap funnel -> unwrap the trap -> back to anyhow.
+        let via_stream: wasmtime_wasi::p2::StreamError =
+            TerminalCallError::new(WorkerExecutorError::runtime("boom"), context).into();
+        match via_stream {
+            wasmtime_wasi::p2::StreamError::Trap(trap) => {
+                let back: anyhow::Error = trap.into();
+                assert_eq!(
+                    find_durable_call_trap_context(&back),
+                    Some(context),
+                    "marker must survive the StreamError::Trap round trip"
+                );
+            }
+            other => panic!("expected StreamError::Trap, got {other:?}"),
+        }
     }
 
     // ---------------------------------------------------------------------

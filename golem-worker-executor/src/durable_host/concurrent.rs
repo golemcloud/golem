@@ -45,11 +45,12 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData};
 
+use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::{
-    DurabilityHost, DurableExecutionState, HostFailureKind, InFunctionRetryController,
-    InFunctionRetryHost, InternalRetryResult, try_trigger_host_trap_retry,
+    DurabilityHost, DurableCallTrapContext, DurableCallTrapError, DurableExecutionState,
+    HostFailureKind, InFunctionRetryController, InFunctionRetryHost, InternalRetryResult,
+    TerminalCallError, mark_durable_call_trap_context, try_trigger_host_trap_retry,
 };
-use crate::durable_host::{DurableWorkerCtx, PrivateDurableWorkerState};
 use crate::services::oplog::{Oplog, OplogOps, PendingUpload};
 use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
@@ -258,6 +259,11 @@ pub struct DroppedCall {
     start_idx: OplogIndex,
     request_upload: PendingUpload,
     atomic_region_registration: Option<OplogIndex>,
+    /// The dropped call's own trap classification, captured from its execution scope at drop time.
+    /// A cancellation-drain failure (deferred request upload / terminal recorder join) traps with
+    /// this context so the retry grouping belongs to the dropped call, not to whichever later host
+    /// call happens to drive the drain.
+    trap_context: DurableCallTrapContext,
 }
 
 impl DroppedCall {
@@ -271,6 +277,10 @@ impl DroppedCall {
 
     pub fn atomic_region_registration(&self) -> Option<OplogIndex> {
         self.atomic_region_registration
+    }
+
+    pub fn trap_context(&self) -> DurableCallTrapContext {
+        self.trap_context
     }
 
     async fn wait_request_upload(&self) -> Result<(), WorkerExecutorError> {
@@ -323,10 +333,12 @@ pub enum DropEvent {
     /// A terminal was already being recorded when the future was dropped; only in-memory atomic
     /// membership cleanup is needed, not another durable terminal entry.
     CleanupAtomicRegion { begin_index: OplogIndex },
-    /// A terminal append was handed to an owned task; wait for it before in-memory cleanup.
+    /// A terminal append was handed to an owned task; wait for it before in-memory cleanup. A join
+    /// failure traps with the dropped call's own `trap_context` rather than ambient state.
     CleanupAfterTerminal {
         begin_index: OplogIndex,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        trap_context: DurableCallTrapContext,
     },
 }
 
@@ -393,6 +405,7 @@ enum AccessTerminalGuardState {
     CleanupAfterTerminal {
         begin_index: Option<OplogIndex>,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+        trap_context: DurableCallTrapContext,
     },
     Disarmed,
 }
@@ -432,9 +445,14 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
     ) {
         let begin_index = self.atomic_region_registration();
+        let trap_context = self
+            .call()
+            .expect("cleanup_after_terminal called before the terminal is armed")
+            .trap_context();
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
             begin_index,
             terminal: Some(terminal),
+            trap_context,
         };
     }
 
@@ -466,11 +484,13 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
             AccessTerminalGuardState::CleanupAfterTerminal {
                 begin_index: Some(begin_index),
                 terminal: Some(terminal),
+                trap_context,
             } => {
                 if let Some(sink) = &self.sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
                         begin_index,
                         terminal,
+                        trap_context,
                     });
                 }
             }
@@ -494,20 +514,28 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
 pub async fn drain_dropped_call_events<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     receiver: &mut UnboundedReceiver<DropEvent>,
-) -> Result<usize, WorkerExecutorError> {
+) -> Result<usize, TerminalCallError> {
     let mut recorded = 0;
     while let Ok(event) = receiver.try_recv() {
         match event {
             DropEvent::UnfinishedCancellable { call } => {
-                call.wait_request_upload().await?;
-                call.append_cancelled(ctx, None).await?;
+                let context = call.trap_context();
+                call.wait_request_upload()
+                    .await
+                    .map_err(|err| TerminalCallError::new(err, context))?;
+                call.append_cancelled(ctx, None)
+                    .await
+                    .map_err(|err| TerminalCallError::new(err, context))?;
                 recorded += 1;
             }
             DropEvent::UnfinishedNotCancellable { call } => {
-                return Err(WorkerExecutorError::runtime(format!(
-                    "non-cancellable durable call {} dropped without finish/cancel",
-                    call.start_idx()
-                )));
+                return Err(TerminalCallError::new(
+                    WorkerExecutorError::runtime(format!(
+                        "non-cancellable durable call {} dropped without finish/cancel",
+                        call.start_idx()
+                    )),
+                    call.trap_context(),
+                ));
             }
             DropEvent::CleanupAtomicRegion { begin_index } => {
                 ctx.state.unregister_atomic_region_call(begin_index);
@@ -516,12 +544,19 @@ pub async fn drain_dropped_call_events<Ctx: WorkerCtx>(
             DropEvent::CleanupAfterTerminal {
                 begin_index,
                 terminal,
+                trap_context,
             } => {
-                terminal.await.map_err(|err| {
+                let joined = terminal.await.map_err(|err| {
                     WorkerExecutorError::runtime(format!(
                         "durable call terminal recorder task failed: {err}"
                     ))
-                })??;
+                });
+                match joined {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) | Err(err) => {
+                        return Err(TerminalCallError::new(err, trap_context));
+                    }
+                }
                 ctx.state.unregister_atomic_region_call(begin_index);
                 recorded += 1;
             }
@@ -536,7 +571,7 @@ pub async fn drain_dropped_call_events<Ctx: WorkerCtx>(
 pub async fn drain_dropped_call_events_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<usize, WorkerExecutorError>
+) -> Result<usize, TerminalCallError>
 where
     T: 'static,
     D: HasData + ?Sized,
@@ -559,6 +594,7 @@ where
         match drain.current_mut() {
             DropEvent::UnfinishedCancellable { call } => {
                 let begin_index = call.atomic_region_registration();
+                let context = call.trap_context();
                 let result = async {
                     call.wait_request_upload().await?;
                     call.append_cancelled_with_oplog(oplog.clone(), None).await
@@ -577,17 +613,21 @@ where
                     }
                     Err(err) => {
                         if first_error.is_none() {
-                            first_error = Some(err);
+                            first_error = Some(TerminalCallError::new(err, context));
                         }
                     }
                 }
             }
             DropEvent::UnfinishedNotCancellable { call } => {
+                let context = call.trap_context();
+                let start_idx = call.start_idx();
                 first_error.get_or_insert_with(|| {
-                    WorkerExecutorError::runtime(format!(
-                        "non-cancellable durable call {} dropped without finish/cancel",
-                        call.start_idx()
-                    ))
+                    TerminalCallError::new(
+                        WorkerExecutorError::runtime(format!(
+                            "non-cancellable durable call {start_idx} dropped without finish/cancel"
+                        )),
+                        context,
+                    )
                 });
             }
             DropEvent::CleanupAtomicRegion { begin_index } => {
@@ -601,8 +641,10 @@ where
             DropEvent::CleanupAfterTerminal {
                 begin_index,
                 terminal,
+                trap_context,
             } => {
                 let begin_index = *begin_index;
+                let trap_context = *trap_context;
                 match terminal.await.map_err(|err| {
                     WorkerExecutorError::runtime(format!(
                         "durable call terminal recorder task failed: {err}"
@@ -611,7 +653,7 @@ where
                     Ok(Ok(())) => recorded += 1,
                     Ok(Err(err)) | Err(err) => {
                         if first_error.is_none() {
-                            first_error = Some(err);
+                            first_error = Some(TerminalCallError::new(err, trap_context));
                         }
                     }
                 }
@@ -731,9 +773,6 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
 
 #[derive(Debug, Clone)]
 struct BegunCallExecutionScope {
-    /// The global fallback retry point that was active before this call began. Kept so the current
-    /// serial path can restore the old worker state after a normal terminal.
-    restore_retry_point: OplogIndex,
     /// The durable scope this host-call `Start` will be nested under, if any. This is derived from
     /// the call's own function type / begin index, never from temporally-open sibling scopes.
     parent_start_index: Option<OplogIndex>,
@@ -750,7 +789,6 @@ struct BegunCallExecutionScope {
 impl BegunCallExecutionScope {
     fn finish(self, start_idx: OplogIndex) -> CallExecutionScope {
         CallExecutionScope {
-            restore_retry_point: self.restore_retry_point,
             retry_from: self.parent_start_index.unwrap_or(start_idx),
             durable_scope: self.parent_start_index,
             atomic_region: self.atomic_region,
@@ -761,8 +799,6 @@ impl BegunCallExecutionScope {
 
 #[derive(Debug, Clone)]
 struct CallExecutionScope {
-    /// The retry point that was active before this call changed the worker fallback state.
-    restore_retry_point: OplogIndex,
     /// The retry point owned by this in-flight call: the enclosing durable scope `Start` if present,
     /// otherwise the host-call `Start` itself.
     retry_from: OplogIndex,
@@ -782,19 +818,12 @@ impl CallExecutionScope {
         self.atomic_region
     }
 
-    /// Compatibility bridge for the current serial host-call path: mirror this call's retry point
-    /// into the ambient worker fallback while the call is in flight. Real retry decisions for the
-    /// call itself already use [`ScopedRetryHost`] and this call-owned scope; this mirror only keeps
-    /// legacy trap plumbing grouped correctly until the p3 Accessor path has per-task retry state.
-    fn mirror_into_ambient_retry_point(&self, state: &mut PrivateDurableWorkerState) {
-        state.mirror_call_retry_point(self.retry_from);
-    }
-
-    /// Undo [`Self::mirror_into_ambient_retry_point`] after an explicit terminal. Trap-abandoned
-    /// calls intentionally do not restore so the outer trap path still sees the call/scope retry
-    /// point.
-    fn restore_ambient_retry_point(&self, state: &mut PrivateDurableWorkerState) {
-        state.restore_call_retry_point(self.restore_retry_point);
+    /// The retry point to attach to a trap raised by this call: the call's own atomic region (whole
+    /// region retried from its begin index) if it was initiated inside one, otherwise its enclosing
+    /// durable scope `Start` or its own `Start`. This mirrors [`ScopedRetryHost::retry_point`] so a
+    /// hard (non-semantic) trap groups exactly like an inline/semantic retry would.
+    fn trap_retry_point(&self) -> OplogIndex {
+        self.atomic_region.unwrap_or(self.retry_from)
     }
 }
 
@@ -915,13 +944,28 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
         state
     }
 
+    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
+        self.inner.atomic_region_has_side_effects_for(begin_index)
+    }
+
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+        // Membership/initiation-precise: classify against the region this call was *initiated* in,
+        // not whatever region happens to be outermost at retry time. A call started outside any
+        // atomic region never writes `inside_atomic_region = true`, even if a sibling later opened
+        // one.
+        self.execution_scope
+            .atomic_region
+            .is_some_and(|begin_index| self.inner.atomic_region_has_side_effects_for(begin_index))
+    }
+
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
     ) {
         self.inner
-            .append_retry_error_entry(retry_from, retry_policy_state)
+            .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
             .await;
     }
 }
@@ -1120,7 +1164,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .state
             .child_parent_start_index(&function_type, OplogIndex::INITIAL);
         let execution_scope = BegunCallExecutionScope {
-            restore_retry_point: ctx.state.ambient_retry_point(),
             parent_start_index,
             atomic_region,
             persistence_level: ctx.state.persistence_level,
@@ -1248,12 +1291,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     }
 
     fn finish_access_start<Ctx: WorkerCtx>(
-        ctx: &mut DurableWorkerCtx<Ctx>,
+        _ctx: &mut DurableWorkerCtx<Ctx>,
         executed: ExecutedAccessStart<Pair, P>,
     ) -> Result<Self, WorkerExecutorError> {
-        executed
-            .execution_scope
-            .mirror_into_ambient_retry_point(&mut ctx.state);
         Ok(CallHandle {
             start_idx: executed.start_idx,
             begin_index: executed.begin_index,
@@ -1301,7 +1341,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .await?;
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let execution_scope = BegunCallExecutionScope {
-            restore_retry_point: ctx.state.ambient_retry_point(),
             parent_start_index: ctx
                 .state
                 .child_parent_start_index(&function_type, begin_index),
@@ -1339,17 +1378,52 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.begin_index
     }
 
-    /// Marks the call as finished without writing anything to the oplog, leaving its host-call
-    /// `Start` incomplete on disk. This is the terminal used when a host call traps (fall-back to
-    /// oplog replay) or is interrupted: a trap is **not** a cancellation, so it must never write a
-    /// `Cancelled`. The incomplete `Start` is resolved on the next replay/retry (see
+    /// Low-level abandon: marks the call as finished without writing anything to the oplog, leaving
+    /// its host-call `Start` incomplete on disk. This is the terminal used when a host call traps
+    /// (fall-back to oplog replay) or is interrupted: a trap is **not** a cancellation, so it must
+    /// never write a `Cancelled`. The incomplete `Start` is resolved on the next replay/retry (see
     /// [`CallReplayOutcome::Incomplete`]).
     ///
-    /// It deliberately does **not** restore `ambient_retry_point`: unmarked legacy trap plumbing
-    /// still uses that compatibility fallback, while semantic host traps carry this call's retry
-    /// point in the error marker itself.
-    pub fn abandon_for_trap(&mut self) {
+    /// This does **not** attach a [`DurableCallTrapContext`]. Every *hard error* that escapes as a
+    /// `TrapType::Error` must instead go through [`Self::trap`], so the post-trap retry grouping is
+    /// owned by this call's scope rather than ambient worker state a sibling call could clobber once
+    /// durable calls overlap. Raw `abandon_for_trap` is only for non-`TrapType::Error` control flow
+    /// (interrupts / sleep-suspend), where `TrapType::from_error` ignores the marker anyway, and for
+    /// tests.
+    pub(crate) fn abandon_for_trap(&mut self) {
         self.finished = true;
+    }
+
+    /// The call-owned trap classification for a hard error escaping this call: its own retry point
+    /// and atomic-region membership, derived purely from the call's execution scope (the region it
+    /// was *initiated* in), never from ambient worker state. Being pure, it needs no `ctx` and is
+    /// stable across the call's body, so it can be built at the trap egress point or snapshotted
+    /// earlier when the handle is moved before egress (see `io::poll`).
+    pub(crate) fn trap_context(&self) -> DurableCallTrapContext {
+        DurableCallTrapContext {
+            retry_from: self.execution_scope.trap_retry_point(),
+            in_atomic_region: self.execution_scope.atomic_region().is_some(),
+        }
+    }
+
+    /// Abandons this call for a hard trap and wraps the escaping error with this call's
+    /// [`DurableCallTrapContext`], so `TrapType::from_error` groups the failure against the call's
+    /// own scope. Use this at every `TrapType::Error` egress after the call has started; see
+    /// [`Self::abandon_for_trap`] for the non-error control-flow cases.
+    pub fn trap(&mut self, err: impl Into<anyhow::Error>) -> anyhow::Error {
+        let err = err.into();
+        // Invariant lock: a marked host-call trap must never be a deterministic wasm trap. The
+        // marker carries no call-owned atomic-region side-effect bit (`TrapType::from_error` sources
+        // that from ambient state), which is only sound because the side-effect bit is consulted
+        // solely for `AgentError::DeterministicTrap` and a host error is never one. Guest wasm traps
+        // are classified on the invocation path without a `CallHandle`, so they never reach here.
+        debug_assert!(
+            err.root_cause().downcast_ref::<wasmtime::Trap>().is_none(),
+            "CallHandle::trap must not wrap a deterministic wasm trap (root cause was a wasmtime::Trap)"
+        );
+        let context = self.trap_context();
+        self.abandon_for_trap();
+        mark_durable_call_trap_context(err, context)
     }
 
     /// Retry wrapper around [`InFunctionRetryController::try_trigger_retry`]. On the `Err` branch
@@ -1362,15 +1436,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<()> {
-        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
-        let outcome = self
-            .retry
-            .try_trigger_retry(&mut retry_host, result, classify)
-            .await;
-        if outcome.is_err() {
-            self.abandon_for_trap();
-        }
-        outcome
+        let outcome = {
+            let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
+            self.retry
+                .try_trigger_retry(&mut retry_host, result, classify)
+                .await
+        };
+        outcome.map_err(|err| self.trap(err))
     }
 
     pub async fn try_trigger_retry_with_properties<Ok, Err: Display>(
@@ -1380,15 +1452,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
     ) -> anyhow::Result<()> {
-        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
-        let outcome = self
-            .retry
-            .try_trigger_retry_with_properties(&mut retry_host, result, classify, properties)
-            .await;
-        if outcome.is_err() {
-            self.abandon_for_trap();
-        }
-        outcome
+        let outcome = {
+            let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
+            self.retry
+                .try_trigger_retry_with_properties(&mut retry_host, result, classify, properties)
+                .await
+        };
+        outcome.map_err(|err| self.trap(err))
     }
 
     pub async fn try_trigger_retry_or_loop<Ok, Err: Display>(
@@ -1397,15 +1467,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<InternalRetryResult> {
-        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
-        let outcome = self
-            .retry
-            .try_trigger_retry_or_loop(&mut retry_host, result, classify)
-            .await;
-        if outcome.is_err() {
-            self.abandon_for_trap();
-        }
-        outcome
+        let outcome = {
+            let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
+            self.retry
+                .try_trigger_retry_or_loop(&mut retry_host, result, classify)
+                .await
+        };
+        outcome.map_err(|err| self.trap(err))
     }
 
     pub async fn try_trigger_retry_or_loop_with_properties<Ok, Err: Display>(
@@ -1415,20 +1483,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
     ) -> anyhow::Result<InternalRetryResult> {
-        let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
-        let outcome = self
-            .retry
-            .try_trigger_retry_or_loop_with_properties(
-                &mut retry_host,
-                result,
-                classify,
-                properties,
-            )
-            .await;
-        if outcome.is_err() {
-            self.abandon_for_trap();
-        }
-        outcome
+        let outcome = {
+            let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
+            self.retry
+                .try_trigger_retry_or_loop_with_properties(
+                    &mut retry_host,
+                    result,
+                    classify,
+                    properties,
+                )
+                .await
+        };
+        outcome.map_err(|err| self.trap(err))
     }
 
     /// Drives the full live / replay / incomplete-replay flow for a **re-executable** durable call
@@ -1452,7 +1518,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     ) -> Result<Pair::Resp, E>
     where
         Ctx: WorkerCtx,
-        E: From<WorkerExecutorError>,
+        E: DurableCallTrapError,
         A: AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Pair::Resp, E>,
     {
         debug_assert!(
@@ -1473,7 +1539,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     }
 
     /// Runs `live_action` and either completes the call with its response or, on error, abandons the
-    /// call for trap and propagates the error. Shared by both [`Self::run`] paths.
+    /// call for trap and propagates the error wrapped with this call's [`DurableCallTrapContext`].
+    /// Shared by both [`Self::run`] paths.
     async fn run_live_action<Ctx, A, E>(
         mut self,
         ctx: &mut DurableWorkerCtx<Ctx>,
@@ -1481,21 +1548,37 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     ) -> Result<Pair::Resp, E>
     where
         Ctx: WorkerCtx,
-        E: From<WorkerExecutorError>,
+        E: DurableCallTrapError,
         A: AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Pair::Resp, E>,
     {
         match live_action(ctx).await {
-            Ok(response) => Ok(self.complete(ctx, response).await?),
-            Err(err) => {
-                self.abandon_for_trap();
-                Err(err)
-            }
+            Ok(response) => self
+                .complete(ctx, response)
+                .await
+                .map_err(|err| E::from_durable_call_trap(err.into_marked_anyhow())),
+            Err(err) => Err(E::from_durable_call_trap(self.trap(err))),
         }
     }
 
     /// Completes a live call: upload the response, append the matching host-call `End`, then close
     /// the durable scope / commit / checkpoint via `end_durable_function`.
+    ///
+    /// A terminal failure is returned as a [`TerminalCallError`] carrying this call's own
+    /// [`DurableCallTrapContext`], so the post-trap retry grouping stays owned by the call rather
+    /// than falling back to ambient worker state a sibling could have clobbered once durable calls
+    /// overlap.
     pub async fn complete<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError> {
+        let context = self.trap_context();
+        self.complete_impl(ctx, response)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    async fn complete_impl<Ctx: WorkerCtx>(
         mut self,
         ctx: &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
@@ -1564,13 +1647,31 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                 .await?;
         }
-        self.execution_scope
-            .restore_ambient_retry_point(&mut ctx.state);
         Ok(response)
     }
 
     /// Accessor-window completion for non-scope-opening p3 durable calls.
+    ///
+    /// As with [`Self::complete`], a terminal failure carries this call's own
+    /// [`DurableCallTrapContext`] via [`TerminalCallError`].
     pub async fn complete_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        self.complete_access_impl(store, get_ctx, response)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    async fn complete_access_impl<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -1589,11 +1690,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         }
         {
             let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+            let trap_context = self.trap_context();
             let mut guard = AccessTerminalGuard::<P>::new(
                 DroppedCall {
                     start_idx: self.start_idx,
                     request_upload: self.request_upload.clone(),
                     atomic_region_registration: self.atomic_region_registration.take(),
+                    trap_context,
                 },
                 self.drop_sink.clone(),
             );
@@ -1654,10 +1757,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 if let Some(begin_index) = registration {
                     ctx.state.unregister_atomic_region_call(begin_index);
                 }
-                if persist_result.is_ok() && result.is_ok() {
-                    self.execution_scope
-                        .restore_ambient_retry_point(&mut ctx.state);
-                }
                 result
             });
 
@@ -1715,8 +1814,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
                 ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                     .await?;
-                self.execution_scope
-                    .restore_ambient_retry_point(&mut ctx.state);
                 Ok(CallReplayOutcome::Replayed(response))
             }
             ResolutionOutcome::Resolved(Resolution::Cancelled { cancelled_idx, .. }) => {
@@ -1730,8 +1827,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 if self.retry.can_reexecute_on_incomplete_replay() {
                     // Switch the handle to live completion of the existing, committed `Start`: the
                     // caller re-runs the side effect and `complete`s, appending the missing `End`.
-                    // The ambient retry mirror is intentionally left at this call's retry point, so
-                    // a failure during re-execution stays grouped here.
+                    // A failure during re-execution stays grouped at this call's own retry point via
+                    // the call-owned `execution_scope` (and the semantic-trap error marker).
                     self.is_live = true;
                     self.persisted = true;
                     Ok(CallReplayOutcome::Incomplete(self))
@@ -1788,11 +1885,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 let response: Pair::Resp = host_response
                     .try_into()
                     .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
-                store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    self.execution_scope
-                        .restore_ambient_retry_point(&mut ctx.state);
-                });
                 Ok(CallReplayOutcome::Replayed(response))
             }
             ResolutionOutcome::Resolved(Resolution::Cancelled { cancelled_idx, .. }) => {
@@ -1849,10 +1941,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
     /// Cancels a call.
     ///
-    /// Live: append a `Cancelled` entry. Replay: expect the call to resolve as `Cancelled`. The
-    /// retry point is intentionally left pointing at this call's `Start` on the live path, so a
-    /// host error propagating after cancellation is grouped against this call.
+    /// Live: append a `Cancelled` entry. Replay: expect the call to resolve as `Cancelled`. This
+    /// call's own retry grouping stays with its call-owned `execution_scope` (and the semantic-trap
+    /// error marker); the cancel path no longer touches the ambient/global retry-point fallback.
     pub async fn cancel<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        partial: Option<Pair::Resp>,
+    ) -> Result<(), TerminalCallError> {
+        let context = self.trap_context();
+        self.cancel_impl(ctx, partial)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    async fn cancel_impl<Ctx: WorkerCtx>(
         mut self,
         ctx: &mut DurableWorkerCtx<Ctx>,
         partial: Option<Pair::Resp>,
@@ -1863,10 +1966,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 let oplog = ctx.state.oplog.clone();
+                let trap_context = self.trap_context();
                 let dropped_call = DroppedCall {
                     start_idx: self.start_idx,
                     request_upload: self.request_upload.clone(),
                     atomic_region_registration: self.atomic_region_registration.take(),
+                    trap_context,
                 };
                 // As in `complete`: surface a deferred request-upload failure at the call site before
                 // recording the `Cancelled` that references the request. A no-op when the request was
@@ -1916,14 +2021,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     format!("End at {end_idx}"),
                 ));
             }
-            self.execution_scope
-                .restore_ambient_retry_point(&mut ctx.state);
         }
         Ok(())
     }
 
     /// Accessor-window cancellation for p3 durable calls.
     pub async fn cancel_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        partial: Option<Pair::Resp>,
+    ) -> Result<(), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        self.cancel_access_impl(store, get_ctx, partial)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))
+    }
+
+    async fn cancel_access_impl<T, D, Ctx>(
         mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -1938,11 +2058,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
+                let trap_context = self.trap_context();
                 let mut guard = AccessTerminalGuard::<P>::new(
                     DroppedCall {
                         start_idx: self.start_idx,
                         request_upload: self.request_upload.clone(),
                         atomic_region_registration: self.atomic_region_registration.take(),
+                        trap_context,
                     },
                     self.drop_sink.clone(),
                 );
@@ -1997,11 +2119,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     format!("End at {end_idx}"),
                 ));
             }
-            store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                self.execution_scope
-                    .restore_ambient_retry_point(&mut ctx.state);
-            });
         }
         Ok(())
     }
@@ -2164,9 +2281,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         } else {
             None
         };
-        // Compatibility mirror for legacy/unmarked trap plumbing. Semantic host-trap retries use
-        // the call-owned scope directly and carry the retry point in the error marker.
-        execution_scope.mirror_into_ambient_retry_point(&mut ctx.state);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -2205,9 +2319,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             .await?;
         let start_idx = replay.start_idx();
         let execution_scope = self.execution_scope.finish(start_idx);
-        // Mirror the live path compatibility fallback. Semantic host-trap retries use the
-        // call-owned scope directly and carry the retry point in the error marker.
-        execution_scope.mirror_into_ambient_retry_point(&mut ctx.state);
         Ok(CallHandle {
             start_idx,
             begin_index: self.begin_index,
@@ -2233,11 +2344,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 // A live call dropped without finish/cancel: run the compile-time drop policy.
+                let trap_context = self.trap_context();
                 P::unfinished_drop(
                     DroppedCall {
                         start_idx: self.start_idx,
                         request_upload: self.request_upload.clone(),
                         atomic_region_registration: self.atomic_region_registration,
+                        trap_context,
                     },
                     self.drop_sink.as_ref(),
                 );
@@ -2428,7 +2541,6 @@ mod tests {
             replay: None,
             finished: false,
             execution_scope: CallExecutionScope {
-                restore_retry_point: OplogIndex::INITIAL,
                 retry_from: start_idx,
                 durable_scope: None,
                 atomic_region: None,
@@ -2441,6 +2553,46 @@ mod tests {
                 "test:monotonic_clock::now",
             ),
             drop_sink: Some(sink),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// A synthetic, already-finished handle carrying an arbitrary [`CallExecutionScope`]. Used by the
+    /// Seam-2 terminal-failure tests to drive `trap_context()` (the call-owned classification a
+    /// terminal-step failure attaches) for a call initiated in a specific scope, without standing up
+    /// a full `DurableWorkerCtx`. `finished` is set so dropping the handle is a no-op (no drop
+    /// event), and no `drop_sink` is attached. `start_idx`/`begin_index` are set from
+    /// `scope.retry_from` only so the struct is well-formed; the tests read nothing but the scope.
+    fn synthetic_finished_handle_with_scope<P: DropPolicy>(
+        scope: CallExecutionScope,
+    ) -> CallHandle<host_functions::MonotonicClockNow, P> {
+        use crate::durable_host::durability::DurableExecutionState;
+        use std::time::Duration;
+        let durable_execution_state = DurableExecutionState {
+            is_live: true,
+            persistence_level: PersistenceLevel::Smart,
+            snapshotting_mode: None,
+            assume_idempotence: false,
+            max_in_function_retry_delay: Duration::ZERO,
+        };
+        let start_idx = scope.retry_from;
+        let atomic_region_registration = scope.atomic_region;
+        CallHandle {
+            start_idx,
+            begin_index: start_idx,
+            is_live: true,
+            persisted: true,
+            request_upload: PendingUpload::already_durable(),
+            replay: None,
+            finished: true,
+            execution_scope: scope,
+            atomic_region_registration,
+            retry: InFunctionRetryController::new(
+                DurableFunctionType::ReadLocal,
+                durable_execution_state,
+                "test:monotonic_clock::now",
+            ),
+            drop_sink: None,
             _phantom: PhantomData,
         }
     }
@@ -2556,6 +2708,11 @@ mod tests {
     struct RetryHostProbe {
         current_retry_point: OplogIndex,
         appended_retry_from: Vec<OplogIndex>,
+        appended_inside_atomic_region: Vec<bool>,
+        /// Atomic region begin indices the inner host reports as having recorded side effects.
+        regions_with_side_effects: Vec<OplogIndex>,
+        /// Ambient outermost-region side-effect state, used by the unscoped fallback path.
+        outermost_has_side_effects: bool,
     }
 
     impl RetryHostProbe {
@@ -2563,6 +2720,9 @@ mod tests {
             Self {
                 current_retry_point,
                 appended_retry_from: Vec::new(),
+                appended_inside_atomic_region: Vec::new(),
+                regions_with_side_effects: Vec::new(),
+                outermost_has_side_effects: false,
             }
         }
     }
@@ -2607,12 +2767,23 @@ mod tests {
             durable_execution_state()
         }
 
+        fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
+            self.regions_with_side_effects.contains(&begin_index)
+        }
+
+        fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+            self.outermost_has_side_effects
+        }
+
         async fn append_retry_error_entry(
             &mut self,
             retry_from: OplogIndex,
+            inside_atomic_region: bool,
             _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
         ) {
             self.appended_retry_from.push(retry_from);
+            self.appended_inside_atomic_region
+                .push(inside_atomic_region);
         }
     }
 
@@ -2620,7 +2791,6 @@ mod tests {
     fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         let mut inner = RetryHostProbe::new(idx(99));
         let scope = CallExecutionScope {
-            restore_retry_point: idx(3),
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
             atomic_region: None,
@@ -2641,7 +2811,6 @@ mod tests {
     fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         let mut inner = RetryHostProbe::new(idx(99));
         let scope = CallExecutionScope {
-            restore_retry_point: idx(3),
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
             atomic_region: Some(idx(7)),
@@ -2658,7 +2827,6 @@ mod tests {
     async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         let mut inner = RetryHostProbe::new(idx(99));
         let scope = CallExecutionScope {
-            restore_retry_point: idx(3),
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
             atomic_region: None,
@@ -2683,14 +2851,12 @@ mod tests {
     async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         let mut inner = RetryHostProbe::new(idx(99));
         let scope_a = CallExecutionScope {
-            restore_retry_point: idx(3),
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
             atomic_region: None,
             persistence_level: PersistenceLevel::Smart,
         };
         let scope_b = CallExecutionScope {
-            restore_retry_point: idx(42),
             retry_from: idx(77),
             durable_scope: Some(idx(70)),
             atomic_region: None,
@@ -2734,14 +2900,12 @@ mod tests {
     async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         let mut inner = RetryHostProbe::new(idx(99));
         let scope_a = CallExecutionScope {
-            restore_retry_point: idx(3),
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
             atomic_region: Some(idx(7)),
             persistence_level: PersistenceLevel::Smart,
         };
         let scope_b = CallExecutionScope {
-            restore_retry_point: idx(42),
             retry_from: idx(77),
             durable_scope: Some(idx(70)),
             atomic_region: Some(idx(8)),
@@ -2781,12 +2945,173 @@ mod tests {
         assert_eq!(override_b.retry_from, idx(8));
     }
 
+    // ---- Seam-2 terminal-step failures ----
+
+    /// Classifies a terminal-step failure the way the invocation loop does, with a deliberately
+    /// *hostile* ambient fallback (a retry point and atomic-region membership belonging to no real
+    /// call). A call-owned [`DurableCallTrapContext`] marker carried by the error must override both
+    /// fallbacks; if the terminal path lost the marker, the classifier would silently adopt these
+    /// ambient values instead — the exact §5.7.3 misclassification we are guarding against.
+    fn classify_with_hostile_ambient(error: &anyhow::Error) -> crate::model::TrapType {
+        crate::model::TrapType::from_error::<crate::workerctx::default::Context>(
+            error,
+            idx(99),
+            true,
+            false,
+            golem_common::model::agent::AgentMode::Durable,
+        )
+    }
+
+    #[test]
+    fn seam2_terminal_failure_carries_call_owned_trap_context() {
+        // A failure escaping a *terminal* durable-call step (`complete` / `complete_access` /
+        // `cancel` / the dropped-call drain) is wrapped in a `TerminalCallError` built from the
+        // call's own execution scope. Classifying it must group the retry against the call's own
+        // scope and use the call's own atomic-region membership, never the ambient worker state.
+        let scope = CallExecutionScope {
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+        let handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
+
+        let error: anyhow::Error = TerminalCallError::new(
+            WorkerExecutorError::runtime("terminal step failure"),
+            handle.trap_context(),
+        )
+        .into();
+
+        match classify_with_hostile_ambient(&error) {
+            crate::model::TrapType::Error {
+                retry_from,
+                in_atomic_region,
+                ..
+            } => {
+                // Call-owned (idx 42, non-atomic) wins over hostile ambient (idx 99, atomic).
+                assert_eq!(retry_from, idx(42));
+                assert!(!in_atomic_region);
+            }
+            other => panic!("expected TrapType::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
+        // Two durable calls overlap in flight and share the same ambient worker state. Each one's
+        // terminal-step failure must still be classified against its OWN retry point and
+        // atomic-region membership. Before §5.7.3 these escaped unmarked and fell back to that shared
+        // ambient state, so an overlapping sibling could clobber the grouping.
+        let scope_a = CallExecutionScope {
+            retry_from: idx(42),
+            durable_scope: Some(idx(40)),
+            atomic_region: Some(idx(7)),
+            persistence_level: PersistenceLevel::Smart,
+        };
+        let scope_b = CallExecutionScope {
+            retry_from: idx(77),
+            durable_scope: Some(idx(70)),
+            atomic_region: None,
+            persistence_level: PersistenceLevel::Smart,
+        };
+        let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
+        let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
+
+        let error_a: anyhow::Error =
+            TerminalCallError::new(WorkerExecutorError::runtime("a"), handle_a.trap_context())
+                .into();
+        let error_b: anyhow::Error =
+            TerminalCallError::new(WorkerExecutorError::runtime("b"), handle_b.trap_context())
+                .into();
+
+        // Both classified against the SAME hostile ambient state, yet each keeps its own grouping.
+        match classify_with_hostile_ambient(&error_a) {
+            crate::model::TrapType::Error {
+                retry_from,
+                in_atomic_region,
+                ..
+            } => {
+                // Call A was initiated inside an atomic region: the whole region retries from its
+                // begin index (idx 7) and membership is recorded.
+                assert_eq!(retry_from, idx(7));
+                assert!(in_atomic_region);
+            }
+            other => panic!("expected TrapType::Error for call A, got {other:?}"),
+        }
+        match classify_with_hostile_ambient(&error_b) {
+            crate::model::TrapType::Error {
+                retry_from,
+                in_atomic_region,
+                ..
+            } => {
+                // Call B was not in an atomic region: it retries from its own scope (idx 77).
+                assert_eq!(retry_from, idx(77));
+                assert!(!in_atomic_region);
+            }
+            other => panic!("expected TrapType::Error for call B, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
+        // A cancellation-drain failure (deferred request upload / terminal recorder join) is driven
+        // by whichever later host call happens to run the drain, but it must be classified with the
+        // *dropped* call's captured context, not the drainer's ambient state. `DroppedCall::trap_context`
+        // carries that captured classification; the drain wraps failures with it via
+        // `TerminalCallError`.
+        // An atomic dropped call: its own context (idx 3, atomic) must win over the hostile ambient.
+        let dropped_atomic = DroppedCall {
+            start_idx: idx(5),
+            request_upload: PendingUpload::already_durable(),
+            atomic_region_registration: Some(idx(3)),
+            trap_context: DurableCallTrapContext {
+                retry_from: idx(3),
+                in_atomic_region: true,
+            },
+        };
+        // A non-atomic dropped call: its membership (false) must win over the hostile ambient's
+        // `in_atomic_region = true`, so the membership assertion is independent of the retry point.
+        let dropped_non_atomic = DroppedCall {
+            start_idx: idx(8),
+            request_upload: PendingUpload::already_durable(),
+            atomic_region_registration: None,
+            trap_context: DurableCallTrapContext {
+                retry_from: idx(8),
+                in_atomic_region: false,
+            },
+        };
+
+        for (dropped, expected_retry, expected_atomic) in [
+            (dropped_atomic, idx(3), true),
+            (dropped_non_atomic, idx(8), false),
+        ] {
+            let error: anyhow::Error = TerminalCallError::new(
+                WorkerExecutorError::runtime("cancellation drain failed"),
+                dropped.trap_context(),
+            )
+            .into();
+
+            // `classify_with_hostile_ambient` supplies idx(99)/atomic-membership-true as the
+            // drainer's ambient state; the dropped call's own context must win.
+            match classify_with_hostile_ambient(&error) {
+                crate::model::TrapType::Error {
+                    retry_from,
+                    in_atomic_region,
+                    ..
+                } => {
+                    assert_eq!(retry_from, expected_retry);
+                    assert_eq!(in_atomic_region, expected_atomic);
+                }
+                other => panic!("expected TrapType::Error, got {other:?}"),
+            }
+        }
+    }
+
     // ---- call-owned execution scope ----
 
     #[test]
     fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         let begun = BegunCallExecutionScope {
-            restore_retry_point: idx(3),
             parent_start_index: Some(idx(10)),
             atomic_region: Some(idx(2)),
             persistence_level: PersistenceLevel::PersistNothing,
@@ -2794,7 +3119,6 @@ mod tests {
 
         let scope = begun.finish(idx(11));
 
-        assert_eq!(scope.restore_retry_point, idx(3));
         assert_eq!(scope.retry_from, idx(10));
         assert_eq!(scope.durable_scope, Some(idx(10)));
         assert_eq!(scope.atomic_region, Some(idx(2)));
@@ -2804,7 +3128,6 @@ mod tests {
     #[test]
     fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         let begun = BegunCallExecutionScope {
-            restore_retry_point: idx(4),
             parent_start_index: None,
             atomic_region: None,
             persistence_level: PersistenceLevel::Smart,
@@ -2812,7 +3135,6 @@ mod tests {
 
         let scope = begun.finish(idx(12));
 
-        assert_eq!(scope.restore_retry_point, idx(4));
         assert_eq!(scope.retry_from, idx(12));
         assert_eq!(scope.durable_scope, None);
         assert_eq!(scope.atomic_region, None);
@@ -2820,9 +3142,8 @@ mod tests {
     }
 
     #[test]
-    fn call_execution_scope_owns_ambient_retry_values() {
+    fn call_execution_scope_owns_call_retry_point() {
         let scope = CallExecutionScope {
-            restore_retry_point: idx(3),
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
             atomic_region: None,
@@ -2830,7 +3151,6 @@ mod tests {
         };
 
         assert_eq!(scope.retry_from, idx(42));
-        assert_eq!(scope.restore_retry_point, idx(3));
     }
 
     // ---- function-type re-execution policy ----

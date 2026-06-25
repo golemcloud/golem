@@ -532,8 +532,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                                 Some(serialized_trailers)
                             }
                             Err(err) => {
-                                call.abandon_for_trap();
-                                return Err(err.into());
+                                return Err(wasmtime::Error::from_anyhow(call.trap(err)));
                             }
                         }
                     }

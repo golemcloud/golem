@@ -137,8 +137,10 @@ where
     let response = match live().await {
         Ok(response) => response,
         Err(err) => {
-            handle.abandon_for_trap();
-            return Err(err);
+            // Mark the escaping trap with this call's own scope so post-trap retry grouping is
+            // immune to ambient state a sibling subtask could have clobbered. The context is pure
+            // (call-owned), so no store access is needed here.
+            return Err(wasmtime::Error::from_anyhow(handle.trap(err)));
         }
     };
 

@@ -257,6 +257,18 @@ pub enum TrapType {
     Error {
         error: AgentError,
         retry_from: OplogIndex,
+        /// Whether the trapping call was inside an atomic region (membership). For a durable-call
+        /// trap this is the call's own region membership carried in the
+        /// `DurableCallTrapContext` marker; otherwise it falls back to the ambient
+        /// "any atomic region currently active" state. Drives the live `DeterministicTrap`
+        /// recovery decision (`fixed_decision_for_trap_type`).
+        in_atomic_region: bool,
+        /// Whether the trapping call's atomic region had recorded side effects. Always the ambient
+        /// "outermost active region has side effects" state at trap classification time, even for a
+        /// durable-call (marked) trap: this only modulates `AgentError::DeterministicTrap`
+        /// retriability, and a marked host-call trap is never a deterministic wasm trap, so there is
+        /// no call-owned value to prefer. Becomes the persisted `OplogEntry::Error.inside_atomic_region`.
+        atomic_region_had_side_effects: bool,
         /// Ephemeral semantic-retry override carried from the host call that
         /// produced this trap. Populated when `try_trigger_retry` resolved a
         /// named retry policy with full host-call properties (e.g. HTTP
@@ -271,33 +283,62 @@ pub enum TrapType {
 }
 
 impl TrapType {
+    /// Classifies an escaping error into a [`TrapType`].
+    ///
+    /// `fallback_retry_from`, `fallback_in_atomic_region`, and
+    /// `fallback_atomic_region_had_side_effects` describe the *ambient* worker state at trap time
+    /// and are used only for traps that do **not** carry a call-owned context (guest-originated
+    /// traps, infrastructure errors). When a durable call abandoned for the trap, its own
+    /// `DurableCallTrapContext` marker (and, for a resolved named policy, its
+    /// `SemanticTrapRetryOverride`) overrides these so the failure is grouped and classified
+    /// against the *call's* scope, immune to overlapping siblings.
     pub fn from_error<Ctx: WorkerCtx>(
         error: &anyhow::Error,
-        retry_from: OplogIndex,
+        fallback_retry_from: OplogIndex,
+        fallback_in_atomic_region: bool,
+        fallback_atomic_region_had_side_effects: bool,
         agent_mode: AgentMode,
     ) -> TrapType {
         use crate::durable_host::durability::{
-            ClassifiedHostError, HostFailureKind, find_semantic_trap_retry_override,
+            ClassifiedHostError, HostFailureKind, find_durable_call_trap_context,
+            find_semantic_trap_retry_override,
         };
 
-        // Extract any semantic-trap-retry override carried in the error chain
-        // once and reuse it in every `TrapType::Error` construction below.
+        // Extract any call-owned context carried in the error chain once and reuse it in every
+        // `TrapType::Error` construction below. A semantic override (resolved named policy) wins for
+        // the retry point; the durable-call context supplies the call-owned retry point (when there
+        // is no semantic override) and atomic-region membership.
         let semantic_trap_retry_override = find_semantic_trap_retry_override(error);
+        let durable_call_trap_context = find_durable_call_trap_context(error);
         let retry_from = semantic_trap_retry_override
             .as_ref()
             .map(|override_| override_.retry_from)
-            .unwrap_or(retry_from);
+            .or_else(|| durable_call_trap_context.map(|ctx| ctx.retry_from))
+            .unwrap_or(fallback_retry_from);
+        let in_atomic_region = durable_call_trap_context
+            .map(|ctx| ctx.in_atomic_region)
+            .unwrap_or(fallback_in_atomic_region);
+        // The side-effect bit is always ambient: it only modulates `AgentError::DeterministicTrap`
+        // retriability, and a deterministic wasm trap never carries a durable-call marker, so there
+        // is no call-owned value to prefer here.
+        let atomic_region_had_side_effects = fallback_atomic_region_had_side_effects;
+
+        // Single constructor for every `TrapType::Error` arm below, so the call-owned/fallback
+        // classification is applied uniformly and adding fields stays a one-line change.
+        let make_error = |error: AgentError| TrapType::Error {
+            error,
+            retry_from,
+            in_atomic_region,
+            atomic_region_had_side_effects,
+            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+        };
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => TrapType::Interrupt(*kind),
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
-                    Some(&Trap::StackOverflow) => TrapType::Error {
-                        error: AgentError::StackOverflow,
-                        retry_from,
-                        semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                    },
+                    Some(&Trap::StackOverflow) => make_error(AgentError::StackOverflow),
                     Some(
                         &Trap::UnreachableCodeReached
                         | &Trap::MemoryOutOfBounds
@@ -310,70 +351,41 @@ impl TrapType {
                         | &Trap::HeapMisaligned
                         | &Trap::NullReference
                         | &Trap::AtomicWaitNonSharedMemory,
-                    ) => TrapType::Error {
-                        error: AgentError::DeterministicTrap(format!("{error:#}")),
-                        retry_from,
-                        semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                    },
+                    ) => make_error(AgentError::DeterministicTrap(format!("{error:#}"))),
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
-                        Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => TrapType::Error {
-                            error: AgentError::OutOfMemory,
-                            retry_from,
-                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                        },
-                        Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => TrapType::Error {
-                            error: AgentError::ExceededMemoryLimit,
-                            retry_from,
-                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                        },
-                        Some(GolemSpecificWasmTrap::WorkerExceededTableLimit) => TrapType::Error {
-                            error: AgentError::ExceededTableLimit,
-                            retry_from,
-                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                        },
+                        Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => {
+                            make_error(AgentError::OutOfMemory)
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => {
+                            make_error(AgentError::ExceededMemoryLimit)
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerExceededTableLimit) => {
+                            make_error(AgentError::ExceededTableLimit)
+                        }
                         Some(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit) => {
-                            TrapType::Error {
-                                error: AgentError::ExceededHttpCallLimit,
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            }
+                            make_error(AgentError::ExceededHttpCallLimit)
                         }
                         Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
-                            TrapType::Error {
-                                error: AgentError::ExceededRpcCallLimit,
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            }
+                            make_error(AgentError::ExceededRpcCallLimit)
                         }
                         Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
-                            TrapType::Error {
-                                error: AgentError::NodeOutOfFilesystemStorage,
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            }
+                            make_error(AgentError::NodeOutOfFilesystemStorage)
                         }
                         Some(GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit) => {
-                            TrapType::Error {
-                                error: AgentError::AgentExceededFilesystemStorageLimit,
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            }
+                            make_error(AgentError::AgentExceededFilesystemStorageLimit)
                         }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
                             match agent_mode {
                                 AgentMode::Durable => TrapType::Interrupt(InterruptKind::Suspend(
                                     Timestamp::now_utc(),
                                 )),
-                                AgentMode::Ephemeral => TrapType::Error {
-                                    error: AgentError::EphemeralCannotSuspend(
+                                AgentMode::Ephemeral => {
+                                    make_error(AgentError::EphemeralCannotSuspend(
                                         EphemeralCannotSuspendError {
                                             reason: "monthly HTTP budget exhausted".to_string(),
                                         },
-                                    ),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                },
+                                    ))
+                                }
                             }
                         }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted) => {
@@ -381,58 +393,43 @@ impl TrapType {
                                 AgentMode::Durable => TrapType::Interrupt(InterruptKind::Suspend(
                                     Timestamp::now_utc(),
                                 )),
-                                AgentMode::Ephemeral => TrapType::Error {
-                                    error: AgentError::EphemeralCannotSuspend(
+                                AgentMode::Ephemeral => {
+                                    make_error(AgentError::EphemeralCannotSuspend(
                                         EphemeralCannotSuspendError {
                                             reason: "monthly RPC budget exhausted".to_string(),
                                         },
-                                    ),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                },
+                                    ))
+                                }
                             }
                         }
                         Some(GolemSpecificWasmTrap::AgentTerminatedByQuota {
                             environment_id,
                             resource_name,
-                        }) => TrapType::Error {
-                            error: AgentError::AgentTerminatedByQuota(
-                                AgentTerminatedByQuotaError {
-                                    environment_id: *environment_id,
-                                    resource_name: resource_name.clone(),
-                                },
-                            ),
-                            retry_from,
-                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                        },
+                        }) => make_error(AgentError::AgentTerminatedByQuota(
+                            AgentTerminatedByQuotaError {
+                                environment_id: *environment_id,
+                                resource_name: resource_name.clone(),
+                            },
+                        )),
                         Some(GolemSpecificWasmTrap::AgentThrottledByQuota {
                             timestamp, ..
                         }) => match agent_mode {
                             AgentMode::Durable => {
                                 TrapType::Interrupt(InterruptKind::Suspend(*timestamp))
                             }
-                            AgentMode::Ephemeral => TrapType::Error {
-                                error: AgentError::EphemeralCannotSuspend(
-                                    EphemeralCannotSuspendError {
-                                        reason: "throttled by quota".to_string(),
-                                    },
-                                ),
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            },
+                            AgentMode::Ephemeral => make_error(AgentError::EphemeralCannotSuspend(
+                                EphemeralCannotSuspendError {
+                                    reason: "throttled by quota".to_string(),
+                                },
+                            )),
                         },
                         Some(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
                             method,
                             host_function,
-                        }) => TrapType::Error {
-                            error: AgentError::ReadOnlyViolation(ReadOnlyViolationError {
-                                method: method.clone(),
-                                host_function: host_function.clone(),
-                            }),
-                            retry_from,
-                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                        },
+                        }) => make_error(AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+                            method: method.clone(),
+                            host_function: host_function.clone(),
+                        })),
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             // The generic read-only check inside `begin_durable_function` reports
                             // violations as `WorkerExecutorError::ReadOnlyViolation` so the
@@ -444,45 +441,23 @@ impl TrapType {
                             Some(WorkerExecutorError::ReadOnlyViolation {
                                 method,
                                 host_function,
-                            }) => TrapType::Error {
-                                error: AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+                            }) => {
+                                make_error(AgentError::ReadOnlyViolation(ReadOnlyViolationError {
                                     method: method.clone(),
                                     host_function: host_function.clone(),
-                                }),
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            },
+                                }))
+                            }
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
-                                TrapType::Error {
-                                    error: AgentError::InvalidRequest(details.clone()),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                }
+                                make_error(AgentError::InvalidRequest(details.clone()))
                             }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
-                                TrapType::Error {
-                                    error: AgentError::InvalidRequest(details.clone()),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                }
+                                make_error(AgentError::InvalidRequest(details.clone()))
                             }
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
-                                TrapType::Error {
-                                    error: AgentError::InvalidRequest(details.clone()),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                }
+                                make_error(AgentError::InvalidRequest(details.clone()))
                             }
                             Some(WorkerExecutorError::InvocationFailed { error, .. }) => {
-                                TrapType::Error {
-                                    error: error.clone(),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                }
+                                make_error(error.clone())
                             }
                             // Replay-corruption errors (`UnexpectedOplogEntry`)
                             // must be classified as a hard non-retriable failure
@@ -497,14 +472,9 @@ impl TrapType {
                             // failures) and must remain retriable via the default
                             // policy path (`AgentError::Unknown`).
                             Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
-                                TrapType::Error {
-                                    error: AgentError::InternalError(format!(
-                                        "Unexpected oplog entry during replay: expected {expected}, got {got}"
-                                    )),
-                                    retry_from,
-                                    semantic_trap_retry_override: semantic_trap_retry_override
-                                        .clone(),
-                                }
+                                make_error(AgentError::InternalError(format!(
+                                    "Unexpected oplog entry during replay: expected {expected}, got {got}"
+                                )))
                             }
                             _ => {
                                 // Search the full error chain for ClassifiedHostError
@@ -513,30 +483,15 @@ impl TrapType {
                                     .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
                                 {
                                     match classified.kind {
-                                        HostFailureKind::Transient => TrapType::Error {
-                                            error: AgentError::TransientError(
-                                                classified.message.clone(),
-                                            ),
-                                            retry_from,
-                                            semantic_trap_retry_override:
-                                                semantic_trap_retry_override.clone(),
-                                        },
-                                        HostFailureKind::Permanent => TrapType::Error {
-                                            error: AgentError::PermanentError(
-                                                classified.message.clone(),
-                                            ),
-                                            retry_from,
-                                            semantic_trap_retry_override:
-                                                semantic_trap_retry_override.clone(),
-                                        },
+                                        HostFailureKind::Transient => make_error(
+                                            AgentError::TransientError(classified.message.clone()),
+                                        ),
+                                        HostFailureKind::Permanent => make_error(
+                                            AgentError::PermanentError(classified.message.clone()),
+                                        ),
                                     }
                                 } else {
-                                    TrapType::Error {
-                                        error: AgentError::Unknown(format!("{error:#}")),
-                                        retry_from,
-                                        semantic_trap_retry_override: semantic_trap_retry_override
-                                            .clone(),
-                                    }
+                                    make_error(AgentError::Unknown(format!("{error:#}")))
                                 }
                             }
                         },
@@ -932,6 +887,8 @@ mod tests {
                 golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ),
             OplogIndex::INITIAL,
+            false,
+            false,
             AgentMode::Durable,
         );
 
@@ -967,6 +924,8 @@ mod tests {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &error,
             ambient_fallback_retry_from,
+            false,
+            false,
             AgentMode::Durable,
         );
 
@@ -990,6 +949,8 @@ mod tests {
                 ),
             ),
             OplogIndex::INITIAL,
+            false,
+            false,
             AgentMode::Durable,
         );
 
@@ -1010,7 +971,7 @@ mod tests {
 
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,
-        >::fixed_decision_for_trap_type(&trap, false);
+        >::fixed_decision_for_trap_type(&trap);
         assert_eq!(decision, Some(RetryDecision::None));
     }
 
@@ -1027,6 +988,8 @@ mod tests {
                 ),
             ),
             OplogIndex::INITIAL,
+            false,
+            false,
             AgentMode::Durable,
         );
 
@@ -1041,7 +1004,7 @@ mod tests {
         // `AgentError::Unknown` has no fixed decision; the policy path applies.
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,
-        >::fixed_decision_for_trap_type(&trap, false);
+        >::fixed_decision_for_trap_type(&trap);
         assert_eq!(decision, None);
     }
 
@@ -1073,6 +1036,8 @@ mod tests {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(preserved),
             OplogIndex::INITIAL,
+            false,
+            false,
             AgentMode::Durable,
         );
 
@@ -1086,7 +1051,7 @@ mod tests {
 
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,
-        >::fixed_decision_for_trap_type(&trap, false);
+        >::fixed_decision_for_trap_type(&trap);
         assert_eq!(decision, Some(RetryDecision::None));
     }
 
@@ -1097,6 +1062,8 @@ mod tests {
                 golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ),
             OplogIndex::INITIAL,
+            false,
+            false,
             AgentMode::Ephemeral,
         );
 

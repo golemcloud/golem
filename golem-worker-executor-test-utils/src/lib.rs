@@ -1401,6 +1401,14 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx.get_current_retry_point().await
     }
 
+    fn current_in_atomic_region(&self) -> bool {
+        self.durable_ctx.current_in_atomic_region()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.durable_ctx.current_atomic_region_had_side_effects()
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }

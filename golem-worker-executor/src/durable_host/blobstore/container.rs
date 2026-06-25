@@ -305,6 +305,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                // Softened to a guest-visible error below (never trapped), so the call-owned trap
+                // marker is irrelevant here: keep the inner `WorkerExecutorError`.
+                .map_err(|e| e.source)
         };
 
         match result {

@@ -933,10 +933,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// driven by named retry policies (`Unknown`, `TransientError`, and
     /// `DeterministicTrap` inside an atomic region), this returns `None` and
     /// the caller falls through to policy-based resolution.
-    pub(crate) fn fixed_decision_for_trap_type(
-        trap_type: &TrapType,
-        in_atomic_region: bool,
-    ) -> Option<RetryDecision> {
+    pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
@@ -1004,11 +1001,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => Some(RetryDecision::None),
             // DeterministicTrap *outside* an atomic region is never retried;
             // *inside* an atomic region it is retried via the named-policy
-            // path (handled by the caller).
+            // path (handled by the caller). Membership comes from the trap
+            // itself (the call's own region for a durable-call trap, the
+            // ambient state otherwise), not from "any region currently active".
             TrapType::Error {
                 error: AgentError::DeterministicTrap(_),
+                in_atomic_region: false,
                 ..
-            } if !in_atomic_region => Some(RetryDecision::None),
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error:
                     AgentError::Unknown(_)
@@ -1049,14 +1049,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         retry_state_with_current_attempt: &HashMap<OplogIndex, RetryPolicyState>,
         trap_type: &TrapType,
-        in_atomic_region: bool,
         full_function_name: &str,
     ) -> (RetryDecision, Option<RetryPolicyState>) {
         // Cases whose decision does not depend on retry policy at all
         // (Interrupt, Exit, deterministic AgentError variants like
         // OutOfMemory, InvalidRequest, …). Returns `None` when policy
         // resolution is required.
-        if let Some(decision) = Self::fixed_decision_for_trap_type(trap_type, in_atomic_region) {
+        if let Some(decision) = Self::fixed_decision_for_trap_type(trap_type) {
             return (decision, None);
         }
 
@@ -1066,6 +1065,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             error,
             retry_from,
             semantic_trap_retry_override,
+            ..
         } = trap_type
         else {
             // Should be unreachable: `fixed_decision_for_trap_type` returns
@@ -1312,6 +1312,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         if self.state.opens_durable_scope(function_type) {
+            // During replay, the scope `End` is folded into the resolver (FU4): claiming the scope
+            // `Start` registers an awaiter keyed by its `begin_index`, and `end_function` awaits it
+            // instead of reading the `End` positionally. The handle is carried in the active scope
+            // and only stored when the scope continues replaying (not when recovery switches to live
+            // and re-runs the body, which appends a fresh `End` live).
+            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
             let result = if self.is_live() {
                 // A scope `Start` is top-level with respect to other durable scopes: long-lived
                 // HTTP / RPC scopes overlap as siblings, so there is no meaningful enclosing scope
@@ -1327,8 +1333,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
                 Ok(begin_index)
             } else {
-                let (begin_index, _) =
-                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
+                let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+                let (begin_index, scope_handle) = self
+                    .state
+                    .replay_state
+                    .claim_scope_start(&scope_name, function_type)
+                    .await?;
+                // The begin-side completion / legality probe stays a non-consuming forward scan: it
+                // decides whether the scope is safe to continue replaying or must be retried *before*
+                // the scope body is replayed. Only the `End` *consumption* moves to the resolver.
                 if !self.state.assume_idempotence
                     && !matches!(
                         *function_type,
@@ -1347,6 +1360,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
                     } else {
+                        scope_replay_handle = Some(scope_handle);
                         Ok(begin_index)
                     }
                 } else if matches!(
@@ -1369,6 +1383,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             debug!(
                                 "Remote write operation {begin_index} already completed at {index}, continue replaying"
                             );
+                            scope_replay_handle = Some(scope_handle);
                             Ok(begin_index)
                         }
                         OplogEntryLookupResult::NotFound {
@@ -1401,6 +1416,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             // TODO: this recomputation should not be necessary.
                             self.public_state.worker().reattach_worker_status().await;
+                            // Switched to live and re-running the body: the scope `End` will be
+                            // appended live by `end_function`, so do not store the (now incomplete)
+                            // replay handle.
                             Ok(begin_index)
                         }
                         OplogEntryLookupResult::NotFound { .. } => {
@@ -1413,6 +1431,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                     }
                 } else {
+                    scope_replay_handle = Some(scope_handle);
                     Ok(begin_index)
                 }
             }?;
@@ -1428,7 +1447,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } else {
                 DurableScopeKind::NonIdempotentWrite
             };
-            self.state.push_durable_scope(result, kind);
+            self.state.push_durable_scope(result, kind, scope_replay_handle);
 
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
@@ -1478,24 +1497,76 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     forced_commit: true,
                 };
                 self.state.oplog.add(entry).await;
+                // The durable scope opened in `begin_function` is now closed.
+                self.state.remove_durable_scope(begin_index)?;
             } else {
-                let (_, end_entry) =
-                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
-                if let OplogEntry::End { start_index, .. } = end_entry
-                    && start_index != begin_index
-                {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("End {{ start_index: {begin_index} }}"),
-                        format!("End {{ start_index: {start_index} }}"),
-                    ));
-                }
+                // FU4: the scope `End` was folded into the resolver at scope-open, so consume it
+                // through the resolver (never positionally, which under overlap could steal a
+                // concurrently-replaying sibling call's terminal). This also repairs a
+                // crash-induced half-pair (FU5) and closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index).await?;
             }
-            // The durable scope opened in `begin_function` is now closed.
-            self.state.remove_durable_scope(begin_index)?;
             Ok(())
         } else {
             Ok(())
         }
+    }
+
+    /// Closes a durable scope during replay by awaiting its `End` through the resolver (FU4), then
+    /// removing the in-memory scope. The scope `End` was registered as a resolver awaiter when its
+    /// `Start` was claimed (`claim_scope_start`), so it is delivered here whether it is the entry at
+    /// the cursor head or was already auto-drained to this scope's handle by another cursor driver.
+    ///
+    /// A crash between a scope's terminal marker and its `End` (`add_pair` gives contiguity, not
+    /// crash atomicity — §5.4.4) truncates the oplog at the marker, so the awaited `End` resolves as
+    /// `Incomplete`; rather than hard-failing we append the missing `End` live to repair the pair for
+    /// future replays (FU5). A `None` handle means the scope was opened live (or recovery switched to
+    /// live at scope-open), in which case there is no recorded `End` to await.
+    async fn close_durable_scope_replay(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self.state.take_durable_scope_replay_handle(begin_index) {
+            Some(handle) => {
+                match self
+                    .state
+                    .replay_state
+                    .await_resolution_outcome(handle)
+                    .await?
+                {
+                    concurrent::ResolutionOutcome::Resolved(
+                        concurrent::Resolution::Completed { .. },
+                    ) => {}
+                    concurrent::ResolutionOutcome::Resolved(
+                        concurrent::Resolution::Cancelled { .. },
+                    ) => {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            format!("End {{ start_index: {begin_index} }}"),
+                            format!("Cancelled {{ start_index: {begin_index} }}"),
+                        ));
+                    }
+                    concurrent::ResolutionOutcome::Incomplete => {
+                        // FU5 half-pair recovery: the scope `Start` (and any terminal marker) is
+                        // committed but the scope `End` was lost to a crash. Replay has reached the
+                        // end of the oplog, so append the missing `End` live to complete the pair.
+                        self.state
+                            .oplog
+                            .add(OplogEntry::End {
+                                timestamp: Timestamp::now_utc(),
+                                start_index: begin_index,
+                                response: None,
+                                forced_commit: true,
+                            })
+                            .await;
+                    }
+                }
+            }
+            None => {
+                // Opened live (or recovery switched to live at scope-open): no recorded `End` to
+                // await.
+            }
+        }
+        self.state.remove_durable_scope(begin_index)
     }
 
     /// Appends a completed child host call inside a durable scope, as an eager `Start` immediately
@@ -1597,43 +1668,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
 
-            // The transaction scope is now open until commit/rollback; block checkpoints.
+            // The transaction scope is now open until commit/rollback; block checkpoints. Opened
+            // live, so there is no recorded scope `End` to await on close.
             self.state
-                .push_durable_scope(begin_index, DurableScopeKind::Transaction);
+                .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
             self.state.current_retry_point = begin_index;
 
             Ok((begin_index, tx))
         } else {
             // The transaction scope `Start` is preserved across restarts, so its index is the
-            // stable original begin index that keys every transaction marker.
-            let (scope_start_index, scope_start_entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
-            // Reject anything that is not the exact `Start` shape `begin_transaction_function`
-            // writes, so a corrupt or interleaved oplog fails here instead of silently driving the
-            // recovery logic with the wrong scope.
-            if let OplogEntry::Start {
-                function_name,
-                request,
-                durable_function_type,
-                ..
-            } = &scope_start_entry
-            {
-                let is_transaction_scope = matches!(
-                    function_name,
-                    HostFunctionName::Custom(name) if name == "<scope:transaction>"
-                ) && request.is_none()
-                    && matches!(
-                        durable_function_type,
-                        DurableFunctionType::WriteRemoteTransaction(None)
-                    );
-                if !is_transaction_scope {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "Start { <scope:transaction>, WriteRemoteTransaction(None) }".to_string(),
-                        format!("Start {{ {function_name}, {durable_function_type:?} }}"),
-                    )
-                    .into());
-                }
-            }
+            // stable original begin index that keys every transaction marker. Its `End` is folded
+            // into the resolver (FU4): `claim_scope_start` consumes the `Start`, validates the exact
+            // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
+            // interleaved oplog fails here instead of silently driving the recovery logic with the
+            // wrong scope), and registers an awaiter the transaction terminal awaits instead of
+            // reading the scope `End` positionally. The handle is stored only when the transaction
+            // continues replaying (not when recovery restarts it live).
+            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
+            let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+            let (scope_start_index, scope_handle) = self
+                .state
+                .replay_state
+                .claim_scope_start(
+                    &scope_name,
+                    &DurableFunctionType::WriteRemoteTransaction(None),
+                )
+                .await?;
             let (begin_index, begin_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::BeginRemoteTransaction
@@ -1781,15 +1841,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ))
                         .await;
 
+                    // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
+                    // be appended live by the transaction terminal, so do not store the (now
+                    // incomplete) replay handle.
                     Ok((original_begin_index, tx))
                 }
             } else {
+                scope_replay_handle = Some(scope_handle);
                 Ok((original_begin_index, tx))
             }?;
 
             // The (possibly re-begun) transaction scope is open until commit/rollback.
             self.state
-                .push_durable_scope(result, DurableScopeKind::Transaction);
+                .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
             self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
@@ -1877,25 +1941,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
+            // The transaction scope opened in `begin_transaction_function` is now closed: the
+            // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed,
+            // so the tip is no longer inside a jumpable scope on its account.
+            self.state.remove_durable_scope(begin_index)?;
         } else {
             let (_, _) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::CommittedRemoteTransaction
             )?;
-            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
-            if let OplogEntry::End { start_index, .. } = end_entry
-                && start_index != begin_index
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("End {{ start_index: {begin_index} }}"),
-                    format!("End {{ start_index: {start_index} }}"),
-                ));
-            }
+            // FU4: the scope `End` was folded into the resolver at scope-open, so await it (the
+            // terminal marker stays positional). FU5: if the crash split the marker/`End` pair, the
+            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
+            self.close_durable_scope_replay(begin_index).await?;
         }
-        // The transaction scope opened in `begin_transaction_function` is now closed: the
-        // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed (live)
-        // or replayed, so the tip is no longer inside a jumpable scope on its account.
-        self.state.remove_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -1931,25 +1990,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
+            // The transaction scope opened in `begin_transaction_function` is now closed: the
+            // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed,
+            // so the tip is no longer inside a jumpable scope on its account.
+            self.state.remove_durable_scope(begin_index)?;
         } else {
             let (_, _) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::RolledBackRemoteTransaction
             )?;
-            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
-            if let OplogEntry::End { start_index, .. } = end_entry
-                && start_index != begin_index
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("End {{ start_index: {begin_index} }}"),
-                    format!("End {{ start_index: {start_index} }}"),
-                ));
-            }
+            // FU4: the scope `End` was folded into the resolver at scope-open, so await it (the
+            // terminal marker stays positional). FU5: if the crash split the marker/`End` pair, the
+            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
+            self.close_durable_scope_replay(begin_index).await?;
         }
-        // The transaction scope opened in `begin_transaction_function` is now closed: the
-        // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed (live)
-        // or replayed, so the tip is no longer inside a jumpable scope on its account.
-        self.state.remove_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -2813,8 +2867,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::Immediate;
         }
 
-        let in_atomic_region = !self.state.active_atomic_regions.is_empty();
-
         let latest_status_before = self
             .public_state
             .worker()
@@ -2824,7 +2876,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .get_recovery_decision_on_trap_with_semantic(
                 &latest_status_before.current_retry_state,
                 trap_type,
-                in_atomic_region,
                 full_function_name,
             )
             .await;
@@ -2840,16 +2891,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
             TrapType::Error {
-                error, retry_from, ..
-            } => {
-                let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
-                Some(OplogEntry::error(
-                    error.clone(),
-                    *retry_from,
-                    inside_atomic_region,
-                    retry_policy_state,
-                ))
-            }
+                error,
+                retry_from,
+                atomic_region_had_side_effects,
+                ..
+            } => Some(OplogEntry::error(
+                error.clone(),
+                *retry_from,
+                *atomic_region_had_side_effects,
+                retry_policy_state,
+            )),
         };
 
         if let Some(entry) = oplog_entry {
@@ -2890,7 +2941,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         debug!(
-            "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
+            "Recovery decision for {trap_type:?} with {:?} retries: {:?}",
             latest_status_before.current_retry_state, decision
         );
 
@@ -3051,6 +3102,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.state.effective_retry_point()
+    }
+
+    fn current_in_atomic_region(&self) -> bool {
+        !self.state.active_atomic_regions.is_empty()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.state.outermost_atomic_region_has_side_effects()
     }
 }
 
@@ -3517,6 +3576,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     Err(error) => Some(TrapType::from_error::<Ctx>(
                                         &anyhow!(error),
                                         OplogIndex::INITIAL,
+                                        false,
+                                        false,
                                         store.as_context().data().agent_mode(),
                                     )),
                                 };
@@ -4488,11 +4549,16 @@ enum DurableScopeKind {
 /// (batched writes, non-idempotent writes, transactions) identified by their `Start` index.
 /// The innermost open scope provides the `parent_start_index` for any `Start` written while
 /// it is open, and contributes to the effective retry point (see `effective_retry_point`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct ActiveDurableScope {
     start_index: OplogIndex,
     #[allow(dead_code)]
     kind: DurableScopeKind,
+    /// During replay, the resolver handle for this scope's `End` (FU4): registered when the scope
+    /// `Start` is claimed, awaited (and taken) when the scope closes. `None` on the live path (the
+    /// scope `End` is written, not replayed) and once the handle has been taken by the closing
+    /// `end_function` / transaction terminal.
+    replay_end: Option<concurrent::ReplayCallHandle>,
 }
 
 #[derive(Debug, Clone)]
@@ -4630,17 +4696,21 @@ struct PrivateDurableWorkerState {
     // Map from resource_id to the dyn_pollables that wrap it
     promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
 
-    /// The **global fallback** retry point: the index attached to an `Error` entry when no atomic
-    /// region and no durable scope is active. It is overwritten every time a side effect is
-    /// persisted (and pointed at a call's `Start` while that call is in flight), so it normally
-    /// tracks the last persisted side effect.
+    /// The **global fallback** retry point: the index attached to an `Error` entry for a trap that
+    /// happens outside any in-flight durable call. It is maintained by `begin_function` /
+    /// transaction begin and the explicit HTTP/RPC retry-point writes, so it normally tracks the
+    /// last persisted side effect / open scope `Start`.
+    ///
+    /// An in-flight durable call no longer mirrors its own retry point into this field: a concurrent
+    /// durable call carries its retry grouping in its call-owned `execution_scope`
+    /// (`durable_host::concurrent`, read by `ScopedRetryHost`) and in the semantic-trap error
+    /// marker, so an overlapping call completing cannot clobber a sibling's grouping.
     ///
     /// This is *not* what is read directly at error time. Errors use
     /// [`PrivateDurableWorkerState::effective_retry_point`], which layers priority on top of this
-    /// field: an active atomic region (whole region retried from its begin index) wins, then an open
-    /// durable scope (error grouped at the scope `Start`), and only otherwise does it fall back to
-    /// `current_retry_point`. Keep them distinct: write `current_retry_point`, read
-    /// `effective_retry_point()`.
+    /// field: an active atomic region (whole region retried from its begin index) wins, and only
+    /// otherwise does it fall back to `current_retry_point`. Keep them distinct: write
+    /// `current_retry_point`, read `effective_retry_point()`.
     current_retry_point: OplogIndex,
 
     /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
@@ -4972,10 +5042,34 @@ impl PrivateDurableWorkerState {
     }
 
     /// Opens a durable scope identified by its `Start` index. Must be balanced by
-    /// `remove_durable_scope` on the matching `End`/`Cancelled`.
-    fn push_durable_scope(&mut self, start_index: OplogIndex, kind: DurableScopeKind) {
+    /// `remove_durable_scope` on the matching `End`/`Cancelled`. `replay_end` is the resolver handle
+    /// for the scope `End` when the scope was claimed during replay (FU4), or `None` on the live
+    /// path.
+    fn push_durable_scope(
+        &mut self,
+        start_index: OplogIndex,
+        kind: DurableScopeKind,
+        replay_end: Option<concurrent::ReplayCallHandle>,
+    ) {
+        self.active_durable_scopes.push(ActiveDurableScope {
+            start_index,
+            kind,
+            replay_end,
+        });
+    }
+
+    /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
+    /// registered during replay (FU4). Leaves the scope open (it is closed by `remove_durable_scope`
+    /// after the `End` has been awaited). Returns `None` if the scope was opened live or the handle
+    /// was already taken.
+    fn take_durable_scope_replay_handle(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Option<concurrent::ReplayCallHandle> {
         self.active_durable_scopes
-            .push(ActiveDurableScope { start_index, kind });
+            .iter_mut()
+            .find(|scope| scope.start_index == start_index)
+            .and_then(|scope| scope.replay_end.take())
     }
 
     /// Closes the durable scope opened at `start_index`. Durable scopes are not strictly nested
@@ -5016,20 +5110,8 @@ impl PrivateDurableWorkerState {
         events
     }
 
-    fn ambient_retry_point(&self) -> OplogIndex {
-        self.current_retry_point
-    }
-
     fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
         self.current_retry_point = retry_point;
-    }
-
-    fn mirror_call_retry_point(&mut self, retry_from: OplogIndex) {
-        self.set_ambient_retry_point(retry_from);
-    }
-
-    fn restore_call_retry_point(&mut self, restore_retry_point: OplogIndex) {
-        self.set_ambient_retry_point(restore_retry_point);
     }
 
     /// The retry point to associate with an error, with priority `atomic region > global`. While an
@@ -5101,6 +5183,17 @@ impl PrivateDurableWorkerState {
             .iter()
             .find(|region| region.begin_index == begin_index)
             .is_some_and(|region| region.in_flight_call_count > 0)
+    }
+
+    /// Whether the atomic region identified by `begin_index` has recorded side effects. Used for
+    /// membership-precise trap classification: a durable call carries its own region's begin index
+    /// in its execution scope, so the persisted `inside_atomic_region` flag reflects the *call's*
+    /// region rather than whatever region happens to be outermost at trap time.
+    pub fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
+        self.active_atomic_regions
+            .iter()
+            .find(|region| region.begin_index == begin_index)
+            .is_some_and(|region| region.has_side_effects)
     }
 
     /// Find the open_http_requests entry key for a given outgoing body rep.

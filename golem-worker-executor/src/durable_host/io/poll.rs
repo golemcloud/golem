@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
-use crate::durable_host::durability::InFunctionRetryHost;
+use crate::durable_host::durability::{InFunctionRetryHost, mark_durable_call_trap_context};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::metrics::ephemeral::{dec_promise_waiting, inc_promise_waiting};
 use crate::workerctx::WorkerCtx;
@@ -145,6 +145,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadLocal,
         )
         .await?;
+        // Snapshot the call-owned trap context up front: the suspend-for-sleep path below abandons
+        // the handle and the ephemeral sleep-too-long error is then raised at a point where the
+        // handle is no longer usable, so we keep this call's own (pure, call-owned) retry/membership
+        // classification rather than falling back to ambient worker state a sibling could clobber.
+        let trap_context = handle.trap_context();
 
         let result: Result<HostResponsePollResult, Duration> = 'poll: {
             if !handle.is_live() {
@@ -210,9 +215,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
                         }
                         _ = &mut timeout => {
-                            handle.abandon_for_trap();
                             let max_nanos = std_duration_to_nanos(timeout_duration);
-                            return Err(ephemeral_sleep_too_long_error(max_nanos, max_nanos));
+                            return Err(wasmtime::Error::from_anyhow(
+                                handle.trap(ephemeral_sleep_too_long_error(max_nanos, max_nanos)),
+                            ));
                         }
                     }
                 } else {
@@ -251,9 +257,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(duration) => {
                 if self.agent_mode() == AgentMode::Ephemeral {
                     let max = self.state.config.suspend.ephemeral_max_sleep;
-                    Err(ephemeral_sleep_too_long_error(
+                    // The call was already abandoned on the suspend-for-sleep path above; the handle
+                    // is consumed, so attach this call's own trap classification directly rather than
+                    // falling back to ambient worker state a sibling could clobber under overlap.
+                    let err = ephemeral_sleep_too_long_error(
                         duration_to_nanos(duration),
                         std_duration_to_nanos(max),
+                    );
+                    Err(wasmtime::Error::from_anyhow(
+                        mark_durable_call_trap_context(err.into(), trap_context),
                     ))
                 } else {
                     self.state.sleep_until(Utc::now() + duration).await?;

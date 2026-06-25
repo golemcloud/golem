@@ -146,8 +146,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let permit = match self.websocket_connection_pool.acquire().await {
             Ok(permit) => permit,
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err);
+                return Err(call.trap(err));
             }
         };
 
@@ -179,11 +178,11 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }),
                     _permit: permit,
                 }));
-                let resource = match self.as_wasi_view().table().push(entry) {
+                let pushed = self.as_wasi_view().table().push(entry);
+                let resource = match pushed {
                     Ok(resource) => resource,
                     Err(err) => {
-                        call.abandon_for_trap();
-                        return Err(err.into());
+                        return Err(call.trap(err));
                     }
                 };
                 self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
@@ -247,8 +246,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 return Ok(Err(error));
             }
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err);
+                return Err(call.trap(err));
             }
         }
 
@@ -262,8 +260,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let entry = match view.table().get(&self_) {
             Ok(entry) => entry,
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err.into());
+                return Err(call.trap(err));
             }
         };
         let tungstenite_msg = to_tungstenite_message(message);
@@ -283,11 +280,11 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 }
             }
             WebSocketConnectionEntry::Replay => {
-                call.abandon_for_trap();
-                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                    "websocket connection entry kind mismatch during replay (live send path saw Replay entry)",
-                )
-                .into());
+                return Err(call.trap(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live send path saw Replay entry)",
+                    ),
+                ));
             }
             WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
         };
@@ -350,8 +347,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 return Ok(Err(error));
             }
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err);
+                return Err(call.trap(err));
             }
         }
 
@@ -365,8 +361,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let entry = match view.table().get(&self_) {
             Ok(entry) => entry,
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err.into());
+                return Err(call.trap(err));
             }
         };
         let live_result = match entry {
@@ -388,11 +383,11 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 }
             }
             WebSocketConnectionEntry::Replay => {
-                call.abandon_for_trap();
-                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                    "websocket connection entry kind mismatch during replay (live receive path saw Replay entry)",
-                )
-                .into());
+                return Err(call.trap(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live receive path saw Replay entry)",
+                    ),
+                ));
             }
             WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
         };
@@ -458,8 +453,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 return Ok(Err(error));
             }
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err);
+                return Err(call.trap(err));
             }
         }
 
@@ -473,8 +467,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let entry = match view.table().get(&self_) {
             Ok(entry) => entry,
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err.into());
+                return Err(call.trap(err));
             }
         };
         let live_result: Result<Option<Message>, Error> = match entry {
@@ -521,11 +514,11 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 }
             }
             WebSocketConnectionEntry::Replay => {
-                call.abandon_for_trap();
-                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                    "websocket connection entry kind mismatch during replay (live receive_with_timeout path saw Replay entry)",
-                )
-                .into());
+                return Err(call.trap(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live receive_with_timeout path saw Replay entry)",
+                    ),
+                ));
             }
             WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
         };
@@ -605,8 +598,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 return Ok(Err(error));
             }
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err);
+                return Err(call.trap(err));
             }
         }
 
@@ -620,8 +612,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let entry = match view.table().get(&self_) {
             Ok(entry) => entry,
             Err(err) => {
-                call.abandon_for_trap();
-                return Err(err.into());
+                return Err(call.trap(err));
             }
         };
         let live_result = match entry {
@@ -646,11 +637,11 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 }
             }
             WebSocketConnectionEntry::Replay => {
-                call.abandon_for_trap();
-                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                    "websocket connection entry kind mismatch during replay (live close path saw Replay entry)",
-                )
-                .into());
+                return Err(call.trap(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live close path saw Replay entry)",
+                    ),
+                ));
             }
             WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
         };

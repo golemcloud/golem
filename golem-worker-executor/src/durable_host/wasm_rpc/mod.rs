@@ -16,7 +16,8 @@ use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancella
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, HostFutureInvokeResultWithStore, HostWasmRpc, RpcError,
+    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
+    HostFutureInvokeResultWithStore, HostWasmRpc, RpcError,
 };
 use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
@@ -469,7 +470,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 match handle.replay(self).await {
                     Ok(CallReplayOutcome::Replayed(replayed)) => break 'result Ok(replayed),
                     Ok(CallReplayOutcome::Incomplete(live)) => handle = live,
-                    Err(err) => break 'result Err(err),
+                    Err(err) => break 'result Err(err.into()),
                 }
             }
 
@@ -508,6 +509,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             handle
                 .complete(self, HostResponseGolemRpcUnitOrFailure { result })
                 .await
+                .map_err(anyhow::Error::from)
         };
 
         self.finish_span(span.span_id()).await?;
@@ -1130,8 +1132,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     {
         Ok(target_component) => target_component,
         Err(err) => {
-            handle.abandon_for_trap();
-            return Err(err.into());
+            return Err(handle.trap(err));
         }
     };
     let target_environment_id = target_component.environment_id;
@@ -1151,8 +1152,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     {
         Ok(demand) => demand,
         Err(err) => {
-            handle.abandon_for_trap();
-            return Err(err.into());
+            return Err(handle.trap(err));
         }
     };
     let target_fingerprint = demand.fingerprint();

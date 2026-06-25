@@ -706,7 +706,8 @@ mod tests {
 
         // make_oplog uses max_payload_size = 4096, so this is stored externally (deferred upload).
         let large_payload = vec![7u8; 64 * 1024];
-        let large_request = HostRequest::Custom(large_payload.clone().into_typed_schema_value().unwrap());
+        let large_request =
+            HostRequest::Custom(large_payload.clone().into_typed_schema_value().unwrap());
         let small_request = HostRequest::Custom("small".into_typed_schema_value().unwrap());
 
         let base = oplog.current_oplog_index().await;

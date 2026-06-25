@@ -1028,6 +1028,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         &TrapType::Error {
                             error: AgentError::InternalError(error.to_string()),
                             retry_from: OplogIndex::INITIAL,
+                            in_atomic_region: false,
+                            atomic_region_had_side_effects: false,
                             semantic_trap_retry_override: None,
                         },
                     )
@@ -1048,6 +1050,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(error) => Some(TrapType::from_error::<Ctx>(
                 &anyhow!(error),
                 OplogIndex::INITIAL,
+                false,
+                false,
                 self.parent.agent_mode(),
             )),
         };
@@ -1555,6 +1559,8 @@ mod tests {
             consumed_fuel: 0,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
             semantic_trap_retry_override: None,
         });
 

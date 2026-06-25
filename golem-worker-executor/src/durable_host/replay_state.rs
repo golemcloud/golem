@@ -700,18 +700,19 @@ impl CursorTx<'_> {
         self.st.pending_replay_events.push(event);
     }
 
-    /// Positionally claims the next `Start` entry for a durable call **without** validating its
-    /// function name or durable function type, registering a resolver receiver keyed by the
-    /// `Start`'s index and returning the claimed entry's identity.
+    /// Positionally consumes the next `Start` entry and registers a resolver receiver keyed by its
+    /// index, returning the registered handle together with the raw `Start` entry for the caller to
+    /// validate. Shared core of [`Self::claim_any_concurrent_start`] (durable host calls, request
+    /// required) and [`Self::claim_scope_start`] (durable scopes, request absent).
     ///
     /// The `Start` consume and the resolver registration happen **atomically** within this
     /// transaction (under the cursor lock). This is required for concurrent replay: if the cursor
     /// advanced past the `Start` before the awaiter was registered, this call's `End` arriving at
     /// the head in that window would not be recognised as an awaited terminal and could be wrongly
     /// consumed by a positional reader.
-    async fn claim_any_concurrent_start(
+    async fn claim_next_start(
         &mut self,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
+    ) -> Result<(ReplayCallHandle, OplogEntry), WorkerExecutorError> {
         let read = self
             .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::Start { .. }))
             .await?;
@@ -721,6 +722,23 @@ impl CursorTx<'_> {
                 "a non-Start entry (end of replay, or concurrent interleaving)".to_string(),
             )
         })?;
+        let receiver = self.st.concurrent_resolver.register(start_idx);
+        // A newly-registered awaiter means an `End`/`Cancelled` already sitting at (or arriving at)
+        // the cursor head may now be a drainable awaited terminal: have `finish_tx` wake suspended
+        // awaiters so they re-drive the cursor.
+        self.notify_progress = true;
+        Ok((ReplayCallHandle::new(start_idx, receiver), entry))
+    }
+
+    /// Positionally claims the next `Start` entry for a durable call **without** validating its
+    /// function name or durable function type, registering a resolver receiver keyed by the
+    /// `Start`'s index and returning the claimed entry's identity. The `Start` must carry a request
+    /// (durable host calls always do); a request-less `Start` is a scope `Start` and is rejected
+    /// here.
+    async fn claim_any_concurrent_start(
+        &mut self,
+    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
+        let (handle, entry) = self.claim_next_start().await?;
         let OplogEntry::Start {
             timestamp,
             function_name,
@@ -729,25 +747,73 @@ impl CursorTx<'_> {
             ..
         } = entry
         else {
-            unreachable!("try_get_oplog_entry condition guarantees a Start entry");
+            unreachable!("claim_next_start guarantees a Start entry");
         };
         if request.is_none() {
+            self.st.concurrent_resolver.unregister(handle.start_idx());
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "Start { request: Some(..) }",
                 "Start { request: None }".to_string(),
             ));
         }
-        let receiver = self.st.concurrent_resolver.register(start_idx);
-        // A newly-registered awaiter means an `End`/`Cancelled` already sitting at (or arriving at)
-        // the cursor head may now be a drainable awaited terminal: have `finish_tx` wake suspended
-        // awaiters so they re-drive the cursor.
-        self.notify_progress = true;
         Ok(ClaimedConcurrentStart {
-            handle: ReplayCallHandle::new(start_idx, receiver),
+            handle,
             function_name,
             durable_function_type,
             timestamp,
         })
+    }
+
+    /// Positionally claims the next durable-*scope* `Start` (a request-less scope `Start` such as
+    /// `<scope:batched-write>` / `<scope:transaction>`), validating its function name and durable
+    /// function type, and registers a resolver awaiter keyed by its index so the matching scope
+    /// `End` is routed through the resolver (FU4) instead of being read positionally. Returns the
+    /// scope's begin index and the handle its `end_function` / transaction-terminal awaits.
+    ///
+    /// Folding scope `End`s into the resolver is what lets a scope `End` be auto-drained by any
+    /// cursor driver (so a positional reader never steals a concurrently-replaying sibling call's
+    /// terminal, and the scope close never steals a sibling's), at the cost of nothing on the serial
+    /// path: when the scope `End` is the entry at the cursor head, awaiting it resolves immediately.
+    async fn claim_scope_start(
+        &mut self,
+        expected_function_name: &HostFunctionName,
+        expected_function_type: &DurableFunctionType,
+    ) -> Result<(OplogIndex, ReplayCallHandle), WorkerExecutorError> {
+        let (handle, entry) = self.claim_next_start().await?;
+        let OplogEntry::Start {
+            function_name,
+            request,
+            durable_function_type,
+            parent_start_index,
+            ..
+        } = &entry
+        else {
+            unreachable!("claim_next_start guarantees a Start entry");
+        };
+        let is_scope_start = request.is_none()
+            && function_name == expected_function_name
+            && durable_function_type == expected_function_type
+            && parent_start_index.is_none();
+        if !is_scope_start {
+            self.st.concurrent_resolver.unregister(handle.start_idx());
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!(
+                    "Start {{ {expected_function_name}, {expected_function_type:?}, request: None, parent_start_index: None }}"
+                ),
+                format!("{entry:?}"),
+            ));
+        }
+        let start_idx = handle.start_idx();
+        // FU7 (cursor liveness invariant, wiring side): every durable scope `Start` consumed during
+        // replay leaves a registered awaiter, so its `End` is always a resolver-routed *awaited
+        // terminal* and never an orphan that a parked awaiter behind it could sleep on until
+        // `switch_to_live`. The only un-drained terminals the cursor may leave at its head are then
+        // the dedicated-positional-consumer pairs (manual durability, `GolemApiFork`).
+        debug_assert!(
+            self.st.concurrent_resolver.is_pending(start_idx),
+            "scope Start claim at {start_idx} must leave a registered awaiter"
+        );
+        Ok((start_idx, handle))
     }
 
     /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,
@@ -1176,6 +1242,23 @@ impl ReplayState {
         let cursor = &*self.cursor;
         let mut tx = cursor.tx().await;
         let result = tx.claim_any_concurrent_start().await;
+        cursor.finish_tx(tx);
+        result
+    }
+
+    /// Claims the next durable-scope `Start` and registers a resolver awaiter for it (FU4), so its
+    /// matching scope `End` is consumed through [`Self::await_resolution_outcome`] rather than a
+    /// positional read. See [`CursorTx::claim_scope_start`].
+    pub async fn claim_scope_start(
+        &self,
+        expected_function_name: &HostFunctionName,
+        expected_function_type: &DurableFunctionType,
+    ) -> Result<(OplogIndex, ReplayCallHandle), WorkerExecutorError> {
+        let cursor = &*self.cursor;
+        let mut tx = cursor.tx().await;
+        let result = tx
+            .claim_scope_start(expected_function_name, expected_function_type)
+            .await;
         cursor.finish_tx(tx);
         result
     }

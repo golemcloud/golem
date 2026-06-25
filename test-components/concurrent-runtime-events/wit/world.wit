@@ -1,0 +1,35 @@
+package golem:cmtest;
+
+/// Bespoke host interface for the Seam 3 runtime cancellation / delivery-ordering
+/// fixtures. It is intentionally minimal and unrelated to the Golem agent guest
+/// interface.
+interface host {
+    /// An async host call identified by `id`, returning a host-chosen `u32`. The
+    /// host test controls when (and whether) each call completes, so the
+    /// component-model runtime's cancellation and event-delivery behaviour can be
+    /// observed from the host side.
+    call: async func(id: u32) -> u32;
+
+    /// Synchronous notification the guest issues right after it observes a
+    /// completion of `call`. Lets the host assert that the completing `call`'s
+    /// body fully ran (where a durable recorder would append `End`) before the
+    /// guest was made ready to act on the completion event (`set_event`).
+    observed: func(id: u32, value: u32);
+}
+
+world runtime-events {
+    import host;
+
+    /// Starts two concurrent `host.call` invocations, awaits the first to
+    /// complete, then drops the other while it is still in flight. Dropping an
+    /// in-flight import future makes `wit-bindgen` issue `subtask.cancel`, which
+    /// the runtime turns into aborting/dropping the host future. Returns the id
+    /// of the call that completed.
+    export cancel-one: async func() -> list<u32>;
+
+    /// Starts `count` concurrent `host.call` invocations (ids `0..count`), and
+    /// for each completion (in the order the host releases them) calls
+    /// `host.observed` before recording the id. Returns the observed delivery
+    /// order.
+    export observe-completions: async func(count: u32) -> list<u32>;
+}

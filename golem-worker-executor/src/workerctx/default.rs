@@ -286,7 +286,6 @@ impl wasmtime_wasi_http::p3::WasiHttpView for Context {
     }
 }
 
-
 #[async_trait]
 impl FuelManagement for Context {
     fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
@@ -439,6 +438,14 @@ impl InvocationHooks for Context {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
+    }
+
+    fn current_in_atomic_region(&self) -> bool {
+        self.durable_ctx.current_in_atomic_region()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.durable_ctx.current_atomic_region_had_side_effects()
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -688,8 +695,6 @@ impl HostWasmRpc for Context {
 }
 
 impl HostFutureInvokeResult for Context {
-
-
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
     }

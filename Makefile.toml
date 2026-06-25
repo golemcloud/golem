@@ -1375,6 +1375,28 @@ cd test-components
 ./build-components.sh rebuild
 '''
 
+[tasks.build-concurrent-delivery-order-component]
+description = "Builds the minimal component-model-async fixture used by the Seam 3 runtime delivery-order test and commits the resulting component WASM"
+script = '''
+cd test-components/concurrent-delivery-order
+rm -rf build-out
+cargo build --release --target wasm32-unknown-unknown --target-dir build-out
+wasm-tools component new build-out/wasm32-unknown-unknown/release/concurrent_delivery_order.wasm -o concurrent_delivery_order.wasm
+wasm-tools validate --features all concurrent_delivery_order.wasm
+rm -rf build-out
+'''
+
+[tasks.build-concurrent-runtime-events-component]
+description = "Builds the minimal component-model-async fixture used by the Seam 3 runtime cancellation / End-before-set_event tests and commits the resulting component WASM"
+script = '''
+cd test-components/concurrent-runtime-events
+rm -rf build-out
+cargo build --release --target wasm32-unknown-unknown --target-dir build-out
+wasm-tools component new build-out/wasm32-unknown-unknown/release/concurrent_runtime_events.wasm -o concurrent_runtime_events.wasm
+wasm-tools validate --features all concurrent_runtime_events.wasm
+rm -rf build-out
+'''
+
 [tasks.build-benchmark-components]
 description = "Builds only the benchmark test WASM components"
 dependencies = ["build", "build-sdk-ts"]

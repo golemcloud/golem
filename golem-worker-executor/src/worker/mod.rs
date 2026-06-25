@@ -2595,6 +2595,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 error.to_string(),
                             ),
                             retry_from: OplogIndex::INITIAL,
+                            in_atomic_region: false,
+                            atomic_region_had_side_effects: false,
                             semantic_trap_retry_override: None,
                         },
                         stderr: String::new(),
@@ -3983,7 +3985,10 @@ impl InvocationResult {
                     })
                 }
                 OplogEntry::Error {
-                    error, retry_from, ..
+                    error,
+                    retry_from,
+                    inside_atomic_region,
+                    ..
                 } => {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
@@ -3991,6 +3996,11 @@ impl InvocationResult {
                         trap_type: TrapType::Error {
                             error,
                             retry_from,
+                            // Membership is not persisted; only the side-effect flag is. This
+                            // reconstructed trap is used for error reporting, not for re-deciding
+                            // recovery, so the membership bit is irrelevant here.
+                            in_atomic_region: inside_atomic_region,
+                            atomic_region_had_side_effects: inside_atomic_region,
                             semantic_trap_retry_override: None,
                         },
                         stderr,
@@ -4101,6 +4111,8 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -4122,6 +4134,8 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),

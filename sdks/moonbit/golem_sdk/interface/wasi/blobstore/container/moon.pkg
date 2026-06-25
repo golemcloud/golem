@@ -1,4 +1,5 @@
 import {
+  "golemcloud/golem_sdk/ffi" @ffi,
   "golemcloud/golem_sdk/interface/wasi/blobstore/types" @types,
 }
 

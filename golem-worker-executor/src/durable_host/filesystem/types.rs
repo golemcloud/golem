@@ -42,7 +42,6 @@ use golem_common::model::oplog::types::{
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
 };
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
@@ -330,7 +329,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         let result = handle
-            .run(self, async |_ctx| -> Result<_, WorkerExecutorError> {
+            .run(self, async |_ctx| -> wasmtime::Result<_> {
                 let result = stat
                     .clone()
                     .map(|stat| SerializableFileTimes {
@@ -411,7 +410,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         let result = handle
-            .run(self, async |_ctx| -> Result<_, WorkerExecutorError> {
+            .run(self, async |_ctx| -> wasmtime::Result<_> {
                 let result = stat
                     .clone()
                     .map(|stat| SerializableFileTimes {

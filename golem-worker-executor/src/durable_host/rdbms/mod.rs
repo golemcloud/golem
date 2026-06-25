@@ -1069,22 +1069,12 @@ where
                 .await?;
 
             if rolled_back.is_some() {
-                // The rollback was recorded in a previous incarnation. The marker and its scope
-                // `End` are written atomically, so consume the matching `End` and close the durable
-                // scope opened in `begin_transaction_function`. Otherwise the begin index would
-                // dangle in `active_durable_scopes` and mis-parent later `Start` entries.
-                let end = ctx
-                    .state
-                    .replay_state
-                    .try_get_oplog_entry(|e| e.is_end_remote_write(entry.begin_index))
-                    .await?;
-                if end.is_none() {
-                    return Err(anyhow!(
-                        "Missing transaction scope End for begin index {} during rollback replay",
-                        entry.begin_index
-                    ));
-                }
-                ctx.state.remove_durable_scope(entry.begin_index)?;
+                // The rollback was recorded in a previous incarnation. FU4: the scope `End` was
+                // folded into the resolver in `begin_transaction_function`, so close the durable
+                // scope by awaiting it (FU5 repairs a crash-split half-pair by appending the missing
+                // `End` live) instead of a positional read. Otherwise the begin index would dangle in
+                // `active_durable_scopes` and mis-parent later `Start` entries.
+                ctx.close_durable_scope_replay(entry.begin_index).await?;
             } else {
                 // Crashed after `PreRollbackRemoteTransaction` but before the rollback was recorded.
                 // `begin_transaction_function` already confirmed the external rollback (otherwise it

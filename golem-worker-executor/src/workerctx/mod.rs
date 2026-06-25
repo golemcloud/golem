@@ -345,6 +345,15 @@ pub trait InvocationHooks {
     /// by this information. The current oplog index is a good default.
     async fn get_current_retry_point(&self) -> OplogIndex;
 
+    /// Ambient fallback for trap classification: whether any atomic region is currently active.
+    /// Used only for traps that do not carry a call-owned `DurableCallTrapContext` (guest-originated
+    /// traps); durable-call traps carry their own membership.
+    fn current_in_atomic_region(&self) -> bool;
+
+    /// Ambient fallback for trap classification: whether the outermost active atomic region has
+    /// recorded side effects. Used only for traps that do not carry a call-owned context.
+    fn current_atomic_region_had_side_effects(&self) -> bool;
+
     /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
     /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
     /// with `AgentError::ReadOnlyViolation` before any oplog entry is written.
