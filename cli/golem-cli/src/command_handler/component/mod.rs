@@ -1071,7 +1071,7 @@ impl ComponentCommandHandler {
                 config,
                 files_by_path,
                 plugins_by_grant_id,
-                initial_permission: {
+                initial_permissions: {
                     let context = initial_permission_recipient_context(
                         environment,
                         component_name,
@@ -1079,10 +1079,10 @@ impl ComponentCommandHandler {
                     );
                     let initial_permission = manifest_config.to_initial_permission(&context);
                     diff::AgentTypeInitialPermission {
-                        lower_positive: initial_permission.lower_bound.positive.0,
-                        lower_negative: initial_permission.lower_bound.negative.0,
-                        upper_positive: initial_permission.upper_bound.positive.0,
-                        upper_negative: initial_permission.upper_bound.negative.0,
+                        lower_positive: initial_permission.lower_bound.positive,
+                        lower_negative: initial_permission.lower_bound.negative,
+                        upper_positive: initial_permission.upper_bound.positive,
+                        upper_negative: initial_permission.upper_bound.negative,
                     }
                 },
             };

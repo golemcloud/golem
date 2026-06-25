@@ -2748,7 +2748,8 @@
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "config": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
         "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
-        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } },
+        "initialPermissions": { "$ref": "#/definitions/PolymorphicCard" }
       },
       "additionalProperties": false
     },
@@ -2797,6 +2798,32 @@
     "AgentFilePermissions": {
       "type": "string",
       "enum": ["read-only", "read-write"]
+    },
+    "CardId": {
+      "type": "object",
+      "required": ["uuid"],
+      "properties": { "uuid": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PolymorphicCardPermissionPattern": {
+      "type": "string",
+      "description": "Rendered form of a card permission entry"
+    },
+    "PolymorphicCard": {
+      "type": "object",
+      "required": [ "cardId", "parenIds", "lowerPositive", "lowerNegative", "upperPositive", "upperNegative", "createdAt", "systemCard" ],
+      "properties": {
+        "cardId": { "$ref": "#/definitions/CardId" },
+        "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } },
+        "lowerPositive": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "lowerNegative": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "upperPositive": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "upperNegative": { "type": "array", "items": { "$ref": "#/definitions/PolymorphicCardPermissionPattern" } },
+        "createdAt": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "systemCard": { "type": "boolean" }
+      },
+      "additionalProperties": false
     },
     "EnvironmentWithDetails": {
       "type": "object",

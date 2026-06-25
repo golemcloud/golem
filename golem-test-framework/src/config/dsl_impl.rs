@@ -41,7 +41,7 @@ use golem_common::model::application::{
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentTypeInitialPermission, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
     ComponentUpdate,
 };
@@ -326,9 +326,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     .contains_key(&agent_type.type_name)
                 {
                     let update = updates.entry(agent_type.type_name.clone()).or_default();
-                    if update.initial_permission.is_none() {
-                        update.initial_permission =
-                            Some(AgentTypeInitialPermission::default_for_recipient(
+                    if update.initial_permissions.is_none() {
+                        update.initial_permissions =
+                            Some(AgentTypeInitialPermissions::default_for_recipient(
                                 RecipientPattern::Account {
                                     account: self.account_email.clone(),
                                 },

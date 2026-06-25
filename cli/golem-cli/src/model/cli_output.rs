@@ -1079,7 +1079,7 @@ mod tests {
                         oplog_processor_component_revision: None,
                     }],
                     files: vec![],
-                    initial_permission: PolymorphicCard {
+                    initial_permissions: PolymorphicCard {
                         card_id: CardId(uuid!("a741846a-2562-4065-8a06-fd9dbee52198")),
                         parent_ids: vec![CardId(uuid!("cd6d7717-4df1-4e9a-ac26-5bf524c1a732"))],
                         lower_negative: Vec::new(),
@@ -1245,7 +1245,7 @@ mod tests {
             )]),
             files_by_path: BTreeMap::new(),
             plugins_by_grant_id: BTreeMap::new(),
-            initial_permission: golem_common::model::diff::AgentTypeInitialPermission {
+            initial_permissions: golem_common::model::diff::AgentTypeInitialPermission {
                 lower_positive: Vec::new(),
                 lower_negative: Vec::new(),
                 upper_positive: Vec::new(),
@@ -4251,7 +4251,7 @@ mod tests {
                     config,
                     plugins,
                     files,
-                    initial_permission,
+                    initial_permissions: initial_permission,
                 }
             })
             .boxed()
@@ -4448,7 +4448,7 @@ mod tests {
                                     ),
                                 )]),
                                 plugins_by_grant_id: BTreeMap::new(),
-                                initial_permission: golem_common::model::diff::AgentTypeInitialPermission {
+                                initial_permissions: golem_common::model::diff::AgentTypeInitialPermission {
                                     lower_negative: Vec::new(),
                                     lower_positive: Vec::new(),
                                     upper_negative: Vec::new(),
@@ -4480,7 +4480,7 @@ mod tests {
                                     ),
                                 )]),
                                 plugins_by_grant_id: BTreeMap::new(),
-                                initial_permission: golem_common::model::diff::AgentTypeInitialPermission {
+                                initial_permissions: golem_common::model::diff::AgentTypeInitialPermission {
                                     lower_negative: Vec::new(),
                                     lower_positive: Vec::new(),
                                     upper_negative: Vec::new(),

@@ -105,14 +105,14 @@ impl ComponentWriteService {
         component_id: ComponentId,
         component_revision: ComponentRevision,
         agent_type_name: &AgentTypeName,
-        initial_permission: &golem_common::model::component::AgentTypeInitialPermission,
+        initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
         auth: &AuthCtx,
     ) -> Result<PolymorphicCard, ComponentError> {
         let effective_surface =
             auth.effective_surface_for_card_derivation("create agent initial permission card")?;
         let card = prepare_agent_initial_card_for_minting(
             agent_type_name,
-            initial_permission,
+            initial_permissions,
             effective_surface,
         )?;
 
@@ -236,7 +236,7 @@ impl ComponentWriteService {
                     component_id,
                     ComponentRevision::INITIAL,
                     agent_type_name,
-                    &creation.initial_permission,
+                    &creation.initial_permissions,
                     auth,
                 )
                 .await?;
@@ -244,7 +244,7 @@ impl ComponentWriteService {
             provision_configs.insert(
                 agent_type_name.clone(),
                 AgentTypeProvisionConfig {
-                    initial_permission,
+                    initial_permissions: initial_permission,
                     env: creation.env.clone(),
                     config,
                     plugins,
@@ -748,7 +748,7 @@ impl ComponentWriteService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
-        let initial_permission = if let Some(initial_permission_update) = update.initial_permission
+        let initial_permission = if let Some(initial_permission_update) = update.initial_permissions
         {
             self.create_initial_permission_card(
                 component_id,
@@ -759,7 +759,7 @@ impl ComponentWriteService {
             )
             .await?
         } else {
-            existing.initial_permission
+            existing.initial_permissions
         };
 
         // Env
@@ -813,7 +813,7 @@ impl ComponentWriteService {
             .await?;
 
         Ok(AgentTypeProvisionConfig {
-            initial_permission,
+            initial_permissions: initial_permission,
             env,
             config,
             plugins,
@@ -832,7 +832,7 @@ impl ComponentWriteService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<AgentTypeProvisionConfig, ComponentError> {
-        let Some(ref initial_permission_update) = update.initial_permission else {
+        let Some(ref initial_permission_update) = update.initial_permissions else {
             return Err(ComponentError::NewAgentTypeMissingInitialPermissions(
                 agent_type_name.clone(),
             ));
@@ -857,7 +857,7 @@ impl ComponentWriteService {
             .await?;
 
         Ok(AgentTypeProvisionConfig {
-            initial_permission,
+            initial_permissions: initial_permission,
             env: update.env.unwrap_or_default(),
             config,
             plugins,
@@ -901,10 +901,10 @@ fn resolve_files_for_update(
 
 fn prepare_agent_initial_card_for_minting(
     agent_type_name: &AgentTypeName,
-    initial_permission: &golem_common::model::component::AgentTypeInitialPermission,
+    initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
     effective_surface: &EffectiveSurface,
 ) -> Result<PolymorphicCard, ComponentError> {
-    let mut card = initial_permission.to_polymorphic_card();
+    let mut card = initial_permissions.to_polymorphic_card();
     let lower_positive = permission_envelopes_for_recipient_patterns(&card.lower_positive)
         .map_err(
             |message| ComponentError::InvalidAgentInitialPermissionCard {
@@ -1242,7 +1242,7 @@ mod tests {
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::card::recipient::RecipientPattern;
     use golem_common::model::card::{CardId, EffectiveSurface, PermissionPattern};
-    use golem_common::model::component::AgentTypeInitialPermission;
+    use golem_common::model::component::AgentTypeInitialPermissions;
     use std::str::FromStr;
     use test_r::test;
 
@@ -1269,7 +1269,7 @@ mod tests {
     fn agent_initial_card_inherits_parent_ids_from_creator_surface() {
         let parent_id = CardId::new();
         let initial_permission =
-            AgentTypeInitialPermission::default_for_recipient(RecipientPattern::Any);
+            AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
 
         let card = prepare_agent_initial_card_for_minting(
             &AgentTypeName("Cart".to_string()),
@@ -1284,7 +1284,7 @@ mod tests {
     #[test]
     fn agent_initial_card_must_be_subsumed_by_creator_surface() {
         let initial_permission =
-            AgentTypeInitialPermission::default_for_recipient(RecipientPattern::Any);
+            AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
         let empty_surface = EffectiveSurface::default();
 
         let error = prepare_agent_initial_card_for_minting(

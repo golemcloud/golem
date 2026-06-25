@@ -211,7 +211,7 @@ impl ComponentRevisionRecord {
                                     )
                                 })
                                 .collect(),
-                            initial_permission: self
+                            initial_permissions: self
                                 .metadata
                                 .value()
                                 .agent_type_initial_permission_card(name)

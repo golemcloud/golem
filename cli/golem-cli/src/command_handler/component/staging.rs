@@ -30,7 +30,7 @@ use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermission,
+    AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermissions,
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ArchiveFilePath,
     ComponentName, PluginInstallation, PluginInstallationAction, PluginInstallationUpdate,
     PluginPriority, PluginUninstallation,
@@ -597,7 +597,7 @@ impl<'a> ComponentStager<'a> {
                     result.insert(
                         name.clone(),
                         AgentTypeProvisionConfigUpdate {
-                            initial_permission: Some(creation.initial_permission),
+                            initial_permissions: Some(creation.initial_permissions),
                             env: Some(creation.env),
                             config: Some(creation.config),
                             files_to_add_or_update: self
@@ -708,8 +708,8 @@ impl<'a> ComponentStager<'a> {
             result.insert(
                 name.clone(),
                 AgentTypeProvisionConfigUpdate {
-                    initial_permission: self
-                        .initial_permission_update_for(name, creation.initial_permission),
+                    initial_permissions: self
+                        .initial_permission_update_for(name, creation.initial_permissions),
                     env: Some(creation.env),
                     config: Some(creation.config),
                     files_to_add_or_update: self
@@ -730,7 +730,7 @@ impl<'a> ComponentStager<'a> {
         component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
         manifest_config: &AgentTypeManifestProvisionConfig,
-    ) -> anyhow::Result<AgentTypeInitialPermission> {
+    ) -> anyhow::Result<AgentTypeInitialPermissions> {
         let context =
             initial_permission_recipient_context(environment, component_name, agent_type_name);
         Ok(manifest_config.to_initial_permission(&context))
@@ -739,10 +739,10 @@ impl<'a> ComponentStager<'a> {
     fn initial_permission_update_for(
         &self,
         name: &AgentTypeName,
-        initial_permission: AgentTypeInitialPermission,
-    ) -> Option<AgentTypeInitialPermission> {
+        initial_permissions: AgentTypeInitialPermissions,
+    ) -> Option<AgentTypeInitialPermissions> {
         match &self.diff {
-            ComponentDiff::All => Some(initial_permission),
+            ComponentDiff::All => Some(initial_permissions),
             ComponentDiff::Diff { diff } => {
                 match diff
                     .agent_type_provision_config_changes
@@ -751,10 +751,10 @@ impl<'a> ComponentStager<'a> {
                     Some(diff::BTreeMapDiffValue::Create)
                     | Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
                         ..
-                    })) => Some(initial_permission),
+                    })) => Some(initial_permissions),
                     Some(diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
                         diff,
-                    })) if diff.initial_permission_changed => Some(initial_permission),
+                    })) if diff.initial_permission_changed => Some(initial_permissions),
                     _ => None,
                 }
             }

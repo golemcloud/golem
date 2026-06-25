@@ -15680,7 +15680,7 @@ components:
             negative: []
             positive: []
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBound'
           - default:
               negative: []
               positive: []
@@ -15689,12 +15689,12 @@ components:
             negative: []
             positive: []
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBound'
           - default:
               negative: []
               positive: []
-    AgentTypeInitialPermissionBoundCreation:
-      title: AgentTypeInitialPermissionBoundCreation
+    AgentTypeInitialPermissionBound:
+      title: AgentTypeInitialPermissionBound
       type: object
       properties:
         positive:
@@ -17850,7 +17850,50 @@ components:
       required:
       - environmentPluginGrantId
     PolymorphicCard:
+      title: PolymorphicCard
       type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        lowerPositive:
+          type: array
+          items:
+            type: string
+        lowerNegative:
+          type: array
+          items:
+            type: string
+        upperPositive:
+          type: array
+          items:
+            type: string
+        upperNegative:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        systemCard:
+          type: boolean
+      required:
+      - cardId
+      - parentIds
+      - lowerPositive
+      - lowerNegative
+      - upperPositive
+      - upperNegative
+      - createdAt
+      - systemCard
     ProducerField:
       title: ProducerField
       type: object

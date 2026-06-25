@@ -74,7 +74,7 @@ pub struct AgentTypeProvisionConfig {
     pub files_by_path: BTreeMap<String, HashOf<AgentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins_by_grant_id: BTreeMap<Uuid, PluginInstallation>,
-    pub initial_permission: AgentTypeInitialPermission,
+    pub initial_permissions: AgentTypeInitialPermission,
 }
 
 impl Hashable for AgentTypeProvisionConfig {
@@ -115,7 +115,7 @@ impl Diffable for AgentTypeProvisionConfig {
             .config
             .diff_with_current(&current.config)?
             .unwrap_or_default();
-        let initial_permission_changed = new.initial_permission != current.initial_permission;
+        let initial_permission_changed = new.initial_permissions != current.initial_permissions;
 
         Ok(
             if !env_changes.is_empty()

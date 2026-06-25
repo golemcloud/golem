@@ -32,7 +32,7 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::component::{
-    AgentFilePermissions, AgentTypeInitialPermission, AgentTypeProvisionConfigCreation,
+    AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
     ComponentRevision, PluginInstallation, PluginPriority,
 };
@@ -75,7 +75,7 @@ pub(crate) fn default_agent_type_provision_config_creation_for_account(
     account_email: AccountEmail,
 ) -> AgentTypeProvisionConfigCreation {
     AgentTypeProvisionConfigCreation {
-        initial_permission: AgentTypeInitialPermission::default_for_recipient(
+        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
             golem_common::model::card::recipient::RecipientPattern::Account {
                 account: account_email,
             },

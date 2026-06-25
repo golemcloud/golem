@@ -83,7 +83,7 @@ impl ComponentDto {
                                     )
                                 })
                                 .collect(),
-                            initial_permission: self
+                            initial_permissions: self
                                 .metadata
                                 .agent_type_initial_permission_card(name)
                                 .map(|card| diff::AgentTypeInitialPermission {

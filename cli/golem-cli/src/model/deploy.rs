@@ -628,8 +628,8 @@ pub struct DeploymentDisplayAgentType {
     pub files: BTreeMap<String, DeploymentDisplayAgentFile>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, DeploymentDisplayPlugin>,
-    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermission::is_empty")]
-    pub initial_permission: DeploymentDisplayInitialPermission,
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissions::is_empty")]
+    pub initial_permissions: DeploymentDisplayInitialPermissions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_mount: Option<DeploymentDisplayHttpMount>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -662,14 +662,14 @@ pub struct DeploymentDisplayPlugin {
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeploymentDisplayInitialPermission {
-    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionBound::is_empty")]
-    pub lower_bound: DeploymentDisplayInitialPermissionBound,
-    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionBound::is_empty")]
-    pub upper_bound: DeploymentDisplayInitialPermissionBound,
+pub struct DeploymentDisplayInitialPermissions {
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionsBound::is_empty")]
+    pub lower_bound: DeploymentDisplayInitialPermissionsBound,
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionsBound::is_empty")]
+    pub upper_bound: DeploymentDisplayInitialPermissionsBound,
 }
 
-impl DeploymentDisplayInitialPermission {
+impl DeploymentDisplayInitialPermissions {
     fn is_empty(&self) -> bool {
         self.lower_bound.is_empty() && self.upper_bound.is_empty()
     }
@@ -677,14 +677,14 @@ impl DeploymentDisplayInitialPermission {
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeploymentDisplayInitialPermissionBound {
+pub struct DeploymentDisplayInitialPermissionsBound {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub positive: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub negative: Vec<String>,
 }
 
-impl DeploymentDisplayInitialPermissionBound {
+impl DeploymentDisplayInitialPermissionsBound {
     fn is_empty(&self) -> bool {
         self.positive.is_empty() && self.negative.is_empty()
     }
@@ -883,7 +883,7 @@ fn display_agent_type(
         plugins: provision_config
             .map(|config| display_plugins(masking, config))
             .unwrap_or_default(),
-        initial_permission: provision_config
+        initial_permissions: provision_config
             .map(display_initial_permission)
             .transpose()?
             .unwrap_or_default(),
@@ -1024,15 +1024,15 @@ fn display_plugins(
 
 fn display_initial_permission(
     provision_config: &diff::AgentTypeProvisionConfig,
-) -> anyhow::Result<DeploymentDisplayInitialPermission> {
-    Ok(DeploymentDisplayInitialPermission {
-        lower_bound: DeploymentDisplayInitialPermissionBound {
-            positive: render_permissions(&provision_config.initial_permission.lower_positive)?,
-            negative: render_permissions(&provision_config.initial_permission.lower_negative)?,
+) -> anyhow::Result<DeploymentDisplayInitialPermissions> {
+    Ok(DeploymentDisplayInitialPermissions {
+        lower_bound: DeploymentDisplayInitialPermissionsBound {
+            positive: render_permissions(&provision_config.initial_permissions.lower_positive)?,
+            negative: render_permissions(&provision_config.initial_permissions.lower_negative)?,
         },
-        upper_bound: DeploymentDisplayInitialPermissionBound {
-            positive: render_permissions(&provision_config.initial_permission.upper_positive)?,
-            negative: render_permissions(&provision_config.initial_permission.upper_negative)?,
+        upper_bound: DeploymentDisplayInitialPermissionsBound {
+            positive: render_permissions(&provision_config.initial_permissions.upper_positive)?,
+            negative: render_permissions(&provision_config.initial_permissions.upper_negative)?,
         },
     })
 }

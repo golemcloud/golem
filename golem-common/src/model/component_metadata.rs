@@ -126,7 +126,7 @@ impl ComponentMetadata {
         name: &AgentTypeName,
     ) -> Option<&PolymorphicCard> {
         self.agent_type_provision_config(name)
-            .map(|config| &config.initial_permission)
+            .map(|config| &config.initial_permissions)
     }
 
     pub fn agent_type_env(&self, name: &AgentTypeName) -> Option<&BTreeMap<String, String>> {
@@ -771,10 +771,10 @@ mod protobuf {
                 .into_iter()
                 .map(InitialAgentFile::try_from)
                 .collect::<Result<Vec<_>, _>>()?;
-            let initial_permission = crate::serialization::deserialize(&proto.initial_permission)?;
+            let initial_permission = crate::serialization::deserialize(&proto.initial_permissions)?;
 
             Ok(AgentTypeProvisionConfig {
-                initial_permission,
+                initial_permissions: initial_permission,
                 env: proto.env.into_iter().collect(),
                 config,
                 plugins,
@@ -790,7 +790,7 @@ mod protobuf {
             use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 
             Self {
-                initial_permission: crate::serialization::serialize(&config.initial_permission)
+                initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                     .expect("failed to serialize agent initial permission card"),
                 env: config.env.into_iter().collect(),
                 config: config
@@ -934,7 +934,7 @@ mod tests {
             BTreeMap::from([(
                 agent_type.clone(),
                 AgentTypeProvisionConfig {
-                    initial_permission: card.clone(),
+                    initial_permissions: card.clone(),
                     env: BTreeMap::new(),
                     config: Vec::new(),
                     plugins: Vec::new(),

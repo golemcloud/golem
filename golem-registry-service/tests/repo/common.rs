@@ -19,7 +19,7 @@ use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAccountRoot};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
@@ -1225,9 +1225,9 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
         Vec::new(),
         None,
         true,
-        Some(CardManagedBy::AccountRoot {
+        Some(CardManagedBy::AccountRoot(CardManagedByAccountRoot {
             account_id: golem_common::model::account::AccountId(account_id),
-        }),
+        })),
     )
 }
 

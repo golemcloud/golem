@@ -1946,7 +1946,7 @@ mod tests {
             use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
             use golem_common::model::agent::AgentTypeName;
             use golem_common::model::card::recipient::RecipientPattern;
-            use golem_common::model::component::AgentTypeInitialPermission;
+            use golem_common::model::component::AgentTypeInitialPermissions;
             use std::collections::BTreeMap;
 
             let provision_configs = if self.installed_plugins.is_empty() {
@@ -1955,7 +1955,7 @@ mod tests {
                 BTreeMap::from([(
                     AgentTypeName("TestPlugin".to_string()),
                     AgentTypeProvisionConfig {
-                        initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
                             RecipientPattern::Account {
                                 account: golem_common::model::account::AccountEmail::new(
                                     "test@golem",

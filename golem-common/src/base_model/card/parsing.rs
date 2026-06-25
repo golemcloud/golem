@@ -16,7 +16,7 @@ use super::class::card_permission_classes;
 use crate::base_model::card::*;
 use crate::model::card::owner::OwnerPattern;
 use crate::model::card::recipient::{PolymorphicRecipientPattern, RecipientPattern};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -151,11 +151,135 @@ impl FromStr for PermissionPattern {
     }
 }
 
+impl Serialize for PermissionPattern {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.render()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PermissionPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).and_then(|grant| Self::from_str(&grant).map_err(serde::de::Error::custom))
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Type for PermissionPattern {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "PermissionPattern".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        <String as poem_openapi::types::Type>::schema_ref()
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for PermissionPattern {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        let value = value.ok_or_else(|| poem_openapi::types::ParseError::expected_input())?;
+
+        serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ToJSON for PermissionPattern {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(self).ok()
+    }
+}
+
 impl FromStr for PolymorphicPermissionPattern {
     type Err = CardParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         parse_polymorphic_permission(value)
+    }
+}
+
+impl Serialize for PolymorphicPermissionPattern {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.render()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PolymorphicPermissionPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).and_then(|grant| Self::from_str(&grant).map_err(serde::de::Error::custom))
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Type for PolymorphicPermissionPattern {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> std::borrow::Cow<'static, str> {
+        "PolymorphicPermissionPattern".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        <String as poem_openapi::types::Type>::schema_ref()
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for PolymorphicPermissionPattern {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        let value = value.ok_or_else(|| poem_openapi::types::ParseError::expected_input())?;
+
+        serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ToJSON for PolymorphicPermissionPattern {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(self).ok()
     }
 }
 

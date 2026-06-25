@@ -15,11 +15,10 @@
 use super::class::card_permission_classes;
 use super::class::*;
 use super::owner::*;
-use serde::{Deserialize, Serialize};
 
 macro_rules! define_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PermissionPattern {
             $($variant(ClassPermissionPattern<$class>),)+
@@ -27,9 +26,11 @@ macro_rules! define_permission_pattern {
     };
 }
 
+card_permission_classes!(define_permission_pattern);
+
 macro_rules! define_permission_target {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PermissionTarget {
             $($variant(ClassPermissionTarget<$class>),)+
@@ -37,9 +38,11 @@ macro_rules! define_permission_target {
     };
 }
 
+card_permission_classes!(define_permission_target);
+
 macro_rules! define_polymorphic_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PolymorphicPermissionPattern {
             $($variant(PolymorphicClassPermissionPattern<$class>),)+
@@ -47,9 +50,11 @@ macro_rules! define_polymorphic_permission_pattern {
     };
 }
 
+card_permission_classes!(define_polymorphic_permission_pattern);
+
 macro_rules! define_polymorphic_manifest_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PolymorphicManifestPermissionPattern {
             $($variant(PolymorphicManifestClassPermissionPattern<$class>),)+
@@ -57,9 +62,6 @@ macro_rules! define_polymorphic_manifest_permission_pattern {
     };
 }
 
-card_permission_classes!(define_permission_pattern);
-card_permission_classes!(define_permission_target);
-card_permission_classes!(define_polymorphic_permission_pattern);
 card_permission_classes!(define_polymorphic_manifest_permission_pattern);
 
 macro_rules! define_class_name_match {
@@ -178,6 +180,10 @@ impl PermissionPattern {
 
     pub fn recipient(&self) -> &crate::model::card::recipient::RecipientPattern {
         recipient_match!(self)
+    }
+
+    pub fn render(&self) -> Result<String, String> {
+        crate::model::card::render_permission(self)
     }
 
     pub(crate) fn to_target(&self) -> PermissionTarget {

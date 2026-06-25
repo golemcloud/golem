@@ -24,9 +24,7 @@ use golem_common::model::account::{Account, AccountEmail, AccountId};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError,
-    CardId, CardManagedBy, CardParseError, ClassPermissionTarget, EffectiveSurface,
-    PermissionPattern, PermissionTarget,
+    AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError, CardId, CardManagedBy, CardManagedByPermissionShare, CardParseError, ClassPermissionTarget, EffectiveSurface, PermissionPattern, PermissionTarget
 };
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
@@ -474,9 +472,9 @@ impl PermissionShareService {
             parsed.upper_negative,
             None,
             true,
-            Some(CardManagedBy::PermissionShare {
+            Some(CardManagedBy::PermissionShare(CardManagedByPermissionShare {
                 permission_share_id: permission_share_id.0,
-            }),
+            })),
         ))
     }
 

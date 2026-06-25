@@ -8172,7 +8172,7 @@ components:
             negative: []
             positive: []
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBound'
           - default:
               negative: []
               positive: []
@@ -8181,13 +8181,13 @@ components:
             negative: []
             positive: []
           allOf:
-          - $ref: '#/components/schemas/AgentTypeInitialPermissionBoundCreation'
+          - $ref: '#/components/schemas/AgentTypeInitialPermissionBound'
           - default:
               negative: []
               positive: []
-    AgentTypeInitialPermissionBoundCreation:
+    AgentTypeInitialPermissionBound:
       type: object
-      title: AgentTypeInitialPermissionBoundCreation
+      title: AgentTypeInitialPermissionBound
       properties:
         positive:
           type: array
@@ -11219,6 +11219,49 @@ components:
           description: EnvironmentPluginGrantId to identify the plugin to update
     PolymorphicCard:
       type: object
+      title: PolymorphicCard
+      required:
+      - cardId
+      - parentIds
+      - lowerPositive
+      - lowerNegative
+      - upperPositive
+      - upperNegative
+      - createdAt
+      - systemCard
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        lowerPositive:
+          type: array
+          items:
+            type: string
+        lowerNegative:
+          type: array
+          items:
+            type: string
+        upperPositive:
+          type: array
+          items:
+            type: string
+        upperNegative:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        systemCard:
+          type: boolean
     ProducerField:
       type: object
       title: ProducerField

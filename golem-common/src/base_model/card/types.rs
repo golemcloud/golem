@@ -17,7 +17,7 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
-use crate::{declare_revision, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -26,110 +26,79 @@ newtype_uuid!(CardId, wit_name: "card-id", wit_owner: "golem:core@2.0.0/types");
 
 declare_revision!(CardRevision);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum CardManagedBy {
-    AccountRoot {
-        account_id: AccountId,
-    },
-    EnvironmentDefault {
-        environment_id: EnvironmentId,
-    },
-    PermissionShare {
-        permission_share_id: Uuid,
-    },
-    AgentInitial {
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        agent_type: AgentTypeName,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct Card {
-    pub card_id: CardId,
-    pub parent_ids: Vec<CardId>,
-    pub lower_positive: Vec<PermissionPattern>,
-    pub lower_negative: Vec<PermissionPattern>,
-    pub upper_positive: Vec<PermissionPattern>,
-    pub upper_negative: Vec<PermissionPattern>,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub system_card: bool,
-    pub managed_by: Option<CardManagedBy>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct PolymorphicCard {
-    pub card_id: CardId,
-    pub parent_ids: Vec<CardId>,
-    pub lower_positive: Vec<PolymorphicPermissionPattern>,
-    pub lower_negative: Vec<PolymorphicPermissionPattern>,
-    pub upper_positive: Vec<PolymorphicPermissionPattern>,
-    pub upper_negative: Vec<PolymorphicPermissionPattern>,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub system_card: bool,
-}
-
-#[cfg(feature = "full")]
-impl poem_openapi::types::Type for PolymorphicCard {
-    const IS_REQUIRED: bool = true;
-
-    type RawValueType = Self;
-    type RawElementValueType = Self;
-
-    fn name() -> std::borrow::Cow<'static, str> {
-        "PolymorphicCard".into()
+declare_structs! {
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct CardManagedByAccountRoot {
+        pub account_id: AccountId,
     }
 
-    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
-        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct CardManagedByEnvironmentDefault {
+        pub environment_id: EnvironmentId,
     }
 
-    fn register(registry: &mut poem_openapi::registry::Registry) {
-        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
-            poem_openapi::registry::MetaSchema::new("object")
-        });
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct CardManagedByPermissionShare {
+        pub permission_share_id: Uuid,
     }
 
-    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
-        Some(self)
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct CardManagedByAgentInitial {
+        pub component_id: ComponentId,
+        pub component_revision: ComponentRevision,
+        pub agent_type: AgentTypeName,
     }
 
-    fn raw_element_iter<'a>(
-        &'a self,
-    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
-        Box::new(self.as_raw_value().into_iter())
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct Card {
+        pub card_id: CardId,
+        pub parent_ids: Vec<CardId>,
+        pub lower_positive: Vec<PermissionPattern>,
+        pub lower_negative: Vec<PermissionPattern>,
+        pub upper_positive: Vec<PermissionPattern>,
+        pub upper_negative: Vec<PermissionPattern>,
+        pub created_at: DateTime<Utc>,
+        pub expires_at: Option<DateTime<Utc>>,
+        pub system_card: bool,
+        pub managed_by: Option<CardManagedBy>,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct PolymorphicCard {
+        pub card_id: CardId,
+        pub parent_ids: Vec<CardId>,
+        pub lower_positive: Vec<PolymorphicPermissionPattern>,
+        pub lower_negative: Vec<PolymorphicPermissionPattern>,
+        pub upper_positive: Vec<PolymorphicPermissionPattern>,
+        pub upper_negative: Vec<PolymorphicPermissionPattern>,
+        pub created_at: DateTime<Utc>,
+        pub expires_at: Option<DateTime<Utc>>,
+        pub system_card: bool,
     }
 }
 
-#[cfg(feature = "full")]
-impl poem_openapi::types::ToJSON for PolymorphicCard {
-    fn to_json(&self) -> Option<serde_json::Value> {
-        serde_json::to_value(self).ok()
+declare_unions! {
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub enum StoredCard {
+        Concrete(Card),
+        Polymorphic(PolymorphicCard),
     }
-}
 
-#[cfg(feature = "full")]
-impl poem_openapi::types::ParseFromJSON for PolymorphicCard {
-    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
-        match value {
-            Some(value) => {
-                serde_json::from_value(value).map_err(poem_openapi::types::ParseError::custom)
-            }
-            None => Err(poem_openapi::types::ParseError::expected_input()),
-        }
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub enum CardManagedBy {
+        AccountRoot(CardManagedByAccountRoot),
+        EnvironmentDefault(CardManagedByEnvironmentDefault),
+        PermissionShare(CardManagedByPermissionShare),
+        AgentInitial(CardManagedByAgentInitial),
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StoredCard {
-    Concrete(Card),
-    Polymorphic(PolymorphicCard),
 }
 
 impl From<Card> for StoredCard {

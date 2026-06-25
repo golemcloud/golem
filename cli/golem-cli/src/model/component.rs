@@ -23,13 +23,13 @@ use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
-use golem_common::model::card::PolymorphicManifestPermissionPattern;
+use golem_common::model::card::{CardId, PolymorphicCard, PolymorphicManifestPermissionPattern};
 use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
 use golem_common::model::component::{
-    AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
+    AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision, InitialAgentFile, InstalledPlugin
 };
 use golem_common::model::component::{
-    AgentFileOptions, AgentFilePath, AgentTypeInitialPermission, AgentTypeProvisionConfigCreation,
+    AgentFileOptions, AgentFilePath, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     ArchiveFilePath, PluginInstallation,
 };
 use golem_common::model::component::{AgentFilePermissions, ComponentName};
@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::str::FromStr;
+use golem_common::model::worker::TypedAgentConfigEntry;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -69,8 +70,8 @@ impl ParsedInitialPermissionCard {
     pub fn resolve_recipients(
         self,
         context: &RecipientMonomorphizationContext,
-    ) -> AgentTypeInitialPermission {
-        AgentTypeInitialPermission::from_patterns(
+    ) -> AgentTypeInitialPermissions {
+        AgentTypeInitialPermissions::from_patterns(
             self.lower_positive
                 .into_iter()
                 .map(|grant| grant.monomorphize_recipient(context))
@@ -236,7 +237,7 @@ impl AgentTypeManifestProvisionConfig {
     pub fn to_provision_config_creation(
         &self,
         resolved_plugins: Vec<PluginInstallation>,
-        initial_permission: AgentTypeInitialPermission,
+        initial_permissions: AgentTypeInitialPermissions,
     ) -> anyhow::Result<AgentTypeProvisionConfigCreation> {
         let files = self
             .files
@@ -251,7 +252,7 @@ impl AgentTypeManifestProvisionConfig {
             })
             .collect();
         Ok(AgentTypeProvisionConfigCreation {
-            initial_permission,
+            initial_permissions,
             env: self.env.clone(),
             config: self.config.clone(),
             files,
@@ -262,12 +263,12 @@ impl AgentTypeManifestProvisionConfig {
     pub fn to_initial_permission(
         &self,
         context: &RecipientMonomorphizationContext,
-    ) -> AgentTypeInitialPermission {
+    ) -> AgentTypeInitialPermissions {
         self.initial_card
             .clone()
             .map(|card| card.resolve_recipients(context))
             .unwrap_or_else(|| {
-                AgentTypeInitialPermission::default_for_recipient(initial_permission_recipient(
+                AgentTypeInitialPermissions::default_for_recipient(initial_permission_recipient(
                     context,
                 ))
             })
@@ -549,7 +550,7 @@ mod tests {
         let context = test_context();
 
         let initial_permission = manifest_card().resolve_recipients(&context);
-        let rendered = initial_permission.lower_bound.positive.render().unwrap();
+        let rendered = initial_permission.lower_bound.positive.into_iter().map(|p| p.render().unwrap()).collect::<Vec<_>>();
 
         assert_eq!(
             rendered,
@@ -577,7 +578,6 @@ mod tests {
             initial_permission
                 .lower_bound
                 .positive
-                .0
                 .iter()
                 .all(|permission| permission.recipient() == &expected)
         );

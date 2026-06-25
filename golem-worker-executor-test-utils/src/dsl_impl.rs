@@ -157,7 +157,7 @@ impl TestDsl for TestWorkerExecutor {
                     Ok((
                         agent_type_name,
                         AgentTypeProvisionConfig {
-                            initial_permission: creation.initial_permission.to_polymorphic_card(),
+                            initial_permissions: creation.initial_permissions.to_polymorphic_card(),
                             env: creation.env,
                             files,
                             config,
@@ -339,10 +339,10 @@ impl TestDsl for TestWorkerExecutor {
                 configs.insert(
                     agent_type_name,
                     AgentTypeProvisionConfig {
-                        initial_permission: update
-                            .initial_permission
+                        initial_permissions: update
+                            .initial_permissions
                             .map(|initial_permission| initial_permission.to_polymorphic_card())
-                            .unwrap_or(existing.initial_permission),
+                            .unwrap_or(existing.initial_permissions),
                         env: new_env,
                         files: files.into_values().collect(),
                         config: new_config,

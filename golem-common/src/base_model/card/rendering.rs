@@ -14,9 +14,29 @@
 
 use super::class::{card_permission_classes, *};
 use super::pattern::{
-    PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern, render_class_permission,
+    PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern, PermissionPattern, render_class_permission,
     render_manifest_class_permission,
 };
+
+pub fn render_permission(
+    permission: &PermissionPattern,
+) -> Result<String, String> {
+    macro_rules! render_case {
+        ($($variant:ident: $class:ty,)+) => {
+            match permission {
+                $(PermissionPattern::$variant(pattern) => render_class_permission(
+                    <$class as PermissionClass>::NAME,
+                    &pattern.owner,
+                    &pattern.recipient,
+                    pattern.verb.as_ref(),
+                    &pattern.resource,
+                ),)+
+            }
+        };
+    }
+
+    card_permission_classes!(render_case)
+}
 
 pub fn render_polymorphic_permission(
     permission: &PolymorphicPermissionPattern,

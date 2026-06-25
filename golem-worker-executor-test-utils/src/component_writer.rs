@@ -22,7 +22,7 @@ use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentTypeInitialPermission, ComponentDto, ComponentId, ComponentName, ComponentRevision,
+    AgentTypeInitialPermissions, ComponentDto, ComponentId, ComponentName, ComponentRevision,
 };
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
@@ -652,7 +652,7 @@ fn with_default_initial_permissions(
         provision_configs
             .entry(agent_type.type_name.clone())
             .or_insert_with(|| AgentTypeProvisionConfig {
-                initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
                     RecipientPattern::Account {
                         account: AccountEmail::new("test@golem"),
                     },

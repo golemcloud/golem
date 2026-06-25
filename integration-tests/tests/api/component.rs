@@ -25,7 +25,7 @@ use golem_common::model::agent::{
 use golem_common::model::base64::Base64;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentFilePermissions, AgentTypeInitialPermission, AgentTypeProvisionConfigCreation,
+    AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
     PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority,
     PluginUninstallation,
@@ -54,7 +54,7 @@ fn default_agent_type_provision_config_creation(
     account_email: AccountEmail,
 ) -> AgentTypeProvisionConfigCreation {
     AgentTypeProvisionConfigCreation {
-        initial_permission: AgentTypeInitialPermission::default_for_recipient(
+        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
             RecipientPattern::Account {
                 account: account_email,
             },
@@ -265,8 +265,8 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("OtherAgent".to_string()),
                     AgentTypeProvisionConfigUpdate {
-                        initial_permission: Some(
-                            AgentTypeInitialPermission::default_for_recipient(
+                        initial_permissions: Some(
+                            AgentTypeInitialPermissions::default_for_recipient(
                                 RecipientPattern::Account {
                                     account: user.account_email.clone(),
                                 },
@@ -1053,7 +1053,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     "Repository".to_string(),
                     AgentTypeProvisionConfigCreation {
-                        initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
                             RecipientPattern::Any,
                         ),
                         plugin_installations: vec![
@@ -1145,7 +1145,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     "Repository".to_string(),
                     AgentTypeProvisionConfigCreation {
-                        initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
                             RecipientPattern::Any,
                         ),
                         plugin_installations: vec![

@@ -151,7 +151,7 @@ declare_structs! {
     }
 
     pub struct AgentTypeProvisionConfigCreation {
-        pub initial_permission: AgentTypeInitialPermission,
+        pub initial_permissions: AgentTypeInitialPermissions,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
@@ -171,7 +171,7 @@ declare_structs! {
     pub struct AgentTypeProvisionConfigUpdate {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub initial_permission: Option<AgentTypeInitialPermission>,
+        pub initial_permissions: Option<AgentTypeInitialPermissions>,
         pub env: Option<BTreeMap<String, String>>,
         pub config: Option<Vec<AgentConfigEntryDto>>,
         #[serde(default)]
@@ -189,23 +189,23 @@ declare_structs! {
     }
 
     #[derive(Default, Eq)]
-    pub struct AgentTypeInitialPermission {
+    pub struct AgentTypeInitialPermissions {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub lower_bound: AgentTypeInitialPermissionBoundCreation,
+        pub lower_bound: AgentTypeInitialPermissionsBound,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub upper_bound: AgentTypeInitialPermissionBoundCreation,
+        pub upper_bound: AgentTypeInitialPermissionsBound,
     }
 
     #[derive(Default, Eq)]
-    pub struct AgentTypeInitialPermissionBoundCreation {
+    pub struct AgentTypeInitialPermissionsBound {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub positive: AgentTypeInitialPermissionGrants,
+        pub positive: Vec<PolymorphicPermissionPattern>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub negative: AgentTypeInitialPermissionGrants,
+        pub negative: Vec<PolymorphicPermissionPattern>,
     }
 
     pub struct AgentFileOptions {
@@ -260,96 +260,7 @@ declare_structs! {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-pub struct AgentTypeInitialPermissionGrants(pub Vec<PolymorphicPermissionPattern>);
-
-impl AgentTypeInitialPermissionGrants {
-    pub fn from_strings(grants: Vec<String>) -> Result<Self, String> {
-        grants
-            .into_iter()
-            .map(|grant| {
-                PolymorphicPermissionPattern::from_str(&grant)
-                    .map_err(|err| format!("invalid grant '{grant}': {err}"))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Self)
-    }
-
-    pub fn render(&self) -> Result<Vec<String>, String> {
-        self.0.iter().map(render_polymorphic_permission).collect()
-    }
-}
-
-impl Serialize for AgentTypeInitialPermissionGrants {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.render()
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for AgentTypeInitialPermissionGrants {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Vec::<String>::deserialize(deserializer)
-            .and_then(|grants| Self::from_strings(grants).map_err(serde::de::Error::custom))
-    }
-}
-
-#[cfg(feature = "full")]
-impl poem_openapi::types::Type for AgentTypeInitialPermissionGrants {
-    const IS_REQUIRED: bool = true;
-
-    type RawValueType = Self;
-    type RawElementValueType = Self;
-
-    fn name() -> std::borrow::Cow<'static, str> {
-        "AgentTypeInitialPermissionGrants".into()
-    }
-
-    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
-        <Vec<String> as poem_openapi::types::Type>::schema_ref()
-    }
-
-    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
-        Some(self)
-    }
-
-    fn raw_element_iter<'a>(
-        &'a self,
-    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
-        Box::new(self.as_raw_value().into_iter())
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-#[cfg(feature = "full")]
-impl poem_openapi::types::ParseFromJSON for AgentTypeInitialPermissionGrants {
-    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
-        let grants = <Vec<String> as poem_openapi::types::ParseFromJSON>::parse_from_json(value)
-            .map_err(poem_openapi::types::ParseError::propagate)?;
-        Self::from_strings(grants).map_err(poem_openapi::types::ParseError::custom)
-    }
-}
-
-#[cfg(feature = "full")]
-impl poem_openapi::types::ToJSON for AgentTypeInitialPermissionGrants {
-    fn to_json(&self) -> Option<serde_json::Value> {
-        self.render()
-            .ok()
-            .and_then(|grants| <Vec<String> as poem_openapi::types::ToJSON>::to_json(&grants))
-    }
-}
-
-impl AgentTypeInitialPermission {
+impl AgentTypeInitialPermissions {
     pub fn from_patterns(
         lower_positive: Vec<PolymorphicPermissionPattern>,
         lower_negative: Vec<PolymorphicPermissionPattern>,
@@ -357,13 +268,13 @@ impl AgentTypeInitialPermission {
         upper_negative: Vec<PolymorphicPermissionPattern>,
     ) -> Self {
         Self {
-            lower_bound: AgentTypeInitialPermissionBoundCreation {
-                positive: AgentTypeInitialPermissionGrants(lower_positive),
-                negative: AgentTypeInitialPermissionGrants(lower_negative),
+            lower_bound: AgentTypeInitialPermissionsBound {
+                positive: lower_positive,
+                negative: lower_negative,
             },
-            upper_bound: AgentTypeInitialPermissionBoundCreation {
-                positive: AgentTypeInitialPermissionGrants(upper_positive),
-                negative: AgentTypeInitialPermissionGrants(upper_negative),
+            upper_bound: AgentTypeInitialPermissionsBound {
+                positive: upper_positive,
+                negative: upper_negative,
             },
         }
     }
@@ -377,32 +288,14 @@ impl AgentTypeInitialPermission {
         )
     }
 
-    pub fn from_grant_strings(
-        lower_positive: Vec<String>,
-        lower_negative: Vec<String>,
-        upper_positive: Vec<String>,
-        upper_negative: Vec<String>,
-    ) -> Result<Self, String> {
-        Ok(Self {
-            lower_bound: AgentTypeInitialPermissionBoundCreation {
-                positive: AgentTypeInitialPermissionGrants::from_strings(lower_positive)?,
-                negative: AgentTypeInitialPermissionGrants::from_strings(lower_negative)?,
-            },
-            upper_bound: AgentTypeInitialPermissionBoundCreation {
-                positive: AgentTypeInitialPermissionGrants::from_strings(upper_positive)?,
-                negative: AgentTypeInitialPermissionGrants::from_strings(upper_negative)?,
-            },
-        })
-    }
-
     pub fn to_polymorphic_card(&self) -> PolymorphicCard {
         PolymorphicCard {
             card_id: crate::model::card::CardId::new(),
             parent_ids: Vec::new(),
-            lower_positive: self.lower_bound.positive.0.clone(),
-            lower_negative: self.lower_bound.negative.0.clone(),
-            upper_positive: self.upper_bound.positive.0.clone(),
-            upper_negative: self.upper_bound.negative.0.clone(),
+            lower_positive: self.lower_bound.positive.clone(),
+            lower_negative: self.lower_bound.negative.clone(),
+            upper_positive: self.upper_bound.positive.clone(),
+            upper_negative: self.upper_bound.negative.clone(),
             created_at: chrono::Utc::now(),
             expires_at: None,
             system_card: false,
@@ -446,7 +339,7 @@ impl AgentFilePermissions {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentTypeInitialPermission, AgentTypeProvisionConfigCreation, ComponentCreation};
+    use super::{AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, ComponentCreation};
     use crate::model::agent::AgentTypeName;
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::component::ComponentName;
@@ -455,10 +348,10 @@ mod tests {
 
     #[test]
     fn initial_permission_creation_renders_typed_default_card() {
-        let creation = AgentTypeInitialPermission::default_for_recipient(RecipientPattern::Any);
+        let creation = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
 
         assert_eq!(
-            creation.lower_bound.positive.render().unwrap(),
+            creation.lower_bound.positive.into_iter().map(|p| p.render().unwrap()).collect::<Vec<_>>(),
             vec![
                 "environment(?env) @ * : view : *",
                 "component(?component) @ * : view : *",
@@ -468,7 +361,6 @@ mod tests {
                 "agent(?env/*/*) @ * : update-revision : *",
             ]
         );
-        let _ = creation.to_polymorphic_card();
     }
 
     #[cfg(feature = "full")]
@@ -480,7 +372,7 @@ mod tests {
             agent_type_provision_configs: BTreeMap::from([(
                 AgentTypeName("CounterAgent".to_string()),
                 AgentTypeProvisionConfigCreation {
-                    initial_permission: AgentTypeInitialPermission::default_for_recipient(
+                    initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
                         RecipientPattern::Agent {
                             account: crate::model::account::AccountEmail::new("initial@user"),
                             application: crate::model::application::ApplicationName(

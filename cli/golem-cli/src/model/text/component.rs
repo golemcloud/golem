@@ -124,8 +124,8 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
             )
             .fmt_field_optional(
                 &format!("{}Initial permissions", prefix),
-                &provision_config.initial_permission,
-                !initial_permission_is_empty(&provision_config.initial_permission),
+                &provision_config.initial_permissions,
+                !initial_permission_is_empty(&provision_config.initial_permissions),
                 format_initial_permission,
             );
     }

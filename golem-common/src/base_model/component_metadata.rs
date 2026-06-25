@@ -203,7 +203,7 @@ pub struct ComponentMetadataInnerData {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct AgentTypeProvisionConfig {
-    pub initial_permission: PolymorphicCard,
+    pub initial_permissions: PolymorphicCard,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
