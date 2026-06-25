@@ -121,16 +121,12 @@ impl Display for ComponentSharing {
 }
 
 /// Default agent-count ramp, used when a cell does not specify one in the suite
-/// YAML. The driver creates/activates agents up to each step, takes its
-/// measurements, then advances — until a catastrophic ceiling fires or the ramp
-/// is exhausted.
+/// YAML. Each step is an independent concurrent target: the driver measures that
+/// target, cleans it up, then advances until a catastrophic ceiling fires or the
+/// ramp is exhausted.
 ///
-/// Resolution is concentrated around the 10000-agent shared idle ceiling
-/// observed on golem-dev, then stops shortly after to avoid spending hours above
-/// the useful signal range.
-pub const DEFAULT_AGENT_RAMP: &[u32] = &[
-    100, 250, 500, 1000, 2000, 4000, 6000, 8000, 9000, 10000, 11000, 12000,
-];
+/// The first pass caps active scenarios at 2000 concurrent invocations.
+pub const DEFAULT_AGENT_RAMP: &[u32] = &[50, 100, 250, 500, 1000, 2000];
 
 #[cfg(test)]
 mod tests {

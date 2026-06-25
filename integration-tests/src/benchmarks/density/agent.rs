@@ -28,34 +28,35 @@
 //!
 //! # The usable-floor load model
 //!
-//! For active scenarios, each ramp step first ensures `N` durable agents exist,
-//! then applies [`INVOKES_PER_AGENT_PER_STEP`] *load rounds*. A round fires one
-//! concurrent `busy_for` invocation per agent in the step's load set and awaits
-//! the whole round, reproducing `N` independent users each invoking their own
-//! agent at the same instant. Create-only instead measures just the one-shot
-//! create/invoke path.
+//! For active scenarios, each ramp step is an independent burst size. First, the
+//! driver issues the cold burst and records cold latency. Then it reuses the same
+//! agents for [`INVOKES_PER_AGENT_PER_STEP`] warm rounds and records warm
+//! latency. Create-only instead measures just the one-shot create/invoke path.
 //!
 //! # Scenarios
 //!
 //! 1. create-only: create/invoke N agents once, then leave durable agents idle
 //!    and eviction-eligible. Measures the create path.
-//! 2. create-with-active-fraction: create N agents, load only the configured
-//!    fraction (25/50/75%) each round (load set = fraction of N).
-//! 3. concurrent-active: load all N agents each round (load set = N).
-//! 4. resume-under-saturation: durable-only. Pre-fill the pod with `prefill_n`
-//!    idle agents (forcing eviction), then measure the latency of resuming an
-//!    already-evicted agent vs. creating a fresh one.
+//! 2. create-with-active-fraction: keep the configured fraction (0/25/50/75%)
+//!    busy with `busy_for(250ms)` while measuring `increment` latency on the
+//!    rest. At 0%, all agents are measured and no agents are busy in the
+//!    background.
+//! 3. concurrent-active: invoke all N agents concurrently with `increment`.
+//! 4. resume-under-saturation: durable-only. For each independent target, warm
+//!    exactly N agents to produce oplog, restart the executor to unload them,
+//!    then measure concurrent replay/resume latency.
 //!
 //! Durable and ephemeral active modes run the same ramp/round driver
-//! ([`run_ramp_cell`]). Durable agents are created once in a step's first phase
-//! and persist across rounds; ephemeral agents have no persistent identity, so a
+//! ([`run_ramp_cell`]). Durable agents are deleted between ramp targets so each
+//! target is independent; ephemeral agents have no persistent identity, so a
 //! round's concurrent invocations *are* that round's ephemeral agents (created
 //! and gone within the round).
 //!
 //! # Operational definitions (from #3523)
 //!
-//! - Load round: one concurrent `busy_for(250ms)` invocation per agent in the
-//!   load set, all in flight at once, awaited together.
+//! - Load round: one concurrent invocation per agent in the load set, all in
+//!   flight at once, awaited together. Scenario 2 uses `busy_for(250ms)` only for
+//!   the background busy agents; measured calls use `increment`.
 //! - Passive (idle): for durable create-only, an agent is created/invoked once,
 //!   then left to drift toward `LoadedIdle` and become eviction-eligible.
 //! - Soft / hard / catastrophic ceilings: see [`super::ceiling`].
@@ -100,12 +101,6 @@ const INVOKES_PER_AGENT_PER_STEP: u32 = 50;
 /// Emit progress every N load rounds so GitHub Actions log lag is distinguishable
 /// from a genuinely stuck benchmark.
 const LOAD_ROUND_PROGRESS_INTERVAL: u32 = 5;
-
-/// Maximum number of agent-create invocations in flight at once while ramping a
-/// cell. The cost of a step is dominated by the round-trips for the new agents,
-/// so fanning them out cuts wall-clock from hours to minutes. The cap keeps the
-/// driver's own connection pool from becoming the bottleneck.
-const CREATE_CONCURRENCY: usize = 100;
 
 /// Maximum number of scenario-4 warmup agents in flight at once. Each warmup
 /// agent performs many sequential calls, so this can be higher than create
@@ -530,6 +525,8 @@ mod keys {
     /// The emitted key is suffixed with `@<zero-padded agent count>` so each
     /// ramp step gets its own distribution.
     pub const INVOKE_LATENCY: &str = "invoke-latency";
+    pub const COLD_INVOKE_LATENCY: &str = "cold-invoke-latency";
+    pub const WARM_INVOKE_LATENCY: &str = "warm-invoke-latency";
 
     // Scenario-4 (resume-under-saturation) latencies, in milliseconds.
     pub const RESUME_EXISTING_P50_MS: &str = "resume-existing-p50-ms";
@@ -548,11 +545,17 @@ struct CellOutcome {
     catastrophic_ceiling_agents: Option<u32>,
     terminated_reason: TerminatedReason,
     max_agents_reached: u32,
+    /// Internal bookkeeping: scenarios 1-3 clean durable agents between ramp
+    /// targets, so the outer cell cleanup can be skipped when the last target
+    /// was already removed successfully.
+    cleanup_already_done: bool,
     /// Invoke latencies bucketed by the ramp-step agent count at which they were
     /// measured. Each bucket is surfaced as its own invoke-latency distribution
     /// (avg/min/max/p50/p90/p95/p99) so latency can be read per ramp step rather
     /// than collapsed across the whole cell.
     invoke_latencies: BTreeMap<u32, Vec<Duration>>,
+    cold_invoke_latencies: BTreeMap<u32, Vec<Duration>>,
+    warm_invoke_latencies: BTreeMap<u32, Vec<Duration>>,
     /// Scenario-4 resume/create latency samples (milliseconds).
     resume_existing_ms: Vec<f64>,
     create_fresh_ms: Vec<f64>,
@@ -569,7 +572,10 @@ impl Default for CellOutcome {
             // sharing-mode upper bound.
             terminated_reason: TerminatedReason::UpperBoundHit,
             max_agents_reached: 0,
+            cleanup_already_done: false,
             invoke_latencies: BTreeMap::new(),
+            cold_invoke_latencies: BTreeMap::new(),
+            warm_invoke_latencies: BTreeMap::new(),
             resume_existing_ms: Vec::new(),
             create_fresh_ms: Vec::new(),
         }
@@ -619,6 +625,18 @@ impl CellOutcome {
         // zero-padded so the keys sort numerically.
         for (agents, latencies) in &self.invoke_latencies {
             let key = format!("{}@{agents:06}", keys::INVOKE_LATENCY);
+            for latency in latencies {
+                recorder.duration(&ResultKey::primary(&key), *latency);
+            }
+        }
+        for (agents, latencies) in &self.cold_invoke_latencies {
+            let key = format!("{}@{agents:06}", keys::COLD_INVOKE_LATENCY);
+            for latency in latencies {
+                recorder.duration(&ResultKey::primary(&key), *latency);
+            }
+        }
+        for (agents, latencies) in &self.warm_invoke_latencies {
+            let key = format!("{}@{agents:06}", keys::WARM_INVOKE_LATENCY);
             for latency in latencies {
                 recorder.duration(&ResultKey::primary(&key), *latency);
             }
@@ -732,7 +750,9 @@ pub async fn run_cell(
         _ => run_ramp_cell(config, &user, &components, probe).await?,
     };
 
-    if cleanup_cell_agents(config, &user, &components, &outcome).await == CleanupResult::Failed {
+    if !outcome.cleanup_already_done
+        && cleanup_cell_agents(config, &user, &components, &outcome).await == CleanupResult::Failed
+    {
         outcome.terminated_reason = TerminatedReason::ConnectionLost;
         outcome.catastrophic_ceiling_agents = Some(outcome.max_agents_reached);
     }
@@ -929,6 +949,7 @@ async fn resolve_components(
 /// agent at the same instant — so `ConcurrentActive` invokes every live agent
 /// (`n`) and `CreateWithActiveFraction` loads only the configured fraction.
 /// `CreateOnly` and `ResumeUnderSaturation` do not run load rounds.
+#[cfg(test)]
 fn load_count(config: &CellConfig, n: u32) -> u32 {
     match config.scenario {
         Scenario::CreateOnly => 0,
@@ -941,28 +962,107 @@ fn load_count(config: &CellConfig, n: u32) -> u32 {
     }
 }
 
-/// Scenarios 1-3 (durable and ephemeral): ramp the agent count and, at each
-/// step, measure the *usable floor* under concurrent load.
-///
-/// Each ramp step has two phases:
-///
-/// 1. **Ensure N agents exist.** For durable cells the new agents in
-///    `created..target` are created (first-invoked) once, with bounded in-flight
-///    concurrency. Ephemeral create-only cells also issue one invocation per
-///    target agent so the create path is measured; active ephemeral cells create
-///    their short-lived agents in the load rounds below.
-///
-/// 2. **Load rounds.** [`INVOKES_PER_AGENT_PER_STEP`] rounds, each firing one
-///    concurrent `busy_for` invocation per agent in the load set (size
-///    [`load_count`]) and awaiting the whole round. A round's concurrency equals
-///    the load-set size, so it reproduces the realistic worst case — every loaded
-///    agent invoked at the same instant, as independent users would — which is
-///    what reveals the usable agent ceiling and where the executor breaks. For
-///    ephemeral cells each round's concurrent invocations are that round's
-///    ephemeral agents (created and gone within the round).
-///
-/// Every invocation latency is fed to the ceiling detector; the executor's
-/// pod-restart count is polled once per round.
+#[cfg(test)]
+fn has_create_phase(config: &CellConfig) -> bool {
+    config.scenario == Scenario::CreateOnly
+}
+
+enum LatencyPhase {
+    Invoke,
+    Cold,
+    Warm,
+}
+
+async fn invoke_agent_indices(
+    config: &CellConfig,
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    components: &[ComponentDto],
+    indices: Vec<u32>,
+    method: &'static str,
+    params: golem_common::base_model::agent::DataValue,
+    timeout: Duration,
+) -> Vec<(u32, AttemptOutcome)> {
+    let concurrency = indices.len().max(1);
+    let mut attempts: Vec<(u32, AttemptOutcome)> = futures::stream::iter(indices)
+        .map(|index| {
+            let (component, agent) =
+                agent_for_index(config, index, components).expect("agent_for_index within ramp");
+            let component = component.clone();
+            let params = params.clone();
+            async move {
+                let outcome = timed_invoke(user, &component, &agent, method, params, timeout).await;
+                (index, outcome)
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
+    attempts.sort_by_key(|(index, _)| *index);
+    attempts
+}
+
+fn batch_connection_alive(attempts: &[&AttemptOutcome]) -> bool {
+    let transport_failures = attempts.iter().filter(|a| a.connection_lost).count();
+    attempts.is_empty()
+        || (transport_failures as f64) < (attempts.len() as f64 * TRANSPORT_FAILURE_RATIO)
+}
+
+fn record_attempts(
+    outcome: &mut CellOutcome,
+    detector: &mut CeilingDetector,
+    timeout: &mut AdaptiveTimeout,
+    phase: LatencyPhase,
+    target: u32,
+    pod_restart_count: u64,
+    connection_alive: bool,
+    attempts: &[AttemptOutcome],
+) -> bool {
+    for attempt in attempts {
+        match phase {
+            LatencyPhase::Invoke => outcome
+                .invoke_latencies
+                .entry(target)
+                .or_default()
+                .push(attempt.latency),
+            LatencyPhase::Cold => outcome
+                .cold_invoke_latencies
+                .entry(target)
+                .or_default()
+                .push(attempt.latency),
+            LatencyPhase::Warm => outcome
+                .warm_invoke_latencies
+                .entry(target)
+                .or_default()
+                .push(attempt.latency),
+        }
+        let sample = Sample {
+            latency: attempt.latency,
+            coord: SampleCoord::Agents(target),
+            pod_restart_count,
+            connection_alive,
+            overloaded: attempt.overloaded,
+            snapshot: CrossAxisSnapshot::default(),
+            queue_depth: None,
+        };
+        for event in detector.observe(&sample) {
+            handle_event(event, outcome, timeout);
+        }
+        if detector.is_terminal() {
+            return true;
+        }
+    }
+    false
+}
+
+fn active_fraction_counts(target: u32, active_fraction: u32) -> (u32, u32) {
+    let busy = ((target as u64 * active_fraction as u64) / 100) as u32;
+    let measured = target.saturating_sub(busy);
+    (busy, measured)
+}
+
+/// Scenarios 1-3: each ramp target is an independent burst size. Durable agents
+/// are deleted before advancing to the next target, so larger targets do not mix
+/// already-warm agents from smaller targets with newly-created agents.
 async fn run_ramp_cell(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
@@ -974,179 +1074,242 @@ async fn run_ramp_cell(
     let mut outcome = CellOutcome::default();
     let mut timeout = AdaptiveTimeout::new();
     let started = Instant::now();
-    let mut created = 0u32;
-    let is_ephemeral = config.mode == AgentMode::Ephemeral;
 
     'ramp: for &target in &ramp {
         info!(
-            "Density-agent[{}]: ramping to {target} agents",
+            "Density-agent[{}]: measuring independent target {target}",
             config.cell_name()
         );
+        outcome.max_agents_reached = target;
+        outcome.cleanup_already_done = false;
 
-        // Phase 1: ensure agents up to `target` have been invoked once. Durable
-        // agents persist after this; ephemeral create-only agents do not, but the
-        // one-shot invocation is still the create-path measurement for that mode.
-        let has_create_phase = !is_ephemeral || config.scenario == Scenario::CreateOnly;
-        if has_create_phase && target > created {
-            let batch: Vec<u32> = (created..target).collect();
-            info!(
-                "Density-agent[{}]: creating {} agents for target {target} ({} -> {})",
-                config.cell_name(),
-                batch.len(),
-                created,
-                target
-            );
-            let timeout_current = timeout.current;
-            let creates: Vec<AttemptOutcome> = futures::stream::iter(batch)
-                .map(|index| {
-                    let (component, agent) = agent_for_index(config, index, components)
-                        .expect("agent_for_index within ramp");
-                    let component = component.clone();
-                    async move {
-                        timed_invoke(
+        match config.scenario {
+            Scenario::CreateOnly => {
+                let creates = invoke_agent_indices(
+                    config,
+                    user,
+                    components,
+                    (0..target).collect(),
+                    "increment",
+                    data_value!(),
+                    timeout.current,
+                )
+                .await;
+                let pod_restart_count = probe.pod_restart_count().await;
+                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+                let attempt_refs: Vec<&AttemptOutcome> = creates.iter().map(|(_, a)| a).collect();
+                let connection_alive = batch_connection_alive(&attempt_refs);
+                let attempts: Vec<AttemptOutcome> = creates.into_iter().map(|(_, a)| a).collect();
+                if record_attempts(
+                    &mut outcome,
+                    &mut detector,
+                    &mut timeout,
+                    LatencyPhase::Invoke,
+                    target,
+                    pod_restart_count,
+                    connection_alive,
+                    &attempts,
+                ) {
+                    break 'ramp;
+                }
+            }
+            Scenario::ConcurrentActive => {
+                let cold = invoke_agent_indices(
+                    config,
+                    user,
+                    components,
+                    (0..target).collect(),
+                    "increment",
+                    data_value!(),
+                    timeout.current,
+                )
+                .await;
+                let pod_restart_count = probe.pod_restart_count().await;
+                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+                let attempt_refs: Vec<&AttemptOutcome> = cold.iter().map(|(_, a)| a).collect();
+                let connection_alive = batch_connection_alive(&attempt_refs);
+                let attempts: Vec<AttemptOutcome> = cold.into_iter().map(|(_, a)| a).collect();
+                if record_attempts(
+                    &mut outcome,
+                    &mut detector,
+                    &mut timeout,
+                    LatencyPhase::Cold,
+                    target,
+                    pod_restart_count,
+                    connection_alive,
+                    &attempts,
+                ) {
+                    break 'ramp;
+                }
+
+                for round_index in 1..=INVOKES_PER_AGENT_PER_STEP {
+                    let warm = invoke_agent_indices(
+                        config,
+                        user,
+                        components,
+                        (0..target).collect(),
+                        "increment",
+                        data_value!(),
+                        timeout.current,
+                    )
+                    .await;
+                    let pod_restart_count = probe.pod_restart_count().await;
+                    detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+                    let attempt_refs: Vec<&AttemptOutcome> = warm.iter().map(|(_, a)| a).collect();
+                    let connection_alive = batch_connection_alive(&attempt_refs);
+                    let attempts: Vec<AttemptOutcome> = warm.into_iter().map(|(_, a)| a).collect();
+                    if record_attempts(
+                        &mut outcome,
+                        &mut detector,
+                        &mut timeout,
+                        LatencyPhase::Warm,
+                        target,
+                        pod_restart_count,
+                        connection_alive,
+                        &attempts,
+                    ) {
+                        break 'ramp;
+                    }
+                    if round_index == 1
+                        || round_index % LOAD_ROUND_PROGRESS_INTERVAL == 0
+                        || round_index == INVOKES_PER_AGENT_PER_STEP
+                    {
+                        info!(
+                            "Density-agent[{}]: completed warm increment round {round_index}/{} for target {target}",
+                            config.cell_name(),
+                            INVOKES_PER_AGENT_PER_STEP
+                        );
+                    }
+                }
+            }
+            Scenario::CreateWithActiveFraction => {
+                let active_fraction = config.active_fraction.unwrap_or(0);
+                let (busy_count, measured_count) = active_fraction_counts(target, active_fraction);
+                info!(
+                    "Density-agent[{}]: target {target}, busy {busy_count}, measured {measured_count}",
+                    config.cell_name()
+                );
+                let busy_indices: Vec<u32> = (0..busy_count).collect();
+                let measured_indices: Vec<u32> = (busy_count..target).collect();
+
+                let timeout_current = timeout.current;
+                let (busy, measured) = futures::join!(
+                    invoke_agent_indices(
+                        config,
+                        user,
+                        components,
+                        busy_indices.clone(),
+                        "busy_for",
+                        data_value!(BUSY_MILLIS),
+                        timeout_current,
+                    ),
+                    invoke_agent_indices(
+                        config,
+                        user,
+                        components,
+                        measured_indices.clone(),
+                        "increment",
+                        data_value!(),
+                        timeout_current,
+                    )
+                );
+                let pod_restart_count = probe.pod_restart_count().await;
+                detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+                let attempt_refs: Vec<&AttemptOutcome> = busy
+                    .iter()
+                    .map(|(_, a)| a)
+                    .chain(measured.iter().map(|(_, a)| a))
+                    .collect();
+                let connection_alive = batch_connection_alive(&attempt_refs);
+                let attempts: Vec<AttemptOutcome> = measured.into_iter().map(|(_, a)| a).collect();
+                if record_attempts(
+                    &mut outcome,
+                    &mut detector,
+                    &mut timeout,
+                    LatencyPhase::Cold,
+                    target,
+                    pod_restart_count,
+                    connection_alive,
+                    &attempts,
+                ) {
+                    break 'ramp;
+                }
+
+                for round_index in 1..=INVOKES_PER_AGENT_PER_STEP {
+                    let timeout_current = timeout.current;
+                    let (busy, measured) = futures::join!(
+                        invoke_agent_indices(
+                            config,
                             user,
-                            &component,
-                            &agent,
+                            components,
+                            busy_indices.clone(),
+                            "busy_for",
+                            data_value!(BUSY_MILLIS),
+                            timeout_current,
+                        ),
+                        invoke_agent_indices(
+                            config,
+                            user,
+                            components,
+                            measured_indices.clone(),
                             "increment",
                             data_value!(),
                             timeout_current,
                         )
-                        .await
+                    );
+                    let pod_restart_count = probe.pod_restart_count().await;
+                    detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+                    let attempt_refs: Vec<&AttemptOutcome> = busy
+                        .iter()
+                        .map(|(_, a)| a)
+                        .chain(measured.iter().map(|(_, a)| a))
+                        .collect();
+                    let connection_alive = batch_connection_alive(&attempt_refs);
+                    let attempts: Vec<AttemptOutcome> =
+                        measured.into_iter().map(|(_, a)| a).collect();
+                    if record_attempts(
+                        &mut outcome,
+                        &mut detector,
+                        &mut timeout,
+                        LatencyPhase::Warm,
+                        target,
+                        pod_restart_count,
+                        connection_alive,
+                        &attempts,
+                    ) {
+                        break 'ramp;
                     }
-                })
-                .buffer_unordered(CREATE_CONCURRENCY)
-                .collect()
-                .await;
-
-            let pod_restart_count = probe.pod_restart_count().await;
-            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-            let transport_failures = creates.iter().filter(|a| a.connection_lost).count();
-            let batch_connection_alive = creates.is_empty()
-                || (transport_failures as f64) < (creates.len() as f64 * TRANSPORT_FAILURE_RATIO);
-            if !batch_connection_alive {
-                warn!(
-                    "Density-agent[{}]: {transport_failures}/{} creates failed at transport level — treating executor as unreachable",
-                    config.cell_name(),
-                    creates.len()
-                );
-            }
-
-            for attempt in &creates {
-                outcome
-                    .invoke_latencies
-                    .entry(target)
-                    .or_default()
-                    .push(attempt.latency);
-                let sample = Sample {
-                    latency: attempt.latency,
-                    coord: SampleCoord::Agents(target),
-                    pod_restart_count,
-                    connection_alive: batch_connection_alive,
-                    overloaded: attempt.overloaded,
-                    snapshot: CrossAxisSnapshot::default(),
-                    queue_depth: None,
-                };
-                for event in detector.observe(&sample) {
-                    handle_event(event, &mut outcome, &mut timeout);
-                }
-                if detector.is_terminal() {
-                    outcome.max_agents_reached = target;
-                    break 'ramp;
-                }
-            }
-            created = target;
-            info!(
-                "Density-agent[{}]: create phase complete for target {target}",
-                config.cell_name()
-            );
-        }
-        outcome.max_agents_reached = target;
-
-        // Phase 2: load rounds. Each round fires one concurrent `busy_for` per
-        // agent in the load set and awaits the whole round — N users invoking
-        // their own agents at the same instant.
-        let load = load_count(config, target);
-        if load == 0 {
-            continue;
-        }
-        info!(
-            "Density-agent[{}]: starting load rounds for target {target}, load {load}, rounds {}",
-            config.cell_name(),
-            INVOKES_PER_AGENT_PER_STEP
-        );
-        for round_index in 1..=INVOKES_PER_AGENT_PER_STEP {
-            let timeout_current = timeout.current;
-            let round: Vec<(u32, AttemptOutcome)> = futures::stream::iter(0..load)
-                .map(|index| {
-                    let (component, agent) = agent_for_index(config, index, components)
-                        .expect("agent_for_index within load round");
-                    let component = component.clone();
-                    async move {
-                        let outcome = timed_invoke(
-                            user,
-                            &component,
-                            &agent,
-                            "busy_for",
-                            data_value!(BUSY_MILLIS),
-                            timeout_current,
-                        )
-                        .await;
-                        (index, outcome)
+                    if round_index == 1
+                        || round_index % LOAD_ROUND_PROGRESS_INTERVAL == 0
+                        || round_index == INVOKES_PER_AGENT_PER_STEP
+                    {
+                        info!(
+                            "Density-agent[{}]: completed warm measured-increment round {round_index}/{} for target {target}",
+                            config.cell_name(),
+                            INVOKES_PER_AGENT_PER_STEP
+                        );
                     }
-                })
-                .buffer_unordered(load as usize)
-                .collect()
-                .await;
-
-            let pod_restart_count = probe.pod_restart_count().await;
-            detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-
-            let mut ordered = round;
-            ordered.sort_by_key(|(index, _)| *index);
-            let transport_failures = ordered.iter().filter(|(_, a)| a.connection_lost).count();
-            let round_connection_alive = ordered.is_empty()
-                || (transport_failures as f64) < (ordered.len() as f64 * TRANSPORT_FAILURE_RATIO);
-            if !round_connection_alive {
-                warn!(
-                    "Density-agent[{}]: {transport_failures}/{} load invocations failed at transport level — treating executor as unreachable",
-                    config.cell_name(),
-                    ordered.len()
-                );
-            }
-
-            for (_, attempt) in &ordered {
-                outcome
-                    .invoke_latencies
-                    .entry(target)
-                    .or_default()
-                    .push(attempt.latency);
-                let sample = Sample {
-                    latency: attempt.latency,
-                    coord: SampleCoord::Agents(target),
-                    pod_restart_count,
-                    connection_alive: round_connection_alive,
-                    overloaded: attempt.overloaded,
-                    snapshot: CrossAxisSnapshot::default(),
-                    queue_depth: None,
-                };
-                for event in detector.observe(&sample) {
-                    handle_event(event, &mut outcome, &mut timeout);
-                }
-                if detector.is_terminal() {
-                    break 'ramp;
                 }
             }
-            if round_index == 1
-                || round_index % LOAD_ROUND_PROGRESS_INTERVAL == 0
-                || round_index == INVOKES_PER_AGENT_PER_STEP
-            {
-                info!(
-                    "Density-agent[{}]: completed load round {round_index}/{} for target {target}, load {load}",
-                    config.cell_name(),
-                    INVOKES_PER_AGENT_PER_STEP
-                );
-            }
+            Scenario::ResumeUnderSaturation => unreachable!("scenario 4 uses run_resume_cell"),
         }
+
+        if detector.is_terminal() {
+            break 'ramp;
+        }
+
+        let step_outcome = CellOutcome {
+            max_agents_reached: target,
+            ..CellOutcome::default()
+        };
+        if cleanup_cell_agents(config, user, components, &step_outcome).await
+            == CleanupResult::Failed
+        {
+            outcome.terminated_reason = TerminatedReason::ConnectionLost;
+            outcome.catastrophic_ceiling_agents = Some(target);
+            break 'ramp;
+        }
+        outcome.cleanup_already_done = true;
     }
 
     Ok(outcome)
@@ -1204,11 +1367,10 @@ const RESUME_WARMUP_CALLS_PER_AGENT: u32 = 100;
 /// so the replay test uses comparable per-invocation work.
 const RESUME_WARMUP_BUSY_MILLIS: u32 = 250;
 
-/// Scenario 4 (durable-only): warm `prefill_n` existing agents to produce oplog,
-/// restart the worker-executor to force them out of memory, then ramp cumulative
-/// resume targets over those existing agents. No fresh agents are created during
-/// measurement; each ramp step resumes only the newly-added slice
-/// `resumed_so_far..target`.
+/// Scenario 4 (durable-only): each ramp target is an independent replay burst.
+/// The driver warms exactly `target` agents to produce oplog, restarts the
+/// worker-executor to unload them, then revives all `target` agents concurrently.
+/// `prefill_n` is only the per-cell upper bound for allowed targets.
 async fn run_resume_cell(
     config: &CellConfig,
     user: &TestUserContext<BenchmarkTestDependencies>,
@@ -1218,133 +1380,87 @@ async fn run_resume_cell(
     let prefill = config
         .prefill_n
         .ok_or_else(|| anyhow::anyhow!("resume-under-saturation cell missing prefill_n"))?;
-    let mut detector = CeilingDetector::new();
     let mut outcome = CellOutcome::default();
+    let mut detector = CeilingDetector::new();
     let mut timeout = AdaptiveTimeout::new();
     let started = Instant::now();
 
-    info!(
-        "Density-agent[{}]: warming {prefill} agents with {} calls each",
-        config.cell_name(),
-        RESUME_WARMUP_CALLS_PER_AGENT
-    );
-    let timeout_current = timeout.current;
-    let warmups: Vec<(u32, Vec<AttemptOutcome>)> = futures::stream::iter(0..prefill)
-        .map(|index| {
-            let (component, agent) =
-                agent_for_index(config, index, components).expect("agent_for_index within warmup");
-            let component = component.clone();
-            async move {
-                let mut attempts = Vec::with_capacity(RESUME_WARMUP_CALLS_PER_AGENT as usize);
-                for _ in 0..RESUME_WARMUP_CALLS_PER_AGENT {
-                    attempts.push(
-                        timed_invoke(
-                            user,
-                            &component,
-                            &agent,
-                            "busy_for",
-                            data_value!(RESUME_WARMUP_BUSY_MILLIS),
-                            timeout_current,
-                        )
-                        .await,
-                    );
-                }
-                (index, attempts)
-            }
-        })
-        .buffer_unordered(RESUME_WARMUP_CONCURRENCY)
-        .collect()
-        .await;
-
-    let pod_restart_count = probe.pod_restart_count().await;
-    let mut warmed = 0u32;
-    for (index, attempts) in warmups {
-        warmed += 1;
-        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-        let transport_failures = attempts.iter().filter(|a| a.connection_lost).count();
-        let connection_alive = attempts.is_empty()
-            || (transport_failures as f64) < (attempts.len() as f64 * TRANSPORT_FAILURE_RATIO);
-        for attempt in attempts {
-            let sample = Sample {
-                latency: attempt.latency,
-                coord: SampleCoord::Agents(index + 1),
-                pod_restart_count,
-                connection_alive,
-                overloaded: attempt.overloaded,
-                snapshot: CrossAxisSnapshot::default(),
-                queue_depth: None,
-            };
-            for event in detector.observe(&sample) {
-                handle_event(event, &mut outcome, &mut timeout);
-            }
-            if detector.is_terminal() {
-                outcome.max_agents_reached = index + 1;
-                return Ok(outcome);
-            }
-        }
-        if warmed == 1 || warmed.is_multiple_of(500) || warmed == prefill {
-            info!(
-                "Density-agent[{}]: warmed {warmed}/{prefill} agents",
-                config.cell_name()
-            );
-        }
-    }
-    outcome.max_agents_reached = prefill;
-
-    probe.restart_executor().await?;
-
     let ramp = config.ramp.clone();
-    if let Some(max_target) = ramp.last()
+    if let Some(max_target) = ramp.iter().max()
         && *max_target > prefill
     {
         anyhow::bail!("resume-under-saturation ramp target {max_target} exceeds prefill {prefill}");
     }
-    let mut resumed = 0u32;
 
     'ramp: for &target in &ramp {
-        if target <= resumed {
-            continue;
-        }
+        outcome.max_agents_reached = target;
+        outcome.cleanup_already_done = false;
+
         info!(
-            "Density-agent[{}]: resuming agents {}..{} (target {target})",
+            "Density-agent[{}]: warming {target} agents with {} calls each",
             config.cell_name(),
-            resumed,
-            target
+            RESUME_WARMUP_CALLS_PER_AGENT
         );
         let timeout_current = timeout.current;
-        let resumed_batch: Vec<(u32, AttemptOutcome)> = futures::stream::iter(resumed..target)
+        let warmups: Vec<(u32, Vec<AttemptOutcome>)> = futures::stream::iter(0..target)
             .map(|index| {
                 let (component, agent) = agent_for_index(config, index, components)
-                    .expect("agent_for_index within resume ramp");
+                    .expect("agent_for_index within warmup");
                 let component = component.clone();
                 async move {
-                    let outcome = timed_invoke(
-                        user,
-                        &component,
-                        &agent,
-                        "increment",
-                        data_value!(),
-                        timeout_current,
-                    )
-                    .await;
-                    (index, outcome)
+                    let mut attempts = Vec::with_capacity(RESUME_WARMUP_CALLS_PER_AGENT as usize);
+                    for _ in 0..RESUME_WARMUP_CALLS_PER_AGENT {
+                        attempts.push(
+                            timed_invoke(
+                                user,
+                                &component,
+                                &agent,
+                                "busy_for",
+                                data_value!(RESUME_WARMUP_BUSY_MILLIS),
+                                timeout_current,
+                            )
+                            .await,
+                        );
+                    }
+                    (index, attempts)
                 }
             })
-            .buffer_unordered(CREATE_CONCURRENCY)
+            .buffer_unordered(RESUME_WARMUP_CONCURRENCY)
             .collect()
             .await;
 
-        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
-        let transport_failures = resumed_batch
+        let warmup_attempts: Vec<&AttemptOutcome> = warmups
             .iter()
-            .filter(|(_, a)| a.connection_lost)
-            .count();
-        let connection_alive = resumed_batch.is_empty()
-            || (transport_failures as f64) < (resumed_batch.len() as f64 * TRANSPORT_FAILURE_RATIO);
-        let mut ordered = resumed_batch;
-        ordered.sort_by_key(|(index, _)| *index);
+            .flat_map(|(_, attempts)| attempts.iter())
+            .collect();
+        let warmup_connection_alive = batch_connection_alive(&warmup_attempts);
+        if !warmup_connection_alive {
+            outcome.terminated_reason = TerminatedReason::ConnectionLost;
+            outcome.catastrophic_ceiling_agents = Some(target);
+            break 'ramp;
+        }
 
-        for (_, resume) in &ordered {
+        probe.restart_executor().await?;
+
+        info!(
+            "Density-agent[{}]: reviving {target} warmed agents concurrently",
+            config.cell_name()
+        );
+        let resumed_batch = invoke_agent_indices(
+            config,
+            user,
+            components,
+            (0..target).collect(),
+            "increment",
+            data_value!(),
+            timeout.current,
+        )
+        .await;
+
+        detector.set_elapsed_secs(started.elapsed().as_secs_f64());
+        let attempt_refs: Vec<&AttemptOutcome> = resumed_batch.iter().map(|(_, a)| a).collect();
+        let connection_alive = batch_connection_alive(&attempt_refs);
+        for (_, resume) in &resumed_batch {
             outcome
                 .resume_existing_ms
                 .push(resume.latency.as_secs_f64() * 1000.0);
@@ -1371,12 +1487,28 @@ async fn run_resume_cell(
                 break 'ramp;
             }
         }
-        resumed = target;
-        outcome.max_agents_reached = target;
+
+        if detector.is_terminal() {
+            break 'ramp;
+        }
+
         info!(
-            "Density-agent[{}]: resumed {resumed}/{prefill} prepared agents",
+            "Density-agent[{}]: revived {target} warmed agents",
             config.cell_name()
         );
+
+        let step_outcome = CellOutcome {
+            max_agents_reached: target,
+            ..CellOutcome::default()
+        };
+        if cleanup_cell_agents(config, user, components, &step_outcome).await
+            == CleanupResult::Failed
+        {
+            outcome.terminated_reason = TerminatedReason::ConnectionLost;
+            outcome.catastrophic_ceiling_agents = Some(target);
+            break 'ramp;
+        }
+        outcome.cleanup_already_done = true;
     }
 
     Ok(outcome)
@@ -1427,5 +1559,26 @@ mod tests {
             ramp: vec![100, 250, 500],
         };
         assert_eq!(load_count(&cell, 1000), 0);
+    }
+
+    #[test]
+    fn active_scenarios_do_not_precreate_agents() {
+        let mut cell = CellConfig {
+            scenario: Scenario::CreateWithActiveFraction,
+            mode: AgentMode::Durable,
+            sharing: ComponentSharing::Shared,
+            snapshotting: false,
+            active_fraction: Some(50),
+            prefill_n: None,
+            ramp: vec![100, 250, 500],
+        };
+        assert!(!has_create_phase(&cell));
+
+        cell.scenario = Scenario::ConcurrentActive;
+        cell.active_fraction = None;
+        assert!(!has_create_phase(&cell));
+
+        cell.scenario = Scenario::CreateOnly;
+        assert!(has_create_phase(&cell));
     }
 }

@@ -59,10 +59,9 @@ pub const AGENT_COUNTERS_WASM: &str = "it_agent_counters_release";
 /// cache defaults to 32 entries, so even a few hundred distinct components
 /// thrash it hard — the per-agent ceiling is reached well below this count.
 ///
-/// The observed Variant D ceiling is around 1000 agents. The shared environment
-/// consumes one slot from the 1000-environment account limit, leaving 999
-/// distinct per-agent environments/components.
-pub const PER_AGENT_COMPONENT_COUNT: u32 = 999;
+/// The first cloud pass caps per-agent-component cells at 2000 concurrent
+/// agents/components.
+pub const PER_AGENT_COMPONENT_COUNT: u32 = 2000;
 
 /// Registry name of the single shared agent-density component (the
 /// shared-component sharing mode, labelled `U`).
@@ -70,7 +69,7 @@ pub const UNIFORM_COMPONENT_NAME: &str = "density-counter-uniform";
 
 /// Builds the registry name of the `index`-th (1-based) per-agent distinct
 /// component: `density-counter-distinct-0001` ..
-/// `density-counter-distinct-0999`.
+/// `density-counter-distinct-2000`.
 pub fn distinct_component_name(index: u32) -> String {
     format!("density-counter-distinct-{index:04}")
 }
