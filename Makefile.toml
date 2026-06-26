@@ -72,11 +72,16 @@ dependencies = [
 ]
 
 # WIT DEPENDENCIES
+#
+# Sync the per-crate wit/deps copies from the canonical top-level wit/deps with the
+# dir-mirror tool (dev-tools/dir-mirror) rather than cp: it preserves the mtime of
+# unchanged files, so cargo (which tracks these .wit files via rerun-if-changed from
+# bindgen!) doesn't rebuild the workspace on every run. The <source> <target> pairs
+# below replace the old cp/glob_cp lines one-for-one.
 [tasks.wit]
-description = "Fetches the WIT dependencies based on wit/deps.toml"
+description = "Syncs the per-crate WIT dependency copies from the canonical wit/deps"
 run_task = [
     { name = [
-        "remove-wit-deps",
         "wit-golem-common",
         "wit-golem-cli",
         "wit-sdks",
@@ -85,52 +90,41 @@ run_task = [
 
 [tasks.wit-golem-common]
 private = true
-script_runner = "@duckscript"
-script = """
-rm -r golem-common/wit/deps
-mkdir golem-common/wit/deps
-cp wit/deps/io golem-common/wit/deps
-cp wit/deps/clocks golem-common/wit/deps
-cp wit/deps/golem-1.x golem-common/wit/deps
-cp wit/deps/golem-core-v2 golem-common/wit/deps
-cp wit/deps/golem-agent golem-common/wit/deps
-cp wit/deps/golem-secrets golem-common/wit/deps
-cp wit/deps/golem-tool golem-common/wit/deps
-"""
+command = "cargo"
+args = [
+    "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
+    "wit/deps/io", "golem-common/wit/deps/io",
+    "wit/deps/clocks", "golem-common/wit/deps/clocks",
+    "wit/deps/golem-1.x", "golem-common/wit/deps/golem-1.x",
+    "wit/deps/golem-core-v2", "golem-common/wit/deps/golem-core-v2",
+    "wit/deps/golem-agent", "golem-common/wit/deps/golem-agent",
+    "wit/deps/golem-secrets", "golem-common/wit/deps/golem-secrets",
+    "wit/deps/golem-tool", "golem-common/wit/deps/golem-tool",
+]
 
 [tasks.wit-sdks]
 private = true
-script_runner = "@duckscript"
-script = """
-rm -r sdks/rust/golem-rust/wit/deps
-rm -r sdks/ts/wit/deps
-rm -r sdks/scala/wit/deps
-rm -r sdks/moonbit/golem_sdk/wit/deps
-mkdir sdks/rust/golem-rust/wit/deps
-mkdir sdks/ts/wit/deps
-mkdir sdks/scala/wit/deps
-mkdir sdks/moonbit/golem_sdk/wit/deps
-glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
-glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
-glob_cp wit/deps/**/* sdks/ts/wit/deps
-glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
-glob_cp wit/deps/**/* sdks/scala/wit/deps
-glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
-"""
+command = "cargo"
+args = [
+    "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
+    "wit/deps", "sdks/rust/golem-rust/wit/deps",
+    "wit/deps", "sdks/ts/wit/deps",
+    "wit/deps", "sdks/scala/wit/deps",
+    "wit/deps", "sdks/moonbit/golem_sdk/wit/deps",
+]
 
 [tasks.wit-golem-cli]
 private = true
-script_runner = "@duckscript"
-script = """
-rm -r cli/golem-cli/wit/deps
-mkdir cli/golem-cli/wit/deps
-cp wit/deps/clocks cli/golem-cli/wit/deps
-cp wit/deps/io cli/golem-cli/wit/deps
-cp wit/deps/golem-1.x cli/golem-cli/wit/deps
-cp wit/deps/golem-core-v2 cli/golem-cli/wit/deps
-cp wit/deps/golem-agent cli/golem-cli/wit/deps
-cp wit/deps/logging cli/golem-cli/wit/deps
-"""
+command = "cargo"
+args = [
+    "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
+    "wit/deps/clocks", "cli/golem-cli/wit/deps/clocks",
+    "wit/deps/io", "cli/golem-cli/wit/deps/io",
+    "wit/deps/golem-1.x", "cli/golem-cli/wit/deps/golem-1.x",
+    "wit/deps/golem-core-v2", "cli/golem-cli/wit/deps/golem-core-v2",
+    "wit/deps/golem-agent", "cli/golem-cli/wit/deps/golem-agent",
+    "wit/deps/logging", "cli/golem-cli/wit/deps/logging",
+]
 
 [tasks.remove-wit-deps]
 private = true
@@ -414,7 +408,13 @@ rm -f target/.local-publish-marker
 
 [tasks.check]
 description = "Runs rustfmt and clippy checks without applying any fix"
-dependencies = ["wit", "check-clippy", "check-rustfmt"]
+dependencies = [
+    "wit",
+    "check-clippy",
+    "check-rustfmt",
+    "check-clippy-dev-tools",
+    "check-rustfmt-dev-tools",
+]
 
 [tasks.check-rustfmt]
 description = "Runs rustfmt checks without applying any fix"
@@ -428,12 +428,36 @@ install_crate = "clippy"
 command = "cargo"
 args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
+# The dev-tools workspace is separate, so it needs its own fmt/clippy invocations.
+[tasks.check-rustfmt-dev-tools]
+description = "Runs rustfmt checks on the dev-tools workspace without applying any fix"
+command = "cargo"
+args = ["fmt", "--manifest-path", "dev-tools/Cargo.toml", "--all", "--", "--check"]
+
+[tasks.check-clippy-dev-tools]
+description = "Runs clippy checks on the dev-tools workspace without applying any fix"
+command = "cargo"
+args = [
+    "clippy",
+    "--manifest-path",
+    "dev-tools/Cargo.toml",
+    "--all-targets",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
 ## ** FIX **
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
 #dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
-dependencies = ["fix-clippy", "fix-rustfmt"]
+dependencies = [
+    "fix-clippy",
+    "fix-rustfmt",
+    "fix-clippy-dev-tools",
+    "fix-rustfmt-dev-tools",
+]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"
@@ -456,6 +480,27 @@ args = [
     "-Dwarnings",
 ]
 
+[tasks.fix-rustfmt-dev-tools]
+description = "Runs rustfmt on the dev-tools workspace and applies fixes"
+command = "cargo"
+args = ["fmt", "--manifest-path", "dev-tools/Cargo.toml", "--all"]
+
+[tasks.fix-clippy-dev-tools]
+description = "Runs clippy on the dev-tools workspace and applies fixes"
+command = "cargo"
+args = [
+    "clippy",
+    "--manifest-path",
+    "dev-tools/Cargo.toml",
+    "--all-targets",
+    "--fix",
+    "--allow-dirty",
+    "--allow-staged",
+    "--",
+    "--no-deps",
+    "-Dwarnings",
+]
+
 ## ** TEST **
 
 [tasks.test]
@@ -467,10 +512,16 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
-dependencies = ["wit"]
+dependencies = ["wit", "dev-tools-tests"]
 description = "Runs unit tests only"
 script = '''
 cargo-test-r run --workspace --lib -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.dev-tools-tests]
+description = "Runs the dev-tools workspace unit tests"
+script = '''
+cargo-test-r run --manifest-path dev-tools/Cargo.toml --lib -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]

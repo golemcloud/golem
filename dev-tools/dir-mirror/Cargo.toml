@@ -1,0 +1,18 @@
+[package]
+name = "dir-mirror"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+description = "Idempotent directory mirror used to keep per-crate wit/deps copies in sync"
+
+[lib]
+harness = false
+
+[[bin]]
+name = "dir-mirror"
+test = false
+
+[dev-dependencies]
+tempfile = { workspace = true }
+test-r = { workspace = true }

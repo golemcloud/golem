@@ -24,7 +24,8 @@ members = [
 
 exclude = [
     "test-components",
-    "sdks/golem-rust"
+    "sdks/golem-rust",
+    "dev-tools"
 ]
 
 [workspace.metadata]
