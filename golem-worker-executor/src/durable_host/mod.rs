@@ -721,6 +721,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
     }
 
+    async fn handle_card_expiry_or_revocation_during_replay(
+        &mut self,
+        card_id: CardId
+    ) -> Result<(), WorkerExecutorError> {
+        assert!(self.is_replay());
+
+        let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
+
+        if was_in_wallet {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+
+        Ok(())
+    }
+
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
         if !self.state.is_live() {
             return Ok(());
@@ -736,7 +751,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             match &pending_event.event {
                 QueuedCardEvent::Revoke { card_id } => {
-                    self.apply_card_revoked(*card_id, pending_event.oplog_index, true).await?;
+                    self.apply_card_revoked(*card_id, pending_event.oplog_index).await?;
                 }
                 QueuedCardEvent::Install { card_id } => {
                     let _ = self
@@ -834,31 +849,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         card_id: CardId,
         queued_event_index: OplogIndex,
-        is_live: bool,
     ) -> Result<(), WorkerExecutorError> {
+        assert!(self.is_live());
+
         let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
 
-        if was_in_wallet {
-            self.rederive_agent_effective_surface_from_wallet();
+        if !was_in_wallet {
+            return Ok(());
         }
 
-        if is_live {
-            let wallet_card_ids = self
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            self.state
-                .card_interest_index
-                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
+        let wallet_card_ids = self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
 
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
-                .await;
-        }
+        self.state
+            .card_interest_index
+            .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
+            .await;
+
+        self.public_state
+            .worker()
+            .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
+            .await;
 
         Ok(())
     }
@@ -866,24 +881,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn remove_expired_cards(&mut self) {
         assert!(self.is_live());
 
-        let cards_to_revoke = Vec::new();
+        let mut cards_to_expire = Vec::new();
         let now = Utc::now();
 
-        for (card_id, card) in self.state.agent_wallet_cards {
+        for (card_id, card) in &self.state.agent_wallet_cards {
             if let Some(expires_at) = card.expires_at() && expires_at >= now {
-                cards_to_revoke.push(card_id);
+                cards_to_expire.push(*card_id);
             }
         };
 
-        if cards_to_revoke.is_empty() {
+        if cards_to_expire.is_empty() {
             return;
         }
 
-        for card_id in cards_to_revoke {
+        for card_id in cards_to_expire {
             self.state.agent_wallet_cards.remove(&card_id);
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_revoked(None, card_id))
+                .add_and_commit_oplog(OplogEntry::card_expired(card_id))
                 .await;
         }
 
@@ -2643,8 +2658,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::CardRevoked { card_id } => {
                     debug!(card_id = %card_id, "Applying replayed card revocation");
-                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
-                        .await?;
+                    self.handle_card_expiry_or_revocation_during_replay(card_id).await?;
+                }
+                ReplayEvent::CardExpired { card_id } => {
+                    debug!(card_id = %card_id, "Applying replayed card expiration");
+                    self.handle_card_expiry_or_revocation_during_replay(card_id).await?;
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");

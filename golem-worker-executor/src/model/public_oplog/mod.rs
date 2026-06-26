@@ -23,18 +23,7 @@ use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
-    CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams, BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams, CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -890,6 +879,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
                 timestamp,
                 queued_event_index,
+                card_id,
+            })),
+            OplogEntry::CardExpired {
+                timestamp,
+                card_id,
+            } => Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
+                timestamp,
                 card_id,
             })),
             OplogEntry::CardEventQueued { timestamp, event } => {
