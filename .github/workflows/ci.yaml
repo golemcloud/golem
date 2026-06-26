@@ -49,6 +49,9 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: 'true'
+      # Test the build tooling (dev-tools/) first so a broken tool fails fast
+      - name: Test build tools (dev-tools)
+        run: cargo make --profile ci dev-tools-tests
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest

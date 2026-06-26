@@ -517,7 +517,7 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
-dependencies = ["wit", "dev-tools-tests"]
+dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
 cargo-test-r run --workspace --lib -- --nocapture --report-time $JUNIT_OPTS
@@ -525,9 +525,8 @@ cargo-test-r run --workspace --lib -- --nocapture --report-time $JUNIT_OPTS
 
 [tasks.dev-tools-tests]
 description = "Runs the dev-tools workspace unit tests"
-script = '''
-cargo-test-r run --manifest-path dev-tools/Cargo.toml --lib -- --nocapture --report-time $JUNIT_OPTS
-'''
+command = "cargo"
+args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
 [tasks.worker-executor-tests]
 dependencies = ["wit"]
