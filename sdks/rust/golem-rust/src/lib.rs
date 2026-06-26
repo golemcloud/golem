@@ -300,6 +300,7 @@ pub use json::*;
 
 mod checkpoint;
 pub mod quota;
+pub mod secrets;
 mod transaction;
 
 use std::future::Future;
@@ -314,6 +315,7 @@ pub type OplogIndex = u64;
 pub mod websocket;
 pub use checkpoint::*;
 pub use quota::*;
+pub use secrets::*;
 pub mod retry;
 pub use transaction::*;
 pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};
