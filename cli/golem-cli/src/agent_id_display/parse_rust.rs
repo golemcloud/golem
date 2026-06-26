@@ -13,7 +13,11 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{Dialect, ParseError, parse_cm_value, perr};
+use super::parse_common::{
+    Dialect, ParseError, duration_value_from_nanos, duration_value_from_text, parse_cm_value,
+    parse_quantity_constructor, parse_rich_constructor_body, parse_uint, perr,
+    quantity_value_from_text,
+};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
@@ -253,5 +257,76 @@ impl Dialect for RustDialect {
         }
         lexer.expect(&Token::RBrace)?;
         Ok(SchemaValue::Flags { bits })
+    }
+
+    /// Rust quantities accept the native `N.unit()` literal (e.g. `5.kg()`,
+    /// `1.5.kg()`) in addition to the `Quantity("5kg")` constructor. Units with
+    /// non-identifier characters (`/`, `%`, `^`, …) stay constructor-only.
+    fn parse_quantity(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        if matches!(
+            lexer.peek()?,
+            Token::IntLit(_) | Token::UintLit(_) | Token::FloatLit(_)
+        ) {
+            let (_, start, end) = lexer.next_token()?;
+            let number = lexer.slice(start, end).to_string();
+            lexer.expect(&Token::Dot)?;
+            let (unit, _, _) = lexer.expect_ident()?;
+            lexer.expect(&Token::LParen)?;
+            lexer.expect(&Token::RParen)?;
+            quantity_value_from_text(start, &format!("{number}{unit}"))
+        } else {
+            parse_quantity_constructor(lexer)
+        }
+    }
+
+    /// Rust durations accept the native `Duration::from_secs(N)` family
+    /// (`from_nanos`/`from_micros`/`from_millis`/`from_secs`, non-negative
+    /// integer argument) in addition to the `Duration("PT30S")` constructor.
+    fn parse_duration(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        let (name, pos, _) = lexer.expect_ident()?;
+        if name != "Duration" {
+            return Err(perr(
+                pos,
+                &format!("expected 'Duration' constructor or literal, got '{name}'"),
+            ));
+        }
+        match lexer.peek()? {
+            Token::DoubleColon => {
+                lexer.next_token()?;
+                let (method, mpos, _) = lexer.expect_ident()?;
+                let factor: i64 = match method.as_str() {
+                    "from_nanos" => 1,
+                    "from_micros" => 1_000,
+                    "from_millis" => 1_000_000,
+                    "from_secs" => 1_000_000_000,
+                    _ => {
+                        return Err(perr(
+                            mpos,
+                            &format!("unknown Duration constructor '{method}'"),
+                        ));
+                    }
+                };
+                lexer.expect(&Token::LParen)?;
+                let n = parse_uint(lexer)?;
+                lexer.expect(&Token::RParen)?;
+                let nanos = (n as i128)
+                    .checked_mul(factor as i128)
+                    .and_then(|v| i64::try_from(v).ok())
+                    .ok_or_else(|| perr(mpos, "duration literal overflows i64 nanoseconds"))?;
+                Ok(duration_value_from_nanos(nanos))
+            }
+            Token::LParen => {
+                let bpos = lexer.position();
+                let body = parse_rich_constructor_body(lexer)?;
+                duration_value_from_text(bpos, &body)
+            }
+            other => {
+                let other = other.clone();
+                Err(perr(
+                    lexer.position(),
+                    &format!("expected '::' or '(' after 'Duration', got {other:?}"),
+                ))
+            }
+        }
     }
 }

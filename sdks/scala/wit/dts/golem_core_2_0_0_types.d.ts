@@ -8,6 +8,8 @@ declare module 'golem:core/types@2.0.0' {
    * Converts a UUID to a string
    */
   export function uuidToString(uuid: Uuid): string;
+  export class QuotaToken {
+  }
   /**
    * ============================================================
    * Carrier indices
@@ -578,18 +580,6 @@ declare module 'golem:core/types@2.0.0' {
     /** Opaque, authority-resolved reference. */
     secretRef: string;
   };
-  /**
-   * Capability value: quota-token transport is **by snapshot**. The receiver
-   * re-acquires a live lease against `(environment-id, resource-name)` on
-   * demand.
-   */
-  export type QuotaTokenValuePayload = {
-    environmentId: EnvironmentId;
-    resourceName: string;
-    expectedUse: bigint;
-    lastCredit: bigint;
-    lastCreditAt: Datetime;
-  };
   export type SchemaValueNode = 
   /** Primitives */
   {
@@ -725,8 +715,8 @@ declare module 'golem:core/types@2.0.0' {
     val: SecretValuePayload
   } |
   {
-    tag: 'quota-token-value'
-    val: QuotaTokenValuePayload
+    tag: 'quota-token-handle'
+    val: QuotaToken
   };
   /**
    * ============================================================

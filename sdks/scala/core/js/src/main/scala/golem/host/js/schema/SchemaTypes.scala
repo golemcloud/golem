@@ -542,33 +542,6 @@ object JsSecretValuePayload {
     js.Dynamic.literal("secretRef" -> secretRef).asInstanceOf[JsSecretValuePayload]
 }
 
-@js.native
-sealed trait JsQuotaTokenValuePayload extends js.Object {
-  def environmentId: JsEnvironmentId = js.native
-  def resourceName: String           = js.native
-  def expectedUse: js.BigInt         = js.native
-  def lastCredit: js.BigInt          = js.native
-  def lastCreditAt: JsDatetime       = js.native
-}
-object JsQuotaTokenValuePayload {
-  def apply(
-    environmentId: JsEnvironmentId,
-    resourceName: String,
-    expectedUse: js.BigInt,
-    lastCredit: js.BigInt,
-    lastCreditAt: JsDatetime
-  ): JsQuotaTokenValuePayload =
-    js.Dynamic
-      .literal(
-        "environmentId" -> environmentId,
-        "resourceName"  -> resourceName,
-        "expectedUse"   -> expectedUse,
-        "lastCredit"    -> lastCredit,
-        "lastCreditAt"  -> lastCreditAt
-      )
-      .asInstanceOf[JsQuotaTokenValuePayload]
-}
-
 // === Schema value node / tree / typed value ===
 
 @js.native
@@ -626,8 +599,14 @@ object JsSchemaValueNode {
 
   def secretValue(p: JsSecretValuePayload): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("secret-value", p)
-  def quotaTokenValue(p: JsQuotaTokenValuePayload): JsSchemaValueNode =
-    JsShape.tagged[JsSchemaValueNode]("quota-token-value", p)
+
+  /**
+   * `schema-value-node :: quota-token-handle(own<quota-token>)`. The `val`
+   * carries the opaque owned `golem:core/types@2.0.0` `quota-token` resource as
+   * an unforgeable handle; it has no readable structure.
+   */
+  def quotaTokenHandle(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("quota-token-handle", resource)
 }
 
 @js.native

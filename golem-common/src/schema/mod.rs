@@ -32,8 +32,8 @@ pub use golem_schema::schema::proptest_strategies;
 #[cfg(feature = "full")]
 pub use golem_schema::schema::wit;
 pub use golem_schema::schema::{
-    canonical, conversion, derive, graph, metadata, multimodal, schema_type, schema_value,
-    unstructured,
+    canonical, conversion, derive, graph, host_managed, metadata, multimodal, schema_type,
+    schema_value, unstructured,
 };
 
 #[cfg(test)]
@@ -48,10 +48,15 @@ pub use agent::{
 };
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
-    SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
+    Quantity, QuantityUnit, SchemaBuilder, SecretRef, merge_agent_graphs, try_into_schema_graph,
+    try_into_typed_schema_value,
 };
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
+pub use host_managed::{
+    HostManagedKind, RedactedSchemaValue, redact_host_managed_type,
+    redact_host_managed_typed_value, redact_host_managed_value, redacted_schema_value_debug,
+};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,

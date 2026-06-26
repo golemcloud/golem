@@ -936,7 +936,7 @@ mod agent_error_tests {
         let err = AgentError::CustomError(typed);
         let rendered = err.to_string();
         assert!(
-            rendered.contains("<redacted>"),
+            rendered.contains("<redacted: secret>"),
             "expected secret to be redacted, got: {rendered:?}"
         );
         assert!(

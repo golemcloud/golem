@@ -16,11 +16,11 @@
 
 package golem.host
 
-import golem.{EnvironmentId, Uuid}
 import golem.schema._
 import golem.schema.wire._
 import golem.host.js.schema._
 
+import scala.collection.mutable
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
@@ -49,8 +49,10 @@ object SchemaWireInterop {
   def graphFromJs(j: JsSchemaGraph): WitSchemaGraph =
     WitSchemaGraph(j.typeNodes.toList.toVector.map(typeNodeFromJs), j.defs.toList.toVector.map(defFromJs), j.root)
 
-  def valueTreeToJs(v: WitSchemaValueTree): JsSchemaValueTree =
+  def valueTreeToJs(v: WitSchemaValueTree): JsSchemaValueTree = {
+    preflightValueTree(v)
     JsSchemaValueTree(v.valueNodes.map(valueNodeToJs).toJSArray, v.root)
+  }
 
   def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree =
     WitSchemaValueTree(j.valueNodes.toList.toVector.map(valueNodeFromJs), j.root)
@@ -105,15 +107,6 @@ object SchemaWireInterop {
   // ===========================================================================
   // Embedded common records
   // ===========================================================================
-
-  private def uuidToJs(u: Uuid): JsUuid =
-    JsUuid(js.BigInt(u.highBits.toString), js.BigInt(u.lowBits.toString))
-
-  private def uuidFromJs(j: JsUuid): Uuid =
-    Uuid(BigInt(j.highBits.toString), BigInt(j.lowBits.toString))
-
-  private def envIdToJs(e: EnvironmentId): JsEnvironmentId   = JsEnvironmentId(uuidToJs(e.uuid))
-  private def envIdFromJs(j: JsEnvironmentId): EnvironmentId = EnvironmentId(uuidFromJs(j.uuid))
 
   private def datetimeToJs(d: Datetime): JsDatetime   = JsDatetime(js.BigInt(d.seconds.toString), d.nanoseconds)
   private def datetimeFromJs(j: JsDatetime): Datetime = Datetime(BigInt(j.seconds.toString).toLong, j.nanoseconds)
@@ -281,24 +274,6 @@ object SchemaWireInterop {
   private def quotaSpecToJs(s: QuotaTokenSpec): JsQuotaTokenSpec   = JsQuotaTokenSpec(s.resourceName.orUndefined)
   private def quotaSpecFromJs(j: JsQuotaTokenSpec): QuotaTokenSpec = QuotaTokenSpec(j.resourceName.toOption)
 
-  private def quotaPayloadToJs(p: QuotaTokenValuePayload): JsQuotaTokenValuePayload =
-    JsQuotaTokenValuePayload(
-      envIdToJs(p.environmentId),
-      p.resourceName,
-      js.BigInt(U64.fromRawBits(p.expectedUse).toString),
-      js.BigInt(p.lastCredit.toString),
-      datetimeToJs(p.lastCreditAt)
-    )
-
-  private def quotaPayloadFromJs(j: JsQuotaTokenValuePayload): QuotaTokenValuePayload =
-    QuotaTokenValuePayload(
-      envIdFromJs(j.environmentId),
-      j.resourceName,
-      U64.toRawBits(BigInt(j.expectedUse.toString)),
-      BigInt(j.lastCredit.toString).toLong,
-      datetimeFromJs(j.lastCreditAt)
-    )
-
   // ===========================================================================
   // Schema graph: defs / fields / cases / type body / node
   // ===========================================================================
@@ -445,6 +420,68 @@ object SchemaWireInterop {
       case other       => throw new IllegalArgumentException(s"Unknown result-value-payload tag: $other")
     }
 
+  /**
+   * Validate an entire `WitSchemaValueTree` before [[valueTreeToJs]] moves any
+   * owned `quota-token` handle.
+   *
+   * `valueNodeToJs` performs the affine `handle.take()` in the same `map` pass
+   * that also runs conversions which (here or at the component-model boundary
+   * the resulting JS tree crosses next) can still reject a sibling: an invalid
+   * `char` code point, an out-of-range `u8`/`u16`/`u32`, or an invalid
+   * `datetime`. Without this preflight a sibling failure after a handle was
+   * taken would silently destroy the token. Running this borrow-only validation
+   * first keeps the move atomic: a tree the boundary would reject is rejected
+   * before any handle leaves its cell.
+   *
+   * The check is a flat pass over every node, mirroring the `map` below (which
+   * converts — and so takes — each array slot exactly once, regardless of how
+   * the nodes reference each other). It deliberately does not validate child
+   * indices: `valueNodeToJs` copies them verbatim without dereferencing, so a
+   * dangling index cannot strand a taken handle, and several shape tests rely
+   * on isolating a single node. Handles are deduplicated by the identity of the
+   * underlying owned resource (peeked without consuming), so two distinct
+   * holders wrapping the same raw `quota-token` are rejected too, not only the
+   * same holder used twice.
+   */
+  private def preflightValueTree(v: WitSchemaValueTree): Unit = {
+    import WitSchemaValueNode._
+    val seenRawQuota = mutable.Set.empty[Any]
+
+    def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
+      if (value < min || value > max)
+        throw SchemaEncodeError(s"$name value out of range: $value")
+
+    v.valueNodes.foreach {
+      case U8Value(value)   => checkRange("u8", value.toLong, 0L, 255L)
+      case U16Value(value)  => checkRange("u16", value.toLong, 0L, 65535L)
+      case U32Value(value)  => checkRange("u32", value, 0L, 4294967295L)
+      case CharValue(value) =>
+        // A WIT `char` is a Unicode scalar value; reject anything outside
+        // `[0, 0x10FFFF]` or a lone surrogate, both of which the boundary
+        // rejects (and which `Character.toChars` would otherwise mishandle).
+        if (!Character.isValidCodePoint(value) || (value >= 0xd800 && value <= 0xdfff))
+          throw SchemaEncodeError(s"char value is not a Unicode scalar value: $value")
+      case DatetimeValue(dt) =>
+        if (dt.nanoseconds < 0 || dt.nanoseconds >= 1000000000)
+          throw SchemaEncodeError(
+            s"invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${dt.nanoseconds}"
+          )
+      case QuotaTokenHandle(h) =>
+        // Peek the underlying owned resource without consuming it so two distinct
+        // holders wrapping the same raw handle are also rejected.
+        val raw = h
+          .withHandle(identity)
+          .getOrElse(
+            throw SchemaEncodeError(
+              "quota-token handle was already transferred; an owned quota-token can only be sent once"
+            )
+          )
+        if (!seenRawQuota.add(raw))
+          throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
+      case _ => ()
+    }
+  }
+
   private def valueNodeToJs(n: WitSchemaValueNode): JsSchemaValueNode = {
     import WitSchemaValueNode._
     n match {
@@ -482,7 +519,17 @@ object SchemaWireInterop {
       case QuantityValueNode(v) => JsSchemaValueNode.quantityValueNode(quantityValueToJs(v))
       case UnionValue(p)        => JsSchemaValueNode.unionValue(JsUnionValuePayload(p.tag, p.body))
       case SecretValue(p)       => JsSchemaValueNode.secretValue(JsSecretValuePayload(p.secretRef))
-      case QuotaTokenValue(v)   => JsSchemaValueNode.quotaTokenValue(quotaPayloadToJs(v))
+      case QuotaTokenHandle(h)  =>
+        // Move the owned `quota-token` resource out of the opaque handle exactly
+        // once. `schemaValueToWit` preflights that every handle is present and
+        // unique, so this take always succeeds for a well-formed tree.
+        h.take() match {
+          case Some(raw) => JsSchemaValueNode.quotaTokenHandle(raw.asInstanceOf[js.Any])
+          case None      =>
+            throw new IllegalStateException(
+              "quota-token handle was already transferred; an owned quota-token can only be sent once"
+            )
+        }
     }
   }
 
@@ -536,8 +583,10 @@ object SchemaWireInterop {
       case "secret-value" =>
         val p = valOf(j).asInstanceOf[JsSecretValuePayload]
         SecretValue(WitSecretValuePayload(p.secretRef))
-      case "quota-token-value" => QuotaTokenValue(quotaPayloadFromJs(valOf(j).asInstanceOf[JsQuotaTokenValuePayload]))
-      case other               => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
+      case "quota-token-handle" =>
+        // Wrap the owned `quota-token` resource in a fresh take-once handle.
+        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(valOf(j)))
+      case other => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
     }
   }
 }

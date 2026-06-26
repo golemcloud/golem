@@ -515,6 +515,38 @@ pub fn decode_agent_error(
     })
 }
 
+/// Host-only decode of a guest-returned [`wire::AgentError`] at a boundary that
+/// does not permit quota tokens.
+///
+/// A guest returns an `agent-error` (the `Err` arm of `initialize` / `invoke` /
+/// `discover-agent-types`) after its export has already returned, so the
+/// instance — and its resource table — stay alive while the host decodes the
+/// result. The `custom-error` payload is a guest-owned `typed-schema-value`
+/// whose owned `quota-token` handles were transferred into the resource table;
+/// since domain errors must never carry a capability, this decodes the payload
+/// through the rejecting path, which deletes any such handle from the table
+/// (rather than leaking it) and rejects the value with
+/// [`DecodeError::QuotaTokenNotPermitted`].
+#[cfg(feature = "full")]
+pub fn decode_agent_error_rejecting_quota_with<
+    D: golem_schema::schema::wit::QuotaTokenHandleDropper,
+>(
+    w: wire::AgentError,
+    dropper: &mut D,
+) -> Result<crate::model::agent::AgentError, AgentWitError> {
+    use crate::model::agent::AgentError as M;
+    use golem_schema::schema::wit::decode_typed_rejecting_quota_with;
+    Ok(match w {
+        wire::AgentError::InvalidInput(s) => M::InvalidInput(s),
+        wire::AgentError::InvalidMethod(s) => M::InvalidMethod(s),
+        wire::AgentError::InvalidType(s) => M::InvalidType(s),
+        wire::AgentError::InvalidAgentId(s) => M::InvalidAgentId(s),
+        wire::AgentError::CustomError(typed) => {
+            M::CustomError(decode_typed_rejecting_quota_with(typed, dropper)?)
+        }
+    })
+}
+
 // ============================================================
 // Non-schema structural conversions (base_model <-> wire)
 //

@@ -13,7 +13,11 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{Dialect, ParseError, parse_cm_value, perr};
+use super::parse_common::{
+    Dialect, EpochNumber, ParseError, datetime_value_from_epoch_millis_f64,
+    datetime_value_from_millis, datetime_value_from_text, parse_cm_value, parse_epoch_number,
+    parse_rich_constructor_body, perr,
+};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
@@ -295,6 +299,67 @@ impl Dialect for ScalaDialect {
         }
         lexer.expect(&Token::RBrack)?;
         Ok(SchemaValue::List { elements: items })
+    }
+
+    /// Scala datetimes accept the native `Datetime.fromEpochMillis(N)` and
+    /// `Datetime.fromEpochSeconds(N)` value constructors (matching the
+    /// `golem.Datetime` value class) in addition to the `Datetime("...")`
+    /// constructor. Dynamic constructors (`now`, `afterMillis`, …) are rejected
+    /// so agent-id parsing stays deterministic.
+    fn parse_datetime(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        let (name, pos, _) = lexer.expect_ident()?;
+        if name != "Datetime" {
+            return Err(perr(
+                pos,
+                &format!("expected 'Datetime' constructor or literal, got '{name}'"),
+            ));
+        }
+        match lexer.peek()? {
+            Token::Dot => {
+                lexer.next_token()?;
+                let (method, mpos, _) = lexer.expect_ident()?;
+                lexer.expect(&Token::LParen)?;
+                let npos = lexer.position();
+                let n = parse_epoch_number(lexer)?;
+                lexer.expect(&Token::RParen)?;
+                match method.as_str() {
+                    // `golem.Datetime.fromEpochMillis` / `fromEpochSeconds` both
+                    // take a `Double`; integer arguments stay bit-exact while
+                    // fractional arguments keep sub-unit precision.
+                    "fromEpochMillis" => match n {
+                        EpochNumber::Int(ms) => datetime_value_from_millis(npos, ms),
+                        EpochNumber::Float(ms) => datetime_value_from_epoch_millis_f64(npos, ms),
+                    },
+                    "fromEpochSeconds" => match n {
+                        EpochNumber::Int(s) => {
+                            let millis = s
+                                .checked_mul(1_000)
+                                .ok_or_else(|| perr(npos, "epoch seconds overflow"))?;
+                            datetime_value_from_millis(npos, millis)
+                        }
+                        EpochNumber::Float(s) => {
+                            datetime_value_from_epoch_millis_f64(npos, s * 1_000.0)
+                        }
+                    },
+                    _ => Err(perr(
+                        mpos,
+                        &format!("unknown Datetime constructor '{method}'"),
+                    )),
+                }
+            }
+            Token::LParen => {
+                let bpos = lexer.position();
+                let body = parse_rich_constructor_body(lexer)?;
+                datetime_value_from_text(bpos, &body)
+            }
+            other => {
+                let other = other.clone();
+                Err(perr(
+                    lexer.position(),
+                    &format!("expected '.' or '(' after 'Datetime', got {other:?}"),
+                ))
+            }
+        }
     }
 }
 

@@ -138,7 +138,7 @@ fn generate_config_schema_impl(
                         &field_path,
                         &#golem_rust_crate_ident::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
                     );
-                    let value = #golem_rust_crate_ident::decode_schema_value(&value)
+                    let value = #golem_rust_crate_ident::decode_schema_value(value)
                         .expect("failed to decode config schema value");
                     #golem_rust_crate_ident::schema::FromSchema::from_value(&value)
                         .expect("failed deserializing config value")

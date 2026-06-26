@@ -20,6 +20,7 @@
 
 use crate::schema::canonical;
 use crate::schema::graph::SchemaGraph;
+use crate::schema::host_managed::HostManagedKind;
 use crate::schema::metadata::TypeId;
 use crate::schema::render::error::RenderError;
 use crate::schema::render::walker::{SchemaWalker, WalkerError, resolve_ref, walk};
@@ -40,6 +41,35 @@ pub fn to_json_value(
 ) -> Result<Value, RenderError> {
     let mut renderer = ToJsonRenderer {
         path: PathStack::new(),
+        redact: false,
+    };
+    drive(walk(&mut renderer, graph, ty, value))
+}
+
+/// Render a value tree to a `serde_json::Value`, redacting every
+/// host-managed capability node (see [`HostManagedKind`]).
+///
+/// Each `Secret` / `QuotaToken` value — including those nested inside
+/// records, variants, lists, maps, options, results and unions — is
+/// replaced with the JSON string `"<redacted: kind>"`. Non-capability
+/// material is encoded exactly as in [`to_json_value`].
+///
+/// Use this on external-facing surfaces (MCP tool/resource responses,
+/// custom HTTP API responses) that would otherwise forward raw
+/// capability references to clients. Internal, trusted callers that
+/// need the lossless round-trippable form — registry storage,
+/// cross-worker RPC, oplog/grpc, config storage — should keep using
+/// [`to_json_value`]. Unlike [`to_json_value`], the output of this
+/// function is **not** guaranteed to round-trip through
+/// [`from_json_value`]; the redacted placeholder is a one-way sink.
+pub fn to_json_value_redacted(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+) -> Result<Value, RenderError> {
+    let mut renderer = ToJsonRenderer {
+        path: PathStack::new(),
+        redact: true,
     };
     drive(walk(&mut renderer, graph, ty, value))
 }
@@ -59,6 +89,7 @@ pub fn from_json_value(
 
 struct ToJsonRenderer {
     path: PathStack,
+    redact: bool,
 }
 
 impl SchemaWalker for ToJsonRenderer {
@@ -96,6 +127,16 @@ fn encode(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<Value, RenderError> {
+    if r.redact
+        && let (Some(type_kind), Some(value_kind)) = (
+            HostManagedKind::from_type(ty),
+            HostManagedKind::from_value(value),
+        )
+        && type_kind == value_kind
+    {
+        return Ok(Value::String(type_kind.redacted_placeholder().to_string()));
+    }
+
     match (ty, value) {
         (SchemaType::Ref { .. }, _) => unreachable!("walker resolves refs"),
 

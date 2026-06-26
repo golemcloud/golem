@@ -225,7 +225,46 @@ object SchemaWire {
   // Schema value
   // ----------------------------------------------------------------
 
+  /**
+   * Verify, before any owned handle is moved, that every [[SchemaValue]]
+   * `quota-token` in `value` is still present and that no handle appears more
+   * than once. Running this as a preflight keeps lowering atomic: a value tree
+   * with an aliased or already-transferred token is rejected without partially
+   * transferring any handle. Mirrors the TS SDK's `preflightQuotaHandles`.
+   */
+  private def preflightQuotaHandles(value: SchemaValue): Unit = {
+    val seen                        = mutable.Set.empty[GuestQuotaTokenHandle]
+    def visit(v: SchemaValue): Unit = {
+      import SchemaValue._
+      v match {
+        case QuotaTokenHandle(h) =>
+          if (!h.isPresent)
+            throw SchemaEncodeError(
+              "quota-token handle was already transferred; an owned quota-token can only be sent once"
+            )
+          if (!seen.add(h))
+            throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
+        case RecordValue(fields)  => fields.foreach(visit)
+        case VariantValue(_, p)   => p.foreach(visit)
+        case TupleValue(elements) => elements.foreach(visit)
+        case ListValue(elements)  => elements.foreach(visit)
+        case FixedListValue(es)   => es.foreach(visit)
+        case MapValue(entries)    => entries.foreach { e => visit(e.key); visit(e.value) }
+        case OptionValue(o)       => o.foreach(visit)
+        case ResultValue(result)  =>
+          result match {
+            case SchemaResult.Ok(o)  => o.foreach(visit)
+            case SchemaResult.Err(o) => o.foreach(visit)
+          }
+        case UnionValue(_, body) => visit(body)
+        case _                   => ()
+      }
+    }
+    visit(value)
+  }
+
   def schemaValueToWit(value: SchemaValue): WitSchemaValueTree = {
+    preflightQuotaHandles(value)
     val valueNodes = mutable.ArrayBuffer.empty[WitSchemaValueNode]
 
     def emit(value: SchemaValue): Int = {
@@ -275,7 +314,7 @@ object SchemaWire {
         case QuantityValueNode(x)         => W.QuantityValueNode(x)
         case UnionValue(unionTag, body)   => W.UnionValue(WitUnionValuePayload(unionTag, emit(body)))
         case SecretValue(secretRef)       => W.SecretValue(WitSecretValuePayload(secretRef))
-        case QuotaTokenValue(x)           => W.QuotaTokenValue(x)
+        case QuotaTokenHandle(h)          => W.QuotaTokenHandle(h)
       }
     }
 
@@ -286,15 +325,48 @@ object SchemaWire {
   def schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue = {
     val nodes  = wit.valueNodes
     val onPath = Array.fill(nodes.length)(false)
+    // An owned `quota-token` handle node may be lifted into the value tree at
+    // most once; track which handle nodes have already been claimed so a
+    // malformed tree that references the same handle node twice cannot wrap one
+    // owned resource into two handles.
+    val liftedHandle = Array.fill(nodes.length)(false)
 
     def fromIdx(idx: Int): SchemaValue = {
       if (idx < 0 || idx >= nodes.length)
         throw SchemaDecodeError(s"value node index out of range: $idx (nodes: ${nodes.length})")
       if (onPath(idx)) throw SchemaDecodeError(s"cyclic value node reference at index $idx")
+      nodes(idx) match {
+        case _: WitSchemaValueNode.QuotaTokenHandle =>
+          if (liftedHandle(idx))
+            throw SchemaDecodeError(s"quota-token handle node referenced more than once at index $idx")
+          liftedHandle(idx) = true
+        case _ => ()
+      }
       onPath(idx) = true
       val result = fromNode(nodes(idx))
       onPath(idx) = false
       result
+    }
+
+    // Empty owned `quota-token` handles still present in `nodes`, returning the
+    // first such index. With `includeLifted = false` only handle nodes never
+    // lifted into the value tree are drained (used to detect a tree that carries
+    // handles unreachable from the root); with `includeLifted = true` every
+    // handle is drained, including ones already lifted into a partial or rejected
+    // value, so no decode failure leaves a live owned resource dangling.
+    def drainHandles(includeLifted: Boolean): Option[Int] = {
+      var leftover: Option[Int] = None
+      var i                     = 0
+      while (i < nodes.length) {
+        nodes(i) match {
+          case WitSchemaValueNode.QuotaTokenHandle(h) if includeLifted || !liftedHandle(i) =>
+            h.take()
+            if (leftover.isEmpty) leftover = Some(i)
+          case _ => ()
+        }
+        i += 1
+      }
+      leftover
     }
 
     def fromNode(node: WitSchemaValueNode): SchemaValue = {
@@ -338,11 +410,31 @@ object SchemaWire {
         case WitSchemaValueNode.QuantityValueNode(x) => S.QuantityValueNode(x)
         case WitSchemaValueNode.UnionValue(p)        => S.UnionValue(p.tag, fromIdx(p.body))
         case WitSchemaValueNode.SecretValue(p)       => S.SecretValue(p.secretRef)
-        case WitSchemaValueNode.QuotaTokenValue(x)   => S.QuotaTokenValue(x)
+        case WitSchemaValueNode.QuotaTokenHandle(h)  => S.QuotaTokenHandle(h)
       }
     }
 
-    fromIdx(wit.root)
+    val result =
+      try fromIdx(wit.root)
+      catch {
+        case e: Throwable =>
+          // Release every owned `quota-token` handle in the wire tree, including
+          // ones already lifted into the partial (now discarded) value, so a
+          // failed decode never leaves a live owned resource dangling.
+          drainHandles(includeLifted = true)
+          throw e
+      }
+
+    // A valid tree references every owned `quota-token` handle exactly once from
+    // the root. If any handle node was never lifted it was unreachable from the
+    // root: the whole decode is rejected, so every handle is released, including
+    // those already lifted into `result`.
+    drainHandles(includeLifted = false) match {
+      case Some(i) =>
+        drainHandles(includeLifted = true)
+        throw SchemaDecodeError(s"quota-token handle node not referenced from the root at index $i")
+      case None => result
+    }
   }
 
   // ----------------------------------------------------------------

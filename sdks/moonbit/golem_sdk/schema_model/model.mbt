@@ -176,7 +176,8 @@ pub(all) enum SchemaValue {
   Union(String, SchemaValue)
   // opaque secret reference
   Secret(String)
-  QuotaToken(@types.QuotaTokenValuePayload)
+  // owned `quota-token` resource carried as an opaque, affine handle
+  QuotaToken(GuestQuotaTokenHandle)
 } derive(Show, Eq)
 
 ///|

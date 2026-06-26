@@ -31,6 +31,11 @@ export interface WellKnownTypes {
     config: WellKnown;
     secret: WellKnown;
     quotaToken: WellKnown;
+    path: WellKnown;
+    duration: WellKnown;
+    quantity: WellKnown;
+    date: WellKnown;
+    url: WellKnown;
   };
 }
 
@@ -38,7 +43,7 @@ export function createWellKnownTypes(project: Project, golemTsSdkImport: string)
   const sf = project.createSourceFile(
     `__golem_well_known_types__.ts`,
     `
-      import { Principal, Config, Secret, QuotaToken } from '${golemTsSdkImport}';
+      import { Principal, Config, Secret, QuotaToken, Path, Duration, Quantity } from '${golemTsSdkImport}';
 
       let _object!: Object;
 
@@ -60,6 +65,11 @@ export function createWellKnownTypes(project: Project, golemTsSdkImport: string)
       let _config!: Config<{}>;
       let _secret!: Secret<{}>;
       let _quotaToken!: QuotaToken;
+      let _path!: Path;
+      let _duration!: Duration;
+      let _quantity!: Quantity<any>;
+      let _date!: Date;
+      let _url!: URL;
     `,
     { overwrite: true, scriptKind: ScriptKind.TS },
   );
@@ -86,6 +96,11 @@ export function createWellKnownTypes(project: Project, golemTsSdkImport: string)
     config: getWellKnownFromVar(sf, '_config'),
     secret: getWellKnownFromVar(sf, '_secret'),
     quotaToken: getWellKnownFromVar(sf, '_quotaToken'),
+    path: getWellKnownFromVar(sf, '_path'),
+    duration: getWellKnownFromVar(sf, '_duration'),
+    quantity: getWellKnownFromVar(sf, '_quantity'),
+    date: getWellKnownFromVar(sf, '_date'),
+    url: getWellKnownFromVar(sf, '_url'),
   };
 
   return {

@@ -188,7 +188,21 @@ function mapTypeInner(type: TsType, scope: TypeScope | undefined, state: MapperS
     case 'principal':
       return mapPrincipal(state);
     case 'quota-token':
-      return mapQuotaToken(state);
+      return mapQuotaToken();
+    case 'path':
+      return Either.right(r.path({ direction: 'in-out', kind: 'any' }));
+    case 'url':
+      return Either.right(r.url({}));
+    case 'datetime':
+      return Either.right(r.datetime());
+    case 'duration':
+      return Either.right(r.duration());
+    case 'quantity':
+      if (!type.spec)
+        return Either.left(
+          'Quantity<T> type parameter must have a literal baseUnit and a tuple of string-literal allowedSuffixes',
+        );
+      return Either.right(r.quantity(type.spec));
 
     case 'others':
       return mapOthers(type, state);
@@ -770,47 +784,11 @@ function buildUuid(state: MapperState): EitherR {
   );
 }
 
-function mapQuotaToken(state: MapperState): EitherR {
-  const uuidR = buildUuid(state);
-  if (Either.isLeft(uuidR)) return uuidR;
-
-  const envIdR = registerComposite(
-    'EnvironmentId',
-    () => Either.right(r.record([resolvedField('uuid', uuidR.val)], 'EnvironmentId')),
-    state,
-  );
-  if (Either.isLeft(envIdR)) return envIdR;
-
-  const datetimeR = registerComposite(
-    'Datetime',
-    () =>
-      Either.right(
-        r.record(
-          [resolvedField('seconds', r.u64()), resolvedField('nanoseconds', r.u32())],
-          'Datetime',
-        ),
-      ),
-    state,
-  );
-  if (Either.isLeft(datetimeR)) return datetimeR;
-
-  return registerComposite(
-    'QuotaTokenRecord',
-    () =>
-      Either.right(
-        r.record(
-          [
-            resolvedField('environmentId', envIdR.val),
-            resolvedField('resourceName', r.string()),
-            resolvedField('expectedUse', r.u64()),
-            resolvedField('lastCredit', r.s64()),
-            resolvedField('lastCreditAt', datetimeR.val),
-          ],
-          'QuotaTokenRecord',
-        ),
-      ),
-    state,
-  );
+function mapQuotaToken(): EitherR {
+  // A quota-token is an opaque, unforgeable capability: it maps to the rich
+  // `quota-token` schema type, never to a structural record. The runtime value
+  // is an owned handle (see `GuestQuotaTokenHandle`) carried by ownership.
+  return Either.right(r.quotaToken({}));
 }
 
 function mapPrincipal(state: MapperState): EitherR {

@@ -39,7 +39,7 @@ Avoid invoking `golem generate-bridge` manually — it exists as a low-level esc
 
 The generated `my-agent-client/` directory is a self-contained `moon` module. Its `moon.mod.json` declares an agent-derived module name matching the generated directory name (for example, `my-agent-client`), so multiple generated bridge modules can be used from the same external project. The module bundles its own runtime, only depends on `moonbitlang/async` and the MoonBit core library, and builds for the `native` target.
 
-Add it to your external MoonBit project as a local path dependency in `moon.mod.json`. Also depend on `moonbitlang/async` directly — your own `async fn main` entry point needs it imported (see the next step), and the version must match the one the generated module pins (`0.18.1`):
+Add it to your external MoonBit project as a local path dependency in `moon.mod.json`. Also depend on `moonbitlang/async` directly — your own `async fn main` entry point needs it imported (see the next step), and the version must match the one the generated module pins (`0.19.2`):
 
 ```json
 {
@@ -49,7 +49,7 @@ Add it to your external MoonBit project as a local path dependency in `moon.mod.
     "my-agent-client": {
       "path": "../golem-temp/bridge-sdk/moonbit/my-agent-client"
     },
-    "moonbitlang/async": "0.18.1"
+    "moonbitlang/async": "0.19.2"
   }
 }
 ```
