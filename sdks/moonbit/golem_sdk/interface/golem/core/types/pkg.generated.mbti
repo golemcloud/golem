@@ -137,6 +137,9 @@ pub(all) struct QuotaTokenSpec {
   resource_name : String?
 } derive(Eq, Show)
 
+pub(all) struct Secret(Int) derive(Eq, Show)
+pub fn Secret::drop(Self) -> Unit
+
 pub(all) struct ResultSpec {
   ok : Int?
   err : Int?
@@ -242,7 +245,7 @@ pub(all) enum SchemaValueNode {
   DurationValue(DurationValuePayload)
   QuantityValueNode(QuantityValue)
   UnionValue(UnionValuePayload)
-  SecretValue(SecretValuePayload)
+  SecretValue(Secret)
   QuotaTokenHandle(QuotaToken)
 } derive(Eq, Show)
 
@@ -253,10 +256,6 @@ pub(all) struct SchemaValueTree {
 
 pub(all) struct SecretSpec {
   category : String?
-} derive(Eq, Show)
-
-pub(all) struct SecretValuePayload {
-  secret_ref : String
 } derive(Eq, Show)
 
 pub(all) struct TextRestrictions {
@@ -316,4 +315,3 @@ pub(all) struct VariantValuePayload {
 // Type aliases
 
 // Traits
-

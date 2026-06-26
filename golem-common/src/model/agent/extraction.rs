@@ -15,9 +15,11 @@
 use crate::model::agent::AgentError;
 use crate::model::parsed_function_name::ParsedFunctionName;
 use crate::schema::agent::AgentTypeSchema;
-use crate::schema::agent::wit::{decode_agent_error, decode_agent_type, wire};
+use crate::schema::agent::wit::{decode_agent_error_rejecting_quota_with, decode_agent_type, wire};
 use anyhow::anyhow;
-use golem_schema::schema::wit::QuotaTokenHandleRep;
+use golem_schema::schema::wit::{
+    QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
+};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
@@ -153,8 +155,9 @@ pub async fn extract_agent_type_schemas_with_streams(
             Ok(agent_types)
         }
         Err(agent_error) => {
-            let agent_error: AgentError = decode_agent_error(agent_error)
-                .map_err(|e| anyhow!("Failed to decode discovered agent error: {e:?}"))?;
+            let agent_error: AgentError =
+                decode_agent_error_rejecting_quota_with(agent_error, store.data_mut())
+                    .map_err(|e| anyhow!("Failed to decode discovered agent error: {e:?}"))?;
             error!("Error while discovering agent types: {agent_error}");
             Err(anyhow!(agent_error.to_string()))
         }
@@ -241,6 +244,21 @@ impl WasiView for Host {
     }
 }
 
+impl QuotaTokenHandleDropper for Host {
+    fn drop_quota_token_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<QuotaTokenHandleRep>,
+    ) {
+        let _ = self.table().delete(handle);
+    }
+}
+
+impl SecretHandleDropper for Host {
+    fn drop_secret_handle(&mut self, handle: wasmtime::component::Resource<SecretHandleRep>) {
+        let _ = self.table().delete(handle);
+    }
+}
+
 /// Whether the resource `resource_name` imported from interface
 /// `interface_name` is the opaque `golem:core/types.quota-token`. It is matched
 /// both at its defining interface and at the `golem:quota/types` interface that
@@ -251,6 +269,21 @@ fn is_quota_token_resource(interface_name: &str, resource_name: &str) -> bool {
         && matches!(
             interface_name,
             "golem:core/types@2.0.0" | "golem:quota/types@1.5.0"
+        )
+}
+
+/// Whether the resource `resource_name` imported from interface
+/// `interface_name` is the opaque `golem:core/types.secret`. Like
+/// `quota-token`, it can appear transitively inside schema value trees and must
+/// use the same host resource representation as the generated wire bindings.
+fn is_secret_resource(interface_name: &str, resource_name: &str) -> bool {
+    resource_name == "secret"
+        && matches!(
+            interface_name,
+            "golem:core/types@2.0.0"
+                | "golem:secrets/types@0.1.0"
+                | "golem:secrets/reveal@0.1.0"
+                | "golem:secrets/create@0.1.0"
         )
 }
 
@@ -314,6 +347,12 @@ fn dynamic_import(
                         instance.resource(
                             &inner_name,
                             ResourceType::host::<QuotaTokenHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if is_secret_resource(&name, &inner_name) {
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<SecretHandleRep>(),
                             |_store, _rep| Ok(()),
                         )?;
                     } else if &inner_name != "pollable"

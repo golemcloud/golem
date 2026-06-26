@@ -6,11 +6,12 @@ package golem:secrets@0.1.0;
 /// import only this interface.
 interface types {
   use wasi:clocks/wall-clock@0.2.3.{datetime};
+  use golem:core/types@2.0.0.{secret};
 
-  /// Opaque handle to a sensitive value held by the runtime. The
-  /// guest never sees plaintext through this resource; methods
-  /// expose only safe metadata. To extract bytes, the component
-  /// must additionally import `golem:secrets/reveal`.
+  /// The opaque handle to a sensitive value is defined in
+  /// `golem:core/types` so it can travel inside a `schema-value-tree` as an
+  /// unforgeable owned handle. This interface exposes only safe metadata
+  /// operations over that handle.
   ///
   /// Resource handles are scoped to a component instance's
   /// resource table. When a secret is passed across a component
@@ -19,18 +20,6 @@ interface types {
   /// receiving instance's table that points at the same
   /// host-side state. The wire form carries only the
   /// `secret-id`, never plaintext.
-  resource secret {
-    /// Stable opaque identifier. Comparing equal across two
-    /// `secret` handles means "same secret material, same
-    /// version" — useful for caching and audit correlation.
-    /// Safe to log, oplog, and emit in traces.
-    id: func() -> secret-id;
-
-    /// Immutable metadata captured at resolve-time. Includes the
-    /// config-key path, the resolved version, and the resolution
-    /// timestamp. No plaintext.
-    metadata: func() -> secret-metadata;
-  }
 
   /// Stable, opaque identifier scoped to the deployment.
   record secret-id {
@@ -59,6 +48,15 @@ interface types {
   record secret-version {
     bytes: list<u8>,
   }
+
+  /// Stable opaque identifier. Comparing equal across two `secret` handles
+  /// means "same secret material, same version" — useful for caching and audit
+  /// correlation. Safe to log, oplog, and emit in traces.
+  id: func(s: borrow<secret>) -> secret-id;
+
+  /// Immutable metadata captured at resolve-time. Includes the config-key
+  /// path, the resolved version, and the resolution timestamp. No plaintext.
+  metadata: func(s: borrow<secret>) -> secret-metadata;
 
   /// Errors common to operations on secrets.
   variant secret-error {

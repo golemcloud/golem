@@ -97,6 +97,10 @@ pub mod bindings {
             pub(crate) use crate::raw_bindings::golem::quota::types;
         }
 
+        pub mod secrets {
+            pub use crate::raw_bindings::golem::secrets::{reveal, types};
+        }
+
         pub mod agent {
             pub use crate::raw_bindings::golem::agent::host;
         }
@@ -126,6 +130,8 @@ pub mod load_snapshot {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -164,6 +170,8 @@ pub mod save_snapshot {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -203,6 +211,8 @@ pub mod golem_agentic {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -257,6 +267,8 @@ pub mod oplog_processor {
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,

@@ -58,7 +58,10 @@ pub use decode::{
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use encode::encode_value_with;
 #[cfg(all(feature = "host", not(feature = "guest")))]
-pub use host_support::{QuotaTokenHandleDropper, QuotaTokenHandleRep, QuotaTokenResolver};
+pub use host_support::{
+    QuotaTokenHandleDropper, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleDropper,
+    SecretHandleRep,
+};
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
 pub use guest_support::GuestQuotaTokenHandle;
@@ -166,9 +169,45 @@ mod host_support {
         fn drop_quota_token_handle(&mut self, handle: Resource<QuotaTokenHandleRep>);
     }
 
+    /// Minimal capability needed to clean up owned `secret` handles at
+    /// boundaries that reject secret transport.
+    pub trait SecretHandleDropper {
+        /// Delete an owned secret handle from the resource table without
+        /// inspecting it.
+        fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>);
+    }
+
     impl<R: QuotaTokenResolver> QuotaTokenHandleDropper for R {
         fn drop_quota_token_handle(&mut self, handle: Resource<QuotaTokenHandleRep>) {
             QuotaTokenResolver::drop_handle(self, handle)
+        }
+    }
+
+    /// Opaque host representation backing the `secret` WIT resource.
+    ///
+    /// The boxed payload is owned and interpreted solely by the embedder. This
+    /// crate only gives the resource a shared table representation so the core
+    /// `secret` handle can be generated and linked alongside `quota-token`.
+    pub struct SecretHandleRep {
+        payload: Box<dyn std::any::Any + Send + Sync>,
+    }
+
+    impl SecretHandleRep {
+        pub fn new(payload: impl std::any::Any + Send + Sync) -> Self {
+            Self {
+                payload: Box::new(payload),
+            }
+        }
+
+        pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+            self.payload.downcast_ref::<T>()
+        }
+
+        pub fn into_payload<T: std::any::Any>(self) -> Result<T, Self> {
+            match self.payload.downcast::<T>() {
+                Ok(boxed) => Ok(*boxed),
+                Err(payload) => Err(Self { payload }),
+            }
         }
     }
 }

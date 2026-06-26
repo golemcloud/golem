@@ -66,6 +66,17 @@ pub fn QuotaToken::drop(self : QuotaToken) -> Unit {
       wasmImportResourceDropQuotaToken(resource)
 }
 ///|
+/// An unforgeable handle to sensitive material held by the runtime. The
+/// handle is opaque to guests: components can pass it through schema values
+/// and reveal it only through capability-gated host interfaces.
+pub(all) struct Secret(Int) derive(Show, Eq)
+
+/// Drops a resource handle.
+pub fn Secret::drop(self : Secret) -> Unit {
+      let Secret(resource) = self
+      wasmImportResourceDropSecret(resource)
+}
+///|
 /// A named type definition inside a `schema-graph`.
 ///
 /// The def itself does not carry metadata; metadata lives on the
@@ -347,14 +358,6 @@ pub(all) struct UnionValuePayload {
       tag : String; body : Int
 } derive(Show, Eq)
 ///|
-/// Capability value: secret transport is **by reference**. The schema side
-/// declares the secret; the value side carries an opaque reference that the
-/// authority resolves on read. The literal secret material never crosses
-/// this carrier.
-pub(all) struct SecretValuePayload {
-      secret_ref : String
-} derive(Show, Eq)
-///|
 pub(all) enum SchemaValueNode {
       BoolValue(Bool)
       S8Value(Int)
@@ -387,7 +390,7 @@ pub(all) enum SchemaValueNode {
       DurationValue(DurationValuePayload)
       QuantityValueNode(QuantityValue)
       UnionValue(UnionValuePayload)
-      SecretValue(SecretValuePayload)
+      SecretValue(Secret)
       QuotaTokenHandle(QuotaToken)
 } derive(Show, Eq)
 ///|

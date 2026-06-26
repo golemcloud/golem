@@ -38,6 +38,10 @@ pub enum EncodeError {
     /// WASM boundary only as owned handles, which requires the host-side
     /// [`encode_value_with`] entry point and a `QuotaTokenResolver`.
     QuotaTokenNotTransportable,
+    /// A [`SchemaValue::Secret`] snapshot was encountered while encoding a
+    /// value tree through the pure (resolver-less) path. Secrets cross the
+    /// WASM boundary only as owned handles.
+    SecretNotTransportable,
     /// The host `QuotaTokenResolver` failed to materialize an owned handle from
     /// a snapshot.
     QuotaResolver(String),
@@ -59,6 +63,10 @@ impl Display for EncodeError {
             EncodeError::QuotaTokenNotTransportable => write!(
                 f,
                 "quota-token values can only be encoded through the host resolver-aware path"
+            ),
+            EncodeError::SecretNotTransportable => write!(
+                f,
+                "secret values can only be encoded through a secret resolver-aware path"
             ),
             EncodeError::QuotaResolver(msg) => {
                 write!(f, "quota-token handle could not be created: {msg}")
@@ -190,6 +198,7 @@ fn preflight_quota_handles(value: &SchemaValue) -> Result<(), EncodeError> {
                 }
                 Ok(())
             }
+            SchemaValue::Secret(_) => Err(EncodeError::SecretNotTransportable),
             SchemaValue::Record { fields } => {
                 for f in fields {
                     walk(f, seen)?;
@@ -756,11 +765,7 @@ impl ValueCtx {
                     body,
                 })
             }
-            SchemaValue::Secret(s) => {
-                wire::SchemaValueNode::SecretValue(wire::SecretValuePayload {
-                    secret_ref: s.secret_ref.clone(),
-                })
-            }
+            SchemaValue::Secret(_) => return Err(EncodeError::SecretNotTransportable),
             SchemaValue::QuotaToken(q) => quota(q)?,
         };
         Ok(self.push(node))

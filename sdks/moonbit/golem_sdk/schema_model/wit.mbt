@@ -554,7 +554,10 @@ fn ValueEncoder::emit_node(
     Duration(ns) => @types.DurationValue({ nanoseconds: ns })
     Quantity(q) => @types.QuantityValueNode(q)
     Union(tag, body) => @types.UnionValue({ tag, body: self.emit(body) })
-    Secret(secret_ref) => @types.SecretValue({ secret_ref, })
+    Secret(_) =>
+      raise EncodeError(
+        "secret values can only be encoded through a secret resolver-aware path",
+      )
     QuotaToken(handle) =>
       // Move the owned `quota-token` resource out of the opaque handle exactly
       // once. `schema_value_to_wit` preflights that every handle is present and
@@ -624,6 +627,10 @@ fn preflight_walk(
           "invalid datetime value: nanoseconds must be < 1_000_000_000, got \{dt.nanoseconds}",
         )
       }
+    Secret(_) =>
+      raise EncodeError(
+        "secret values can only be encoded through a secret resolver-aware path",
+      )
     QuotaToken(handle) => {
       // Peek (without consuming) the underlying owned resource so two distinct
       // holders wrapping the same raw `quota-token` are also rejected, not only
@@ -841,7 +848,10 @@ fn ValueDecoder::from_node(
     @types.DurationValue(dp) => Duration(dp.nanoseconds)
     @types.QuantityValueNode(q) => Quantity(q)
     @types.UnionValue(up) => Union(up.tag, self.from_idx(up.body))
-    @types.SecretValue(sp) => Secret(sp.secret_ref)
+    @types.SecretValue(_) =>
+      raise DecodeError(
+        "secret values can only be decoded through a secret resolver-aware path",
+      )
     @types.QuotaTokenHandle(raw) => {
       // Lift the owned `quota-token` resource into an opaque take-once holder.
       // Track the originating node index as lifted so a malformed tree that

@@ -14,7 +14,7 @@ pub fn wasmExportDiscoverTools() -> Int {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.Tool = (payload)[(index)]
                         let iter_base = address + (index * 36);
-                        __wit_bindgen_lower_t517((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t518((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((return_area) + 8, (payload).length())
@@ -24,7 +24,7 @@ pub fn wasmExportDiscoverTools() -> Int {
             }
             Err(payload0) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t518((return_area) + 4, payload0)
+                  __wit_bindgen_lower_t519((return_area) + 4, payload0)
 
                   ()
             }
@@ -191,10 +191,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                   mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                             }
-                                                            31 => {
-                                                                  mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                            }
+                                                            31 => ()
                                                             32 => ()
                                                             _ => panic()
                                                       }
@@ -375,10 +372,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                         }
-                                                                        31 => {
-                                                                              mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                        }
+                                                                        31 => ()
                                                                         32 => ()
                                                                         _ => panic()
                                                                   }
@@ -556,10 +550,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                         }
-                                                                        31 => {
-                                                                              mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                        }
+                                                                        31 => ()
                                                                         32 => ()
                                                                         _ => panic()
                                                                   }
@@ -725,10 +716,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -849,10 +837,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -973,10 +958,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -1100,10 +1082,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                       mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                                 }
-                                                                                                31 => {
-                                                                                                      mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                                }
+                                                                                                31 => ()
                                                                                                 32 => ()
                                                                                                 _ => panic()
                                                                                           }
@@ -1227,10 +1206,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -1348,10 +1324,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -1472,10 +1445,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -1593,10 +1563,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -2871,10 +2838,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                           }
-                                          31 => {
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                          }
+                                          31 => ()
                                           32 => ()
                                           _ => panic()
                                     }
@@ -2903,13 +2867,13 @@ pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
       match result0 {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
-                  __wit_bindgen_lower_t517((return_area) + 4, payload)
+                  __wit_bindgen_lower_t518((return_area) + 4, payload)
 
                   ()
             }
             Err(payload1) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t518((return_area) + 4, payload1)
+                  __wit_bindgen_lower_t519((return_area) + 4, payload1)
 
                   ()
             }
@@ -3073,10 +3037,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                             mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                       }
-                                                      31 => {
-                                                            mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                      }
+                                                      31 => ()
                                                       32 => ()
                                                       _ => panic()
                                                 }
@@ -3257,10 +3218,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                   }
-                                                                  31 => {
-                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                  }
+                                                                  31 => ()
                                                                   32 => ()
                                                                   _ => panic()
                                                             }
@@ -3438,10 +3396,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                   }
-                                                                  31 => {
-                                                                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                  }
+                                                                  31 => ()
                                                                   32 => ()
                                                                   _ => panic()
                                                             }
@@ -3607,10 +3562,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -3731,10 +3683,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -3855,10 +3804,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -3982,10 +3928,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                           }
-                                                                                          31 => {
-                                                                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                          }
+                                                                                          31 => ()
                                                                                           32 => ()
                                                                                           _ => panic()
                                                                                     }
@@ -4109,10 +4052,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -4230,10 +4170,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -4354,10 +4291,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -4475,10 +4409,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                                                                     }
-                                                                                    31 => {
-                                                                                          mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                                                                    }
+                                                                                    31 => ()
                                                                                     32 => ()
                                                                                     _ => panic()
                                                                               }
@@ -5750,10 +5681,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                           }
-                                          31 => {
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                          }
+                                          31 => ()
                                           32 => ()
                                           _ => panic()
                                     }
@@ -6626,11 +6554,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
       }
       mbt_ffi_free(mbt_ffi_load32((p0) + 24))
 
-      let array163 : Array[@types.SchemaValueNode] = [];
-      for index164 = 0; index164 < (mbt_ffi_load32((p0) + 40)); index164 = index164 + 1 {
-            let iter_base = (mbt_ffi_load32((p0) + 36)) + (index164 * 32)
+      let array162 : Array[@types.SchemaValueNode] = [];
+      for index163 = 0; index163 < (mbt_ffi_load32((p0) + 40)); index163 = index163 + 1 {
+            let iter_base = (mbt_ffi_load32((p0) + 36)) + (index163 * 32)
 
-            let lifted162 = match (mbt_ffi_load8_u((iter_base) + 0)) {
+            let lifted161 = match (mbt_ffi_load8_u((iter_base) + 0)) {
                   0 => {
 
                         @types.SchemaValueNode::BoolValue((mbt_ffi_load8_u((iter_base) + 8) != 0))
@@ -6889,9 +6817,7 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   }
                   31 => {
 
-                        let result161 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
-
-                        @types.SchemaValueNode::SecretValue(@types.SecretValuePayload::{secret_ref : result161})
+                        @types.SchemaValueNode::SecretValue(@types.Secret::Secret(mbt_ffi_load32((iter_base) + 8)))
                   }
                   32 => {
 
@@ -6900,11 +6826,11 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                   _ => panic()
             }
 
-            array163.push(lifted162)
+            array162.push(lifted161)
       }
       mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
-      let lifted165 : @streams.InputStream? = match mbt_ffi_load8_u((p0) + 48) {
+      let lifted164 : @streams.InputStream? = match mbt_ffi_load8_u((p0) + 48) {
             0 => Option::None
             1 => {
 
@@ -6913,36 +6839,36 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
             _ => panic()
       }
 
-      let lifted183 = match (mbt_ffi_load8_u((p0) + 56)) {
+      let lifted182 = match (mbt_ffi_load8_u((p0) + 56)) {
             0 => {
 
-                  let result166 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 64), mbt_ffi_load32((p0) + 68))
+                  let result165 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 64), mbt_ffi_load32((p0) + 68))
 
-                  let result167 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 72), mbt_ffi_load32((p0) + 76))
+                  let result166 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 72), mbt_ffi_load32((p0) + 76))
 
-                  let lifted169 : String? = match mbt_ffi_load8_u((p0) + 80) {
+                  let lifted168 : String? = match mbt_ffi_load8_u((p0) + 80) {
                         0 => Option::None
                         1 => {
 
-                              let result168 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 84), mbt_ffi_load32((p0) + 88))
+                              let result167 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 84), mbt_ffi_load32((p0) + 88))
 
-                              Option::Some(result168)
+                              Option::Some(result167)
                         }
                         _ => panic()
                   }
 
-                  let lifted171 : String? = match mbt_ffi_load8_u((p0) + 92) {
+                  let lifted170 : String? = match mbt_ffi_load8_u((p0) + 92) {
                         0 => Option::None
                         1 => {
 
-                              let result170 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 96), mbt_ffi_load32((p0) + 100))
+                              let result169 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 96), mbt_ffi_load32((p0) + 100))
 
-                              Option::Some(result170)
+                              Option::Some(result169)
                         }
                         _ => panic()
                   }
 
-                  let lifted172 : Bool? = match mbt_ffi_load8_u((p0) + 104) {
+                  let lifted171 : Bool? = match mbt_ffi_load8_u((p0) + 104) {
                         0 => Option::None
                         1 => {
 
@@ -6951,59 +6877,59 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
                         _ => panic()
                   }
 
-                  let lifted174 : String? = match mbt_ffi_load8_u((p0) + 108) {
+                  let lifted173 : String? = match mbt_ffi_load8_u((p0) + 108) {
                         0 => Option::None
                         1 => {
 
-                              let result173 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 112), mbt_ffi_load32((p0) + 116))
+                              let result172 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 112), mbt_ffi_load32((p0) + 116))
 
-                              Option::Some(result173)
+                              Option::Some(result172)
                         }
                         _ => panic()
                   }
 
-                  let lifted176 : String? = match mbt_ffi_load8_u((p0) + 120) {
+                  let lifted175 : String? = match mbt_ffi_load8_u((p0) + 120) {
                         0 => Option::None
                         1 => {
 
-                              let result175 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 124), mbt_ffi_load32((p0) + 128))
+                              let result174 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 124), mbt_ffi_load32((p0) + 128))
 
-                              Option::Some(result175)
+                              Option::Some(result174)
                         }
                         _ => panic()
                   }
 
-                  let lifted178 : String? = match mbt_ffi_load8_u((p0) + 132) {
+                  let lifted177 : String? = match mbt_ffi_load8_u((p0) + 132) {
                         0 => Option::None
                         1 => {
 
-                              let result177 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 136), mbt_ffi_load32((p0) + 140))
+                              let result176 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 136), mbt_ffi_load32((p0) + 140))
 
-                              Option::Some(result177)
+                              Option::Some(result176)
                         }
                         _ => panic()
                   }
 
-                  let lifted180 : String? = match mbt_ffi_load8_u((p0) + 144) {
+                  let lifted179 : String? = match mbt_ffi_load8_u((p0) + 144) {
                         0 => Option::None
                         1 => {
 
-                              let result179 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 148), mbt_ffi_load32((p0) + 152))
+                              let result178 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 148), mbt_ffi_load32((p0) + 152))
 
-                              Option::Some(result179)
+                              Option::Some(result178)
                         }
                         _ => panic()
                   }
 
-                  let result181 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 156), mbt_ffi_load32((p0) + 160))
+                  let result180 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 156), mbt_ffi_load32((p0) + 160))
 
-                  @common0.Principal::Oidc(@common0.OidcPrincipal::{sub : result166, issuer : result167, email : lifted169, name : lifted171, email_verified : lifted172, given_name : lifted174, family_name : lifted176, picture : lifted178, preferred_username : lifted180, claims : result181})
+                  @common0.Principal::Oidc(@common0.OidcPrincipal::{sub : result165, issuer : result166, email : lifted168, name : lifted170, email_verified : lifted171, given_name : lifted173, family_name : lifted175, picture : lifted177, preferred_username : lifted179, claims : result180})
             }
             1 => {
 
-                  let result182 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 80), mbt_ffi_load32((p0) + 84))
+                  let result181 = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 80), mbt_ffi_load32((p0) + 84))
 
-                  @common0.Principal::Agent(@common0.AgentPrincipal::{agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((p0) + 64)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((p0) + 72)).reinterpret_as_uint64()}}, agent_id : result182}})
+                  @common0.Principal::Agent(@common0.AgentPrincipal::{agent_id : @types.AgentId::{component_id : @types.ComponentId::{uuid : @types.Uuid::{high_bits : (mbt_ffi_load64((p0) + 64)).reinterpret_as_uint64(), low_bits : (mbt_ffi_load64((p0) + 72)).reinterpret_as_uint64()}}, agent_id : result181}})
             }
             2 => {
 
@@ -7016,20 +6942,20 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
             _ => panic()
       }
 
-      let (result184) : (Result[@common.InvocationResult, @common.ToolError]) = invoke(result, array, @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array126, defs : array131, root : mbt_ffi_load32((p0) + 32)}, value : @types.SchemaValueTree::{value_nodes : array163, root : mbt_ffi_load32((p0) + 44)}}, lifted165, lifted183);
+      let (result183) : (Result[@common.InvocationResult, @common.ToolError]) = invoke(result, array, @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array126, defs : array131, root : mbt_ffi_load32((p0) + 32)}, value : @types.SchemaValueTree::{value_nodes : array162, root : mbt_ffi_load32((p0) + 44)}}, lifted164, lifted182);
       mbt_ffi_free(p0)
       let return_area = mbt_ffi_malloc(48)
 
-      match result184 {
+      match result183 {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
-                  __wit_bindgen_lower_t522((return_area) + 4, payload)
+                  __wit_bindgen_lower_t523((return_area) + 4, payload)
 
                   ()
             }
-            Err(payload185) => {
+            Err(payload184) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t518((return_area) + 4, payload185)
+                  __wit_bindgen_lower_t519((return_area) + 4, payload184)
 
                   ()
             }
@@ -7649,10 +7575,7 @@ pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                           }
-                                          31 => {
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                          }
+                                          31 => ()
                                           32 => ()
                                           _ => panic()
                                     }
@@ -8296,10 +8219,7 @@ pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                                           }
-                                          31 => {
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
-
-                                          }
+                                          31 => ()
                                           32 => ()
                                           _ => panic()
                                     }
@@ -8325,7 +8245,7 @@ fn __wit_bindgen_lower_t5(ptr : Int, value : @types.Datetime) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t15(ptr : Int, value : @types.SchemaTypeDef) -> Unit {
+fn __wit_bindgen_lower_t16(ptr : Int, value : @types.SchemaTypeDef) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).id)
       mbt_ffi_store32((ptr) + 4, (value).id.length())
@@ -8352,7 +8272,7 @@ fn __wit_bindgen_lower_t15(ptr : Int, value : @types.SchemaTypeDef) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t16(ptr : Int, value : @types.Role) -> Unit {
+fn __wit_bindgen_lower_t17(ptr : Int, value : @types.Role) -> Unit {
 
       match value {
             Multimodal => {
@@ -8384,7 +8304,7 @@ fn __wit_bindgen_lower_t16(ptr : Int, value : @types.Role) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
+fn __wit_bindgen_lower_t20(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
 
       match ((value).doc) {
             None => {
@@ -8454,7 +8374,7 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
             }
             Some(payload10) => {
                   mbt_ffi_store8((ptr) + 40, (1))
-                  __wit_bindgen_lower_t16((ptr) + 44, payload10)
+                  __wit_bindgen_lower_t17((ptr) + 44, payload10)
 
                   ()
             }
@@ -8463,18 +8383,18 @@ fn __wit_bindgen_lower_t19(ptr : Int, value : @types.MetadataEnvelope) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t20(ptr : Int, value : @types.NamedFieldType) -> Unit {
+fn __wit_bindgen_lower_t21(ptr : Int, value : @types.NamedFieldType) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
       mbt_ffi_store32((ptr) + 8, (value).body)
-      __wit_bindgen_lower_t19((ptr) + 12, (value).metadata)
+      __wit_bindgen_lower_t20((ptr) + 12, (value).metadata)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t22(ptr : Int, value : @types.VariantCaseType) -> Unit {
+fn __wit_bindgen_lower_t23(ptr : Int, value : @types.VariantCaseType) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
@@ -8493,26 +8413,26 @@ fn __wit_bindgen_lower_t22(ptr : Int, value : @types.VariantCaseType) -> Unit {
                   ()
             }
       }
-      __wit_bindgen_lower_t19((ptr) + 16, (value).metadata)
+      __wit_bindgen_lower_t20((ptr) + 16, (value).metadata)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t23(ptr : Int, value : @types.FixedListSpec) -> Unit {
+fn __wit_bindgen_lower_t24(ptr : Int, value : @types.FixedListSpec) -> Unit {
       mbt_ffi_store32((ptr) + 0, (value).element)
       mbt_ffi_store32((ptr) + 4, ((value).length).reinterpret_as_int())
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t24(ptr : Int, value : @types.MapSpec) -> Unit {
+fn __wit_bindgen_lower_t25(ptr : Int, value : @types.MapSpec) -> Unit {
       mbt_ffi_store32((ptr) + 0, (value).key)
       mbt_ffi_store32((ptr) + 4, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t25(ptr : Int, value : @types.ResultSpec) -> Unit {
+fn __wit_bindgen_lower_t26(ptr : Int, value : @types.ResultSpec) -> Unit {
 
       match ((value).ok) {
             None => {
@@ -8545,7 +8465,7 @@ fn __wit_bindgen_lower_t25(ptr : Int, value : @types.ResultSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
+fn __wit_bindgen_lower_t29(ptr : Int, value : @types.TextRestrictions) -> Unit {
 
       match ((value).languages) {
             None => {
@@ -8621,7 +8541,7 @@ fn __wit_bindgen_lower_t28(ptr : Int, value : @types.TextRestrictions) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit {
+fn __wit_bindgen_lower_t30(ptr : Int, value : @types.BinaryRestrictions) -> Unit {
 
       match ((value).mime_types) {
             None => {
@@ -8680,7 +8600,7 @@ fn __wit_bindgen_lower_t29(ptr : Int, value : @types.BinaryRestrictions) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t32(ptr : Int, value : @types.PathSpec) -> Unit {
+fn __wit_bindgen_lower_t33(ptr : Int, value : @types.PathSpec) -> Unit {
       mbt_ffi_store8((ptr) + 0, (value).direction.ordinal())
       mbt_ffi_store8((ptr) + 1, (value).kind.ordinal())
 
@@ -8739,7 +8659,7 @@ fn __wit_bindgen_lower_t32(ptr : Int, value : @types.PathSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t33(ptr : Int, value : @types.UrlRestrictions) -> Unit {
+fn __wit_bindgen_lower_t34(ptr : Int, value : @types.UrlRestrictions) -> Unit {
 
       match ((value).allowed_schemes) {
             None => {
@@ -8796,7 +8716,7 @@ fn __wit_bindgen_lower_t33(ptr : Int, value : @types.UrlRestrictions) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t34(ptr : Int, value : @types.QuantityValue) -> Unit {
+fn __wit_bindgen_lower_t35(ptr : Int, value : @types.QuantityValue) -> Unit {
       mbt_ffi_store64((ptr) + 0, (value).mantissa)
       mbt_ffi_store32((ptr) + 8, (value).scale)
 
@@ -8807,7 +8727,7 @@ fn __wit_bindgen_lower_t34(ptr : Int, value : @types.QuantityValue) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
+fn __wit_bindgen_lower_t37(ptr : Int, value : @types.QuantitySpec) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).base_unit)
       mbt_ffi_store32((ptr) + 4, (value).base_unit.length())
@@ -8834,7 +8754,7 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
             }
             Some(payload2) => {
                   mbt_ffi_store8((ptr) + 16, (1))
-                  __wit_bindgen_lower_t34((ptr) + 24, payload2)
+                  __wit_bindgen_lower_t35((ptr) + 24, payload2)
 
                   ()
             }
@@ -8848,7 +8768,7 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 48, (1))
-                  __wit_bindgen_lower_t34((ptr) + 56, payload4)
+                  __wit_bindgen_lower_t35((ptr) + 56, payload4)
 
                   ()
             }
@@ -8857,7 +8777,7 @@ fn __wit_bindgen_lower_t36(ptr : Int, value : @types.QuantitySpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t37(ptr : Int, value : @types.FieldDiscriminator) -> Unit {
+fn __wit_bindgen_lower_t38(ptr : Int, value : @types.FieldDiscriminator) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).field_name)
       mbt_ffi_store32((ptr) + 4, (value).field_name.length())
@@ -8883,7 +8803,7 @@ fn __wit_bindgen_lower_t37(ptr : Int, value : @types.FieldDiscriminator) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit {
+fn __wit_bindgen_lower_t39(ptr : Int, value : @types.DiscriminatorRule) -> Unit {
 
       match value {
             Prefix(payload) => {
@@ -8924,7 +8844,7 @@ fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit 
             }
             FieldEquals(payload7) => {
                   mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t37((ptr) + 4, payload7)
+                  __wit_bindgen_lower_t38((ptr) + 4, payload7)
 
                   ()
             }
@@ -8942,25 +8862,25 @@ fn __wit_bindgen_lower_t38(ptr : Int, value : @types.DiscriminatorRule) -> Unit 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t39(ptr : Int, value : @types.UnionBranch) -> Unit {
+fn __wit_bindgen_lower_t40(ptr : Int, value : @types.UnionBranch) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).tag)
       mbt_ffi_store32((ptr) + 4, (value).tag.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
       mbt_ffi_store32((ptr) + 8, (value).body)
-      __wit_bindgen_lower_t38((ptr) + 12, (value).discriminator)
-      __wit_bindgen_lower_t19((ptr) + 36, (value).metadata)
+      __wit_bindgen_lower_t39((ptr) + 12, (value).discriminator)
+      __wit_bindgen_lower_t20((ptr) + 36, (value).metadata)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t41(ptr : Int, value : @types.UnionSpec) -> Unit {
+fn __wit_bindgen_lower_t42(ptr : Int, value : @types.UnionSpec) -> Unit {
 
       let address = mbt_ffi_malloc(((value).branches).length() * 92);
       for index = 0; index < ((value).branches).length(); index = index + 1 {
             let iter_elem : @types.UnionBranch = ((value).branches)[(index)]
             let iter_base = address + (index * 92);
-            __wit_bindgen_lower_t39((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t40((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).branches).length())
@@ -8969,7 +8889,7 @@ fn __wit_bindgen_lower_t41(ptr : Int, value : @types.UnionSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t42(ptr : Int, value : @types.SecretSpec) -> Unit {
+fn __wit_bindgen_lower_t43(ptr : Int, value : @types.SecretSpec) -> Unit {
 
       match ((value).category) {
             None => {
@@ -8991,7 +8911,7 @@ fn __wit_bindgen_lower_t42(ptr : Int, value : @types.SecretSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t43(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
+fn __wit_bindgen_lower_t44(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
 
       match ((value).resource_name) {
             None => {
@@ -9013,7 +8933,7 @@ fn __wit_bindgen_lower_t43(ptr : Int, value : @types.QuotaTokenSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
+fn __wit_bindgen_lower_t48(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 
       match value {
             RefType(payload) => {
@@ -9094,7 +9014,7 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
                   for index = 0; index < (payload13).length(); index = index + 1 {
                         let iter_elem : @types.NamedFieldType = (payload13)[(index)]
                         let iter_base = address + (index * 68);
-                        __wit_bindgen_lower_t20((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t21((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 12, (payload13).length())
@@ -9109,7 +9029,7 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
                   for index16 = 0; index16 < (payload14).length(); index16 = index16 + 1 {
                         let iter_elem : @types.VariantCaseType = (payload14)[(index16)]
                         let iter_base = address15 + (index16 * 72);
-                        __wit_bindgen_lower_t22((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t23((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 12, (payload14).length())
@@ -9176,13 +9096,13 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
             }
             FixedListType(payload29) => {
                   mbt_ffi_store8((ptr) + 0, (20))
-                  __wit_bindgen_lower_t23((ptr) + 8, payload29)
+                  __wit_bindgen_lower_t24((ptr) + 8, payload29)
 
                   ()
             }
             MapType(payload30) => {
                   mbt_ffi_store8((ptr) + 0, (21))
-                  __wit_bindgen_lower_t24((ptr) + 8, payload30)
+                  __wit_bindgen_lower_t25((ptr) + 8, payload30)
 
                   ()
             }
@@ -9194,31 +9114,31 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
             }
             ResultType(payload32) => {
                   mbt_ffi_store8((ptr) + 0, (23))
-                  __wit_bindgen_lower_t25((ptr) + 8, payload32)
+                  __wit_bindgen_lower_t26((ptr) + 8, payload32)
 
                   ()
             }
             TextType(payload33) => {
                   mbt_ffi_store8((ptr) + 0, (24))
-                  __wit_bindgen_lower_t28((ptr) + 8, payload33)
+                  __wit_bindgen_lower_t29((ptr) + 8, payload33)
 
                   ()
             }
             BinaryType(payload34) => {
                   mbt_ffi_store8((ptr) + 0, (25))
-                  __wit_bindgen_lower_t29((ptr) + 8, payload34)
+                  __wit_bindgen_lower_t30((ptr) + 8, payload34)
 
                   ()
             }
             PathType(payload35) => {
                   mbt_ffi_store8((ptr) + 0, (26))
-                  __wit_bindgen_lower_t32((ptr) + 8, payload35)
+                  __wit_bindgen_lower_t33((ptr) + 8, payload35)
 
                   ()
             }
             UrlType(payload36) => {
                   mbt_ffi_store8((ptr) + 0, (27))
-                  __wit_bindgen_lower_t33((ptr) + 8, payload36)
+                  __wit_bindgen_lower_t34((ptr) + 8, payload36)
 
                   ()
             }
@@ -9234,25 +9154,25 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
             }
             QuantityType(payload39) => {
                   mbt_ffi_store8((ptr) + 0, (30))
-                  __wit_bindgen_lower_t36((ptr) + 8, payload39)
+                  __wit_bindgen_lower_t37((ptr) + 8, payload39)
 
                   ()
             }
             UnionType(payload40) => {
                   mbt_ffi_store8((ptr) + 0, (31))
-                  __wit_bindgen_lower_t41((ptr) + 8, payload40)
+                  __wit_bindgen_lower_t42((ptr) + 8, payload40)
 
                   ()
             }
             SecretType(payload41) => {
                   mbt_ffi_store8((ptr) + 0, (32))
-                  __wit_bindgen_lower_t42((ptr) + 8, payload41)
+                  __wit_bindgen_lower_t43((ptr) + 8, payload41)
 
                   ()
             }
             QuotaTokenType(payload42) => {
                   mbt_ffi_store8((ptr) + 0, (33))
-                  __wit_bindgen_lower_t43((ptr) + 8, payload42)
+                  __wit_bindgen_lower_t44((ptr) + 8, payload42)
 
                   ()
             }
@@ -9299,20 +9219,20 @@ fn __wit_bindgen_lower_t47(ptr : Int, value : @types.SchemaTypeBody) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t48(ptr : Int, value : @types.SchemaTypeNode) -> Unit {
-      __wit_bindgen_lower_t47((ptr) + 0, (value).body)
-      __wit_bindgen_lower_t19((ptr) + 88, (value).metadata)
+fn __wit_bindgen_lower_t49(ptr : Int, value : @types.SchemaTypeNode) -> Unit {
+      __wit_bindgen_lower_t48((ptr) + 0, (value).body)
+      __wit_bindgen_lower_t20((ptr) + 88, (value).metadata)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t51(ptr : Int, value : @types.SchemaGraph) -> Unit {
+fn __wit_bindgen_lower_t52(ptr : Int, value : @types.SchemaGraph) -> Unit {
 
       let address = mbt_ffi_malloc(((value).type_nodes).length() * 144);
       for index = 0; index < ((value).type_nodes).length(); index = index + 1 {
             let iter_elem : @types.SchemaTypeNode = ((value).type_nodes)[(index)]
             let iter_base = address + (index * 144);
-            __wit_bindgen_lower_t48((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t49((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).type_nodes).length())
@@ -9322,7 +9242,7 @@ fn __wit_bindgen_lower_t51(ptr : Int, value : @types.SchemaGraph) -> Unit {
       for index1 = 0; index1 < ((value).defs).length(); index1 = index1 + 1 {
             let iter_elem : @types.SchemaTypeDef = ((value).defs)[(index1)]
             let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t15((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t16((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 12, ((value).defs).length())
@@ -9332,7 +9252,7 @@ fn __wit_bindgen_lower_t51(ptr : Int, value : @types.SchemaGraph) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t53(ptr : Int, value : @types.VariantValuePayload) -> Unit {
+fn __wit_bindgen_lower_t54(ptr : Int, value : @types.VariantValuePayload) -> Unit {
       mbt_ffi_store32((ptr) + 0, ((value).case).reinterpret_as_int())
 
       match ((value).payload) {
@@ -9352,14 +9272,14 @@ fn __wit_bindgen_lower_t53(ptr : Int, value : @types.VariantValuePayload) -> Uni
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t54(ptr : Int, value : @types.MapEntry) -> Unit {
+fn __wit_bindgen_lower_t55(ptr : Int, value : @types.MapEntry) -> Unit {
       mbt_ffi_store32((ptr) + 0, (value).key)
       mbt_ffi_store32((ptr) + 4, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t55(ptr : Int, value : @types.ResultValuePayload) -> Unit {
+fn __wit_bindgen_lower_t56(ptr : Int, value : @types.ResultValuePayload) -> Unit {
 
       match value {
             OkValue(payload) => {
@@ -9405,7 +9325,7 @@ fn __wit_bindgen_lower_t55(ptr : Int, value : @types.ResultValuePayload) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
+fn __wit_bindgen_lower_t57(ptr : Int, value : @types.TextValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).text)
       mbt_ffi_store32((ptr) + 4, (value).text.length())
@@ -9431,7 +9351,7 @@ fn __wit_bindgen_lower_t56(ptr : Int, value : @types.TextValuePayload) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t58(ptr : Int, value : @types.BinaryValuePayload) -> Unit {
+fn __wit_bindgen_lower_t59(ptr : Int, value : @types.BinaryValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_bytes2ptr((value).bytes)
 
@@ -9458,13 +9378,13 @@ fn __wit_bindgen_lower_t58(ptr : Int, value : @types.BinaryValuePayload) -> Unit
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t59(ptr : Int, value : @types.DurationValuePayload) -> Unit {
+fn __wit_bindgen_lower_t60(ptr : Int, value : @types.DurationValuePayload) -> Unit {
       mbt_ffi_store64((ptr) + 0, (value).nanoseconds)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t60(ptr : Int, value : @types.UnionValuePayload) -> Unit {
+fn __wit_bindgen_lower_t61(ptr : Int, value : @types.UnionValuePayload) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).tag)
       mbt_ffi_store32((ptr) + 4, (value).tag.length())
@@ -9474,16 +9394,7 @@ fn __wit_bindgen_lower_t60(ptr : Int, value : @types.UnionValuePayload) -> Unit 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t61(ptr : Int, value : @types.SecretValuePayload) -> Unit {
-
-      let ptr0 = mbt_ffi_str2ptr((value).secret_ref)
-      mbt_ffi_store32((ptr) + 4, (value).secret_ref.length())
-      mbt_ffi_store32((ptr) + 0, ptr0)
-
-}
-
-#doc(hidden)
-fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
+fn __wit_bindgen_lower_t67(ptr : Int, value : @types.SchemaValueNode) -> Unit {
 
       match value {
             BoolValue(payload) => {
@@ -9584,7 +9495,7 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             }
             VariantValue(payload14) => {
                   mbt_ffi_store8((ptr) + 0, (14))
-                  __wit_bindgen_lower_t53((ptr) + 8, payload14)
+                  __wit_bindgen_lower_t54((ptr) + 8, payload14)
 
                   ()
             }
@@ -9661,7 +9572,7 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
                   for index30 = 0; index30 < (payload28).length(); index30 = index30 + 1 {
                         let iter_elem : @types.MapEntry = (payload28)[(index30)]
                         let iter_base = address29 + (index30 * 8);
-                        __wit_bindgen_lower_t54((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t55((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 12, (payload28).length())
@@ -9690,19 +9601,19 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             }
             ResultValue(payload34) => {
                   mbt_ffi_store8((ptr) + 0, (22))
-                  __wit_bindgen_lower_t55((ptr) + 8, payload34)
+                  __wit_bindgen_lower_t56((ptr) + 8, payload34)
 
                   ()
             }
             TextValue(payload35) => {
                   mbt_ffi_store8((ptr) + 0, (23))
-                  __wit_bindgen_lower_t56((ptr) + 8, payload35)
+                  __wit_bindgen_lower_t57((ptr) + 8, payload35)
 
                   ()
             }
             BinaryValue(payload36) => {
                   mbt_ffi_store8((ptr) + 0, (24))
-                  __wit_bindgen_lower_t58((ptr) + 8, payload36)
+                  __wit_bindgen_lower_t59((ptr) + 8, payload36)
 
                   ()
             }
@@ -9732,33 +9643,35 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
             }
             DurationValue(payload42) => {
                   mbt_ffi_store8((ptr) + 0, (28))
-                  __wit_bindgen_lower_t59((ptr) + 8, payload42)
+                  __wit_bindgen_lower_t60((ptr) + 8, payload42)
 
                   ()
             }
             QuantityValueNode(payload43) => {
                   mbt_ffi_store8((ptr) + 0, (29))
-                  __wit_bindgen_lower_t34((ptr) + 8, payload43)
+                  __wit_bindgen_lower_t35((ptr) + 8, payload43)
 
                   ()
             }
             UnionValue(payload44) => {
                   mbt_ffi_store8((ptr) + 0, (30))
-                  __wit_bindgen_lower_t60((ptr) + 8, payload44)
+                  __wit_bindgen_lower_t61((ptr) + 8, payload44)
 
                   ()
             }
             SecretValue(payload45) => {
                   mbt_ffi_store8((ptr) + 0, (31))
-                  __wit_bindgen_lower_t61((ptr) + 8, payload45)
+
+                  let @types.Secret(handle) = payload45
+                  mbt_ffi_store32((ptr) + 8, handle)
 
                   ()
             }
             QuotaTokenHandle(payload46) => {
                   mbt_ffi_store8((ptr) + 0, (32))
 
-                  let @types.QuotaToken(handle) = payload46
-                  mbt_ffi_store32((ptr) + 8, handle)
+                  let @types.QuotaToken(handle47) = payload46
+                  mbt_ffi_store32((ptr) + 8, handle47)
 
                   ()
             }
@@ -9767,13 +9680,13 @@ fn __wit_bindgen_lower_t66(ptr : Int, value : @types.SchemaValueNode) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t68(ptr : Int, value : @types.SchemaValueTree) -> Unit {
+fn __wit_bindgen_lower_t69(ptr : Int, value : @types.SchemaValueTree) -> Unit {
 
       let address = mbt_ffi_malloc(((value).value_nodes).length() * 32);
       for index = 0; index < ((value).value_nodes).length(); index = index + 1 {
             let iter_elem : @types.SchemaValueNode = ((value).value_nodes)[(index)]
             let iter_base = address + (index * 32);
-            __wit_bindgen_lower_t66((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t67((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).value_nodes).length())
@@ -9783,14 +9696,14 @@ fn __wit_bindgen_lower_t68(ptr : Int, value : @types.SchemaValueTree) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t69(ptr : Int, value : @types.TypedSchemaValue) -> Unit {
-      __wit_bindgen_lower_t51((ptr) + 0, (value).graph)
-      __wit_bindgen_lower_t68((ptr) + 20, (value).value)
+fn __wit_bindgen_lower_t70(ptr : Int, value : @types.TypedSchemaValue) -> Unit {
+      __wit_bindgen_lower_t52((ptr) + 0, (value).graph)
+      __wit_bindgen_lower_t69((ptr) + 20, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t466(ptr : Int, value : @common.CommandAnnotations) -> Unit {
+fn __wit_bindgen_lower_t467(ptr : Int, value : @common.CommandAnnotations) -> Unit {
       mbt_ffi_store8((ptr) + 0, (if (value).read_only { 1 } else { 0 }))
       mbt_ffi_store8((ptr) + 1, (if (value).destructive { 1 } else { 0 }))
       mbt_ffi_store8((ptr) + 2, (if (value).idempotent { 1 } else { 0 }))
@@ -9799,7 +9712,7 @@ fn __wit_bindgen_lower_t466(ptr : Int, value : @common.CommandAnnotations) -> Un
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t467(ptr : Int, value : @common.Repetition) -> Unit {
+fn __wit_bindgen_lower_t468(ptr : Int, value : @common.Repetition) -> Unit {
 
       match value {
             Repeated => {
@@ -9824,14 +9737,14 @@ fn __wit_bindgen_lower_t467(ptr : Int, value : @common.Repetition) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t468(ptr : Int, value : @common.RepeatableShape) -> Unit {
-      __wit_bindgen_lower_t467((ptr) + 0, (value).repetition)
+fn __wit_bindgen_lower_t469(ptr : Int, value : @common.RepeatableShape) -> Unit {
+      __wit_bindgen_lower_t468((ptr) + 0, (value).repetition)
       mbt_ffi_store32((ptr) + 8, (value).type_)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t469(ptr : Int, value : @common.OptionShape) -> Unit {
+fn __wit_bindgen_lower_t470(ptr : Int, value : @common.OptionShape) -> Unit {
 
       match value {
             Scalar(payload) => {
@@ -9848,7 +9761,7 @@ fn __wit_bindgen_lower_t469(ptr : Int, value : @common.OptionShape) -> Unit {
             }
             Repeatable(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (2))
-                  __wit_bindgen_lower_t468((ptr) + 4, payload1)
+                  __wit_bindgen_lower_t469((ptr) + 4, payload1)
 
                   ()
             }
@@ -9857,19 +9770,19 @@ fn __wit_bindgen_lower_t469(ptr : Int, value : @common.OptionShape) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t470(ptr : Int, value : @common.BoolFlagShape) -> Unit {
+fn __wit_bindgen_lower_t471(ptr : Int, value : @common.BoolFlagShape) -> Unit {
       mbt_ffi_store8((ptr) + 0, (if (value).default { 1 } else { 0 }))
       mbt_ffi_store8((ptr) + 1, (if (value).negatable { 1 } else { 0 }))
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t472(ptr : Int, value : @common.FlagShape) -> Unit {
+fn __wit_bindgen_lower_t473(ptr : Int, value : @common.FlagShape) -> Unit {
 
       match value {
             BoolFlag(payload) => {
                   mbt_ffi_store8((ptr) + 0, (0))
-                  __wit_bindgen_lower_t470((ptr) + 4, payload)
+                  __wit_bindgen_lower_t471((ptr) + 4, payload)
 
                   ()
             }
@@ -9897,17 +9810,17 @@ fn __wit_bindgen_lower_t472(ptr : Int, value : @common.FlagShape) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t473(ptr : Int, value : @common.ValueIsRef) -> Unit {
+fn __wit_bindgen_lower_t474(ptr : Int, value : @common.ValueIsRef) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t68((ptr) + 8, (value).value)
+      __wit_bindgen_lower_t69((ptr) + 8, (value).value)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t474(ptr : Int, value : @common.Ref) -> Unit {
+fn __wit_bindgen_lower_t475(ptr : Int, value : @common.Ref) -> Unit {
 
       match value {
             Present(payload) => {
@@ -9921,7 +9834,7 @@ fn __wit_bindgen_lower_t474(ptr : Int, value : @common.Ref) -> Unit {
             }
             ValueIs(payload1) => {
                   mbt_ffi_store8((ptr) + 0, (1))
-                  __wit_bindgen_lower_t473((ptr) + 4, payload1)
+                  __wit_bindgen_lower_t474((ptr) + 4, payload1)
 
                   ()
             }
@@ -9930,13 +9843,13 @@ fn __wit_bindgen_lower_t474(ptr : Int, value : @common.Ref) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t476(ptr : Int, value : @common.RefGroup) -> Unit {
+fn __wit_bindgen_lower_t477(ptr : Int, value : @common.RefGroup) -> Unit {
 
       let address = mbt_ffi_malloc(((value).refs).length() * 24);
       for index = 0; index < ((value).refs).length(); index = index + 1 {
             let iter_elem : @common.Ref = ((value).refs)[(index)]
             let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).refs).length())
@@ -9945,14 +9858,14 @@ fn __wit_bindgen_lower_t476(ptr : Int, value : @common.RefGroup) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t478(ptr : Int, value : @common.ImpliesC) -> Unit {
+fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ImpliesC) -> Unit {
       mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
 
       let address = mbt_ffi_malloc(((value).lhs).length() * 24);
       for index = 0; index < ((value).lhs).length(); index = index + 1 {
             let iter_elem : @common.Ref = ((value).lhs)[(index)]
             let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
@@ -9963,7 +9876,7 @@ fn __wit_bindgen_lower_t478(ptr : Int, value : @common.ImpliesC) -> Unit {
       for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
             let iter_elem : @common.Ref = ((value).rhs)[(index1)]
             let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 20, ((value).rhs).length())
@@ -9972,14 +9885,14 @@ fn __wit_bindgen_lower_t478(ptr : Int, value : @common.ImpliesC) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ForbidsC) -> Unit {
+fn __wit_bindgen_lower_t480(ptr : Int, value : @common.ForbidsC) -> Unit {
       mbt_ffi_store8((ptr) + 0, (value).lhs_quant.ordinal())
 
       let address = mbt_ffi_malloc(((value).lhs).length() * 24);
       for index = 0; index < ((value).lhs).length(); index = index + 1 {
             let iter_elem : @common.Ref = ((value).lhs)[(index)]
             let iter_base = address + (index * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 8, ((value).lhs).length())
@@ -9989,7 +9902,7 @@ fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ForbidsC) -> Unit {
       for index1 = 0; index1 < ((value).rhs).length(); index1 = index1 + 1 {
             let iter_elem : @common.Ref = ((value).rhs)[(index1)]
             let iter_base = address0 + (index1 * 24);
-            __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 16, ((value).rhs).length())
@@ -9998,7 +9911,7 @@ fn __wit_bindgen_lower_t479(ptr : Int, value : @common.ForbidsC) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
+fn __wit_bindgen_lower_t482(ptr : Int, value : @common.Constraint) -> Unit {
 
       match value {
             RequiresAll(payload) => {
@@ -10008,7 +9921,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.Ref = (payload)[(index)]
                         let iter_base = address + (index * 24);
-                        __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload).length())
@@ -10023,7 +9936,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index2 = 0; index2 < (payload0).length(); index2 = index2 + 1 {
                         let iter_elem : @common.Ref = (payload0)[(index2)]
                         let iter_base = address1 + (index2 * 24);
-                        __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload0).length())
@@ -10038,7 +9951,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index5 = 0; index5 < (payload3).length(); index5 = index5 + 1 {
                         let iter_elem : @common.Ref = (payload3)[(index5)]
                         let iter_base = address4 + (index5 * 24);
-                        __wit_bindgen_lower_t474((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t475((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload3).length())
@@ -10053,7 +9966,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
                   for index8 = 0; index8 < (payload6).length(); index8 = index8 + 1 {
                         let iter_elem : @common.RefGroup = (payload6)[(index8)]
                         let iter_base = address7 + (index8 * 8);
-                        __wit_bindgen_lower_t476((iter_base) + 0, iter_elem)
+                        __wit_bindgen_lower_t477((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((ptr) + 8, (payload6).length())
@@ -10063,13 +9976,13 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
             }
             Implies(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (4))
-                  __wit_bindgen_lower_t478((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t479((ptr) + 4, payload9)
 
                   ()
             }
             Forbids(payload10) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t479((ptr) + 4, payload10)
+                  __wit_bindgen_lower_t480((ptr) + 4, payload10)
 
                   ()
             }
@@ -10078,7 +9991,7 @@ fn __wit_bindgen_lower_t481(ptr : Int, value : @common.Constraint) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t483(ptr : Int, value : @common.Example) -> Unit {
+fn __wit_bindgen_lower_t484(ptr : Int, value : @common.Example) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).title)
       mbt_ffi_store32((ptr) + 4, (value).title.length())
@@ -10091,7 +10004,7 @@ fn __wit_bindgen_lower_t483(ptr : Int, value : @common.Example) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Doc) -> Unit {
+fn __wit_bindgen_lower_t486(ptr : Int, value : @common.Doc) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).summary)
       mbt_ffi_store32((ptr) + 4, (value).summary.length())
@@ -10105,7 +10018,7 @@ fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Doc) -> Unit {
       for index = 0; index < ((value).examples).length(); index = index + 1 {
             let iter_elem : @common.Example = ((value).examples)[(index)]
             let iter_base = address + (index * 16);
-            __wit_bindgen_lower_t483((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t484((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 20, ((value).examples).length())
@@ -10114,12 +10027,12 @@ fn __wit_bindgen_lower_t485(ptr : Int, value : @common.Doc) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t488(ptr : Int, value : @common.Positional) -> Unit {
+fn __wit_bindgen_lower_t489(ptr : Int, value : @common.Positional) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t486((ptr) + 8, (value).doc)
 
       match ((value).value_name) {
             None => {
@@ -10147,7 +10060,7 @@ fn __wit_bindgen_lower_t488(ptr : Int, value : @common.Positional) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 48, (1))
-                  __wit_bindgen_lower_t68((ptr) + 52, payload4)
+                  __wit_bindgen_lower_t69((ptr) + 52, payload4)
 
                   ()
             }
@@ -10157,12 +10070,12 @@ fn __wit_bindgen_lower_t488(ptr : Int, value : @common.Positional) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t489(ptr : Int, value : @common.TailPositional) -> Unit {
+fn __wit_bindgen_lower_t490(ptr : Int, value : @common.TailPositional) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t486((ptr) + 8, (value).doc)
 
       match ((value).value_name) {
             None => {
@@ -10218,13 +10131,13 @@ fn __wit_bindgen_lower_t489(ptr : Int, value : @common.TailPositional) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t492(ptr : Int, value : @common.Positionals) -> Unit {
+fn __wit_bindgen_lower_t493(ptr : Int, value : @common.Positionals) -> Unit {
 
       let address = mbt_ffi_malloc(((value).fixed).length() * 68);
       for index = 0; index < ((value).fixed).length(); index = index + 1 {
             let iter_elem : @common.Positional = ((value).fixed)[(index)]
             let iter_base = address + (index * 68);
-            __wit_bindgen_lower_t488((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t489((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).fixed).length())
@@ -10238,7 +10151,7 @@ fn __wit_bindgen_lower_t492(ptr : Int, value : @common.Positionals) -> Unit {
             }
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 8, (1))
-                  __wit_bindgen_lower_t489((ptr) + 12, payload0)
+                  __wit_bindgen_lower_t490((ptr) + 12, payload0)
 
                   ()
             }
@@ -10247,7 +10160,7 @@ fn __wit_bindgen_lower_t492(ptr : Int, value : @common.Positionals) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
+fn __wit_bindgen_lower_t496(ptr : Int, value : @common.OptionSpec) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).long)
       mbt_ffi_store32((ptr) + 4, (value).long.length())
@@ -10279,7 +10192,7 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
       }
       mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
       mbt_ffi_store32((ptr) + 16, address)
-      __wit_bindgen_lower_t485((ptr) + 24, (value).doc)
+      __wit_bindgen_lower_t486((ptr) + 24, (value).doc)
 
       match ((value).value_name) {
             None => {
@@ -10297,7 +10210,7 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
                   ()
             }
       }
-      __wit_bindgen_lower_t469((ptr) + 60, (value).shape)
+      __wit_bindgen_lower_t470((ptr) + 60, (value).shape)
 
       match ((value).default) {
             None => {
@@ -10307,7 +10220,7 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
             }
             Some(payload7) => {
                   mbt_ffi_store8((ptr) + 76, (1))
-                  __wit_bindgen_lower_t68((ptr) + 80, payload7)
+                  __wit_bindgen_lower_t69((ptr) + 80, payload7)
 
                   ()
             }
@@ -10334,7 +10247,7 @@ fn __wit_bindgen_lower_t495(ptr : Int, value : @common.OptionSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t496(ptr : Int, value : @common.FlagSpec) -> Unit {
+fn __wit_bindgen_lower_t497(ptr : Int, value : @common.FlagSpec) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).long)
       mbt_ffi_store32((ptr) + 4, (value).long.length())
@@ -10366,8 +10279,8 @@ fn __wit_bindgen_lower_t496(ptr : Int, value : @common.FlagSpec) -> Unit {
       }
       mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
       mbt_ffi_store32((ptr) + 16, address)
-      __wit_bindgen_lower_t485((ptr) + 24, (value).doc)
-      __wit_bindgen_lower_t472((ptr) + 48, (value).shape)
+      __wit_bindgen_lower_t486((ptr) + 24, (value).doc)
+      __wit_bindgen_lower_t473((ptr) + 48, (value).shape)
 
       match ((value).env_var) {
             None => {
@@ -10389,13 +10302,13 @@ fn __wit_bindgen_lower_t496(ptr : Int, value : @common.FlagSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t499(ptr : Int, value : @common.Globals) -> Unit {
+fn __wit_bindgen_lower_t500(ptr : Int, value : @common.Globals) -> Unit {
 
       let address = mbt_ffi_malloc(((value).options).length() * 108);
       for index = 0; index < ((value).options).length(); index = index + 1 {
             let iter_elem : @common.OptionSpec = ((value).options)[(index)]
             let iter_base = address + (index * 108);
-            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t496((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).options).length())
@@ -10405,7 +10318,7 @@ fn __wit_bindgen_lower_t499(ptr : Int, value : @common.Globals) -> Unit {
       for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
             let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
             let iter_base = address0 + (index1 * 72);
-            __wit_bindgen_lower_t496((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t497((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 12, ((value).flags).length())
@@ -10414,8 +10327,8 @@ fn __wit_bindgen_lower_t499(ptr : Int, value : @common.Globals) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t500(ptr : Int, value : @common.StreamSpec) -> Unit {
-      __wit_bindgen_lower_t485((ptr) + 0, (value).doc)
+fn __wit_bindgen_lower_t501(ptr : Int, value : @common.StreamSpec) -> Unit {
+      __wit_bindgen_lower_t486((ptr) + 0, (value).doc)
 
       let address = mbt_ffi_malloc(((value).mime).length() * 8);
       for index = 0; index < ((value).mime).length(); index = index + 1 {
@@ -10434,25 +10347,25 @@ fn __wit_bindgen_lower_t500(ptr : Int, value : @common.StreamSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t501(ptr : Int, value : @common.Formatter) -> Unit {
+fn __wit_bindgen_lower_t502(ptr : Int, value : @common.Formatter) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t486((ptr) + 8, (value).doc)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t503(ptr : Int, value : @common.ResultSpec) -> Unit {
+fn __wit_bindgen_lower_t504(ptr : Int, value : @common.ResultSpec) -> Unit {
       mbt_ffi_store32((ptr) + 0, (value).type_)
-      __wit_bindgen_lower_t485((ptr) + 4, (value).doc)
+      __wit_bindgen_lower_t486((ptr) + 4, (value).doc)
 
       let address = mbt_ffi_malloc(((value).formatters).length() * 32);
       for index = 0; index < ((value).formatters).length(); index = index + 1 {
             let iter_elem : @common.Formatter = ((value).formatters)[(index)]
             let iter_base = address + (index * 32);
-            __wit_bindgen_lower_t501((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t502((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 32, ((value).formatters).length())
@@ -10465,12 +10378,12 @@ fn __wit_bindgen_lower_t503(ptr : Int, value : @common.ResultSpec) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t505(ptr : Int, value : @common.ErrorCase) -> Unit {
+fn __wit_bindgen_lower_t506(ptr : Int, value : @common.ErrorCase) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t485((ptr) + 8, (value).doc)
+      __wit_bindgen_lower_t486((ptr) + 8, (value).doc)
       mbt_ffi_store8((ptr) + 32, (value).kind.ordinal())
       mbt_ffi_store8((ptr) + 33, ((value).exit_code).to_int())
 
@@ -10491,14 +10404,14 @@ fn __wit_bindgen_lower_t505(ptr : Int, value : @common.ErrorCase) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
-      __wit_bindgen_lower_t492((ptr) + 0, (value).positionals)
+fn __wit_bindgen_lower_t512(ptr : Int, value : @common.CommandBody) -> Unit {
+      __wit_bindgen_lower_t493((ptr) + 0, (value).positionals)
 
       let address = mbt_ffi_malloc(((value).options).length() * 108);
       for index = 0; index < ((value).options).length(); index = index + 1 {
             let iter_elem : @common.OptionSpec = ((value).options)[(index)]
             let iter_base = address + (index * 108);
-            __wit_bindgen_lower_t495((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t496((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 92, ((value).options).length())
@@ -10508,7 +10421,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
       for index1 = 0; index1 < ((value).flags).length(); index1 = index1 + 1 {
             let iter_elem : @common.FlagSpec = ((value).flags)[(index1)]
             let iter_base = address0 + (index1 * 72);
-            __wit_bindgen_lower_t496((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t497((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 100, ((value).flags).length())
@@ -10518,7 +10431,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
       for index3 = 0; index3 < ((value).constraints).length(); index3 = index3 + 1 {
             let iter_elem : @common.Constraint = ((value).constraints)[(index3)]
             let iter_base = address2 + (index3 * 28);
-            __wit_bindgen_lower_t481((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t482((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 108, ((value).constraints).length())
@@ -10532,7 +10445,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 112, (1))
-                  __wit_bindgen_lower_t500((ptr) + 116, payload4)
+                  __wit_bindgen_lower_t501((ptr) + 116, payload4)
 
                   ()
             }
@@ -10546,7 +10459,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload6) => {
                   mbt_ffi_store8((ptr) + 152, (1))
-                  __wit_bindgen_lower_t500((ptr) + 156, payload6)
+                  __wit_bindgen_lower_t501((ptr) + 156, payload6)
 
                   ()
             }
@@ -10560,7 +10473,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload8) => {
                   mbt_ffi_store8((ptr) + 192, (1))
-                  __wit_bindgen_lower_t503((ptr) + 196, payload8)
+                  __wit_bindgen_lower_t504((ptr) + 196, payload8)
 
                   ()
             }
@@ -10570,7 +10483,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
       for index10 = 0; index10 < ((value).errors).length(); index10 = index10 + 1 {
             let iter_elem : @common.ErrorCase = ((value).errors)[(index10)]
             let iter_base = address9 + (index10 * 44);
-            __wit_bindgen_lower_t505((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t506((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 244, ((value).errors).length())
@@ -10584,7 +10497,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
             }
             Some(payload12) => {
                   mbt_ffi_store8((ptr) + 248, (1))
-                  __wit_bindgen_lower_t466((ptr) + 249, payload12)
+                  __wit_bindgen_lower_t467((ptr) + 249, payload12)
 
                   ()
             }
@@ -10593,7 +10506,7 @@ fn __wit_bindgen_lower_t511(ptr : Int, value : @common.CommandBody) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
+fn __wit_bindgen_lower_t515(ptr : Int, value : @common.CommandNode) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).name)
       mbt_ffi_store32((ptr) + 4, (value).name.length())
@@ -10611,8 +10524,8 @@ fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
       }
       mbt_ffi_store32((ptr) + 12, ((value).aliases).length())
       mbt_ffi_store32((ptr) + 8, address)
-      __wit_bindgen_lower_t485((ptr) + 16, (value).doc)
-      __wit_bindgen_lower_t499((ptr) + 40, (value).globals)
+      __wit_bindgen_lower_t486((ptr) + 16, (value).doc)
+      __wit_bindgen_lower_t500((ptr) + 40, (value).globals)
 
       let address2 = mbt_ffi_malloc(((value).subcommands).length() * 4);
       for index3 = 0; index3 < ((value).subcommands).length(); index3 = index3 + 1 {
@@ -10632,7 +10545,7 @@ fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
             }
             Some(payload4) => {
                   mbt_ffi_store8((ptr) + 64, (1))
-                  __wit_bindgen_lower_t511((ptr) + 68, payload4)
+                  __wit_bindgen_lower_t512((ptr) + 68, payload4)
 
                   ()
             }
@@ -10641,13 +10554,13 @@ fn __wit_bindgen_lower_t514(ptr : Int, value : @common.CommandNode) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t516(ptr : Int, value : @common.CommandTree) -> Unit {
+fn __wit_bindgen_lower_t517(ptr : Int, value : @common.CommandTree) -> Unit {
 
       let address = mbt_ffi_malloc(((value).nodes).length() * 324);
       for index = 0; index < ((value).nodes).length(); index = index + 1 {
             let iter_elem : @common.CommandNode = ((value).nodes)[(index)]
             let iter_base = address + (index * 324);
-            __wit_bindgen_lower_t514((iter_base) + 0, iter_elem)
+            __wit_bindgen_lower_t515((iter_base) + 0, iter_elem)
 
       }
       mbt_ffi_store32((ptr) + 4, ((value).nodes).length())
@@ -10656,18 +10569,18 @@ fn __wit_bindgen_lower_t516(ptr : Int, value : @common.CommandTree) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t517(ptr : Int, value : @common.Tool) -> Unit {
+fn __wit_bindgen_lower_t518(ptr : Int, value : @common.Tool) -> Unit {
 
       let ptr0 = mbt_ffi_str2ptr((value).version)
       mbt_ffi_store32((ptr) + 4, (value).version.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
-      __wit_bindgen_lower_t516((ptr) + 8, (value).commands)
-      __wit_bindgen_lower_t51((ptr) + 16, (value).schema)
+      __wit_bindgen_lower_t517((ptr) + 8, (value).commands)
+      __wit_bindgen_lower_t52((ptr) + 16, (value).schema)
 
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t518(ptr : Int, value : @common.ToolError) -> Unit {
+fn __wit_bindgen_lower_t519(ptr : Int, value : @common.ToolError) -> Unit {
 
       match value {
             InvalidToolName(payload) => {
@@ -10726,7 +10639,7 @@ fn __wit_bindgen_lower_t518(ptr : Int, value : @common.ToolError) -> Unit {
             }
             CustomError(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t69((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t70((ptr) + 4, payload9)
 
                   ()
             }
@@ -10735,7 +10648,7 @@ fn __wit_bindgen_lower_t518(ptr : Int, value : @common.ToolError) -> Unit {
 }
 
 #doc(hidden)
-fn __wit_bindgen_lower_t522(ptr : Int, value : @common.InvocationResult) -> Unit {
+fn __wit_bindgen_lower_t523(ptr : Int, value : @common.InvocationResult) -> Unit {
 
       match ((value).result) {
             None => {
@@ -10745,7 +10658,7 @@ fn __wit_bindgen_lower_t522(ptr : Int, value : @common.InvocationResult) -> Unit
             }
             Some(payload0) => {
                   mbt_ffi_store8((ptr) + 0, (1))
-                  __wit_bindgen_lower_t69((ptr) + 4, payload0)
+                  __wit_bindgen_lower_t70((ptr) + 4, payload0)
 
                   ()
             }
@@ -10774,20 +10687,8 @@ extern "wasm" fn mbt_ffi_store16(offset : Int, value : Int) =
 #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store16)
 
 ///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-#|(func (param i32) (result i64) local.get 0 i64.load)
-
-///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-#|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load)
+extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
+#|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
 
 ///|
 #owned(str)
@@ -10795,12 +10696,33 @@ extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
 #|(func (param i32) (result i32) local.get 0)
 
 ///|
+extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
+#|(func (param i32) (result f32) local.get 0 f32.load)
+
+///|
+extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.extend8_s)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+#|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+#|(func (param i32) (result i32) local.get 0)
+
+///|
 extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
 #|(func (param i32) (param f32) local.get 0 local.get 1 f32.store)
 
 ///|
-extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
-#|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
+extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load8_s)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
@@ -10810,16 +10732,16 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
 #| local.get 0)
 
 ///|
-extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
-#|(func (param i32) (result f64) local.get 0 f64.load)
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load8_u)
 
 ///|
-extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.extend8_s)
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
 
 ///|
-extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load16_u)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
@@ -10829,8 +10751,20 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
 #| local.get 0)
 
 ///|
-extern "wasm" fn mbt_ffi_load16_u(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load16_u)
+extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
+#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+
+///|
+extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.load16_s)
+
+///|
+extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
+#|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
+
+///|
+extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
+#|(func (param i32) (result i32) local.get 0 i32.extend16_s)
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
@@ -10840,31 +10774,10 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 #| local.get 1)
 
 ///|
-extern "wasm" fn mbt_ffi_loadf32(offset : Int) -> Float =
-#|(func (param i32) (result f32) local.get 0 f32.load)
+extern "wasm" fn mbt_ffi_loadf64(offset : Int) -> Double =
+#|(func (param i32) (result f64) local.get 0 f64.load)
 
 ///|
-extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
-#|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
-
-///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-#|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-#|(func (param i32) (result i32) local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_load8(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load8_s)
-
-///|
-extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.load16_s)
-
-///|
-extern "wasm" fn mbt_ffi_extend16(value : Int) -> Int =
-#|(func (param i32) (result i32) local.get 0 i32.extend16_s)
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+#|(func (param i32) (result i64) local.get 0 i64.load)
 

@@ -18,9 +18,10 @@ use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue};
 use crate::schema::wit::{
-    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, decode_graph, decode_typed,
-    decode_typed_rejecting_quota_with, decode_value, decode_value_rejecting_quota_with,
-    decode_value_with, encode_graph, encode_typed, encode_value, encode_value_with, wire,
+    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleDropper,
+    SecretHandleRep, decode_graph, decode_typed, decode_typed_rejecting_quota_with, decode_value,
+    decode_value_rejecting_quota_with, decode_value_with, encode_graph, encode_typed, encode_value,
+    encode_value_with, wire,
 };
 use chrono::{TimeZone, Utc};
 use golem_schema::model::EnvironmentId;
@@ -245,6 +246,15 @@ impl TableResolver {
             ..Self::new()
         }
     }
+
+    fn secret_handle(&mut self) -> Resource<SecretHandleRep> {
+        let handle = self
+            .table
+            .push(SecretHandleRep::new("secret-payload".to_string()))
+            .unwrap();
+        self.live += 1;
+        handle
+    }
 }
 
 impl QuotaTokenResolver for TableResolver {
@@ -280,6 +290,14 @@ impl QuotaTokenResolver for TableResolver {
     }
 
     fn drop_handle(&mut self, handle: Resource<QuotaTokenHandleRep>) {
+        if self.table.delete(handle).is_ok() {
+            self.live -= 1;
+        }
+    }
+}
+
+impl SecretHandleDropper for TableResolver {
+    fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>) {
         if self.table.delete(handle).is_ok() {
             self.live -= 1;
         }
@@ -336,6 +354,22 @@ fn pure_decode_rejects_quota_handle() {
         encode_value_with(&SchemaValue::QuotaToken(sample_snapshot()), &mut resolver).unwrap();
     let err = decode_value(&wire).expect_err("pure decode must reject handles");
     assert!(matches!(err, DecodeError::QuotaTokenRequiresResolver));
+}
+
+#[test]
+fn pure_decode_rejects_unreferenced_secret_handle() {
+    let mut resolver = TableResolver::new();
+    let secret = resolver.secret_handle();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![
+            wire::SchemaValueNode::SecretValue(secret),
+            wire::SchemaValueNode::BoolValue(false),
+        ],
+        root: 1,
+    };
+
+    let err = decode_value(&tree).expect_err("pure decode must reject secret transport");
+    assert!(matches!(err, DecodeError::SecretRequiresResolver));
 }
 
 #[test]
@@ -516,4 +550,60 @@ fn typed_reject_decoder_drains_handle_before_decoding_invalid_graph() {
         .expect_err("must reject before reaching the invalid graph");
     assert!(matches!(err, DecodeError::QuotaTokenNotPermitted(0)));
     assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn secrets_create_interface_is_imported_by_host_and_sdk_worlds() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("golem-common is a workspace member");
+    let world_files = [
+        "wit/host.wit",
+        "sdks/rust/golem-rust/wit/golem-rust.wit",
+        "sdks/ts/wit/main.wit",
+        "sdks/scala/wit/main.wit",
+        "sdks/moonbit/golem_sdk/wit/main.wit",
+    ];
+    let missing = world_files
+        .iter()
+        .filter(|path| {
+            let contents = std::fs::read_to_string(workspace_root.join(path))
+                .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+            !contents.contains("import golem:secrets/create@0.1.0;")
+        })
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "golem:secrets/create@0.1.0 is missing from these host/SDK worlds: {missing:?}"
+    );
+}
+
+#[test]
+fn discover_agent_error_decode_path_leaks_custom_error_secret_handle() {
+    let mut resolver = TableResolver::new();
+    let valid = encode_typed(&TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::bool()),
+        SchemaValue::Bool(false),
+    ))
+    .expect("encode valid typed");
+    let secret = resolver.secret_handle();
+    let wire_err =
+        crate::schema::agent::wit::wire::AgentError::CustomError(wire::TypedSchemaValue {
+            graph: valid.graph,
+            value: wire::SchemaValueTree {
+                value_nodes: vec![wire::SchemaValueNode::SecretValue(secret)],
+                root: 0,
+            },
+        });
+
+    let err =
+        crate::schema::agent::wit::decode_agent_error_rejecting_quota_with(wire_err, &mut resolver)
+            .expect_err("custom errors must not carry secret handles");
+    assert!(err.to_string().contains("secret"));
+    assert_eq!(
+        resolver.live, 0,
+        "secret handle was rejected but not drained"
+    );
 }

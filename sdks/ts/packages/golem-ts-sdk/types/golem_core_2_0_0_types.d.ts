@@ -10,6 +10,8 @@ declare module 'golem:core/types@2.0.0' {
   export function uuidToString(uuid: Uuid): string;
   export class QuotaToken {
   }
+  export class Secret {
+  }
   /**
    * ============================================================
    * Carrier indices
@@ -570,16 +572,6 @@ declare module 'golem:core/types@2.0.0' {
      */
     body: ValueNodeIndex;
   };
-  /**
-   * Capability value: secret transport is **by reference**. The schema side
-   * declares the secret; the value side carries an opaque reference that the
-   * authority resolves on read. The literal secret material never crosses
-   * this carrier.
-   */
-  export type SecretValuePayload = {
-    /** Opaque, authority-resolved reference. */
-    secretRef: string;
-  };
   export type SchemaValueNode = 
   /** Primitives */
   {
@@ -712,7 +704,7 @@ declare module 'golem:core/types@2.0.0' {
   /** Capability nodes */
   {
     tag: 'secret-value'
-    val: SecretValuePayload
+    val: Secret
   } |
   {
     tag: 'quota-token-handle'

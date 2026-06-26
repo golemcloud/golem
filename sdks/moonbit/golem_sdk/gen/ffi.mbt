@@ -39,28 +39,23 @@ extern "wasm" fn mbt_ffi_free(position : Int) =
 #|(func (param i32) local.get 0 call $moonbit.decref)
 
 #doc(hidden)
-pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
-      @guest.wasmExportDiscoverToolsPostReturn(p0)
+pub fn wasmExportDiscoverAgentTypes() -> Int {
+      @guest0.wasmExportDiscoverAgentTypes()
 }
 
 #doc(hidden)
-pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
-      @guest0.wasmExportGetDefinitionPostReturn(p0)
+pub fn wasmExportInitialize(p0 : Int) -> Int {
+      @guest0.wasmExportInitialize(p0)
 }
 
 #doc(hidden)
-pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
-      @guest.wasmExportInvokeGolemToolGuest(p0)
+pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
+      @guest.wasmExportInvokeGolemToolGuestPostReturn(p0)
 }
 
 #doc(hidden)
-pub fn wasmExportInvokeGolemAgentGuestPostReturn(p0 : Int) -> Unit {
-      @guest0.wasmExportInvokeGolemAgentGuestPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportSave() -> Int {
-      @saveSnapshot.wasmExportSave()
+pub fn wasmExportDiscoverTools() -> Int {
+      @guest.wasmExportDiscoverTools()
 }
 
 #doc(hidden)
@@ -74,33 +69,8 @@ pub fn wasmExportInitializePostReturn(p0 : Int) -> Unit {
 }
 
 #doc(hidden)
-pub fn wasmExportLoadPostReturn(p0 : Int) -> Unit {
-      @loadSnapshot.wasmExportLoadPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportDiscoverTools() -> Int {
-      @guest.wasmExportDiscoverTools()
-}
-
-#doc(hidden)
-pub fn wasmExportGetDefinition() -> Int {
-      @guest0.wasmExportGetDefinition()
-}
-
-#doc(hidden)
-pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
-      @guest.wasmExportGetToolPostReturn(p0)
-}
-
-#doc(hidden)
-pub fn wasmExportDiscoverAgentTypes() -> Int {
-      @guest0.wasmExportDiscoverAgentTypes()
-}
-
-#doc(hidden)
-pub fn wasmExportInvokeGolemToolGuestPostReturn(p0 : Int) -> Unit {
-      @guest.wasmExportInvokeGolemToolGuestPostReturn(p0)
+pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
+      @guest.wasmExportDiscoverToolsPostReturn(p0)
 }
 
 #doc(hidden)
@@ -114,17 +84,47 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
 }
 
 #doc(hidden)
-pub fn wasmExportInitialize(p0 : Int) -> Int {
-      @guest0.wasmExportInitialize(p0)
+pub fn wasmExportSave() -> Int {
+      @saveSnapshot.wasmExportSave()
 }
 
 #doc(hidden)
-pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
-      @loadSnapshot.wasmExportLoad(p0, p1, p2, p3)
+pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
+      @guest.wasmExportGetToolPostReturn(p0)
+}
+
+#doc(hidden)
+pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
+      @guest.wasmExportInvokeGolemToolGuest(p0)
+}
+
+#doc(hidden)
+pub fn wasmExportLoadPostReturn(p0 : Int) -> Unit {
+      @loadSnapshot.wasmExportLoadPostReturn(p0)
 }
 
 #doc(hidden)
 pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
       @guest0.wasmExportInvokeGolemAgentGuest(p0)
+}
+
+#doc(hidden)
+pub fn wasmExportInvokeGolemAgentGuestPostReturn(p0 : Int) -> Unit {
+      @guest0.wasmExportInvokeGolemAgentGuestPostReturn(p0)
+}
+
+#doc(hidden)
+pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
+      @guest0.wasmExportGetDefinitionPostReturn(p0)
+}
+
+#doc(hidden)
+pub fn wasmExportGetDefinition() -> Int {
+      @guest0.wasmExportGetDefinition()
+}
+
+#doc(hidden)
+pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
+      @loadSnapshot.wasmExportLoad(p0, p1, p2, p3)
 }
 

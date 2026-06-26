@@ -1848,18 +1848,16 @@ pub fn persist_durable_function_invocation(function_name : String, request : @ty
                   SecretValue(payload282) => {
                         mbt_ffi_store8((iter_base) + 0, (31))
 
-                        let ptr283 = mbt_ffi_str2ptr((payload282).secret_ref)
-                        mbt_ffi_store32((iter_base) + 12, (payload282).secret_ref.length())
-                        mbt_ffi_store32((iter_base) + 8, ptr283)
-                        cleanup_list.push(ptr283)
+                        let @types.Secret(handle) = payload282
+                        mbt_ffi_store32((iter_base) + 8, handle)
 
                         ()
                   }
-                  QuotaTokenHandle(payload284) => {
+                  QuotaTokenHandle(payload283) => {
                         mbt_ffi_store8((iter_base) + 0, (32))
 
-                        let @types.QuotaToken(handle) = payload284
-                        mbt_ffi_store32((iter_base) + 8, handle)
+                        let @types.QuotaToken(handle284) = payload283
+                        mbt_ffi_store32((iter_base) + 8, handle284)
 
                         ()
                   }
@@ -3502,10 +3500,8 @@ pub fn persist_durable_function_invocation(function_name : String, request : @ty
                   SecretValue(payload572) => {
                         mbt_ffi_store8((iter_base) + 0, (31))
 
-                        let ptr573 = mbt_ffi_str2ptr((payload572).secret_ref)
-                        mbt_ffi_store32((iter_base) + 12, (payload572).secret_ref.length())
-                        mbt_ffi_store32((iter_base) + 8, ptr573)
-                        cleanup_list.push(ptr573)
+                        let @types.Secret(handle573) = payload572
+                        mbt_ffi_store32((iter_base) + 8, handle573)
 
                         ()
                   }
@@ -4446,11 +4442,11 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
       }
       mbt_ffi_free(mbt_ffi_load32((return_area) + 32))
 
-      let array160 : Array[@types.SchemaValueNode] = [];
-      for index161 = 0; index161 < (mbt_ffi_load32((return_area) + 48)); index161 = index161 + 1 {
-            let iter_base = (mbt_ffi_load32((return_area) + 44)) + (index161 * 32)
+      let array159 : Array[@types.SchemaValueNode] = [];
+      for index160 = 0; index160 < (mbt_ffi_load32((return_area) + 48)); index160 = index160 + 1 {
+            let iter_base = (mbt_ffi_load32((return_area) + 44)) + (index160 * 32)
 
-            let lifted159 = match (mbt_ffi_load8_u((iter_base) + 0)) {
+            let lifted158 = match (mbt_ffi_load8_u((iter_base) + 0)) {
                   0 => {
 
                         @types.SchemaValueNode::BoolValue((mbt_ffi_load8_u((iter_base) + 8) != 0))
@@ -4709,9 +4705,7 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
                   }
                   31 => {
 
-                        let result158 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
-
-                        @types.SchemaValueNode::SecretValue(@types.SecretValuePayload::{secret_ref : result158})
+                        @types.SchemaValueNode::SecretValue(@types.Secret::Secret(mbt_ffi_load32((iter_base) + 8)))
                   }
                   32 => {
 
@@ -4720,11 +4714,11 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
                   _ => panic()
             }
 
-            array160.push(lifted159)
+            array159.push(lifted158)
       }
       mbt_ffi_free(mbt_ffi_load32((return_area) + 44))
 
-      let lifted164 = match (mbt_ffi_load8_u((return_area) + 56)) {
+      let lifted163 = match (mbt_ffi_load8_u((return_area) + 56)) {
             0 => {
 
                   @oplog.WrappedFunctionType::ReadLocal
@@ -4743,6 +4737,19 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
             }
             4 => {
 
+                  let lifted161 : UInt64? = match mbt_ffi_load8_u((return_area) + 64) {
+                        0 => Option::None
+                        1 => {
+
+                              Option::Some((mbt_ffi_load64((return_area) + 72)).reinterpret_as_uint64())
+                        }
+                        _ => panic()
+                  }
+
+                  @oplog.WrappedFunctionType::WriteRemoteBatched(lifted161)
+            }
+            5 => {
+
                   let lifted162 : UInt64? = match mbt_ffi_load8_u((return_area) + 64) {
                         0 => Option::None
                         1 => {
@@ -4752,24 +4759,11 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
                         _ => panic()
                   }
 
-                  @oplog.WrappedFunctionType::WriteRemoteBatched(lifted162)
-            }
-            5 => {
-
-                  let lifted163 : UInt64? = match mbt_ffi_load8_u((return_area) + 64) {
-                        0 => Option::None
-                        1 => {
-
-                              Option::Some((mbt_ffi_load64((return_area) + 72)).reinterpret_as_uint64())
-                        }
-                        _ => panic()
-                  }
-
-                  @oplog.WrappedFunctionType::WriteRemoteTransaction(lifted163)
+                  @oplog.WrappedFunctionType::WriteRemoteTransaction(lifted162)
             }
             _ => panic()
       }
-      let ret = PersistedDurableFunctionInvocation::{timestamp : @wallClock.Datetime::{seconds : (mbt_ffi_load64((return_area) + 0)).reinterpret_as_uint64(), nanoseconds : (mbt_ffi_load32((return_area) + 8)).reinterpret_as_uint()}, function_name : result, response : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array123, defs : array128, root : mbt_ffi_load32((return_area) + 40)}, value : @types.SchemaValueTree::{value_nodes : array160, root : mbt_ffi_load32((return_area) + 52)}}, function_type : lifted164, entry_version : OplogEntryVersion::from(mbt_ffi_load8_u((return_area) + 80))}
+      let ret = PersistedDurableFunctionInvocation::{timestamp : @wallClock.Datetime::{seconds : (mbt_ffi_load64((return_area) + 0)).reinterpret_as_uint64(), nanoseconds : (mbt_ffi_load32((return_area) + 8)).reinterpret_as_uint()}, function_name : result, response : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array123, defs : array128, root : mbt_ffi_load32((return_area) + 40)}, value : @types.SchemaValueTree::{value_nodes : array159, root : mbt_ffi_load32((return_area) + 52)}}, function_type : lifted163, entry_version : OplogEntryVersion::from(mbt_ffi_load8_u((return_area) + 80))}
       mbt_ffi_free(return_area)
       return ret
 

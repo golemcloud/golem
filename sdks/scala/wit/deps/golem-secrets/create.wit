@@ -9,7 +9,7 @@ package golem:secrets@0.1.0;
 /// that obtain a token from an external service and must hand it
 /// to another tool downstream.
 interface create {
-  use types.{secret};
+  use golem:core/types@2.0.0.{secret};
 
   /// Mint a fresh secret from a plaintext string. Always succeeds
   /// (modulo runtime-internal failures). The runtime SHOULD make a
