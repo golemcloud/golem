@@ -71,15 +71,15 @@ fn card_id_from_wit(card_id: oplog::CardId) -> CardId {
     CardId(card_id.uuid.into())
 }
 
-fn queued_card_event_to_wit(value: PublicQueuedCardEvent) -> oplog::PublicQueuedCardEvent {
+fn queued_card_event_to_wit(value: PublicQueuedCardEvent) -> oplog::QueuedCardEvent {
     match value {
         PublicQueuedCardEvent::Install(event) => {
-            oplog::PublicQueuedCardEvent::Install(oplog::PublicQueuedCardEventCard {
+            oplog::QueuedCardEvent::Install(oplog::QueuedCardEventInstall {
                 card_id: card_id_to_wit(event.card_id),
             })
         }
         PublicQueuedCardEvent::Revoke(event) => {
-            oplog::PublicQueuedCardEvent::Revoke(oplog::PublicQueuedCardEventCard {
+            oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventRevoke {
                 card_id: card_id_to_wit(event.card_id),
             })
         }
@@ -88,20 +88,14 @@ fn queued_card_event_to_wit(value: PublicQueuedCardEvent) -> oplog::PublicQueued
 
 fn raw_queued_card_event_to_wit(value: QueuedCardEvent) -> oplog::QueuedCardEvent {
     match value {
-        QueuedCardEvent::Install(event) => {
-            oplog::QueuedCardEvent::Install(oplog::QueuedCardEventCard {
-                card_id: card_id_to_wit(event.card_id),
-                card: event
-                    .card
-                    .and_then(|card| serde_json::to_vec(&card).ok())
-                    .map(Some)
-                    .unwrap_or_default(),
+        QueuedCardEvent::Install { card_id } => {
+            oplog::QueuedCardEvent::Install(oplog::QueuedCardEventInstall {
+                card_id: card_id_to_wit(card_id),
             })
         }
-        QueuedCardEvent::Revoke(event) => {
-            oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventCard {
-                card_id: card_id_to_wit(event.card_id),
-                card: None,
+        QueuedCardEvent::Revoke { card_id } => {
+            oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventRevoke {
+                card_id: card_id_to_wit(card_id)
             })
         }
     }
@@ -1842,7 +1836,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 card_id: card_id_to_wit(card_id),
             })),
             M::CardEventQueued { timestamp, event } => {
-                Ok(Self::CardEventQueued(oplog::RawCardEventQueuedParameters {
+                Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),
                     event: raw_queued_card_event_to_wit(event),
                 }))

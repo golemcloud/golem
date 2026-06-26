@@ -323,15 +323,18 @@ message RawCardRevokedParameters {
 }
 
 message RawQueuedCardEvent {
-  oneof event {
-    RawQueuedCardEventCard install = 1;
-    RawQueuedCardEventCard revoke = 2;
+  message Install {
+    golem.common.UUID card_id = 1;
   }
-}
 
-message RawQueuedCardEventCard {
-  golem.common.UUID card_id = 1;
-  bytes card = 2;
+  message Revoke {
+    golem.common.UUID card_id = 1;
+  }
+
+  oneof event {
+    Install install = 1;
+    Revoke revoke = 2;
+  }
 }
 
 enum RawCardInstallFailure {

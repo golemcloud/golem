@@ -28,7 +28,7 @@ use super::{
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::oplog::{
-    CardInstallFailure, PublicQueuedCardEvent, PublicQueuedCardEventCard, QueuedCardEvent,
+    CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent,
 };
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
@@ -54,9 +54,7 @@ use crate::model::oplog::public_oplog_entry::{
     SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
-    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel,
-    ReadOnlyViolationError,
+    AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel, PublicQueuedCardEventInstall, PublicQueuedCardEventRevoke, ReadOnlyViolationError
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -104,10 +102,10 @@ fn public_queued_card_event_from_proto(
     use golem_api_grpc::proto::golem::worker::queued_card_event::Event;
 
     match value.event.ok_or("Missing queued card event")? {
-        Event::Install(event) => Ok(PublicQueuedCardEvent::Install(PublicQueuedCardEventCard {
+        Event::Install(event) => Ok(PublicQueuedCardEvent::Install(PublicQueuedCardEventInstall {
             card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
         })),
-        Event::Revoke(event) => Ok(PublicQueuedCardEvent::Revoke(PublicQueuedCardEventCard {
+        Event::Revoke(event) => Ok(PublicQueuedCardEvent::Revoke(PublicQueuedCardEventRevoke {
             card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
         })),
     }
@@ -116,16 +114,16 @@ fn public_queued_card_event_from_proto(
 fn public_queued_card_event_to_proto(
     value: PublicQueuedCardEvent,
 ) -> golem_api_grpc::proto::golem::worker::QueuedCardEvent {
-    use golem_api_grpc::proto::golem::worker::queued_card_event::Event;
+    use golem_api_grpc::proto::golem::worker::queued_card_event as proto;
 
     let event = match value {
         PublicQueuedCardEvent::Install(event) => {
-            Event::Install(golem_api_grpc::proto::golem::worker::QueuedCardEventCard {
+            proto::Event::Install(proto::Install {
                 card_id: Some(event.card_id.0.into()),
             })
         }
         PublicQueuedCardEvent::Revoke(event) => {
-            Event::Revoke(golem_api_grpc::proto::golem::worker::QueuedCardEventCard {
+            proto::Event::Revoke(proto::Revoke {
                 card_id: Some(event.card_id.0.into()),
             })
         }
@@ -140,39 +138,29 @@ fn raw_queued_card_event_from_proto(
     use golem_api_grpc::proto::golem::worker::raw_queued_card_event::Event;
 
     match value.event.ok_or("Missing queued card event")? {
-        Event::Install(event) => {
-            let card: StoredCard = crate::serialization::deserialize(&event.card)
-                .map_err(|err| format!("Failed to deserialize queued install card: {err}"))?;
-            Ok(QueuedCardEvent::install(card))
-        }
-        Event::Revoke(event) => Ok(QueuedCardEvent::revoke(CardId(
-            event.card_id.ok_or("Missing card_id")?.into(),
-        ))),
+        Event::Install(event) => Ok(QueuedCardEvent::Install {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into())
+        }),
+        Event::Revoke(event) => Ok(QueuedCardEvent::Revoke {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into())
+        }),
     }
 }
 
 fn raw_queued_card_event_to_proto(
     value: QueuedCardEvent,
 ) -> golem_api_grpc::proto::golem::worker::RawQueuedCardEvent {
-    use golem_api_grpc::proto::golem::worker::raw_queued_card_event::Event;
+    use golem_api_grpc::proto::golem::worker::raw_queued_card_event as proto;
 
     let event = match value {
-        QueuedCardEvent::Install(event) => Event::Install(
-            golem_api_grpc::proto::golem::worker::RawQueuedCardEventCard {
-                card_id: Some(event.card_id.0.into()),
-                card: event
-                    .card
-                    .as_ref()
-                    .map(crate::serialization::serialize)
-                    .transpose()
-                    .expect("Card must be serializable")
-                    .unwrap_or_default(),
+        QueuedCardEvent::Install { card_id } => proto::Event::Install(
+            proto::Install {
+                card_id: Some(card_id.0.into()),
             },
         ),
-        QueuedCardEvent::Revoke(event) => Event::Revoke(
-            golem_api_grpc::proto::golem::worker::RawQueuedCardEventCard {
-                card_id: Some(event.card_id.0.into()),
-                card: Vec::new(),
+        QueuedCardEvent::Revoke { card_id } => proto::Event::Revoke(
+            proto::Revoke {
+                card_id: Some(card_id.0.into()),
             },
         ),
     };

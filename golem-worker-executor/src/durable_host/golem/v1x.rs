@@ -660,19 +660,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = handle
             .run(self, async move |ctx| {
-                let card = ctx
-                    .state
-                    .card_service
-                    .check_cards(vec![card_id])
-                    .await?
-                    .remove(&card_id);
-                let result = if let Some(crate::services::card::CardState::Live(card)) = card {
-                    ctx.apply_card_install(None, *card).await?
-                } else {
-                    Err(CardInstallFailure::NotFound)
-                };
-
-                Ok::<_, anyhow::Error>(HostResponseGolemApiInstallCard { result })
+                ctx.public_state.worker().queue_card_install(card_id).await;
+                Ok::<_, anyhow::Error>(HostResponseGolemApiInstallCard { result: Ok(()) })
             })
             .await?;
 

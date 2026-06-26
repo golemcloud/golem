@@ -286,14 +286,18 @@ message CardRevokedParameters {
 }
 
 message QueuedCardEvent {
-  oneof event {
-    QueuedCardEventCard install = 1;
-    QueuedCardEventCard revoke = 2;
+  message Install {
+    golem.common.UUID card_id = 1;
   }
-}
 
-message QueuedCardEventCard {
-  golem.common.UUID card_id = 1;
+  message Revoke {
+    golem.common.UUID card_id = 1;
+  }
+
+  oneof event {
+    Install install = 1;
+    Revoke revoke = 2;
+  }
 }
 
 enum CardInstallFailure {

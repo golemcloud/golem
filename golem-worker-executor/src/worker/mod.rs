@@ -2124,21 +2124,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
+    pub async fn queue_card_install(&self, card_id: CardId) -> Option<OplogIndex> {
+        let status = self.get_last_known_status().await;
+
+        let card_already_pending = status.pending_card_events.iter().any(|pending_event| {
+            matches!(&pending_event.event, QueuedCardEvent::Install { card_id } | QueuedCardEvent::Revoke { card_id } if card_id == card_id)
+        });
+
+        if card_already_pending {
+            None
+        } else {
+            Some(
+                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::Install { card_id }))
+                .await,
+            )
+        }
+    }
+
     pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
         let status = self.get_last_known_status().await;
         let revoke_already_pending = || {
             status.pending_card_events.iter().any(|pending_event| {
-            matches!(&pending_event.event, QueuedCardEvent::Revoke(event) if event.card_id == card_id)
-        })
+                matches!(&pending_event.event, QueuedCardEvent::Revoke { card_id } if card_id == card_id)
+            })
         };
 
         if status.revoked_cards.contains(&card_id) || revoke_already_pending() {
             None
         } else {
             Some(
-                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
-                    card_id,
-                )))
+                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::Revoke { card_id }))
                 .await,
             )
         }
