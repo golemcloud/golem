@@ -25,6 +25,7 @@ pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_registry::{
     get_all_tools, get_extended_tool_by_name, get_tool_by_name, register_tool,
@@ -49,6 +50,7 @@ mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
 mod tool_impl;
+mod tool_literal;
 mod tool_refinement;
 mod tool_registry;
 mod unstructured_binary;

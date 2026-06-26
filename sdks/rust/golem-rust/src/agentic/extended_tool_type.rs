@@ -145,6 +145,12 @@ pub struct ExtendedErrorCase {
     pub payload: Option<SchemaGraph>,
 }
 
+/// Implemented by `#[derive(ToolError)]` enums. A tool method returning
+/// `Result<T, E>` reads its declared error cases from `E::error_cases()`.
+pub trait ToolErrorSchema {
+    fn error_cases() -> Vec<ExtendedErrorCase>;
+}
+
 #[derive(Clone, Debug)]
 pub enum ExtendedRef {
     Present(String),
