@@ -36,7 +36,7 @@ use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use anyhow::{Context as _, anyhow, bail};
+use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -172,25 +172,28 @@ impl ApplicationContext {
         source_mode: ApplicationSourceMode,
         yes: bool,
     ) -> anyhow::Result<()> {
-        let original_dir = fs::current_dir_lexical()?;
+        Self::plan_and_apply_manifest_upgrades_before_load_from(
+            source_mode,
+            yes,
+            &fs::current_dir_lexical()?,
+        )
+    }
 
+    fn plan_and_apply_manifest_upgrades_before_load_from(
+        source_mode: ApplicationSourceMode,
+        yes: bool,
+        calling_working_dir: &Path,
+    ) -> anyhow::Result<()> {
         let collected_sources = {
             let _output = LogOutput::new(Output::None);
             match &source_mode {
-                ApplicationSourceMode::Automatic => collect_sources_and_switch_to_app_root(None),
+                ApplicationSourceMode::Automatic => collect_sources_from(calling_working_dir, None),
                 ApplicationSourceMode::ByRootManifest(root_manifest) => {
-                    collect_sources_and_switch_to_app_root(Some(root_manifest))
+                    collect_sources_from(calling_working_dir, Some(root_manifest))
                 }
                 ApplicationSourceMode::Preloaded(_) | ApplicationSourceMode::None => None,
             }
         };
-
-        std::env::set_current_dir(&original_dir).with_context(|| {
-            anyhow!(
-                "Failed to restore working directory to {}",
-                original_dir.display()
-            )
-        })?;
 
         let Some(collected_sources) = collected_sources else {
             return Ok(());
@@ -829,7 +832,18 @@ fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<CollectedSources>> {
     let calling_working_dir = fs::current_dir_lexical().unwrap();
+    collect_sources_from(&calling_working_dir, root_manifest).map(|collected_sources| {
+        collected_sources.inspect(|collected_sources| {
+            std::env::set_current_dir(&collected_sources.app_root_dir)
+                .expect("Failed to set current dir for config parent");
+        })
+    })
+}
 
+fn collect_sources_from(
+    calling_working_dir: &Path,
+    root_manifest: Option<&Path>,
+) -> Option<ValidatedResult<CollectedSources>> {
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
 
@@ -838,7 +852,6 @@ fn collect_sources_and_switch_to_app_root(
     ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
         let source_dir =
             fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
-        std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
         if includes.is_empty() {
@@ -860,18 +873,14 @@ fn collect_sources_and_switch_to_app_root(
     }
 
     let sources_and_root_dir = match root_manifest {
-        None => match find_main_source() {
+        None => match find_main_source_from(calling_working_dir) {
             Some(source) => collect_by_main_source(&source),
             None => None,
         },
-        Some(source) => match fs::absolute_lexical_path(source) {
-            Ok(source) => collect_by_main_source(&source),
-            Err(err) => Some(ValidatedResult::from_error(format!(
-                "Cannot resolve requested application manifest source {}: {}",
-                source.log_color_highlight(),
-                err
-            ))),
-        },
+        Some(source) => {
+            let source = fs::absolute_lexical_path_from_base_dir(source, calling_working_dir);
+            collect_by_main_source(&source)
+        }
     };
 
     sources_and_root_dir.map(|sources_and_root_dir| {
@@ -895,15 +904,10 @@ fn collect_sources_and_switch_to_app_root(
             })
             .map(|sources_and_root_dir| CollectedSources {
                 app_root_dir: sources_and_root_dir.1,
-                calling_working_dir,
+                calling_working_dir: calling_working_dir.to_path_buf(),
                 sources: sources_and_root_dir.0,
             })
     })
-}
-
-fn find_main_source() -> Option<PathBuf> {
-    let current_dir = std::env::current_dir().expect("Failed to get current dir");
-    find_main_source_from(&current_dir)
 }
 
 pub(crate) fn find_main_source_from(start_dir: &Path) -> Option<PathBuf> {
@@ -953,12 +957,12 @@ pub fn validated_to_anyhow<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::{ApplicationContext, preload_app};
-    use crate::model::app::ApplicationSourceMode;
+    use super::ApplicationContext;
+    use crate::model::app::{Application, ApplicationSourceMode, ResolvedLocalServer};
     use test_r::test;
 
     #[test]
-    fn automatic_manifest_upgrade_applies_before_load_and_restores_cwd() {
+    fn automatic_manifest_upgrade_applies_before_load_without_changing_cwd() {
         let original_dir = std::env::current_dir().unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let app_dir = temp_dir.path().join("app");
@@ -975,20 +979,18 @@ app: demo
 
         let nested_dir = app_dir.join("src");
         std::fs::create_dir(&nested_dir).unwrap();
-        std::env::set_current_dir(&nested_dir).unwrap();
 
-        let result = ApplicationContext::plan_and_apply_manifest_upgrades_before_load(
+        let result = ApplicationContext::plan_and_apply_manifest_upgrades_before_load_from(
             ApplicationSourceMode::Automatic,
             true,
+            &nested_dir,
         );
 
         let current_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&original_dir).unwrap();
-
         result.unwrap();
         assert_eq!(
             std::fs::canonicalize(current_dir).unwrap(),
-            std::fs::canonicalize(nested_dir).unwrap()
+            std::fs::canonicalize(original_dir).unwrap()
         );
 
         let upgraded = std::fs::read_to_string(manifest).unwrap();
@@ -1031,21 +1033,33 @@ localServer:
         )
         .unwrap();
 
-        let result = preload_app(ApplicationSourceMode::ByRootManifest(manifest), false)
+        let result = super::collect_sources_from(&original_dir, Some(&manifest))
             .expect("manifest should be found");
-        let (preload_result, warns, errors) = result.into_product();
-        std::env::set_current_dir(&original_dir).unwrap();
+        let (collected_sources, warns, errors) = result.into_product();
 
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
 
-        let preload_result = preload_result.unwrap();
-        let raw_local_server = preload_result
-            .application_preload
-            .unwrap()
+        let collected_sources = collected_sources.unwrap();
+        let raw_apps = collected_sources
+            .sources
+            .iter()
+            .map(|source| crate::model::app_raw::ApplicationWithSource::from_yaml_file(source))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let (application_preload, warns, errors) =
+            Application::preload_from_raw_apps(raw_apps.as_slice()).into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+
+        let application_preload = application_preload.unwrap();
+        let raw_local_server = application_preload
             .local_server
+            .as_ref()
             .unwrap()
-            .value;
+            .value
+            .clone();
 
         assert_eq!(
             raw_local_server.ports_file,
@@ -1060,7 +1074,10 @@ localServer:
             Some(std::path::PathBuf::from(".golem/agents"))
         );
 
-        let resolved_local_server = preload_result.resolved_local_server.unwrap();
+        let resolved_local_server = ResolvedLocalServer::from_raw_with_source(
+            application_preload.local_server.as_ref().unwrap(),
+            &collected_sources.app_root_dir,
+        );
 
         assert_eq!(
             resolved_local_server.ports_file,
