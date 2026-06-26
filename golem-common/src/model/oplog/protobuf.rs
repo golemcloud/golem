@@ -61,11 +61,11 @@ use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
-    oplog_entry, wrapped_function_type,
+    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, RawCardExpiredParameters, invocation_span, oplog_entry, wrapped_function_type
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
+use super::public_oplog_entry::CardExpiredParams;
 
 impl From<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
@@ -994,6 +994,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     )?,
                 }),
             ),
+            oplog_entry::Entry::CardExpired(params) => Ok(
+                PublicOplogEntry::CardExpired(CardExpiredParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                }),
+            ),
         }
     }
 }
@@ -1555,6 +1561,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             queued_event_index: params.queued_event_index.into(),
                             card_id: Some(params.card_id.0.into()),
                             reason: card_install_failure_to_proto(params.reason) as i32,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardExpired(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardExpired(
+                        golem_api_grpc::proto::golem::worker::CardExpiredParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            card_id: Some(params.card_id.0.into()),
                         },
                     )),
                 }
@@ -2745,6 +2761,10 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 card_id: p.card_id,
                 reason: p.reason,
             }),
+            PublicOplogEntry::CardExpired(p) => Ok(OplogEntry::CardExpired {
+                timestamp: p.timestamp,
+                card_id: p.card_id,
+            }),
         }
     }
 }
@@ -3502,6 +3522,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 card_id: Some(card_id.0.into()),
                 reason: raw_card_install_failure_to_proto(reason) as i32,
             }),
+            OplogEntry::CardExpired {
+                timestamp,
+                card_id,
+            } => Entry::CardExpired(RawCardExpiredParameters {
+                timestamp: Some(timestamp.into()),
+                card_id: Some(card_id.0.into()),
+            }),
         };
 
         Ok(golem_api_grpc::proto::golem::worker::RawOplogEntry {
@@ -3946,6 +3973,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     golem_api_grpc::proto::golem::worker::RawCardInstallFailure::try_from(p.reason)
                         .map_err(|e| format!("Invalid raw card install failure: {e}"))?,
                 )?,
+            }),
+            Entry::CardExpired(p) => Ok(OplogEntry::CardExpired {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
             }),
         }
     }

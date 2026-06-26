@@ -745,6 +745,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
         }
+
+        self.remove_expired_cards().await;
+
         Ok(())
     }
 
@@ -753,6 +756,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         queued_event_index: Option<OplogIndex>,
         card_id: CardId,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
+        assert!(self.is_live());
+
         let mut candidate_wallet_card_ids = self
             .state
             .agent_wallet_cards
@@ -857,6 +862,48 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
+
+    pub(crate) async fn remove_expired_cards(&mut self) {
+        assert!(self.is_live());
+
+        let cards_to_revoke = Vec::new();
+        let now = Utc::now();
+
+        for (card_id, card) in self.state.agent_wallet_cards {
+            if let Some(expires_at) = card.expires_at() && expires_at >= now {
+                cards_to_revoke.push(card_id);
+            }
+        };
+
+        if cards_to_revoke.is_empty() {
+            return;
+        }
+
+        for card_id in cards_to_revoke {
+            self.state.agent_wallet_cards.remove(&card_id);
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_revoked(None, card_id))
+                .await;
+        }
+
+        self.rederive_agent_effective_surface_from_wallet();
+
+        {
+            let wallet_card_ids = self
+                .state
+                .agent_wallet_cards
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+
+            self.state
+                .card_interest_index
+                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
+                .await;
+        }
+    }
+
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.state.agent_id.clone()

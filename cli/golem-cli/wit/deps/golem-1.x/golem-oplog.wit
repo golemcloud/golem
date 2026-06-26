@@ -271,6 +271,12 @@ interface oplog {
         card-id: card-id,
     }
 
+    /// Parameters for a card-expired oplog entry.
+    record card-expired-parameters {
+        timestamp: datetime,
+        card-id: card-id,
+    }
+
     record end-atomic-region-parameters {
         timestamp: datetime,
         begin-index: oplog-index
@@ -791,7 +797,9 @@ interface oplog {
         /// Records failed installation of a permission card into the agent wallet
         card-install-failed(card-install-failed-parameters),
         /// Records that a permission card used by the agent has been revoked
-        card-revoked(card-revoked-parameters)
+        card-revoked(card-revoked-parameters),
+        /// Records that a permission card used by the agent has expired
+        card-expired(card-expired-parameters)
     }
 
     variant public-oplog-entry {
@@ -893,7 +901,9 @@ interface oplog {
         /// Records failed installation of a permission card into the agent wallet
         card-install-failed(card-install-failed-parameters),
         /// Records that a permission card used by the agent has been revoked
-        card-revoked(card-revoked-parameters)
+        card-revoked(card-revoked-parameters),
+        /// Records that a permission card used by the agent has expired
+        card-expired(card-expired-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

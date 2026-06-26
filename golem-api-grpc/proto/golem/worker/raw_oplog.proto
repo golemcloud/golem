@@ -63,6 +63,7 @@ message RawOplogEntry {
     RawCardEventQueuedParameters card_event_queued = 47;
     RawCardInstalledParameters card_installed = 48;
     RawCardInstallFailedParameters card_install_failed = 49;
+    RawCardExpiredParameters card_expired = 50;
   }
 }
 
@@ -320,6 +321,11 @@ message RawCardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
+}
+
+message RawCardExpiredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
 }
 
 message RawQueuedCardEvent {

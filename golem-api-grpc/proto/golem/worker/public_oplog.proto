@@ -71,6 +71,7 @@ message OplogEntry {
     CardEventQueuedParameters CardEventQueued = 48;
     CardInstalledParameters CardInstalled = 49;
     CardInstallFailedParameters CardInstallFailed = 50;
+    CardExpiredParameters CardExpired = 51;
   }
 }
 
@@ -283,6 +284,11 @@ message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
+}
+
+message CardExpiredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
 }
 
 message QueuedCardEvent {
