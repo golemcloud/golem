@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::public_oplog_entry::CardExpiredParams;
 use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
@@ -27,12 +28,10 @@ use super::{
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
-use crate::base_model::oplog::{
-    CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent,
-};
+use crate::base_model::oplog::{CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent};
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
-use crate::model::card::{CardId, StoredCard};
+use crate::model::card::CardId;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
@@ -54,18 +53,20 @@ use crate::model::oplog::public_oplog_entry::{
     SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel, PublicQueuedCardEventInstall, PublicQueuedCardEventRevoke, ReadOnlyViolationError
+    AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
+    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel,
+    PublicQueuedCardEventInstall, PublicQueuedCardEventRevoke, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, RawCardExpiredParameters, invocation_span, oplog_entry, wrapped_function_type
+    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan,
+    RawCardExpiredParameters, invocation_span, oplog_entry, wrapped_function_type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
-use super::public_oplog_entry::CardExpiredParams;
 
 impl From<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
@@ -102,9 +103,11 @@ fn public_queued_card_event_from_proto(
     use golem_api_grpc::proto::golem::worker::queued_card_event::Event;
 
     match value.event.ok_or("Missing queued card event")? {
-        Event::Install(event) => Ok(PublicQueuedCardEvent::Install(PublicQueuedCardEventInstall {
-            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
-        })),
+        Event::Install(event) => Ok(PublicQueuedCardEvent::Install(
+            PublicQueuedCardEventInstall {
+                card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
+            },
+        )),
         Event::Revoke(event) => Ok(PublicQueuedCardEvent::Revoke(PublicQueuedCardEventRevoke {
             card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
         })),
@@ -117,16 +120,12 @@ fn public_queued_card_event_to_proto(
     use golem_api_grpc::proto::golem::worker::queued_card_event as proto;
 
     let event = match value {
-        PublicQueuedCardEvent::Install(event) => {
-            proto::Event::Install(proto::Install {
-                card_id: Some(event.card_id.0.into()),
-            })
-        }
-        PublicQueuedCardEvent::Revoke(event) => {
-            proto::Event::Revoke(proto::Revoke {
-                card_id: Some(event.card_id.0.into()),
-            })
-        }
+        PublicQueuedCardEvent::Install(event) => proto::Event::Install(proto::Install {
+            card_id: Some(event.card_id.0.into()),
+        }),
+        PublicQueuedCardEvent::Revoke(event) => proto::Event::Revoke(proto::Revoke {
+            card_id: Some(event.card_id.0.into()),
+        }),
     };
 
     golem_api_grpc::proto::golem::worker::QueuedCardEvent { event: Some(event) }
@@ -139,10 +138,10 @@ fn raw_queued_card_event_from_proto(
 
     match value.event.ok_or("Missing queued card event")? {
         Event::Install(event) => Ok(QueuedCardEvent::Install {
-            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into())
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
         }),
         Event::Revoke(event) => Ok(QueuedCardEvent::Revoke {
-            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into())
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
         }),
     }
 }
@@ -153,16 +152,12 @@ fn raw_queued_card_event_to_proto(
     use golem_api_grpc::proto::golem::worker::raw_queued_card_event as proto;
 
     let event = match value {
-        QueuedCardEvent::Install { card_id } => proto::Event::Install(
-            proto::Install {
-                card_id: Some(card_id.0.into()),
-            },
-        ),
-        QueuedCardEvent::Revoke { card_id } => proto::Event::Revoke(
-            proto::Revoke {
-                card_id: Some(card_id.0.into()),
-            },
-        ),
+        QueuedCardEvent::Install { card_id } => proto::Event::Install(proto::Install {
+            card_id: Some(card_id.0.into()),
+        }),
+        QueuedCardEvent::Revoke { card_id } => proto::Event::Revoke(proto::Revoke {
+            card_id: Some(card_id.0.into()),
+        }),
     };
 
     golem_api_grpc::proto::golem::worker::RawQueuedCardEvent { event: Some(event) }
@@ -994,12 +989,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     )?,
                 }),
             ),
-            oplog_entry::Entry::CardExpired(params) => Ok(
-                PublicOplogEntry::CardExpired(CardExpiredParams {
+            oplog_entry::Entry::CardExpired(params) => {
+                Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
                     card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
-                }),
-            ),
+                }))
+            }
         }
     }
 }
@@ -3522,13 +3517,12 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 card_id: Some(card_id.0.into()),
                 reason: raw_card_install_failure_to_proto(reason) as i32,
             }),
-            OplogEntry::CardExpired {
-                timestamp,
-                card_id,
-            } => Entry::CardExpired(RawCardExpiredParameters {
-                timestamp: Some(timestamp.into()),
-                card_id: Some(card_id.0.into()),
-            }),
+            OplogEntry::CardExpired { timestamp, card_id } => {
+                Entry::CardExpired(RawCardExpiredParameters {
+                    timestamp: Some(timestamp.into()),
+                    card_id: Some(card_id.0.into()),
+                })
+            }
         };
 
         Ok(golem_api_grpc::proto::golem::worker::RawOplogEntry {

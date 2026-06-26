@@ -17,7 +17,22 @@ use golem_common::base_model::oplog::{CardInstallFailure, PublicQueuedCardEvent,
 use golem_common::model::card::CardId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams, BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams, CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters
+    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedParams, ChangePersistenceLevelParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -81,7 +96,7 @@ fn raw_queued_card_event_to_wit(value: QueuedCardEvent) -> oplog::QueuedCardEven
         }
         QueuedCardEvent::Revoke { card_id } => {
             oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventRevoke {
-                card_id: card_id_to_wit(card_id)
+                card_id: card_id_to_wit(card_id),
             })
         }
     }
@@ -499,13 +514,12 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 queued_event_index: queued_event_index.into(),
                 card_id: card_id_to_wit(card_id),
             }),
-            PublicOplogEntry::CardExpired(CardExpiredParams {
-                timestamp,
-                card_id,
-            }) => Self::CardExpired(oplog::CardExpiredParameters {
-                timestamp: timestamp.into(),
-                card_id: card_id_to_wit(card_id),
-            }),
+            PublicOplogEntry::CardExpired(CardExpiredParams { timestamp, card_id }) => {
+                Self::CardExpired(oplog::CardExpiredParameters {
+                    timestamp: timestamp.into(),
+                    card_id: card_id_to_wit(card_id),
+                })
+            }
             PublicOplogEntry::CardEventQueued(CardEventQueuedParams { timestamp, event }) => {
                 Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),
@@ -1832,13 +1846,12 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 queued_event_index: queued_event_index.into(),
                 card_id: card_id_to_wit(card_id),
             })),
-            M::CardExpired {
-                timestamp,
-                card_id,
-            } => Ok(Self::CardExpired(oplog::CardExpiredParameters {
-                timestamp: timestamp.into(),
-                card_id: card_id_to_wit(card_id),
-            })),
+            M::CardExpired { timestamp, card_id } => {
+                Ok(Self::CardExpired(oplog::CardExpiredParameters {
+                    timestamp: timestamp.into(),
+                    card_id: card_id_to_wit(card_id),
+                }))
+            }
             M::CardEventQueued { timestamp, event } => {
                 Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),

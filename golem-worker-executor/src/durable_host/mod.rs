@@ -723,7 +723,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn handle_card_expiry_or_revocation_during_replay(
         &mut self,
-        card_id: CardId
+        card_id: CardId,
     ) -> Result<(), WorkerExecutorError> {
         assert!(self.is_replay());
 
@@ -751,7 +751,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             match &pending_event.event {
                 QueuedCardEvent::Revoke { card_id } => {
-                    self.apply_card_revoked(*card_id, pending_event.oplog_index).await?;
+                    self.apply_card_revoked(*card_id, pending_event.oplog_index)
+                        .await?;
                 }
                 QueuedCardEvent::Install { card_id } => {
                     let _ = self
@@ -885,10 +886,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let now = Utc::now();
 
         for (card_id, card) in &self.state.agent_wallet_cards {
-            if let Some(expires_at) = card.expires_at() && expires_at >= now {
+            if let Some(expires_at) = card.expires_at()
+                && expires_at >= now
+            {
                 cards_to_expire.push(*card_id);
             }
-        };
+        }
 
         if cards_to_expire.is_empty() {
             return;
@@ -918,7 +921,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await;
         }
     }
-
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.state.agent_id.clone()
@@ -2658,11 +2660,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::CardRevoked { card_id } => {
                     debug!(card_id = %card_id, "Applying replayed card revocation");
-                    self.handle_card_expiry_or_revocation_during_replay(card_id).await?;
+                    self.handle_card_expiry_or_revocation_during_replay(card_id)
+                        .await?;
                 }
                 ReplayEvent::CardExpired { card_id } => {
                     debug!(card_id = %card_id, "Applying replayed card expiration");
-                    self.handle_card_expiry_or_revocation_during_replay(card_id).await?;
+                    self.handle_card_expiry_or_revocation_during_replay(card_id)
+                        .await?;
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");

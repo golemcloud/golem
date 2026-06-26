@@ -12081,6 +12081,7 @@ components:
           CardInstalled: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
           CardInstallFailed: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
+          CardExpired: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -12128,6 +12129,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstalledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -12236,6 +12238,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CardEventQueuedParams'
+    PublicOplogEntry_r#CardExpiredParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardExpired
+            type: string
+            enum:
+            - CardExpired
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardExpiredParams'
     PublicOplogEntry_r#CardInstallFailedParams:
       allOf:
       - type: object
@@ -12684,14 +12698,14 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
-          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventInstall'
+          Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventRevoke'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
-      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
-    PublicQueuedCardEventCard:
-      title: PublicQueuedCardEventCard
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventInstall'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventRevoke'
+    PublicQueuedCardEventInstall:
+      title: PublicQueuedCardEventInstall
       type: object
       properties:
         cardId:
@@ -12699,7 +12713,28 @@ components:
           format: uuid
       required:
       - cardId
-    PublicQueuedCardEvent_PublicQueuedCardEventCard:
+    PublicQueuedCardEventRevoke:
+      title: PublicQueuedCardEventRevoke
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+      required:
+      - cardId
+    PublicQueuedCardEvent_PublicQueuedCardEventInstall:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Install
+            type: string
+            enum:
+            - Install
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicQueuedCardEventInstall'
+    PublicQueuedCardEvent_PublicQueuedCardEventRevoke:
       allOf:
       - type: object
         properties:
@@ -12710,7 +12745,7 @@ components:
             - Revoke
         required:
         - type
-      - $ref: '#/components/schemas/PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEventRevoke'
     PublicRetryPolicyState:
       description: |-
         API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
@@ -14783,6 +14818,19 @@ components:
       required:
       - timestamp
       - event
+    r#CardExpiredParams:
+      title: r#CardExpiredParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        cardId:
+          type: string
+          format: uuid
+      required:
+      - timestamp
+      - cardId
     r#CardInstallFailedParams:
       title: r#CardInstallFailedParams
       type: object

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{CardId, StoredCard};
+use crate::base_model::card::CardId;
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
@@ -574,12 +574,8 @@ pub enum PublicRetryPolicyState {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum QueuedCardEvent {
-    Install {
-        card_id: CardId
-    },
-    Revoke {
-        card_id: CardId
-    },
+    Install { card_id: CardId },
+    Revoke { card_id: CardId },
 }
 
 impl QueuedCardEvent {
@@ -633,8 +629,12 @@ impl PublicQueuedCardEvent {
 impl From<QueuedCardEvent> for PublicQueuedCardEvent {
     fn from(value: QueuedCardEvent) -> Self {
         match value {
-            QueuedCardEvent::Install { card_id } => Self::Install(PublicQueuedCardEventInstall { card_id }),
-            QueuedCardEvent::Revoke { card_id } => Self::Revoke(PublicQueuedCardEventRevoke { card_id }),
+            QueuedCardEvent::Install { card_id } => {
+                Self::Install(PublicQueuedCardEventInstall { card_id })
+            }
+            QueuedCardEvent::Revoke { card_id } => {
+                Self::Revoke(PublicQueuedCardEventRevoke { card_id })
+            }
         }
     }
 }

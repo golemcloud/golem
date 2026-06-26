@@ -204,40 +204,21 @@ interface oplog {
         name: string,
     }
 
-    record queued-card-event-card {
+    record queued-card-event-install {
         card-id: card-id,
-        card: option<list<u8>>,
     }
 
-    record public-queued-card-event-card {
+    record queued-card-event-revoke {
         card-id: card-id,
     }
 
     variant queued-card-event {
-        install(queued-card-event-card),
-        revoke(queued-card-event-card),
-    }
-
-    variant public-queued-card-event {
-        install(public-queued-card-event-card),
-        revoke(public-queued-card-event-card),
-    }
-
-    enum card-install-failure {
-        card-revoked,
-        not-found,
-        recipient-mismatch,
-        not-permitted,
+        install(queued-card-event-install),
+        revoke(queued-card-event-revoke),
     }
 
     /// Parameters for a card-event-queued oplog entry.
     record card-event-queued-parameters {
-        timestamp: datetime,
-        event: public-queued-card-event,
-    }
-
-    /// Raw parameters for a card-event-queued oplog entry.
-    record raw-card-event-queued-parameters {
         timestamp: datetime,
         event: queued-card-event,
     }
@@ -254,6 +235,13 @@ interface oplog {
         timestamp: datetime,
         queued-event-index: option<oplog-index>,
         card: list<u8>,
+    }
+
+    enum card-install-failure {
+        card-revoked,
+        not-found,
+        recipient-mismatch,
+        not-permitted,
     }
 
     /// Parameters for a card-install-failed oplog entry.
@@ -791,7 +779,7 @@ interface oplog {
         /// Removes a named retry policy by name
         remove-retry-policy(remove-retry-policy-parameters),
         /// Durable queue entry for pending permission-card work
-        card-event-queued(raw-card-event-queued-parameters),
+        card-event-queued(card-event-queued-parameters),
         /// Records successful installation of a permission card into the agent wallet
         card-installed(raw-card-installed-parameters),
         /// Records failed installation of a permission card into the agent wallet
