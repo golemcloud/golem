@@ -34,8 +34,8 @@ use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    CardManagedBy, ClassPermissionTarget, ComponentResourcePattern, ComponentVerb,
-    EffectiveSurface, PermissionTarget, PolymorphicCard,
+    CardManagedBy, CardManagedByAgentInitial, ClassPermissionTarget, ComponentResourcePattern,
+    ComponentVerb, EffectiveSurface, PermissionTarget, PolymorphicCard,
     permission_envelopes_for_recipient_patterns,
 };
 use golem_common::model::component::{
@@ -122,11 +122,11 @@ impl ComponentWriteService {
             card.upper_negative.clone(),
             card.expires_at,
             card.system_card,
-            Some(CardManagedBy::AgentInitial {
+            Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                 component_id,
                 component_revision,
                 agent_type: agent_type_name.clone(),
-            }),
+            })),
         );
 
         Ok((card, record))

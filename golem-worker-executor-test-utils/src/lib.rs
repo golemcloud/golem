@@ -92,7 +92,7 @@ use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
-use golem_worker_executor::services::card::{CardService, NoopCardService};
+use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
 use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
@@ -3365,47 +3365,34 @@ pub struct TestCardService;
 
 #[async_trait]
 impl CardService for TestCardService {
-    async fn register_agent(&self, _agent_id: OwnedAgentId) {}
-
-    async fn register_agent_cards(&self, _agent_id: OwnedAgentId, _card_ids: &[CardId]) {}
-
-    async fn remove_revoked_agent_cards(&self, _agent_id: &OwnedAgentId, _card_ids: &[CardId]) {}
-
-    async fn unregister_agent(&self, _agent_id: &OwnedAgentId) {}
-
-    async fn record_revoked_cards(
-        &self,
-        _card_ids: &[CardId],
-    ) -> HashMap<OwnedAgentId, Vec<CardId>> {
-        HashMap::new()
-    }
+    async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
     async fn check_cards(
         &self,
-        _card_ids: Vec<CardId>,
-    ) -> Result<HashSet<CardId>, WorkerExecutorError> {
-        Ok(HashSet::new())
-    }
-
-    async fn get_cards(
-        &self,
         card_ids: Vec<CardId>,
-    ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
-        if card_ids.contains(&TEST_CARD_ID) {
-            Ok(vec![StoredCard::Concrete(Card {
-                card_id: TEST_CARD_ID,
-                parent_ids: Vec::new(),
-                lower_positive: Vec::new(),
-                lower_negative: Vec::new(),
-                upper_positive: Vec::new(),
-                upper_negative: Vec::new(),
-                created_at: DateTime::from_timestamp_nanos(0),
-                expires_at: None,
-                system_card: false,
-                managed_by: None,
-            })])
-        } else {
-            Ok(Vec::new())
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        let mut result = HashMap::new();
+
+        for card_id in card_ids {
+            let card_state = if card_id == TEST_CARD_ID {
+                CardState::Live(Box::new(StoredCard::Concrete(Card {
+                    card_id: TEST_CARD_ID,
+                    parent_ids: Vec::new(),
+                    lower_positive: Vec::new(),
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                    created_at: DateTime::from_timestamp_nanos(0),
+                    expires_at: None,
+                    system_card: false,
+                    managed_by: None,
+                })))
+            } else {
+                CardState::Unknown
+            };
+            result.insert(card_id, card_state);
         }
+
+        Ok(result)
     }
 }

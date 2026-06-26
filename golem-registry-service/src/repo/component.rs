@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::model::card::CardManagedBy;
+use golem_common::model::card::{CardManagedBy, CardManagedByAgentInitial};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -889,13 +889,15 @@ fn remap_agent_initial_card_records(
         .map(|mut card| {
             if let Some(managed_by) = card.managed_by.take() {
                 card.managed_by = match managed_by.into_value() {
-                    CardManagedBy::AgentInitial { agent_type, .. } => {
-                        Some(Blob::new(CardManagedBy::AgentInitial {
+                    CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                        agent_type, ..
+                    }) => Some(Blob::new(CardManagedBy::AgentInitial(
+                        CardManagedByAgentInitial {
                             component_id,
                             component_revision,
                             agent_type,
-                        }))
-                    }
+                        },
+                    ))),
                     other => Some(Blob::new(other)),
                 };
             }

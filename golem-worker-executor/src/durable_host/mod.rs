@@ -726,25 +726,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        let events = self
+        while let Some(pending_event) = self
             .public_state
             .worker()
-            .get_last_known_status()
+            .get_non_detached_last_known_status()
             .await
-            .pending_card_events;
-        if events.is_empty() {
-            return Ok(());
-        }
-
-        for pending_event in events {
-            match pending_event.event {
+            .pending_card_events
+            .first()
+        {
+            match &pending_event.event {
                 QueuedCardEvent::Revoke(event) => {
                     let card_id = event.card_id;
                     self.apply_card_revoked(card_id, pending_event.oplog_index, true)
                         .await?;
                 }
                 QueuedCardEvent::Install(event) => {
-                    let Some(card) = event.card else {
+                    let Some(card) = event.card.clone() else {
                         return Err(WorkerExecutorError::runtime(
                             "queued card install is missing card payload",
                         ));
@@ -755,7 +752,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
         }
-
         Ok(())
     }
 

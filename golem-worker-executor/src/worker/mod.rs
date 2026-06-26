@@ -2126,11 +2126,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
         let status = self.get_last_known_status().await;
-        let revoke_already_pending = status.pending_card_events.iter().any(|pending_event| {
+        let revoke_already_pending = || {
+            status.pending_card_events.iter().any(|pending_event| {
             matches!(&pending_event.event, QueuedCardEvent::Revoke(event) if event.card_id == card_id)
-        });
+        })
+        };
 
-        if status.revoked_cards.contains(&card_id) || revoke_already_pending {
+        if status.revoked_cards.contains(&card_id) || revoke_already_pending() {
             None
         } else {
             Some(
