@@ -129,17 +129,23 @@ args = [
 
 [tasks.diff-wit]
 private = true
+script_runner = "@duckscript"
 script = '''
-dirs="golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps"
-changes=$(git status --porcelain -- $dirs)
-if [ -n "$changes" ]; then
-    echo "Per-crate wit/deps copies are out of sync with the canonical wit/deps." 1>&2
-    echo "Run 'cargo make wit' and commit the result." 1>&2
-    echo "" 1>&2
-    git --no-pager diff -- $dirs 1>&2
-    echo "$changes" 1>&2
-    exit 1
-fi
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
+ok = eq ${status.code} 0
+if not ${ok}
+    echo "git status failed (exit ${status.code}):"
+    echo ${status.stderr}
+    trigger_error "git status failed while checking wit/deps"
+end
+changes = trim ${status.stdout}
+empty = is_empty ${changes}
+if not ${empty}
+    echo "Per-crate wit/deps copies are out of sync with the canonical wit/deps:"
+    echo ${changes}
+    echo "Run 'cargo make wit' and commit the result."
+    trigger_error "wit/deps copies are out of sync"
+end
 '''
 
 [tasks.check-wit]
