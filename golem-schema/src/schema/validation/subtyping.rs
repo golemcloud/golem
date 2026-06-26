@@ -32,9 +32,10 @@
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, PathSpec, QuantitySpec, QuantityValue, SchemaType, TextRestrictions,
-    UrlRestrictions,
+    BinaryRestrictions, NumericRepr, NumericRestrictions, PathSpec, QuantitySpec, QuantityValue,
+    SchemaType, TextRestrictions, UrlRestrictions, numeric_bound_cmp,
 };
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 /// Is `sub` assignable to `sup` inside `graph`?
@@ -68,20 +69,99 @@ fn assignable(
     match (sub_resolved, sup_resolved) {
         // Primitives must match exactly.
         (SchemaType::Bool { .. }, SchemaType::Bool { .. })
-        | (SchemaType::S8 { .. }, SchemaType::S8 { .. })
-        | (SchemaType::S16 { .. }, SchemaType::S16 { .. })
-        | (SchemaType::S32 { .. }, SchemaType::S32 { .. })
-        | (SchemaType::S64 { .. }, SchemaType::S64 { .. })
-        | (SchemaType::U8 { .. }, SchemaType::U8 { .. })
-        | (SchemaType::U16 { .. }, SchemaType::U16 { .. })
-        | (SchemaType::U32 { .. }, SchemaType::U32 { .. })
-        | (SchemaType::U64 { .. }, SchemaType::U64 { .. })
-        | (SchemaType::F32 { .. }, SchemaType::F32 { .. })
-        | (SchemaType::F64 { .. }, SchemaType::F64 { .. })
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
+
+        // Numerics narrow within the same repr: sub's bounds must be inside
+        // sup's bounds (None = unbounded), and the unit must match exactly.
+        (
+            SchemaType::S8 {
+                restrictions: a, ..
+            },
+            SchemaType::S8 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::S16 {
+                restrictions: a, ..
+            },
+            SchemaType::S16 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::S32 {
+                restrictions: a, ..
+            },
+            SchemaType::S32 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::S64 {
+                restrictions: a, ..
+            },
+            SchemaType::S64 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::U8 {
+                restrictions: a, ..
+            },
+            SchemaType::U8 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::U16 {
+                restrictions: a, ..
+            },
+            SchemaType::U16 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::U32 {
+                restrictions: a, ..
+            },
+            SchemaType::U32 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::U64 {
+                restrictions: a, ..
+            },
+            SchemaType::U64 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::F32 {
+                restrictions: a, ..
+            },
+            SchemaType::F32 {
+                restrictions: b, ..
+            },
+        )
+        | (
+            SchemaType::F64 {
+                restrictions: a, ..
+            },
+            SchemaType::F64 {
+                restrictions: b, ..
+            },
+        ) => numeric_narrows(
+            sub_resolved
+                .numeric_repr()
+                .expect("matched numeric variant has a numeric repr"),
+            a,
+            b,
+        ),
 
         (
             SchemaType::Text {
@@ -287,20 +367,92 @@ fn equivalent(
     match (a_resolved, b_resolved) {
         // Primitives must match exactly.
         (SchemaType::Bool { .. }, SchemaType::Bool { .. })
-        | (SchemaType::S8 { .. }, SchemaType::S8 { .. })
-        | (SchemaType::S16 { .. }, SchemaType::S16 { .. })
-        | (SchemaType::S32 { .. }, SchemaType::S32 { .. })
-        | (SchemaType::S64 { .. }, SchemaType::S64 { .. })
-        | (SchemaType::U8 { .. }, SchemaType::U8 { .. })
-        | (SchemaType::U16 { .. }, SchemaType::U16 { .. })
-        | (SchemaType::U32 { .. }, SchemaType::U32 { .. })
-        | (SchemaType::U64 { .. }, SchemaType::U64 { .. })
-        | (SchemaType::F32 { .. }, SchemaType::F32 { .. })
-        | (SchemaType::F64 { .. }, SchemaType::F64 { .. })
         | (SchemaType::Char { .. }, SchemaType::Char { .. })
         | (SchemaType::String { .. }, SchemaType::String { .. })
         | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
         | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
+
+        // Numerics: normalized restrictions must be exactly equal (within repr).
+        (
+            SchemaType::S8 {
+                restrictions: ra, ..
+            },
+            SchemaType::S8 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::S16 {
+                restrictions: ra, ..
+            },
+            SchemaType::S16 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::S32 {
+                restrictions: ra, ..
+            },
+            SchemaType::S32 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::S64 {
+                restrictions: ra, ..
+            },
+            SchemaType::S64 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::U8 {
+                restrictions: ra, ..
+            },
+            SchemaType::U8 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::U16 {
+                restrictions: ra, ..
+            },
+            SchemaType::U16 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::U32 {
+                restrictions: ra, ..
+            },
+            SchemaType::U32 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::U64 {
+                restrictions: ra, ..
+            },
+            SchemaType::U64 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::F32 {
+                restrictions: ra, ..
+            },
+            SchemaType::F32 {
+                restrictions: rb, ..
+            },
+        )
+        | (
+            SchemaType::F64 {
+                restrictions: ra, ..
+            },
+            SchemaType::F64 {
+                restrictions: rb, ..
+            },
+        ) => ra == rb,
 
         // Rich scalars: restrictions/specs must be exactly equal.
         (
@@ -475,6 +627,76 @@ fn resolve<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> (&'a SchemaTyp
 }
 
 // --- Scalar narrowing rules ---
+
+/// Numeric narrowing within the same repr: `sub`'s bounds must sit inside
+/// `sup`'s bounds (`None` = unbounded, inclusive), and the unit must match
+/// exactly (the unit changes the value's semantic interpretation and is not
+/// represented in the numeric value itself, so it is compared even when the
+/// other side is otherwise unconstrained). Returns `false` on bound-family
+/// mismatch or a malformed stored restriction rather than assuming a prior
+/// well-formedness pass.
+fn numeric_narrows(
+    repr: NumericRepr,
+    sub: &Option<NumericRestrictions>,
+    sup: &Option<NumericRestrictions>,
+) -> bool {
+    // Defensive: a restriction set that is not well-formed for the repr (e.g.
+    // family mismatch, `Some(empty)`, out-of-range) is never a valid participant
+    // in a subtype relationship.
+    if let Some(sub) = sub
+        && sub.validate_for_repr(repr).is_err()
+    {
+        return false;
+    }
+    if let Some(sup) = sup
+        && sup.validate_for_repr(repr).is_err()
+    {
+        return false;
+    }
+
+    // Unit is part of the type's meaning and must match exactly, treating an
+    // unconstrained side as unit `None`.
+    let sub_unit = sub.as_ref().and_then(|s| s.unit.as_deref());
+    let sup_unit = sup.as_ref().and_then(|s| s.unit.as_deref());
+    if sub_unit != sup_unit {
+        return false;
+    }
+
+    let sup = match sup {
+        // sup unconstrained: any sub (with the matching unit) narrows it.
+        None => return true,
+        Some(sup) => sup,
+    };
+    let sub = match sub {
+        // sub unconstrained but sup constrained: sub is wider, not a subtype.
+        None => return false,
+        Some(sub) => sub,
+    };
+
+    // sub.min >= sup.min (sup.min None = -inf).
+    if let Some(sup_min) = sup.min {
+        match sub.min {
+            Some(sub_min) => match numeric_bound_cmp(sub_min, sup_min) {
+                Some(Ordering::Less) | None => return false,
+                _ => {}
+            },
+            None => return false,
+        }
+    }
+
+    // sub.max <= sup.max (sup.max None = +inf).
+    if let Some(sup_max) = sup.max {
+        match sub.max {
+            Some(sub_max) => match numeric_bound_cmp(sub_max, sup_max) {
+                Some(Ordering::Greater) | None => return false,
+                _ => {}
+            },
+            None => return false,
+        }
+    }
+
+    true
+}
 
 fn text_narrows(sub: &TextRestrictions, sup: &TextRestrictions) -> bool {
     // sub.min_length >= sup.min_length (sub is at least as constrained)

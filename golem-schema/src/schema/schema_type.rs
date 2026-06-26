@@ -59,42 +59,102 @@ pub enum SchemaType {
         metadata: MetadataEnvelope,
     },
     S8 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     S16 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     S32 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     S64 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     U8 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     U16 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     U32 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     U64 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     F32 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
     F64 {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_normalized_numeric_restrictions"
+        )]
+        restrictions: Option<NumericRestrictions>,
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
@@ -235,16 +295,16 @@ impl SchemaType {
         match self {
             SchemaType::Ref { metadata, .. }
             | SchemaType::Bool { metadata }
-            | SchemaType::S8 { metadata }
-            | SchemaType::S16 { metadata }
-            | SchemaType::S32 { metadata }
-            | SchemaType::S64 { metadata }
-            | SchemaType::U8 { metadata }
-            | SchemaType::U16 { metadata }
-            | SchemaType::U32 { metadata }
-            | SchemaType::U64 { metadata }
-            | SchemaType::F32 { metadata }
-            | SchemaType::F64 { metadata }
+            | SchemaType::S8 { metadata, .. }
+            | SchemaType::S16 { metadata, .. }
+            | SchemaType::S32 { metadata, .. }
+            | SchemaType::S64 { metadata, .. }
+            | SchemaType::U8 { metadata, .. }
+            | SchemaType::U16 { metadata, .. }
+            | SchemaType::U32 { metadata, .. }
+            | SchemaType::U64 { metadata, .. }
+            | SchemaType::F32 { metadata, .. }
+            | SchemaType::F64 { metadata, .. }
             | SchemaType::Char { metadata }
             | SchemaType::String { metadata }
             | SchemaType::Record { metadata, .. }
@@ -277,16 +337,16 @@ impl SchemaType {
         match self {
             SchemaType::Ref { metadata, .. }
             | SchemaType::Bool { metadata }
-            | SchemaType::S8 { metadata }
-            | SchemaType::S16 { metadata }
-            | SchemaType::S32 { metadata }
-            | SchemaType::S64 { metadata }
-            | SchemaType::U8 { metadata }
-            | SchemaType::U16 { metadata }
-            | SchemaType::U32 { metadata }
-            | SchemaType::U64 { metadata }
-            | SchemaType::F32 { metadata }
-            | SchemaType::F64 { metadata }
+            | SchemaType::S8 { metadata, .. }
+            | SchemaType::S16 { metadata, .. }
+            | SchemaType::S32 { metadata, .. }
+            | SchemaType::S64 { metadata, .. }
+            | SchemaType::U8 { metadata, .. }
+            | SchemaType::U16 { metadata, .. }
+            | SchemaType::U32 { metadata, .. }
+            | SchemaType::U64 { metadata, .. }
+            | SchemaType::F32 { metadata, .. }
+            | SchemaType::F64 { metadata, .. }
             | SchemaType::Char { metadata }
             | SchemaType::String { metadata }
             | SchemaType::Record { metadata, .. }
@@ -320,6 +380,41 @@ impl SchemaType {
         self
     }
 
+    /// The numeric representation of this node, if it is a numeric type.
+    pub fn numeric_repr(&self) -> Option<NumericRepr> {
+        match self {
+            SchemaType::S8 { .. } => Some(NumericRepr::S8),
+            SchemaType::S16 { .. } => Some(NumericRepr::S16),
+            SchemaType::S32 { .. } => Some(NumericRepr::S32),
+            SchemaType::S64 { .. } => Some(NumericRepr::S64),
+            SchemaType::U8 { .. } => Some(NumericRepr::U8),
+            SchemaType::U16 { .. } => Some(NumericRepr::U16),
+            SchemaType::U32 { .. } => Some(NumericRepr::U32),
+            SchemaType::U64 { .. } => Some(NumericRepr::U64),
+            SchemaType::F32 { .. } => Some(NumericRepr::F32),
+            SchemaType::F64 { .. } => Some(NumericRepr::F64),
+            _ => None,
+        }
+    }
+
+    /// The numeric restrictions of this node, if it is a numeric type with
+    /// restrictions set.
+    pub fn numeric_restrictions(&self) -> Option<&NumericRestrictions> {
+        match self {
+            SchemaType::S8 { restrictions, .. }
+            | SchemaType::S16 { restrictions, .. }
+            | SchemaType::S32 { restrictions, .. }
+            | SchemaType::S64 { restrictions, .. }
+            | SchemaType::U8 { restrictions, .. }
+            | SchemaType::U16 { restrictions, .. }
+            | SchemaType::U32 { restrictions, .. }
+            | SchemaType::U64 { restrictions, .. }
+            | SchemaType::F32 { restrictions, .. }
+            | SchemaType::F64 { restrictions, .. } => restrictions.as_ref(),
+            _ => None,
+        }
+    }
+
     // --- Ergonomic constructors ------------------------------------------
     //
     // These default the metadata envelope to empty; callers that need
@@ -338,51 +433,61 @@ impl SchemaType {
     }
     pub fn s8() -> Self {
         Self::S8 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn s16() -> Self {
         Self::S16 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn s32() -> Self {
         Self::S32 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn s64() -> Self {
         Self::S64 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn u8() -> Self {
         Self::U8 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn u16() -> Self {
         Self::U16 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn u32() -> Self {
         Self::U32 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn u64() -> Self {
         Self::U64 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn f32() -> Self {
         Self::F32 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
     pub fn f64() -> Self {
         Self::F64 {
+            restrictions: None,
             metadata: MetadataEnvelope::default(),
         }
     }
@@ -565,6 +670,331 @@ pub struct ResultSpec {
     pub ok: Option<Box<SchemaType>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub err: Option<Box<SchemaType>>,
+}
+
+// --- Numeric ---
+
+/// A numeric bound usable across every numeric representation.
+///
+/// `SchemaType` derives `Eq`, and an `i64` mantissa cannot represent
+/// `u64::MAX`, so the bound is a three-family sum. Float bounds store canonical
+/// IEEE-754 `f64` bits (`NaN`/`inf` rejected at construction, `-0.0` normalized
+/// to `+0.0`) so the type stays `Eq`; comparisons always decode the bits back to
+/// `f64` and compare numerically, never by bit order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub enum NumericBound {
+    Signed(i64),
+    Unsigned(u64),
+    FloatBits(u64),
+}
+
+/// Error returned when constructing a numeric bound from an invalid value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericBoundError {
+    /// The float value was `NaN` or infinite.
+    NonFinite,
+}
+
+impl std::fmt::Display for NumericBoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NumericBoundError::NonFinite => write!(f, "numeric float bound must be finite"),
+        }
+    }
+}
+
+impl std::error::Error for NumericBoundError {}
+
+impl NumericBound {
+    /// Construct a float bound from an `f64`, rejecting `NaN`/`inf` and
+    /// normalizing `-0.0` to `+0.0`.
+    pub fn float(value: f64) -> Result<Self, NumericBoundError> {
+        if !value.is_finite() {
+            return Err(NumericBoundError::NonFinite);
+        }
+        // Normalize -0.0 to +0.0 so canonical bits are stable for `Eq`.
+        let normalized = value + 0.0;
+        Ok(NumericBound::FloatBits(normalized.to_bits()))
+    }
+
+    /// The float value of a `FloatBits` bound (decoded from canonical bits).
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            NumericBound::FloatBits(bits) => Some(f64::from_bits(*bits)),
+            _ => None,
+        }
+    }
+}
+
+/// Inline numeric refinement carried by the numeric `SchemaType` variants.
+///
+/// `None` on the variant means "unconstrained" — the common, hot-path case, a
+/// single tag rather than three carried inner `Option`s. The empty restriction
+/// set is never stored as `Some`: smart constructors and decoders collapse it to
+/// `None` via [`NumericRestrictions::normalize`], and well-formedness rejects a
+/// stored `Some(empty)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct NumericRestrictions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<NumericBound>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<NumericBound>,
+    /// Free-form unit annotation. Schema/help metadata only: numeric
+    /// `SchemaValue`s carry no unit, so value validation never checks it;
+    /// equivalence/subtyping require the normalized unit to match exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
+impl NumericRestrictions {
+    /// True when there is nothing to constrain (no bounds and no non-empty unit).
+    pub fn is_empty(&self) -> bool {
+        self.min.is_none()
+            && self.max.is_none()
+            && self.unit.as_ref().map(|u| u.is_empty()).unwrap_or(true)
+    }
+
+    /// Collapse the empty restriction set to `None`, dropping an empty `unit`
+    /// and canonicalizing float bounds (so a decoded `-0.0` becomes `+0.0`).
+    /// This enforces the canonicalization invariants that `Some(empty)` is never
+    /// constructed and that two restriction sets which differ only by float zero
+    /// sign compare equal (`SchemaType` derives `Eq` and feeds byte-equivalence).
+    pub fn normalize(mut self) -> Option<Self> {
+        self.min = self.min.map(canonicalize_bound);
+        self.max = self.max.map(canonicalize_bound);
+        if self.unit.as_ref().map(|u| u.is_empty()).unwrap_or(false) {
+            self.unit = None;
+        }
+        if self.is_empty() { None } else { Some(self) }
+    }
+
+    /// Repr-aware well-formedness check, shared by every validation entry point
+    /// (well-formedness, subtyping, value validation, macro refinement) so no
+    /// path assumes a prior well-formedness pass.
+    ///
+    /// Rejects: a stored empty set (`Some(empty)` must never exist), a bound
+    /// whose family does not match the repr, an integer repr carrying a float
+    /// bound, a bound that does not fit the repr's range, an `F32` bound that
+    /// does not round-trip through `f32`, and `min > max` (compared numerically).
+    pub fn validate_for_repr(&self, repr: NumericRepr) -> Result<(), NumericRestrictionError> {
+        if self.is_empty() {
+            return Err(NumericRestrictionError::EmptyStored);
+        }
+        if let Some(min) = self.min {
+            check_bound_repr(min, repr)?;
+        }
+        if let Some(max) = self.max {
+            check_bound_repr(max, repr)?;
+        }
+        if let (Some(min), Some(max)) = (self.min, self.max) {
+            match numeric_bound_cmp(min, max) {
+                Some(std::cmp::Ordering::Greater) => {
+                    return Err(NumericRestrictionError::MinGreaterThanMax);
+                }
+                Some(_) => {}
+                None => return Err(NumericRestrictionError::FamilyMismatch),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The concrete numeric representation of a numeric `SchemaType` variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericRepr {
+    S8,
+    S16,
+    S32,
+    S64,
+    U8,
+    U16,
+    U32,
+    U64,
+    F32,
+    F64,
+}
+
+impl NumericRepr {
+    /// True for the integer reprs (`S*`/`U*`); false for `F32`/`F64`.
+    pub fn is_integer(self) -> bool {
+        !matches!(self, NumericRepr::F32 | NumericRepr::F64)
+    }
+
+    fn family(self) -> NumericFamily {
+        match self {
+            NumericRepr::S8 | NumericRepr::S16 | NumericRepr::S32 | NumericRepr::S64 => {
+                NumericFamily::Signed
+            }
+            NumericRepr::U8 | NumericRepr::U16 | NumericRepr::U32 | NumericRepr::U64 => {
+                NumericFamily::Unsigned
+            }
+            NumericRepr::F32 | NumericRepr::F64 => NumericFamily::Float,
+        }
+    }
+
+    fn signed_range(self) -> Option<(i64, i64)> {
+        match self {
+            NumericRepr::S8 => Some((i8::MIN as i64, i8::MAX as i64)),
+            NumericRepr::S16 => Some((i16::MIN as i64, i16::MAX as i64)),
+            NumericRepr::S32 => Some((i32::MIN as i64, i32::MAX as i64)),
+            NumericRepr::S64 => Some((i64::MIN, i64::MAX)),
+            _ => None,
+        }
+    }
+
+    fn unsigned_max(self) -> Option<u64> {
+        match self {
+            NumericRepr::U8 => Some(u8::MAX as u64),
+            NumericRepr::U16 => Some(u16::MAX as u64),
+            NumericRepr::U32 => Some(u32::MAX as u64),
+            NumericRepr::U64 => Some(u64::MAX),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericFamily {
+    Signed,
+    Unsigned,
+    Float,
+}
+
+impl NumericBound {
+    fn family(self) -> NumericFamily {
+        match self {
+            NumericBound::Signed(_) => NumericFamily::Signed,
+            NumericBound::Unsigned(_) => NumericFamily::Unsigned,
+            NumericBound::FloatBits(_) => NumericFamily::Float,
+        }
+    }
+}
+
+/// Canonicalize a numeric bound so equal values have equal bits. Currently this
+/// only affects float bounds: a `-0.0` (which compares equal to `+0.0`
+/// numerically but has different bits) is rewritten to canonical `+0.0` so the
+/// `Eq`/byte-equivalence invariants hold for decoded bounds. `NaN`/`inf` bits
+/// are left untouched (well-formedness rejects them).
+fn canonicalize_bound(b: NumericBound) -> NumericBound {
+    match b {
+        NumericBound::FloatBits(bits) => {
+            if f64::from_bits(bits) == 0.0 {
+                NumericBound::FloatBits(0)
+            } else {
+                b
+            }
+        }
+        other => other,
+    }
+}
+
+/// serde helper: deserialize an `Option<NumericRestrictions>` field on a numeric
+/// `SchemaType` variant, applying the same empty→`None` and float canonicalization
+/// normalization the WIT/protobuf decoders use, so JSON is a faithful decode
+/// boundary (`restrictions: {}` or `unit: ""` collapse to `None`).
+fn deserialize_normalized_numeric_restrictions<'de, D>(
+    deserializer: D,
+) -> Result<Option<NumericRestrictions>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<NumericRestrictions>::deserialize(deserializer)?;
+    Ok(raw.and_then(NumericRestrictions::normalize))
+}
+
+/// Numeric comparison of two bounds of the same family. Returns `None` when the
+/// families differ (which callers treat as a family mismatch / "not a subtype").
+pub fn numeric_bound_cmp(a: NumericBound, b: NumericBound) -> Option<std::cmp::Ordering> {
+    match (a, b) {
+        (NumericBound::Signed(x), NumericBound::Signed(y)) => Some(x.cmp(&y)),
+        (NumericBound::Unsigned(x), NumericBound::Unsigned(y)) => Some(x.cmp(&y)),
+        (NumericBound::FloatBits(x), NumericBound::FloatBits(y)) => {
+            // Both are finite by construction, so partial_cmp is total here.
+            f64::from_bits(x).partial_cmp(&f64::from_bits(y))
+        }
+        _ => None,
+    }
+}
+
+fn check_bound_repr(bound: NumericBound, repr: NumericRepr) -> Result<(), NumericRestrictionError> {
+    if bound.family() != repr.family() {
+        return Err(NumericRestrictionError::FamilyMismatch);
+    }
+    match bound {
+        NumericBound::Signed(v) => {
+            let (lo, hi) = repr.signed_range().expect("signed family => signed range");
+            if v < lo || v > hi {
+                return Err(NumericRestrictionError::BoundOutOfRange);
+            }
+        }
+        NumericBound::Unsigned(v) => {
+            let hi = repr
+                .unsigned_max()
+                .expect("unsigned family => unsigned max");
+            if v > hi {
+                return Err(NumericRestrictionError::BoundOutOfRange);
+            }
+        }
+        NumericBound::FloatBits(bits) => {
+            let v = f64::from_bits(bits);
+            if !v.is_finite() {
+                return Err(NumericRestrictionError::NonFiniteFloat);
+            }
+            if repr == NumericRepr::F32 && (v as f32) as f64 != v {
+                return Err(NumericRestrictionError::FloatNotRoundTrippable);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reasons a numeric restriction set is not well-formed for a given repr.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericRestrictionError {
+    /// An empty restriction set was stored as `Some` (must be `None`).
+    EmptyStored,
+    /// A bound's family does not match the repr (e.g. signed bound on `U32`).
+    FamilyMismatch,
+    /// A bound value does not fit the repr's range.
+    BoundOutOfRange,
+    /// A float bound was `NaN`/infinite.
+    NonFiniteFloat,
+    /// An `F32` bound does not round-trip through `f32`.
+    FloatNotRoundTrippable,
+    /// `min` is numerically greater than `max`.
+    MinGreaterThanMax,
+}
+
+impl std::fmt::Display for NumericRestrictionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            NumericRestrictionError::EmptyStored => {
+                "numeric restriction set is empty (must be None)"
+            }
+            NumericRestrictionError::FamilyMismatch => {
+                "numeric bound family does not match the numeric type"
+            }
+            NumericRestrictionError::BoundOutOfRange => {
+                "numeric bound does not fit the numeric type's range"
+            }
+            NumericRestrictionError::NonFiniteFloat => "numeric float bound must be finite",
+            NumericRestrictionError::FloatNotRoundTrippable => {
+                "f32 numeric bound does not round-trip through f32"
+            }
+            NumericRestrictionError::MinGreaterThanMax => {
+                "numeric min bound is greater than max bound"
+            }
+        };
+        write!(f, "{msg}")
+    }
 }
 
 // --- Text / Binary ---
@@ -792,4 +1222,108 @@ pub struct QuotaTokenSpec {
     /// `None` = any resource permitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_name: Option<String>,
+}
+
+#[cfg(test)]
+mod numeric_restriction_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn normalize_drops_empty_to_none() {
+        assert_eq!(NumericRestrictions::default().normalize(), None);
+        assert_eq!(
+            NumericRestrictions {
+                min: None,
+                max: None,
+                unit: Some(String::new()),
+            }
+            .normalize(),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_canonicalizes_negative_zero_float_bound() {
+        let neg_zero = NumericBound::FloatBits((-0.0f64).to_bits());
+        let r = NumericRestrictions {
+            min: Some(neg_zero),
+            max: None,
+            unit: None,
+        }
+        .normalize()
+        .expect("non-empty restriction");
+        assert_eq!(r.min, Some(NumericBound::FloatBits(0)));
+        // Canonical +0.0 has bits 0, so it now equals a freshly-constructed +0.0.
+        assert_eq!(r.min, Some(NumericBound::float(0.0).unwrap()));
+    }
+
+    #[test]
+    fn serde_empty_restrictions_object_deserializes_to_none() {
+        let json = serde_json::json!({ "kind": "u32", "value": { "restrictions": {} } });
+        let ty: SchemaType = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(ty.numeric_restrictions(), None);
+    }
+
+    #[test]
+    fn serde_empty_unit_deserializes_to_none() {
+        let json =
+            serde_json::json!({ "kind": "u32", "value": { "restrictions": { "unit": "" } } });
+        let ty: SchemaType = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(ty.numeric_restrictions(), None);
+    }
+
+    #[test]
+    fn serde_empty_unit_with_bound_drops_only_the_unit() {
+        // An empty `unit` is non-canonical and must normalize to `None`, but a
+        // present bound keeps the restriction set alive (it is not empty).
+        let json = serde_json::json!({
+            "kind": "u32",
+            "value": {
+                "restrictions": {
+                    "min": { "kind": "unsigned", "value": 1 },
+                    "unit": ""
+                }
+            }
+        });
+        let ty: SchemaType = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(
+            ty.numeric_restrictions(),
+            Some(&NumericRestrictions {
+                min: Some(NumericBound::Unsigned(1)),
+                max: None,
+                unit: None,
+            })
+        );
+    }
+
+    #[test]
+    fn serde_canonicalizes_negative_zero_float_bound() {
+        let neg_zero_bits = (-0.0f64).to_bits();
+        let json = serde_json::json!({
+            "kind": "f64",
+            "value": { "restrictions": { "min": { "kind": "float-bits", "value": neg_zero_bits } } }
+        });
+        let ty: SchemaType = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(
+            ty.numeric_restrictions().and_then(|r| r.min),
+            Some(NumericBound::FloatBits(0))
+        );
+    }
+
+    #[test]
+    fn serde_present_restrictions_round_trip() {
+        let original = SchemaType::U32 {
+            restrictions: NumericRestrictions {
+                min: Some(NumericBound::Unsigned(1)),
+                max: Some(NumericBound::Unsigned(100)),
+                unit: Some("items".to_string()),
+            }
+            .normalize(),
+            metadata: MetadataEnvelope::default(),
+        };
+        let json = serde_json::to_value(&original).expect("serialize");
+        let back: SchemaType = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(original, back);
+    }
 }

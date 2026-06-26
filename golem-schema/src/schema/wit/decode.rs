@@ -16,9 +16,10 @@ use super::wire;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
+    NumericRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue,
+    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
+    UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenVariantValue, ResultValuePayload,
@@ -294,16 +295,46 @@ impl<'a> GraphCtx<'a> {
                 }
             }
             wire::SchemaTypeBody::BoolType => SchemaType::Bool { metadata },
-            wire::SchemaTypeBody::S8Type => SchemaType::S8 { metadata },
-            wire::SchemaTypeBody::S16Type => SchemaType::S16 { metadata },
-            wire::SchemaTypeBody::S32Type => SchemaType::S32 { metadata },
-            wire::SchemaTypeBody::S64Type => SchemaType::S64 { metadata },
-            wire::SchemaTypeBody::U8Type => SchemaType::U8 { metadata },
-            wire::SchemaTypeBody::U16Type => SchemaType::U16 { metadata },
-            wire::SchemaTypeBody::U32Type => SchemaType::U32 { metadata },
-            wire::SchemaTypeBody::U64Type => SchemaType::U64 { metadata },
-            wire::SchemaTypeBody::F32Type => SchemaType::F32 { metadata },
-            wire::SchemaTypeBody::F64Type => SchemaType::F64 { metadata },
+            wire::SchemaTypeBody::S8Type(r) => SchemaType::S8 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::S16Type(r) => SchemaType::S16 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::S32Type(r) => SchemaType::S32 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::S64Type(r) => SchemaType::S64 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::U8Type(r) => SchemaType::U8 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::U16Type(r) => SchemaType::U16 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::U32Type(r) => SchemaType::U32 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::U64Type(r) => SchemaType::U64 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::F32Type(r) => SchemaType::F32 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
+            wire::SchemaTypeBody::F64Type(r) => SchemaType::F64 {
+                restrictions: decode_numeric(r),
+                metadata,
+            },
             wire::SchemaTypeBody::CharType => SchemaType::Char { metadata },
             wire::SchemaTypeBody::StringType => SchemaType::String { metadata },
             wire::SchemaTypeBody::RecordType(fields) => {
@@ -1036,6 +1067,27 @@ fn decode_quantity_value(q: &wire::QuantityValue) -> QuantityValue {
         mantissa: q.mantissa,
         scale: q.scale,
         unit: q.unit.clone(),
+    }
+}
+
+/// Decode a wire numeric restriction, normalizing a decoded empty restriction
+/// set to `None` (the canonicalization invariant: `Some(empty)` is never kept).
+fn decode_numeric(r: &Option<wire::NumericRestrictions>) -> Option<NumericRestrictions> {
+    r.as_ref().and_then(|r| {
+        NumericRestrictions {
+            min: r.min.as_ref().map(decode_numeric_bound),
+            max: r.max.as_ref().map(decode_numeric_bound),
+            unit: r.unit.clone(),
+        }
+        .normalize()
+    })
+}
+
+fn decode_numeric_bound(b: &wire::NumericBound) -> NumericBound {
+    match b {
+        wire::NumericBound::Signed(v) => NumericBound::Signed(*v),
+        wire::NumericBound::Unsigned(v) => NumericBound::Unsigned(*v),
+        wire::NumericBound::FloatBits(bits) => NumericBound::FloatBits(*bits),
     }
 }
 

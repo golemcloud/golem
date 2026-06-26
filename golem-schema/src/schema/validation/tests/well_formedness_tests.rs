@@ -16,10 +16,11 @@ use super::wellformed_strategy::wellformed_schema_graph_strategy;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuantitySpec,
-    QuantityValue, SchemaType, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
+    NumericRestrictionError, NumericRestrictions, QuantitySpec, QuantityValue, SchemaType,
+    TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
-use crate::schema::validation::well_formedness::{SchemaError, validate_graph};
+use crate::schema::validation::well_formedness::{SchemaError, validate_graph, validate_root_type};
 use proptest::prelude::*;
 use test_r::test;
 
@@ -66,6 +67,99 @@ fn dangling_ref_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::ref_to(TypeId::new("missing")));
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DanglingRef(TypeId::new("missing"))));
+}
+
+#[test]
+fn validate_root_type_reports_dangling_ref_through_alias_chain() {
+    let alias = TypeId::new("alias");
+    let missing = TypeId::new("missing");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: alias.clone(),
+            name: None,
+            body: SchemaType::ref_to(missing.clone()),
+        }],
+        root: SchemaType::bool(),
+    };
+
+    let errors = validate_root_type(&graph, &SchemaType::ref_to(alias))
+        .expect_err("a root alias chain ending in a missing definition is ill-formed");
+    assert!(
+        errors.contains(&SchemaError::DanglingRef(missing)),
+        "expected the dangling target to be reported, got {errors:?}"
+    );
+}
+
+#[test]
+fn pure_recursive_alias_root_is_rejected() {
+    let id = TypeId::new("Cycle");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: id.clone(),
+            name: None,
+            body: SchemaType::ref_to(id.clone()),
+        }],
+        root: SchemaType::ref_to(id),
+    };
+
+    assert!(
+        validate_graph(&graph).is_err(),
+        "a pure recursive alias never resolves to a concrete schema type and must be rejected"
+    );
+}
+
+#[test]
+fn mutual_pure_alias_cycle_is_rejected() {
+    // A -> ref B, B -> ref A: a two-step pure alias cycle that never bottoms
+    // out in a concrete type.
+    let a = TypeId::new("A");
+    let b = TypeId::new("B");
+    let graph = SchemaGraph {
+        defs: vec![
+            SchemaTypeDef {
+                id: a.clone(),
+                name: None,
+                body: SchemaType::ref_to(b.clone()),
+            },
+            SchemaTypeDef {
+                id: b,
+                name: None,
+                body: SchemaType::ref_to(a.clone()),
+            },
+        ],
+        root: SchemaType::ref_to(a),
+    };
+    let errors = validate_graph(&graph).expect_err("mutual pure alias cycle must be rejected");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, SchemaError::RecursiveAlias(_))),
+        "expected a RecursiveAlias error, got {errors:?}"
+    );
+}
+
+#[test]
+fn legitimate_recursive_type_through_constructor_is_accepted() {
+    // tree -> record { children: list<ref tree> }: the cycle passes through
+    // value-shrinking constructors (record/list), so it resolves to a concrete
+    // type and is valid.
+    let id = TypeId::new("tree");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: id.clone(),
+            name: None,
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "children".to_string(),
+                body: SchemaType::list(SchemaType::ref_to(id.clone())),
+                metadata: Default::default(),
+            }]),
+        }],
+        root: SchemaType::ref_to(id),
+    };
+    assert!(
+        validate_graph(&graph).is_ok(),
+        "a recursive type whose cycle passes through a constructor is well-formed"
+    );
 }
 
 #[test]
@@ -128,6 +222,31 @@ fn map_key_not_primitive_is_reported() {
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::MapKeyNotPrimitive));
+}
+
+#[test]
+fn recursive_alias_map_key_reports_only_recursive_alias() {
+    let key = TypeId::new("key");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: key.clone(),
+            name: None,
+            body: SchemaType::ref_to(key.clone()),
+        }],
+        root: SchemaType::bool(),
+    };
+
+    let errors = validate_root_type(
+        &graph,
+        &SchemaType::map(SchemaType::ref_to(key.clone()), SchemaType::string()),
+    )
+    .expect_err("recursive alias map key must be rejected");
+
+    assert_eq!(
+        errors,
+        vec![SchemaError::RecursiveAlias(key)],
+        "a recursive alias map key should not also cascade into MapKeyNotPrimitive"
+    );
 }
 
 #[test]
@@ -492,6 +611,46 @@ fn union_discriminator_overlap_prefix_is_reported() {
     );
 }
 
+// Deferred: `discriminators_overlap` is intentionally conservative and only
+// detects same-kind nesting/empties (regex overlap is undecidable). Detecting
+// cross-kind overlaps such as prefix-vs-suffix is a separate union-ambiguity
+// completeness effort that also requires redesigning the well-formed property
+// generator (which deliberately relies on the conservative checker), so it is
+// out of scope for the tool dangling/duplicate-detection work and tracked
+// separately.
+#[test]
+#[ignore = "deferred: cross-kind discriminator overlap detection is a separate effort"]
+fn union_discriminator_overlap_prefix_suffix_is_reported() {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
+        branches: vec![
+            UnionBranch {
+                tag: "prefix".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::Prefix {
+                    prefix: "a".to_string(),
+                },
+                metadata: Default::default(),
+            },
+            UnionBranch {
+                tag: "suffix".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::Suffix {
+                    suffix: "b".to_string(),
+                },
+                metadata: Default::default(),
+            },
+        ],
+    }));
+
+    let errors = validate_graph(&graph).expect_err("value `ab` matches both branches");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, SchemaError::UnionAmbiguousDiscriminators { .. })),
+        "expected an ambiguous-discriminator error, got {errors:?}"
+    );
+}
+
 #[test]
 fn invalid_regex_on_union_branch_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
@@ -665,4 +824,132 @@ fn option_of_self_recursive_ref_terminates() {
         root: SchemaType::ref_to(id),
     };
     let _ = validate_graph(&graph);
+}
+
+// --- Numeric restrictions ---
+
+#[test]
+fn numeric_valid_restrictions_pass() {
+    let ty = SchemaType::U32 {
+        restrictions: NumericRestrictions {
+            min: Some(NumericBound::Unsigned(0)),
+            max: Some(NumericBound::Unsigned(100)),
+            unit: Some("items".to_string()),
+        }
+        .normalize(),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+    validate_graph(&graph).expect("valid numeric restrictions must pass");
+}
+
+#[test]
+fn numeric_min_greater_than_max_is_reported() {
+    let ty = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(10)),
+            max: Some(NumericBound::Unsigned(1)),
+            unit: None,
+        }),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::InvalidNumericRestriction {
+        error: NumericRestrictionError::MinGreaterThanMax,
+    }));
+}
+
+#[test]
+fn numeric_bound_family_mismatch_is_reported() {
+    // A signed bound on an unsigned repr.
+    let ty = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Signed(5)),
+            max: None,
+            unit: None,
+        }),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::InvalidNumericRestriction {
+        error: NumericRestrictionError::FamilyMismatch,
+    }));
+}
+
+#[test]
+fn numeric_bound_out_of_range_is_reported() {
+    // 300 does not fit in u8.
+    let ty = SchemaType::U8 {
+        restrictions: Some(NumericRestrictions {
+            min: None,
+            max: Some(NumericBound::Unsigned(300)),
+            unit: None,
+        }),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::InvalidNumericRestriction {
+        error: NumericRestrictionError::BoundOutOfRange,
+    }));
+}
+
+#[test]
+fn numeric_f32_bound_not_round_trippable_is_reported() {
+    // 0.1 cannot be represented exactly in f32, so it does not round-trip.
+    let ty = SchemaType::F32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::float(0.1).unwrap()),
+            max: None,
+            unit: None,
+        }),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::InvalidNumericRestriction {
+        error: NumericRestrictionError::FloatNotRoundTrippable,
+    }));
+}
+
+#[test]
+fn numeric_stored_empty_restriction_is_reported() {
+    // `Some(empty)` must never be stored; well-formedness rejects it even
+    // though smart constructors/decoders normalize it away.
+    let ty = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions::default()),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+    let errors = validate_graph(&graph).expect_err("should fail");
+    assert!(errors.contains(&SchemaError::InvalidNumericRestriction {
+        error: NumericRestrictionError::EmptyStored,
+    }));
+}
+
+#[test]
+fn numeric_empty_unit_with_bound_is_accepted() {
+    // An empty `unit` is *non-canonical* (the codecs normalize `Some("")` to
+    // `None` on decode, see `serde_empty_unit_with_bound_drops_only_the_unit`),
+    // but it is not *structurally invalid*: the restriction still carries a
+    // meaningful bound. Well-formedness validates structural validity, not
+    // canonical spelling — enforcing empty-unit canonicality through
+    // `validate_for_repr` would make value validation skip numeric range checks
+    // for such a type, which is worse than accepting the non-canonical unit.
+    let ty = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(1)),
+            max: None,
+            unit: Some(String::new()),
+        }),
+        metadata: Default::default(),
+    };
+    let graph = SchemaGraph::anonymous(ty);
+
+    assert!(
+        validate_graph(&graph).is_ok(),
+        "a non-canonical empty unit alongside a real bound is structurally valid"
+    );
 }

@@ -16,8 +16,8 @@ use super::wellformed_strategy::wellformed_schema_graph_strategy;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, NamedFieldType, QuantitySpec, QuantityValue, SchemaType, TextRestrictions,
-    UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, NamedFieldType, NumericBound, NumericRestrictions, QuantitySpec,
+    QuantityValue, SchemaType, TextRestrictions, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::validation::subtyping::{is_assignable, is_equivalent_cross_graph};
 use proptest::prelude::*;
@@ -546,4 +546,95 @@ fn cross_graph_mutually_recursive_identical_accepts() {
     let a = mutual();
     let b = mutual();
     assert!(equiv(&a, &b));
+}
+
+// --- Numeric narrowing ---
+
+fn u32_bounds(min: Option<u64>, max: Option<u64>, unit: Option<&str>) -> SchemaType {
+    SchemaType::U32 {
+        restrictions: NumericRestrictions {
+            min: min.map(NumericBound::Unsigned),
+            max: max.map(NumericBound::Unsigned),
+            unit: unit.map(|u| u.to_string()),
+        }
+        .normalize(),
+        metadata: Default::default(),
+    }
+}
+
+#[test]
+fn numeric_narrower_bounds_are_assignable() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let sub = u32_bounds(Some(1), Some(100), None);
+    let sup = u32_bounds(Some(0), Some(200), None);
+    assert!(is_assignable(&graph, &sub, &sup));
+    assert!(!is_assignable(&graph, &sup, &sub));
+}
+
+#[test]
+fn numeric_constrained_is_assignable_to_unconstrained() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let sub = u32_bounds(Some(1), Some(100), None);
+    let sup = SchemaType::u32();
+    assert!(is_assignable(&graph, &sub, &sup));
+    assert!(!is_assignable(&graph, &sup, &sub));
+}
+
+#[test]
+fn numeric_unit_mismatch_is_not_assignable() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let a = u32_bounds(Some(0), Some(100), Some("items"));
+    let b = u32_bounds(Some(0), Some(100), Some("bytes"));
+    assert!(!is_assignable(&graph, &a, &b));
+    assert!(!is_assignable(&graph, &b, &a));
+}
+
+#[test]
+fn numeric_unit_on_constrained_sub_not_assignable_to_unconstrained() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    // A unit-carrying type is not a subtype of a fully unconstrained type:
+    // the unit changes the value's semantic interpretation.
+    let sub = u32_bounds(Some(1), Some(100), Some("bytes"));
+    let sup = SchemaType::u32();
+    assert!(!is_assignable(&graph, &sub, &sup));
+
+    // Even a unit-only refinement (no bounds) is not assignable to unconstrained.
+    let unit_only = u32_bounds(None, None, Some("bytes"));
+    assert!(!is_assignable(&graph, &unit_only, &SchemaType::u32()));
+}
+
+#[test]
+fn numeric_malformed_restriction_is_not_assignable() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    // A signed bound on U32 is malformed (family mismatch); it is never a valid
+    // participant in a subtype relationship, even against an unconstrained sup.
+    let sub = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Signed(-1)),
+            max: None,
+            unit: None,
+        }),
+        metadata: Default::default(),
+    };
+    let sup = SchemaType::u32();
+    assert!(!is_assignable(&graph, &sub, &sup));
+    assert!(!is_assignable(&graph, &sup, &sub));
+}
+
+#[test]
+fn numeric_equal_restrictions_are_mutually_assignable() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let a = u32_bounds(Some(0), Some(100), Some("items"));
+    let b = u32_bounds(Some(0), Some(100), Some("items"));
+    assert!(is_assignable(&graph, &a, &b));
+    assert!(is_assignable(&graph, &b, &a));
+}
+
+#[test]
+fn numeric_different_repr_is_not_assignable() {
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let u = SchemaType::u32();
+    let s = SchemaType::s32();
+    assert!(!is_assignable(&graph, &u, &s));
+    assert!(!is_assignable(&graph, &s, &u));
 }
