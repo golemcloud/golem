@@ -721,6 +721,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
     }
 
+    async fn handle_card_expiry_or_revocation_during_replay(
+        &mut self,
+        card_id: CardId,
+    ) -> Result<(), WorkerExecutorError> {
+        assert!(self.is_replay());
+
+        let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
+
+        if was_in_wallet {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+
+        Ok(())
+    }
+
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
         if !self.state.is_live() {
             return Ok(());
@@ -735,32 +750,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .first()
         {
             match &pending_event.event {
-                QueuedCardEvent::Revoke(event) => {
-                    let card_id = event.card_id;
-                    self.apply_card_revoked(card_id, pending_event.oplog_index, true)
+                QueuedCardEvent::Revoke { card_id } => {
+                    self.apply_card_revoked(*card_id, pending_event.oplog_index)
                         .await?;
                 }
-                QueuedCardEvent::Install(event) => {
-                    let Some(card) = event.card.clone() else {
-                        return Err(WorkerExecutorError::runtime(
-                            "queued card install is missing card payload",
-                        ));
-                    };
+                QueuedCardEvent::Install { card_id } => {
                     let _ = self
-                        .apply_card_install(Some(pending_event.oplog_index), card)
+                        .apply_card_install(Some(pending_event.oplog_index), *card_id)
                         .await?;
                 }
             }
         }
+
+        self.remove_expired_cards().await;
+
         Ok(())
     }
 
     pub(crate) async fn apply_card_install(
         &mut self,
         queued_event_index: Option<OplogIndex>,
-        card: StoredCard,
+        card_id: CardId,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
-        let card_id = card.card_id();
+        assert!(self.is_live());
+
         let mut candidate_wallet_card_ids = self
             .state
             .agent_wallet_cards
@@ -782,7 +795,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await?
             .remove(&card_id);
 
-        if !matches!(card_state, Some(CardState::Live(_))) {
+        if let Some(CardState::Live(card)) = card_state {
+            let card = *card;
+            self.state.agent_wallet_cards.insert(card_id, card.clone());
+            self.rederive_agent_effective_surface_from_wallet();
+            let wallet_card_ids = self
+                .state
+                .agent_wallet_cards
+                .keys()
+                .copied()
+                .collect::<Vec<_>>();
+            self.state
+                .card_interest_index
+                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
+                .await;
+
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
+                .await;
+            Ok(Ok(()))
+        } else {
             let wallet_card_ids = self
                 .state
                 .agent_wallet_cards
@@ -810,25 +843,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .await;
             }
             Ok(Err(reason))
-        } else {
-            self.state.agent_wallet_cards.insert(card_id, card.clone());
-            self.rederive_agent_effective_surface_from_wallet();
-            let wallet_card_ids = self
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            self.state
-                .card_interest_index
-                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
-
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
-                .await;
-            Ok(Ok(()))
         }
     }
 
@@ -836,33 +850,76 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         card_id: CardId,
         queued_event_index: OplogIndex,
-        is_live: bool,
     ) -> Result<(), WorkerExecutorError> {
+        assert!(self.is_live());
+
         let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
 
-        if was_in_wallet {
-            self.rederive_agent_effective_surface_from_wallet();
+        if !was_in_wallet {
+            return Ok(());
         }
 
-        if is_live {
+        let wallet_card_ids = self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        self.state
+            .card_interest_index
+            .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
+            .await;
+
+        self.public_state
+            .worker()
+            .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
+            .await;
+
+        Ok(())
+    }
+
+    pub(crate) async fn remove_expired_cards(&mut self) {
+        assert!(self.is_live());
+
+        let mut cards_to_expire = Vec::new();
+        let now = Utc::now();
+
+        for (card_id, card) in &self.state.agent_wallet_cards {
+            if let Some(expires_at) = card.expires_at()
+                && expires_at >= now
+            {
+                cards_to_expire.push(*card_id);
+            }
+        }
+
+        if cards_to_expire.is_empty() {
+            return;
+        }
+
+        for card_id in cards_to_expire {
+            self.state.agent_wallet_cards.remove(&card_id);
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_expired(card_id))
+                .await;
+        }
+
+        self.rederive_agent_effective_surface_from_wallet();
+
+        {
             let wallet_card_ids = self
                 .state
                 .agent_wallet_cards
                 .keys()
                 .copied()
                 .collect::<Vec<_>>();
+
             self.state
                 .card_interest_index
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
-
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
-                .await;
         }
-
-        Ok(())
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
@@ -2603,7 +2660,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::CardRevoked { card_id } => {
                     debug!(card_id = %card_id, "Applying replayed card revocation");
-                    self.apply_card_revoked(card_id, OplogIndex::NONE, false)
+                    self.handle_card_expiry_or_revocation_during_replay(card_id)
+                        .await?;
+                }
+                ReplayEvent::CardExpired { card_id } => {
+                    debug!(card_id = %card_id, "Applying replayed card expiration");
+                    self.handle_card_expiry_or_revocation_during_replay(card_id)
                         .await?;
                 }
                 ReplayEvent::ReplayFinished => {

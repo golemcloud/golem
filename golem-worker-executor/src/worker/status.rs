@@ -530,6 +530,7 @@ fn calculate_latest_worker_status(
             OplogEntry::CardInstalled { .. } => {}
             OplogEntry::CardInstallFailed { .. } => {}
             OplogEntry::CardRevoked { .. } => {}
+            OplogEntry::CardExpired { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }
@@ -3226,7 +3227,7 @@ mod test {
         let card_id = golem_common::model::card::CardId::new();
         let entries = BTreeMap::from([(
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            OplogEntry::card_event_queued(QueuedCardEvent::Revoke { card_id }),
         )]);
 
         let status = super::update_status_with_new_entries(
@@ -3244,7 +3245,7 @@ mod test {
         );
         assert_eq!(
             status.pending_card_events[0].event,
-            QueuedCardEvent::revoke(card_id)
+            QueuedCardEvent::Revoke { card_id }
         );
     }
 
@@ -3254,7 +3255,7 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(QueuedCardEvent::Revoke { card_id }),
             ),
             (
                 OplogIndex::from_u64(2),
@@ -3280,11 +3281,11 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(QueuedCardEvent::Revoke { card_id }),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(QueuedCardEvent::Revoke { card_id }),
             ),
             (
                 OplogIndex::from_u64(3),
@@ -3311,10 +3312,9 @@ mod test {
     #[test]
     fn card_event_queued_install_is_pending() {
         let card_id = golem_common::model::card::CardId::new();
-        let card = test_card(card_id);
         let entries = BTreeMap::from([(
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+            OplogEntry::card_event_queued(QueuedCardEvent::Install { card_id }),
         )]);
 
         let status = super::update_status_with_new_entries(
@@ -3328,7 +3328,7 @@ mod test {
         assert_eq!(status.pending_card_events.len(), 1);
         assert_eq!(
             status.pending_card_events[0].event,
-            QueuedCardEvent::install(card)
+            QueuedCardEvent::Install { card_id }
         );
     }
 
@@ -3339,7 +3339,7 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+                OplogEntry::card_event_queued(QueuedCardEvent::Install { card_id }),
             ),
             (
                 OplogIndex::from_u64(2),
@@ -3361,11 +3361,10 @@ mod test {
     #[test]
     fn card_install_failed_removes_pending_install() {
         let card_id = golem_common::model::card::CardId::new();
-        let card = test_card(card_id);
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::install(card)),
+                OplogEntry::card_event_queued(QueuedCardEvent::Install { card_id }),
             ),
             (
                 OplogIndex::from_u64(2),
@@ -3394,7 +3393,7 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(QueuedCardEvent::Revoke { card_id }),
             ),
             (
                 OplogIndex::from_u64(3),
@@ -3423,7 +3422,7 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+                OplogEntry::card_event_queued(QueuedCardEvent::Install { card_id }),
             ),
             (
                 OplogIndex::from_u64(2),
