@@ -6,13 +6,9 @@ license-file = "../../LICENSE"
 publish = false
 description = "Idempotent directory mirror used to keep per-crate wit/deps copies in sync"
 
-[lib]
-harness = false
+# No dependencies — std only, on purpose (see dev-tools/README.md). Tests use plain
+# `cargo test` (libtest), so there are no dev-dependencies either.
 
 [[bin]]
 name = "dir-mirror"
 test = false
-
-[dev-dependencies]
-tempfile = { workspace = true }
-test-r = { workspace = true }

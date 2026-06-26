@@ -1,9 +1,7 @@
 # Separate workspace for dev/build tooling, kept out of the main workspace's
-# --workspace/clippy/udeps/release. Add more tool crates as members.
+# --workspace/clippy/udeps/release. Tools here are intentionally std-only (no
+# dependencies) so they compile/check/test almost instantly — see README.md.
+# Add more tool crates as members.
 [workspace]
 resolver = "2"
 members = ["dir-mirror"]
-
-[workspace.dependencies]
-tempfile = "3.18.0"
-test-r = { version = "3.0.10", default-features = true }

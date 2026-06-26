@@ -28,9 +28,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-test_r::enable!();
-
 pub const USAGE: &str = "Usage: dir-mirror --src <dir> --dst <dir> [--src <dir> --dst <dir> ...]\n\
      \n\
      Makes each <dst> a byte-identical copy of <src>: unchanged files are left\n\
@@ -206,8 +203,38 @@ fn remove_empty_dirs(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-    use test_r::test;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Minimal std-only temp directory, removed on drop (so dev-tools stays dependency-free).
+    struct TmpDir(PathBuf);
+
+    impl TmpDir {
+        fn new() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "dir-mirror-test-{}-{nanos}-{n}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            TmpDir(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn write(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -216,7 +243,7 @@ mod tests {
 
     #[test]
     fn copies_exact_tree_from_empty() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
         write(&src.join("a.txt"), "a");
         write(&src.join("nested/b.txt"), "b");
@@ -229,7 +256,7 @@ mod tests {
 
     #[test]
     fn does_not_rewrite_unchanged_files() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src, dst) = (tmp.path().join("src/x.txt"), tmp.path().join("dst/x.txt"));
         write(&src, "same");
 
@@ -242,7 +269,7 @@ mod tests {
 
     #[test]
     fn preserves_mtime_of_unchanged_files() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
         write(&src.join("f.txt"), "x");
         mirror(&src, &dst).unwrap();
@@ -259,7 +286,7 @@ mod tests {
 
     #[test]
     fn propagates_changed_file() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
         write(&src.join("f.txt"), "v1");
         mirror(&src, &dst).unwrap();
@@ -272,7 +299,7 @@ mod tests {
 
     #[test]
     fn prunes_files_absent_from_source() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
         write(&src.join("keep.txt"), "k");
         write(&dst.join("keep.txt"), "k");
@@ -286,7 +313,7 @@ mod tests {
 
     #[test]
     fn removes_emptied_directories() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
         write(&src.join("keep.txt"), "k");
         write(&dst.join("keep.txt"), "k");
@@ -299,14 +326,14 @@ mod tests {
 
     #[test]
     fn errors_when_source_missing() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let err = mirror(&tmp.path().join("missing"), &tmp.path().join("dst")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
     fn errors_on_empty_destination() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let src = tmp.path().join("src");
         write(&src.join("f.txt"), "x");
         let err = mirror(&src, Path::new("")).unwrap_err();
@@ -315,7 +342,7 @@ mod tests {
 
     #[test]
     fn refuses_dangerous_destinations() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let src = tmp.path().join("a/b");
         write(&src.join("f.txt"), "x");
 
@@ -372,7 +399,7 @@ mod tests {
 
     #[test]
     fn run_mirrors_multiple_flagged_pairs() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TmpDir::new();
         let (src_a, dst_a) = (tmp.path().join("src_a"), tmp.path().join("dst_a"));
         let (src_b, dst_b) = (tmp.path().join("src_b"), tmp.path().join("dst_b"));
         write(&src_a.join("a.txt"), "a");
