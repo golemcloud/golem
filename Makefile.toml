@@ -94,13 +94,13 @@ private = true
 command = "cargo"
 args = [
     "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
-    "wit/deps/io", "golem-common/wit/deps/io",
-    "wit/deps/clocks", "golem-common/wit/deps/clocks",
-    "wit/deps/golem-1.x", "golem-common/wit/deps/golem-1.x",
-    "wit/deps/golem-core-v2", "golem-common/wit/deps/golem-core-v2",
-    "wit/deps/golem-agent", "golem-common/wit/deps/golem-agent",
-    "wit/deps/golem-secrets", "golem-common/wit/deps/golem-secrets",
-    "wit/deps/golem-tool", "golem-common/wit/deps/golem-tool",
+    "--src", "wit/deps/io", "--dst", "golem-common/wit/deps/io",
+    "--src", "wit/deps/clocks", "--dst", "golem-common/wit/deps/clocks",
+    "--src", "wit/deps/golem-1.x", "--dst", "golem-common/wit/deps/golem-1.x",
+    "--src", "wit/deps/golem-core-v2", "--dst", "golem-common/wit/deps/golem-core-v2",
+    "--src", "wit/deps/golem-agent", "--dst", "golem-common/wit/deps/golem-agent",
+    "--src", "wit/deps/golem-secrets", "--dst", "golem-common/wit/deps/golem-secrets",
+    "--src", "wit/deps/golem-tool", "--dst", "golem-common/wit/deps/golem-tool",
 ]
 
 [tasks.wit-sdks]
@@ -108,10 +108,10 @@ private = true
 command = "cargo"
 args = [
     "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
-    "wit/deps", "sdks/rust/golem-rust/wit/deps",
-    "wit/deps", "sdks/ts/wit/deps",
-    "wit/deps", "sdks/scala/wit/deps",
-    "wit/deps", "sdks/moonbit/golem_sdk/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/rust/golem-rust/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/ts/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
 ]
 
 [tasks.wit-golem-cli]
@@ -119,12 +119,12 @@ private = true
 command = "cargo"
 args = [
     "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
-    "wit/deps/clocks", "cli/golem-cli/wit/deps/clocks",
-    "wit/deps/io", "cli/golem-cli/wit/deps/io",
-    "wit/deps/golem-1.x", "cli/golem-cli/wit/deps/golem-1.x",
-    "wit/deps/golem-core-v2", "cli/golem-cli/wit/deps/golem-core-v2",
-    "wit/deps/golem-agent", "cli/golem-cli/wit/deps/golem-agent",
-    "wit/deps/logging", "cli/golem-cli/wit/deps/logging",
+    "--src", "wit/deps/clocks", "--dst", "cli/golem-cli/wit/deps/clocks",
+    "--src", "wit/deps/io", "--dst", "cli/golem-cli/wit/deps/io",
+    "--src", "wit/deps/golem-1.x", "--dst", "cli/golem-cli/wit/deps/golem-1.x",
+    "--src", "wit/deps/golem-core-v2", "--dst", "cli/golem-cli/wit/deps/golem-core-v2",
+    "--src", "wit/deps/golem-agent", "--dst", "cli/golem-cli/wit/deps/golem-agent",
+    "--src", "wit/deps/logging", "--dst", "cli/golem-cli/wit/deps/logging",
 ]
 
 [tasks.diff-wit]

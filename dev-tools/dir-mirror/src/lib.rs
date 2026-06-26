@@ -31,22 +31,59 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 test_r::enable!();
 
-pub const USAGE: &str = "Usage: dir-mirror <src1> <dst1> [<src2> <dst2> ...]\n\
+pub const USAGE: &str = "Usage: dir-mirror --src <dir> --dst <dir> [--src <dir> --dst <dir> ...]\n\
      \n\
      Makes each <dst> a byte-identical copy of <src>: unchanged files are left\n\
      untouched (preserving their mtime), and files/dirs in <dst> absent from\n\
      <src> are removed.";
 
-/// Mirror each `<src> <dst>` pair in `args` (a flat list). Errors on an empty or odd-length
-/// argument list. Each pair's error is annotated with the `src -> dst` it came from.
-pub fn run(args: &[String]) -> io::Result<()> {
-    if args.is_empty() || !args.len().is_multiple_of(2) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, USAGE));
+/// Parse one or more `--src <dir> --dst <dir>` pairs. The flags are required (and must
+/// alternate, starting with `--src`) so a source and destination can't be silently
+/// swapped or misaligned.
+fn parse_pairs(args: &[String]) -> io::Result<Vec<(PathBuf, PathBuf)>> {
+    let usage_err =
+        |msg: String| io::Error::new(io::ErrorKind::InvalidInput, format!("{msg}\n\n{USAGE}"));
+    // A flag value must be present and not itself look like a flag.
+    let value = |at: usize, flag: &str| match args.get(at) {
+        Some(v) if !v.starts_with("--") => Ok(PathBuf::from(v)),
+        _ => Err(usage_err(format!("{flag} requires a directory value"))),
+    };
+
+    let mut pairs = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] != "--src" {
+            return Err(usage_err(format!("expected --src, found {:?}", args[i])));
+        }
+        let src = value(i + 1, "--src")?;
+        if args.get(i + 2).map(String::as_str) != Some("--dst") {
+            return Err(usage_err(format!(
+                "--src {} must be followed by --dst",
+                src.display()
+            )));
+        }
+        let dst = value(i + 3, "--dst")?;
+        pairs.push((src, dst));
+        i += 4;
     }
-    for pair in args.chunks(2) {
-        let (src, dst) = (Path::new(&pair[0]), Path::new(&pair[1]));
-        mirror(src, dst)
-            .map_err(|e| io::Error::new(e.kind(), format!("{} -> {}: {e}", pair[0], pair[1])))?;
+    if pairs.is_empty() {
+        return Err(usage_err(
+            "expected at least one --src <dir> --dst <dir> pair".into(),
+        ));
+    }
+    Ok(pairs)
+}
+
+/// Mirror each `--src <dir> --dst <dir>` pair given in `args`. Each pair's error is
+/// annotated with the `src -> dst` it came from.
+pub fn run(args: &[String]) -> io::Result<()> {
+    for (src, dst) in parse_pairs(args)? {
+        mirror(&src, &dst).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("{} -> {}: {e}", src.display(), dst.display()),
+            )
+        })?;
     }
     Ok(())
 }
@@ -54,10 +91,10 @@ pub fn run(args: &[String]) -> io::Result<()> {
 /// Make `dst` a byte-identical copy of the directory `src`, preserving the mtime of
 /// files that are already up to date and removing anything in `dst` not in `src`.
 pub fn mirror(src: &Path, dst: &Path) -> io::Result<()> {
-    if dst.as_os_str().is_empty() {
+    if is_unsafe_dst(src, dst) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "destination path is empty",
+            format!("refusing to mirror into unsafe destination: {dst:?}"),
         ));
     }
     if !src.is_dir() {
@@ -77,25 +114,44 @@ pub fn mirror(src: &Path, dst: &Path) -> io::Result<()> {
     }
     for file in walk_files(dst)? {
         if !want.contains(file.strip_prefix(dst).expect("walked under dst")) {
-            fs::remove_file(&file)?;
+            fs::remove_file(&file).map_err(|e| with_path(e, "removing", &file))?;
         }
     }
     remove_empty_dirs(dst)
 }
 
+/// `mirror` prunes `dst` (deletes files in it but not in `src`), so reject destinations
+/// whose prune could reach unrelated files:
+/// - empty, the current directory (`.`), or the filesystem root;
+/// - any path containing a `..` component, which can escape the intended subtree;
+/// - a path that overlaps `src` (one is an ancestor of the other), unless they're equal.
+fn is_unsafe_dst(src: &Path, dst: &Path) -> bool {
+    use std::path::Component;
+    dst.as_os_str().is_empty()
+        || dst == Path::new(".")
+        || dst.parent().is_none()
+        || dst.components().any(|c| c == Component::ParentDir)
+        || (src != dst && (src.starts_with(dst) || dst.starts_with(src)))
+}
+
+/// Annotate an io error with the path it happened on (std fs errors don't embed it).
+fn with_path(e: io::Error, action: &str, path: &Path) -> io::Error {
+    io::Error::new(e.kind(), format!("{action} {}: {e}", path.display()))
+}
+
 /// Copy `src` to `dst` only when `dst` is missing or differs, creating parent dirs as
 /// needed. Returns whether a write happened.
 fn copy_if_different(src: &Path, dst: &Path) -> io::Result<bool> {
-    let new = fs::read(src)?;
+    let new = fs::read(src).map_err(|e| with_path(e, "reading", src))?;
     if let Ok(old) = fs::read(dst)
         && old == new
     {
         return Ok(false);
     }
     if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|e| with_path(e, "creating", parent))?;
     }
-    fs::write(dst, &new)?;
+    fs::write(dst, &new).map_err(|e| with_path(e, "writing", dst))?;
     Ok(true)
 }
 
@@ -258,14 +314,64 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_odd_argument_count() {
-        let err = run(&["only-one".to_string()]).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(run(&[]).is_err(), "no arguments is rejected");
+    fn refuses_dangerous_destinations() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("a/b");
+        write(&src.join("f.txt"), "x");
+
+        for bad in [
+            Path::new(""),
+            Path::new("."),
+            Path::new(".."),
+            Path::new("/"),
+        ] {
+            let err = mirror(&src, bad).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidInput,
+                "destination {bad:?} must be refused"
+            );
+        }
+        // A destination that overlaps the source (ancestor or descendant), or escapes via
+        // `..`, would prune unrelated files.
+        let overlapping = [
+            tmp.path().join("a"),        // ancestor of src
+            src.join("inner"),           // descendant of src
+            tmp.path().join("a/b/../c"), // ".." escape component
+        ];
+        for bad in &overlapping {
+            let err = mirror(&src, bad).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidInput,
+                "destination {bad:?} must be refused"
+            );
+        }
+    }
+
+    fn s(v: &str) -> String {
+        v.to_string()
     }
 
     #[test]
-    fn run_mirrors_multiple_pairs() {
+    fn run_rejects_malformed_args() {
+        let cases: &[&[&str]] = &[
+            &[],                           // nothing
+            &["src", "dst"],               // bare positional, no flags
+            &["--src", "x"],               // missing --dst
+            &["--src", "x", "--dst"],      // --dst without a value
+            &["--src", "--dst", "y"],      // --src value missing (looks like a flag)
+            &["--dst", "y", "--src", "x"], // wrong order
+        ];
+        for case in cases {
+            let args: Vec<String> = case.iter().map(|a| s(a)).collect();
+            let err = run(&args).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "case {case:?}");
+        }
+    }
+
+    #[test]
+    fn run_mirrors_multiple_flagged_pairs() {
         let tmp = TempDir::new().unwrap();
         let (src_a, dst_a) = (tmp.path().join("src_a"), tmp.path().join("dst_a"));
         let (src_b, dst_b) = (tmp.path().join("src_b"), tmp.path().join("dst_b"));
@@ -273,9 +379,13 @@ mod tests {
         write(&src_b.join("b.txt"), "b");
 
         let args = [
+            s("--src"),
             src_a.to_str().unwrap().to_string(),
+            s("--dst"),
             dst_a.to_str().unwrap().to_string(),
+            s("--src"),
             src_b.to_str().unwrap().to_string(),
+            s("--dst"),
             dst_b.to_str().unwrap().to_string(),
         ];
         run(&args).unwrap();
