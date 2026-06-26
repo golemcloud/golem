@@ -247,11 +247,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     .await;
                 }
                 CallReplayOutcome::Incomplete(live) => {
-                    return reconstruct_lazy_wasm_rpc_resource(
+                    return construct_wasm_rpc_resource(
                         self,
                         live,
                         remote_agent_id,
-                        env,
+                        &env,
                         config,
                         span,
                         remote_agent_type,
@@ -927,8 +927,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let entry = self.table().delete(rep)?;
         let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
-        if let Ok(mut payload) = payload {
-            payload.target_activation.abandon_pending_handle();
+        if let Ok(payload) = payload {
             self.finish_span(&payload.span_id).await?;
         }
 
@@ -1265,7 +1264,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         Ok(Some(Err(rpc_error)))
                     }
                 },
-                SerializableInvokeResult::Failed(error) => Err(deserialize_host_failure(error)),
+                SerializableInvokeResult::Failed(error) => Err(anyhow::anyhow!(error)),
                 SerializableInvokeResult::FailedClassified { kind, message } => {
                     Err(deserialize_classified_host_failure(kind, message))
                 }
@@ -1587,51 +1586,14 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     Ok(entry)
 }
 
-async fn reconstruct_lazy_wasm_rpc_resource<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    mut handle: CallHandle<GolemRpcWasmRpcNew, NotCancellable>,
-    remote_agent_id: AgentId,
-    env: Vec<(String, String)>,
-    config: Vec<AgentConfigEntryDto>,
-    span: Arc<InvocationContextSpan>,
-    remote_agent_type: Arc<AgentTypeSchema>,
-) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let target_component = match ctx
-        .component_service()
-        .get_metadata(remote_agent_id.component_id, None)
-        .await
-    {
-        Ok(target_component) => target_component,
-        Err(err) => {
-            handle.abandon_for_trap();
-            return Err(err.into());
-        }
-    };
-
-    let remote_agent_id = OwnedAgentId::new(target_component.environment_id, &remote_agent_id);
-    let entry = ctx.table().push(WasmRpcEntry {
-        payload: Box::new(WasmRpcEntryPayload {
-            remote_agent_id,
-            span_id: span.span_id().clone(),
-            target_activation: WasmRpcTargetActivation::Pending {
-                handle: Some(handle),
-                env,
-                config,
-            },
-            remote_agent_type,
-        }),
-    })?;
-    Ok(entry)
-}
-
 async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     this: Resource<WasmRpcEntry>,
 ) -> anyhow::Result<AgentFingerprint> {
-    let (remote_agent_id, span_id, env, config, handle, replayed_target_fingerprint) = {
-        let entry = ctx.table().get_mut(&this)?;
-        let payload = entry.payload.downcast_mut::<WasmRpcEntryPayload>().unwrap();
-        match &mut payload.target_activation {
+    let (remote_agent_id, span_id, env, config, replayed_target_fingerprint) = {
+        let entry = ctx.table().get(&this)?;
+        let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
+        match &payload.target_activation {
             WasmRpcTargetActivation::Activated {
                 target_fingerprint, ..
             } => return Ok(*target_fingerprint),
@@ -1644,26 +1606,13 @@ async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
                 payload.span_id.clone(),
                 env.clone(),
                 config.clone(),
-                None,
-                Some(*target_fingerprint),
-            ),
-            WasmRpcTargetActivation::Pending {
-                handle,
-                env,
-                config,
-            } => (
-                payload.remote_agent_id.clone(),
-                payload.span_id.clone(),
-                env.clone(),
-                config.clone(),
-                handle.take(),
-                None,
+                *target_fingerprint,
             ),
         }
     };
 
     let stack = ctx.clone_as_inherited_stack(&span_id);
-    let demand = match ctx
+    let demand = ctx
         .rpc()
         .create_demand(
             &remote_agent_id,
@@ -1674,49 +1623,22 @@ async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             config,
             &ctx.agent_auth_ctx(),
         )
-        .await
-    {
-        Ok(demand) => demand,
-        Err(err) => {
-            if let Some(mut handle) = handle {
-                handle.abandon_for_trap();
-            }
-            return Err(err.into());
-        }
-    };
+        .await?;
     let target_fingerprint = demand.fingerprint();
-    let target_fingerprint = if let Some(replayed_target_fingerprint) = replayed_target_fingerprint
-    {
-        if target_fingerprint != replayed_target_fingerprint {
-            return Err(anyhow::anyhow!(
-                "RPC target activation fingerprint changed during replay: persisted={replayed_target_fingerprint}, live={target_fingerprint}"
-            ));
-        }
-        replayed_target_fingerprint
-    } else {
-        target_fingerprint
-    };
-
-    if let Some(handle) = handle {
-        handle
-            .complete(
-                ctx,
-                HostResponseGolemRpcCreate {
-                    target_fingerprint,
-                    target_environment_id: remote_agent_id.environment_id,
-                },
-            )
-            .await?;
+    if target_fingerprint != replayed_target_fingerprint {
+        return Err(anyhow::anyhow!(
+            "RPC target activation fingerprint changed during replay: persisted={replayed_target_fingerprint}, live={target_fingerprint}"
+        ));
     }
 
     let entry = ctx.table().get_mut(&this)?;
     let payload = entry.payload.downcast_mut::<WasmRpcEntryPayload>().unwrap();
     payload.target_activation = WasmRpcTargetActivation::Activated {
         demand,
-        target_fingerprint,
+        target_fingerprint: replayed_target_fingerprint,
     };
 
-    Ok(target_fingerprint)
+    Ok(replayed_target_fingerprint)
 }
 
 struct TaskRetryParams<Ctx: WorkerCtx> {
@@ -1773,14 +1695,6 @@ fn serialize_host_failure(err: &Error) -> SerializableInvokeResult {
     } else {
         SerializableInvokeResult::Failed(err.to_string())
     }
-}
-
-fn deserialize_host_failure(error: String) -> Error {
-    if error == "future-invoke-result already consumed" {
-        return classified_host_error(HostFailureKind::Permanent, error);
-    }
-
-    anyhow::anyhow!(error)
 }
 
 fn deserialize_classified_host_failure(
@@ -2120,11 +2034,6 @@ pub enum WasmRpcTargetActivation {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     },
-    Pending {
-        handle: Option<CallHandle<GolemRpcWasmRpcNew, NotCancellable>>,
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-    },
 }
 
 impl WasmRpcTargetActivation {
@@ -2139,17 +2048,7 @@ impl WasmRpcTargetActivation {
                 env: env.clone(),
                 config: config.clone(),
             }),
-            WasmRpcTargetActivation::Activated { .. } | WasmRpcTargetActivation::Pending { .. } => {
-                None
-            }
-        }
-    }
-
-    fn abandon_pending_handle(&mut self) {
-        if let WasmRpcTargetActivation::Pending { handle, .. } = self
-            && let Some(mut handle) = handle.take()
-        {
-            handle.abandon_for_trap();
+            WasmRpcTargetActivation::Activated { .. } => None,
         }
     }
 }
@@ -2791,60 +2690,5 @@ mod tests {
             .downcast_ref::<ClassifiedHostError>()
             .expect("replayed permanent activation failure must remain classified");
         assert_eq!(classified.kind, HostFailureKind::Permanent);
-    }
-
-    #[test]
-    fn consumed_future_failed_payload_replays_with_permanent_classification() {
-        let serialized_result =
-            SerializableInvokeResult::Failed("future-invoke-result already consumed".to_string());
-
-        let SerializableInvokeResult::Failed(error) = serialized_result else {
-            panic!("consumed future get should persist a failed future result");
-        };
-        let replayed_error = deserialize_host_failure(error);
-        let classified = replayed_error
-            .downcast_ref::<ClassifiedHostError>()
-            .expect("consumed future failure must replay as a classified permanent host failure");
-        assert_eq!(classified.kind, HostFailureKind::Permanent);
-    }
-
-    #[test]
-    fn unclassified_failed_payload_with_marker_prefix_does_not_gain_classification() {
-        let serialized = SerializableInvokeResult::Failed(
-            "golem-classified-host-failure:transient:user-controlled plain host failure"
-                .to_string(),
-        );
-
-        let SerializableInvokeResult::Failed(error) = serialized else {
-            panic!("plain host failure should use the unclassified Failed variant");
-        };
-        let replayed_error = deserialize_host_failure(error);
-
-        assert!(
-            replayed_error
-                .downcast_ref::<ClassifiedHostError>()
-                .is_none(),
-            "a plain legacy Failed payload whose text starts with the marker prefix must not gain retry classification during replay"
-        );
-    }
-
-    #[test]
-    fn unclassified_failed_payload_with_valid_marker_checksum_does_not_gain_classification() {
-        let serialized = SerializableInvokeResult::Failed(
-            "golem-classified-host-failure:v1:transient:0000000000000000:user-controlled plain host failure"
-                .to_string(),
-        );
-
-        let SerializableInvokeResult::Failed(error) = serialized else {
-            panic!("plain host failure should use the unclassified Failed variant");
-        };
-        let replayed_error = deserialize_host_failure(error);
-
-        assert!(
-            replayed_error
-                .downcast_ref::<ClassifiedHostError>()
-                .is_none(),
-            "a plain legacy Failed payload that happens to have marker-shaped text and a matching checksum must not gain retry classification during replay"
-        );
     }
 }
