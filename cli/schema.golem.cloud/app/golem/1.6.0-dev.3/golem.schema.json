@@ -681,7 +681,7 @@
         },
         "subdomain": {
           "type": "string",
-          "description": "Single DNS label resolved through the deployment environment's built-in server. For local HTTP API deployments this resolves to <subdomain>.localhost:9006 by default, or <subdomain>.localhost:<customRequestPort> when localServer.customRequestPort is set. For cloud HTTP API deployments this resolves to <subdomain>.apps.golem.cloud."
+          "description": "Single DNS label resolved through the deployment environment's built-in server. For local HTTP API deployments this resolves to <subdomain>.localhost:9006 by default, or <subdomain>.localhost:<customRequestPort> when localServer.customRequestPort is set to a stable nonzero port. For cloud HTTP API deployments this resolves to <subdomain>.apps.golem.cloud."
         },
         "webhookUrl": {
           "type": "string",
@@ -751,7 +751,7 @@
         },
         "subdomain": {
           "type": "string",
-          "description": "Single DNS label resolved through the deployment environment's built-in server. For local MCP deployments this resolves to <subdomain>.localhost:9007 by default, or <subdomain>.localhost:<mcpPort> when localServer.mcpPort is set. For cloud MCP deployments this resolves to <subdomain>.mcps.golem.cloud."
+          "description": "Single DNS label resolved through the deployment environment's built-in server. For local MCP deployments this resolves to <subdomain>.localhost:9007 by default, or <subdomain>.localhost:<mcpPort> when localServer.mcpPort is set to a stable nonzero port. For cloud MCP deployments this resolves to <subdomain>.mcps.golem.cloud."
         },
         "agents": {
           "type": "object",
@@ -793,21 +793,21 @@
         },
         "routerPort": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
           "maximum": 65535,
-          "description": "Port to serve the main API on."
+          "description": "Port to serve the main API on. Do not set this to 0 in the manifest; port 0 is only allowed when passed directly as --router-port 0 to golem server run."
         },
         "customRequestPort": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
           "maximum": 65535,
-          "description": "Port to serve custom requests on."
+          "description": "Port to serve custom requests on. Do not set this to 0 in the manifest; port 0 is only allowed when passed directly as --custom-request-port 0 to golem server run."
         },
         "mcpPort": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
           "maximum": 65535,
-          "description": "Port to serve the MCP server on."
+          "description": "Port to serve the MCP server on. Do not set this to 0 in the manifest; port 0 is only allowed when passed directly as --mcp-port 0 to golem server run."
         },
         "portsFile": {
           "type": "string",

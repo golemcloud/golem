@@ -2498,10 +2498,8 @@ mod app_builder {
                         Domain(format!("{label}.{cloud_domain}"))
                     }
                     Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Local)) | None => {
-                        Domain(format!(
-                            "{label}.localhost:{}",
-                            local_port(local_server).unwrap_or(default_local_port)
-                        ))
+                        let local_port = local_port(local_server).unwrap_or(default_local_port);
+                        Domain(format!("{label}.localhost:{}", local_port))
                     }
                 };
 
@@ -3097,12 +3095,63 @@ mod app_builder {
                                 app.source.log_color_highlight()
                             )),
                             None => {
+                                Self::validate_local_server_ports(
+                                    validation,
+                                    local_server,
+                                    &app.source,
+                                );
                                 self.local_server =
                                     Some(WithSource::new(app.source.clone(), local_server.clone()));
                             }
                         }
                     }
                 },
+            );
+        }
+
+        fn validate_local_server_ports(
+            validation: &mut ValidationBuilder,
+            local_server: &app_raw::LocalServer,
+            source: &Path,
+        ) {
+            fn validate_port(
+                validation: &mut ValidationBuilder,
+                value: Option<u16>,
+                manifest_field_name: &str,
+                cli_flag_name: &str,
+                source: &Path,
+            ) {
+                if value == Some(0) {
+                    validation.add_error(format!(
+                        "{} in {} must be nonzero. Port 0 is only allowed when passed directly as {} to {}.",
+                        manifest_field_name.log_color_highlight(),
+                        source.display().to_string().log_color_highlight(),
+                        format!("{cli_flag_name} 0").log_color_highlight(),
+                        "golem server run".log_color_highlight(),
+                    ));
+                }
+            }
+
+            validate_port(
+                validation,
+                local_server.router_port,
+                "localServer.routerPort",
+                "--router-port",
+                source,
+            );
+            validate_port(
+                validation,
+                local_server.custom_request_port,
+                "localServer.customRequestPort",
+                "--custom-request-port",
+                source,
+            );
+            validate_port(
+                validation,
+                local_server.mcp_port,
+                "localServer.mcpPort",
+                "--mcp-port",
+                source,
             );
         }
 
@@ -4452,6 +4501,60 @@ mod test {
             app.mcp_deployments(&EnvironmentName("local".to_string()))
                 .unwrap()
                 .contains_key(&Domain("hello-mcp.localhost:9007".to_string()))
+        );
+    }
+
+    #[test]
+    fn local_server_rejects_zero_manifest_ports() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerPort: 0
+              customRequestPort: 0
+              mcpPort: 0
+              portsFile: .golem/ports.json
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(app_name_and_envs.is_none());
+        assert_eq!(errors.len(), 3, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("localServer.routerPort")
+                    && error.contains("--router-port 0")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("localServer.customRequestPort")
+                    && error.contains("--custom-request-port 0")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors.iter().any(
+                |error| error.contains("localServer.mcpPort") && error.contains("--mcp-port 0")
+            ),
+            "\n{}",
+            errors.join("\n\n")
         );
     }
 

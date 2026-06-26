@@ -150,13 +150,13 @@ The `--ports-file` is written **atomically once all services are ready**, so pol
 | `customRequestPort` | HTTP API endpoints exposed by the application |
 | `mcpPort` | MCP server requests |
 
-When you bind to random ports for tests, keep the test environment on the built-in local server and write the discovered ports into `localServer` before deploying:
+When you deploy through manifest `subdomain` entries, keep the test environment on the built-in local server and use stable nonzero local ports:
 
 ```yaml
 localServer:
-  routerPort: 51823                # Value read from ports.json
-  customRequestPort: 51824         # Value read from ports.json
-  mcpPort: 51825                   # Value read from ports.json
+  routerPort: 9881
+  customRequestPort: 9006
+  mcpPort: 9007
 
 environments:
   test:
@@ -167,7 +167,27 @@ environments:
       reset: true
 ```
 
-The `localServer.routerPort` value makes `golem -E test deploy` connect to the dynamic management port, while `customRequestPort` and `mcpPort` make deployment `subdomain` values resolve to the dynamic HTTP API and MCP ports instead of the defaults. If you prefer fixed ports during local debugging, drop `--router-port 0` and reference the defaults (`9881` / `9006` / `9007`) directly.
+`customRequestPort` and `mcpPort` make deployment `subdomain` values resolve to the configured HTTP API and MCP ports instead of the defaults. Do not set any manifest `localServer` port field to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
+
+If it helps the test workflow to keep local server settings separate from the main manifest, use an included manifest fragment:
+
+```yaml
+includes:
+  - golem-local-server.yaml
+```
+
+Then define `localServer` in `golem-local-server.yaml`:
+
+```yaml
+localServer:
+  routerPort: 9881
+  customRequestPort: 9006
+  mcpPort: 9007
+  portsFile: .golem/ports.json
+  dataDir: .golem/data
+```
+
+`localServer` is a singleton across all manifest sources, so define it either in the main manifest or in the included file, not both. Include paths are relative to the manifest that declares `includes`; `localServer` path fields are relative to the manifest that declares `localServer`. If you load manifests explicitly with `--app`, pass every relevant manifest file because `includes` are only followed during normal auto-discovered manifest loading.
 
 ## 5. Deploy Against the Test Environment
 
@@ -231,9 +251,9 @@ Pseudocode for a typical test harness:
                           --router-port 0 --custom-request-port 0 --mcp-port 0 \
                           --ports-file tests/fixtures/ports.json --clean
 3. wait until tests/fixtures/ports.json exists
-4. read ports → write routerPort, customRequestPort, and mcpPort into localServer
-5. run: golem -E test deploy
-6. run integration tests, hitting resolved subdomain hosts with the discovered ports
+4. read ports from ports.json for direct runtime URLs
+5. deploy through a local environment configured with stable nonzero manifest ports when the test needs deployment subdomains
+6. run integration tests, using either stable subdomain URLs or direct discovered-port URLs
 7. terminate the server process and clean up tests/fixtures/data
 ```
 

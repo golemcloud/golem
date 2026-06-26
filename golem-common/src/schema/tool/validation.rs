@@ -874,10 +874,8 @@ fn type_reaches_variant(
 /// tree.
 fn collect_dangling_refs(graph: &SchemaGraph, ty: &SchemaType, out: &mut Vec<String>) {
     match ty {
-        SchemaType::Ref { id, .. } => {
-            if graph.lookup(id).is_none() {
-                out.push(id.to_string());
-            }
+        SchemaType::Ref { id, .. } if graph.lookup(id).is_none() => {
+            out.push(id.to_string());
         }
         SchemaType::Record { fields, .. } => {
             for f in fields {

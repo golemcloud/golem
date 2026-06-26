@@ -28,12 +28,14 @@ httpApi:
 - `httpApi.deployments` is a map keyed by **environment name** (e.g., `local`, `staging`, `prod`)
 - Each environment contains a list of deployment objects
 - Each deployment has:
-  - `subdomain`: a single DNS label (lowercase letters, digits, and hyphens only — no dots, port, or URL scheme) resolved through the target environment server. Local HTTP API deployments resolve to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set. Cloud HTTP API deployments resolve to `<subdomain>.apps.golem.cloud`.
+  - `subdomain`: a single DNS label (lowercase letters, digits, and hyphens only — no dots, port, or URL scheme) resolved through the target environment server. Local HTTP API deployments resolve to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set to a stable nonzero port. Cloud HTTP API deployments resolve to `<subdomain>.apps.golem.cloud`.
   - `domain`: a full domain such as `api.example.com` for custom registered domains or custom server environments.
   - `agents`: a map of agent type names (PascalCase) to their deployment options
   - `webhookUrl` (optional): path prefix for webhook callbacks; defaults to `/webhooks/`
 
 Define exactly one of `subdomain` or `domain` on each deployment. Prefer `subdomain` for built-in `server: local` and `server: cloud` environments. Use `domain` when you need a full custom domain. `subdomain` cannot be used with custom server environments — those must use `domain`.
+
+Do not use `localServer.customRequestPort: 0` in the manifest. Port `0` is only allowed when passed directly as `--custom-request-port 0` to `golem server run`; manifest deployment domains require stable nonzero ports.
 
 ### Agent Options
 
