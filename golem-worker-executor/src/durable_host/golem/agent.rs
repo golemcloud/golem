@@ -183,6 +183,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
+        let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
+        let (optional, expected_secret_spec) = match expected_root {
+            SchemaType::Option { inner, .. } => match resolve_schema_ref(&expected_graph, inner) {
+                SchemaType::Secret { spec, .. } => (true, spec.clone()),
+                _ => {
+                    return Err(anyhow!(
+                        "expected type for secret key {path_str} must be secret or option<secret>"
+                    ));
+                }
+            },
+            SchemaType::Secret { spec, .. } => (false, spec.clone()),
+            _ => {
+                return Err(anyhow!(
+                    "expected type for secret key {path_str} must be secret or option<secret>"
+                ));
+            }
+        };
+
         let handle = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::start(
             self,
             HostRequestGolemAgentGetConfigValue {
@@ -205,26 +223,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
                 let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
-                let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
-                let (optional, expected_secret_spec) = match expected_root {
-                    SchemaType::Option { inner, .. } => {
-                        match resolve_schema_ref(&expected_graph, inner) {
-                            SchemaType::Secret { spec, .. } => (true, spec),
-                            _ => {
-                                return Err(anyhow!(
-                                    "expected type for secret key {path_str} must be secret or option<secret>"
-                                ));
-                            }
-                        }
-                    }
-                    SchemaType::Secret { spec, .. } => (false, spec),
-                    _ => {
-                        return Err(anyhow!(
-                            "expected type for secret key {path_str} must be secret or option<secret>"
-                        ));
-                    }
-                };
-
                 let result_schema = match agent_secret {
                     None if optional => SchemaValue::Option { inner: None },
                     None => {
@@ -242,6 +240,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             return Err(anyhow!(
                                 "declared and expected type for config key {path_str} are not compatible"
                             ));
+                        }
+
+                        if let Some(secret_value) = &secret.secret_value {
+                            validate_value(&secret.secret_type, &secret.secret_type.root, secret_value)
+                                .map_err(|errors| {
+                                    anyhow!(
+                                        "secret key {path_str} has invalid stored value: {}",
+                                        errors
+                                            .into_iter()
+                                            .map(|error| error.to_string())
+                                            .collect::<Vec<_>>()
+                                            .join("; ")
+                                    )
+                                })?;
                         }
 
                         if secret.secret_value.is_none() {
@@ -276,6 +288,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 })
             })
             .await?;
+
+        validate_secret_config_result_shape(path_str, optional, &persisted.result)?;
 
         Ok(persisted.result)
     }
@@ -413,6 +427,71 @@ fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a
         }
     }
     ty
+}
+
+fn validate_secret_config_result_shape(
+    path_str: &str,
+    optional: bool,
+    value: &SchemaValue,
+) -> anyhow::Result<()> {
+    match (optional, value) {
+        (false, SchemaValue::Secret(_)) => Ok(()),
+        (true, SchemaValue::Option { inner: None }) => Ok(()),
+        (true, SchemaValue::Option { inner: Some(inner) })
+            if matches!(inner.as_ref(), SchemaValue::Secret(_)) =>
+        {
+            Ok(())
+        }
+        _ => Err(anyhow!(
+            "persisted secret config response for key {path_str} has invalid shape"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn secret_snapshot_value() -> SchemaValue {
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: None,
+            version: 1,
+            resolved_at: Utc::now(),
+            category: None,
+        })
+    }
+
+    #[test]
+    fn secret_config_replay_shape_rejects_plaintext_values() {
+        validate_secret_config_result_shape("apiKey", false, &secret_snapshot_value()).unwrap();
+        validate_secret_config_result_shape(
+            "apiKey",
+            true,
+            &SchemaValue::Option {
+                inner: Some(Box::new(secret_snapshot_value())),
+            },
+        )
+        .unwrap();
+        validate_secret_config_result_shape("apiKey", true, &SchemaValue::Option { inner: None })
+            .unwrap();
+
+        validate_secret_config_result_shape(
+            "apiKey",
+            false,
+            &SchemaValue::String("plaintext".to_string()),
+        )
+        .expect_err("required secret config replay must not accept plaintext");
+        validate_secret_config_result_shape(
+            "apiKey",
+            true,
+            &SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String("plaintext".to_string()))),
+            },
+        )
+        .expect_err("optional secret config replay must not accept plaintext");
+    }
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {

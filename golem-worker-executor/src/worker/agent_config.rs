@@ -112,6 +112,21 @@ pub fn ensure_required_agent_secrets_are_configured(
                         config_entry.path.join(".")
                     )));
                 }
+                if let Some(secret_value) = &agent_secret.secret_value {
+                    validate_value(secret_graph, &secret_graph.root, secret_value).map_err(
+                        |errors| {
+                            WorkerExecutorError::invalid_request(format!(
+                                "Required agent secret {} has invalid value: {}",
+                                config_entry.path.join("."),
+                                errors
+                                    .into_iter()
+                                    .map(|error| error.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("; ")
+                            ))
+                        },
+                    )?;
+                }
                 if agent_secret.secret_value.is_none() && !declared_optional {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has no configured value",
@@ -387,5 +402,97 @@ mod tests {
 
         ensure_required_agent_secrets_are_configured(&agent_secrets, Some(&agent_id), &component)
             .expect("secret<T> config should accept an AgentSecret whose stored type is T");
+    }
+
+    #[test]
+    fn secret_backed_config_rejects_invalid_stored_secret_value() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let secret_type = SchemaGraph::anonymous(SchemaType::string());
+        let agent_type = AgentTypeSchema {
+            type_name: agent_type_name.clone(),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Secret,
+                path: config_path.clone(),
+                value_type: SchemaType::secret(SecretSpec {
+                    inner: Box::new(SchemaType::string()),
+                    category: None,
+                }),
+            }],
+        };
+
+        let metadata = ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![agent_type],
+            BTreeMap::new(),
+        );
+        let component = Component {
+            id: ComponentId::new(),
+            revision: ComponentRevision::INITIAL,
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("component".to_string()),
+            hash: Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName::try_from("dev").unwrap(),
+            component_size: 0,
+            metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash: Hash::empty(),
+            object_store_key: String::new(),
+        };
+        let agent_id = ParsedAgentId::new(
+            agent_type_name,
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: vec![] },
+            ),
+            None,
+        );
+        let mut agent_secrets = HashMap::new();
+        agent_secrets.insert(
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            AgentSecret {
+                id: AgentSecretId::new(),
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+                revision: AgentSecretRevision::INITIAL,
+                secret_type,
+                secret_value: Some(SchemaValue::Bool(true)),
+            },
+        );
+
+        let result = ensure_required_agent_secrets_are_configured(
+            &agent_secrets,
+            Some(&agent_id),
+            &component,
+        );
+        assert!(
+            result
+                .expect_err(
+                    "invalid stored plaintext must be rejected before minting a secret handle"
+                )
+                .to_string()
+                .contains("invalid value")
+        );
     }
 }

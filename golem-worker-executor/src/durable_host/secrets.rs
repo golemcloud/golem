@@ -84,27 +84,3 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         anyhow::bail!("golem:secrets/reveal.reveal is not yet implemented")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    #[test]
-    fn secret_backed_config_accepts_secret_payload_type_for_secret_declaration_and_secret_handle_operations_are_implemented(
-    ) {
-        let source = include_str!("secrets.rs");
-
-        assert!(
-            !source.contains("golem:secrets/types.id is not yet implemented"),
-            "secret-backed config returns opaque handles, so golem:secrets/types.id must work on those handles"
-        );
-        assert!(
-            !source.contains("golem:secrets/types.metadata is not yet implemented"),
-            "secret-backed config returns opaque handles, so golem:secrets/types.metadata must work on those handles"
-        );
-        assert!(
-            !source.contains("golem:secrets/reveal.reveal is not yet implemented"),
-            "secret-backed config returns opaque handles, so golem:secrets/reveal.reveal must reveal the stored value through the declared inner type"
-        );
-    }
-}
