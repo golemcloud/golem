@@ -19,6 +19,9 @@
 //! Preserving mtimes is the point: the `wit` cargo-make tasks use this to sync the
 //! per-crate `wit/deps` copies, which cargo tracks via `rerun-if-changed`. A plain
 //! recopy would bump every mtime and rebuild the workspace on every build.
+//!
+//! Only regular files are mirrored — symlinks and empty directories in `src` are not
+//! reproduced (fine for `wit/deps`, which is plain `.wit` files).
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -28,9 +31,35 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 test_r::enable!();
 
+pub const USAGE: &str = "Usage: dir-mirror <src1> <dst1> [<src2> <dst2> ...]\n\
+     \n\
+     Makes each <dst> a byte-identical copy of <src>: unchanged files are left\n\
+     untouched (preserving their mtime), and files/dirs in <dst> absent from\n\
+     <src> are removed.";
+
+/// Mirror each `<src> <dst>` pair in `args` (a flat list). Errors on an empty or odd-length
+/// argument list. Each pair's error is annotated with the `src -> dst` it came from.
+pub fn run(args: &[String]) -> io::Result<()> {
+    if args.is_empty() || !args.len().is_multiple_of(2) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, USAGE));
+    }
+    for pair in args.chunks(2) {
+        let (src, dst) = (Path::new(&pair[0]), Path::new(&pair[1]));
+        mirror(src, dst)
+            .map_err(|e| io::Error::new(e.kind(), format!("{} -> {}: {e}", pair[0], pair[1])))?;
+    }
+    Ok(())
+}
+
 /// Make `dst` a byte-identical copy of the directory `src`, preserving the mtime of
 /// files that are already up to date and removing anything in `dst` not in `src`.
 pub fn mirror(src: &Path, dst: &Path) -> io::Result<()> {
+    if dst.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destination path is empty",
+        ));
+    }
     if !src.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -156,6 +185,23 @@ mod tests {
     }
 
     #[test]
+    fn preserves_mtime_of_unchanged_files() {
+        let tmp = TempDir::new().unwrap();
+        let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
+        write(&src.join("f.txt"), "x");
+        mirror(&src, &dst).unwrap();
+        let before = fs::metadata(dst.join("f.txt")).unwrap().modified().unwrap();
+
+        // Sleep so a (wrong) rewrite would land on a later mtime; an unchanged file keeps
+        // the exact same timestamp regardless.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        mirror(&src, &dst).unwrap();
+        let after = fs::metadata(dst.join("f.txt")).unwrap().modified().unwrap();
+
+        assert_eq!(before, after, "unchanged file must keep its mtime");
+    }
+
+    #[test]
     fn propagates_changed_file() {
         let tmp = TempDir::new().unwrap();
         let (src, dst) = (tmp.path().join("src"), tmp.path().join("dst"));
@@ -200,5 +246,41 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let err = mirror(&tmp.path().join("missing"), &tmp.path().join("dst")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn errors_on_empty_destination() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        write(&src.join("f.txt"), "x");
+        let err = mirror(&src, Path::new("")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn run_rejects_odd_argument_count() {
+        let err = run(&["only-one".to_string()]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(run(&[]).is_err(), "no arguments is rejected");
+    }
+
+    #[test]
+    fn run_mirrors_multiple_pairs() {
+        let tmp = TempDir::new().unwrap();
+        let (src_a, dst_a) = (tmp.path().join("src_a"), tmp.path().join("dst_a"));
+        let (src_b, dst_b) = (tmp.path().join("src_b"), tmp.path().join("dst_b"));
+        write(&src_a.join("a.txt"), "a");
+        write(&src_b.join("b.txt"), "b");
+
+        let args = [
+            src_a.to_str().unwrap().to_string(),
+            dst_a.to_str().unwrap().to_string(),
+            src_b.to_str().unwrap().to_string(),
+            dst_b.to_str().unwrap().to_string(),
+        ];
+        run(&args).unwrap();
+
+        assert_eq!(fs::read_to_string(dst_a.join("a.txt")).unwrap(), "a");
+        assert_eq!(fs::read_to_string(dst_b.join("b.txt")).unwrap(), "b");
     }
 }

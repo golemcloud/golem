@@ -1,8 +1,8 @@
 # List of top-level tasks intended for use:
 #
 # - `cargo make dev-flow` or just `cargo make`: runs a full development flow, including fixing format and clippy, building and running tests and generating OpenAPI specs
-# - `cargo make wit`: fetches the WIT dependencies based on wit/deps.toml
-# - `cargo make check-wit`: deletes then fetches the WIT dependencies based on wit/deps.toml, then checks if it's up-to-date
+# - `cargo make wit`: syncs the per-crate wit/deps copies from the canonical top-level wit/deps
+# - `cargo make check-wit`: re-syncs the per-crate wit/deps and fails if the committed copies are out of date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
@@ -77,7 +77,8 @@ dependencies = [
 # dir-mirror tool (dev-tools/dir-mirror) rather than cp: it preserves the mtime of
 # unchanged files, so cargo (which tracks these .wit files via rerun-if-changed from
 # bindgen!) doesn't rebuild the workspace on every run. The <source> <target> pairs
-# below replace the old cp/glob_cp lines one-for-one.
+# below replace the old cp/glob_cp lines one-for-one. golem-common/cli take a per-subdir
+# subset of the deps, so removing a dep means also removing its pair here.
 [tasks.wit]
 description = "Syncs the per-crate WIT dependency copies from the canonical wit/deps"
 run_task = [
@@ -126,20 +127,24 @@ args = [
     "wit/deps/logging", "cli/golem-cli/wit/deps/logging",
 ]
 
-[tasks.remove-wit-deps]
-private = true
-script_runner = "@duckscript"
-script = """
-rm -rf golem-common/wit/deps
-rm -rf cli/golem-cli/wit/deps
-"""
-
 [tasks.diff-wit]
 private = true
-script = "git diff --exit-code wit golem-common/wit"
+script = '''
+dirs="golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps"
+changes=$(git status --porcelain -- $dirs)
+if [ -n "$changes" ]; then
+    echo "Per-crate wit/deps copies are out of sync with the canonical wit/deps." 1>&2
+    echo "Run 'cargo make wit' and commit the result." 1>&2
+    echo "" 1>&2
+    git --no-pager diff -- $dirs 1>&2
+    echo "$changes" 1>&2
+    exit 1
+fi
+'''
 
 [tasks.check-wit]
-run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
+description = "Re-syncs wit/deps and fails if the committed per-crate copies are out of date"
+run_task = [{ name = ["wit", "diff-wit"] }]
 
 # BUILD
 
