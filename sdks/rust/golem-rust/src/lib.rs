@@ -23,7 +23,7 @@ pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
-    SchemaType, SchemaValue, SecretRef, TypedSchemaValue,
+    SchemaType, SchemaValue, TypedSchemaValue,
 };
 pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 

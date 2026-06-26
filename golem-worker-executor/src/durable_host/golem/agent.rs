@@ -18,6 +18,7 @@ use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult}
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use chrono::Utc;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
@@ -38,12 +39,13 @@ use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
-use golem_common::schema::schema_value::SchemaValue;
+use golem_common::schema::schema_value::{SchemaValue, SecretValuePayload};
 use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{
-    decode_graph, decode_value_with, encode_typed, encode_value, reject_quota_handles_in_value_tree,
+    decode_graph, decode_value_with, encode_typed, encode_value, encode_value_with,
+    reject_quota_handles_in_value_tree,
 };
 
 fn encode_registered_agent_type_schema_wire(
@@ -204,44 +206,67 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
                 let expected_root = resolve_schema_ref(&expected_graph, &expected_graph.root);
+                let (optional, expected_secret_spec) = match expected_root {
+                    SchemaType::Option { inner, .. } => {
+                        match resolve_schema_ref(&expected_graph, inner) {
+                            SchemaType::Secret { spec, .. } => (true, spec),
+                            _ => {
+                                return Err(anyhow!(
+                                    "expected type for secret key {path_str} must be secret or option<secret>"
+                                ));
+                            }
+                        }
+                    }
+                    SchemaType::Secret { spec, .. } => (false, spec),
+                    _ => {
+                        return Err(anyhow!(
+                            "expected type for secret key {path_str} must be secret or option<secret>"
+                        ));
+                    }
+                };
 
-                let result_schema = match (expected_root, agent_secret) {
-                    // No secret stored; `Option<_>` resolves to `None`.
-                    (SchemaType::Option { .. }, None) => SchemaValue::Option { inner: None },
-
-                    // No secret stored and a non-optional expected type.
-                    (_, None) => {
+                let result_schema = match agent_secret {
+                    None if optional => SchemaValue::Option { inner: None },
+                    None => {
                         return Err(anyhow!(
                             "No secret for key {path_str} exists in environment"
                         ));
                     }
-
-                    // Secret exists. Compatibility is checked cross-graph so any
-                    // [`SchemaType::Ref`] on either side resolves through its own
-                    // graph — including a ref to `Option<T>` matched against an
-                    // `Option<T>` expected type.
-                    (_, Some(secret)) => {
+                    Some(secret) => {
                         if !schema_types_compatible(
                             &secret.secret_type,
                             &secret.secret_type.root,
                             &expected_graph,
-                            &expected_graph.root,
+                            &expected_secret_spec.inner,
                         ) {
                             return Err(anyhow!(
                                 "declared and expected type for config key {path_str} are not compatible"
                             ));
                         }
 
-                        match (expected_root, &secret.secret_value) {
-                            // Missing-value secrets with an `Option<_>`
-                            // expected type collapse to `None`.
-                            (SchemaType::Option { .. }, None) => {
-                                SchemaValue::Option { inner: None }
+                        if secret.secret_value.is_none() {
+                            if optional {
+                                return Ok(HostResponseGolemAgentGetConfigValue {
+                                    result: SchemaValue::Option { inner: None },
+                                });
                             }
-                            (_, None) => {
-                                return Err(anyhow!("Secret key {path_str} is missing value"));
+                            return Err(anyhow!("Secret key {path_str} is missing value"));
+                        }
+
+                        let secret_value = SchemaValue::Secret(SecretValuePayload {
+                            secret_id: secret.id.into(),
+                            config_key: Some(secret.path.0.clone()),
+                            version: secret.revision.get(),
+                            resolved_at: Utc::now(),
+                            category: expected_secret_spec.category.clone(),
+                        });
+
+                        if optional {
+                            SchemaValue::Option {
+                                inner: Some(Box::new(secret_value)),
                             }
-                            (_, Some(value)) => value.clone(),
+                        } else {
+                            secret_value
                         }
                     }
                 };
@@ -580,7 +605,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let declaration_value_type = declaration.map(|d| d.value_type.clone());
 
-        let schema_value: SchemaValue = match declaration {
+        let (schema_value, uses_resolver): (SchemaValue, bool) = match declaration {
             // Allow reading undeclared optional config keys so that
             // newer agents can run against older component schemas.
             None if matches!(
@@ -588,11 +613,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 SchemaType::Option { .. }
             ) =>
             {
-                SchemaValue::Option { inner: None }
+                (SchemaValue::Option { inner: None }, false)
             }
             None => return Err(anyhow!("No config declared for path {path_str}")),
-            Some(declaration) if declaration.source == AgentConfigSource::Local => self
-                .resolve_local_config(
+            Some(declaration) if declaration.source == AgentConfigSource::Local => (
+                self.resolve_local_config(
                     &path,
                     &path_str,
                     &expected_graph,
@@ -602,7 +627,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .as_ref()
                         .expect("existing config declaration must have a value type"),
                 )?,
-            Some(declaration) if declaration.source == AgentConfigSource::Secret => {
+                false,
+            ),
+            Some(declaration) if declaration.source == AgentConfigSource::Secret => (
                 self.resolve_secret_config(
                     path,
                     &path_str,
@@ -612,8 +639,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .as_ref()
                         .expect("existing config declaration must have a value type"),
                 )
-                .await?
-            }
+                .await?,
+                true,
+            ),
             Some(declaration) => {
                 return Err(anyhow!(
                     "Unsupported config source {:?} for path {path_str}",
@@ -623,11 +651,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         // Encode the schema-native value into the wire value tree returned
-        // across the `golem:agent/host@2.0.0` boundary. Config values are not a
-        // capability-minting source, so the pure encoder is used: a quota token
-        // appearing here is a schema/config error and is rejected rather than
-        // lowered into a live handle.
-        encode_value(&schema_value)
-            .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
+        // across the `golem:agent/host@2.0.0` boundary. Secret-backed config is
+        // the only capability-minting source here; local config still uses the
+        // pure encoder so a quota token remains a schema/config error.
+        if uses_resolver {
+            encode_value_with(&schema_value, self)
+        } else {
+            encode_value(&schema_value)
+        }
+        .map_err(|e| anyhow!("Failed to encode config value to wire form: {e}"))
     }
 }

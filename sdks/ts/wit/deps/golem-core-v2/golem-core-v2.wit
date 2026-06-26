@@ -429,6 +429,8 @@ interface types {
     // --- Capability nodes ---
 
     record secret-spec {
+        /// Revealed payload type carried by this secret handle.
+        inner: type-node-index,
         /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
         category: option<string>,
     }

@@ -208,7 +208,10 @@ fn discriminator_rule() -> impl Strategy<Value = DiscriminatorRule> {
 }
 
 fn secret_spec() -> impl Strategy<Value = SecretSpec> {
-    option::of(ident_strategy()).prop_map(|category| SecretSpec { category })
+    option::of(ident_strategy()).prop_map(|category| SecretSpec {
+        inner: Box::new(SchemaType::string()),
+        category,
+    })
 }
 
 fn quota_token_spec() -> impl Strategy<Value = QuotaTokenSpec> {
@@ -415,8 +418,22 @@ fn base_leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
 }
 
 fn secret_value_strategy() -> BoxedStrategy<SchemaValue> {
-    short_string()
-        .prop_map(|secret_ref| SchemaValue::Secret(SecretValuePayload { secret_ref }))
+    (
+        any::<u128>(),
+        option::of(vec(ident_strategy(), 0..3)),
+        any::<u64>(),
+        datetime_strategy(),
+        option::of(ident_strategy()),
+    )
+        .prop_map(|(id, config_key, version, resolved_at, category)| {
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::from_u128(id),
+                config_key,
+                version,
+                resolved_at,
+                category,
+            })
+        })
         .boxed()
 }
 

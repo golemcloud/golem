@@ -25,7 +25,7 @@ mod schema_native_tests {
     };
     use crate::schema::schema_value::{
         BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-        SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+        SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
     };
     use chrono::{TimeZone, Utc};
     use golem_schema::EnvironmentId;
@@ -360,9 +360,7 @@ mod schema_native_tests {
                     scale: 1,
                     unit: "kg".into(),
                 }),
-                SchemaValue::Secret(SecretValuePayload {
-                    secret_ref: "secret:ref".into(),
-                }),
+                crate::schema::conversion::secret_to_value("secret:ref".to_string()),
                 SchemaValue::QuotaToken(quota),
                 SchemaValue::Map {
                     entries: vec![

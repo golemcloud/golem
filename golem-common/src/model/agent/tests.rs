@@ -863,7 +863,7 @@ mod agent_error_tests {
     use crate::model::agent::AgentError;
     use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
     use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, TextRestrictions};
-    use crate::schema::schema_value::{SchemaValue, SecretValuePayload, TextValuePayload};
+    use crate::schema::schema_value::{SchemaValue, TextValuePayload};
     use pretty_assertions::assert_eq;
     use test_r::test;
 
@@ -927,9 +927,7 @@ mod agent_error_tests {
                     text: "auth".to_string(),
                     language: None,
                 }),
-                SchemaValue::Secret(SecretValuePayload {
-                    secret_ref: "shhh".to_string(),
-                }),
+                crate::schema::conversion::secret_to_value("shhh".to_string()),
             ],
         };
         let typed = TypedSchemaValue::new(graph, value);

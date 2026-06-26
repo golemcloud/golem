@@ -220,6 +220,7 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
                 collect_refs(inner, out);
             }
         }
+        SchemaType::Secret { spec, .. } => collect_refs(&spec.inner, out),
         // Leaf nodes carrying no child `SchemaType`. Listed explicitly (no
         // wildcard) so a future ref-bearing variant forces this match to be
         // updated.
@@ -245,7 +246,6 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. } => {}
     }
 }

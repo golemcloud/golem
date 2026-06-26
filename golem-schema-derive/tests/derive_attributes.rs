@@ -99,6 +99,33 @@ fn user_to_value_emits_text_payload() {
 }
 
 #[derive(IntoSchema)]
+struct WithSecretField {
+    #[schema(secret)]
+    credential: String,
+}
+
+#[test]
+fn secret_field_attribute_defaults_inner_to_string() {
+    let graph = try_into_schema_graph::<WithSecretField>().expect("graph should be well-formed");
+    let def = graph
+        .defs
+        .iter()
+        .find(|d| d.id == WithSecretField::type_id())
+        .expect("with-secret def is present");
+
+    match &def.body {
+        SchemaType::Record { fields, .. } => match &fields[0].body {
+            SchemaType::Secret { spec, .. } => {
+                assert_eq!(spec.inner.as_ref(), &SchemaType::string());
+                assert_eq!(spec.category, None);
+            }
+            other => panic!("expected secret field, got {other:?}"),
+        },
+        other => panic!("expected record body, got {other:?}"),
+    }
+}
+
+#[derive(IntoSchema)]
 struct WithRename {
     #[schema(rename = "real-name")]
     snake_name: String,

@@ -771,15 +771,49 @@ pub struct FieldDiscriminator {
 
 // --- Capability nodes ---
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SecretSpec {
+    /// Revealed payload type carried by this secret handle.
+    #[serde(default = "default_secret_inner")]
+    pub inner: Box<SchemaType>,
     /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+}
+
+fn default_secret_inner() -> Box<SchemaType> {
+    Box::new(SchemaType::string())
+}
+
+impl Default for SecretSpec {
+    fn default() -> Self {
+        Self {
+            inner: default_secret_inner(),
+            category: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod secret_spec_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn secret_ref_value_round_trip_preserves_opaque_identifier_legacy_serde_secret_spec_defaults_inner()
+     {
+        let decoded: SecretSpec = serde_json::from_value(serde_json::json!({
+            "category": "api-key"
+        }))
+        .expect("legacy SecretSpec JSON without inner should deserialize");
+
+        assert_eq!(decoded.inner.as_ref(), &SchemaType::string());
+        assert_eq!(decoded.category.as_deref(), Some("api-key"));
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]

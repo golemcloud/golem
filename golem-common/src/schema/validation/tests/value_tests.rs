@@ -21,7 +21,7 @@ use crate::schema::schema_type::{
 };
 use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
 use crate::schema::validation::value::{ValueError, ValuePathSegment, validate_value};
@@ -132,8 +132,10 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         )),
         "[a-z][a-z0-9-]{0,8}".prop_map(|r: String| (
             SchemaType::secret(SecretSpec::default()),
-            SchemaValue::Secret(SecretValuePayload {
-                secret_ref: if r.is_empty() { "x".to_string() } else { r },
+            crate::schema::conversion::secret_to_value(if r.is_empty() {
+                "x".to_string()
+            } else {
+                r
             })
         )),
         "[a-z][a-z0-9-]{0,4}".prop_map(|r: String| {

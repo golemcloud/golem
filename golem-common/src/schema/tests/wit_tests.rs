@@ -16,10 +16,10 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::TypeId;
 use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
-use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue};
+use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue, SecretValuePayload};
 use crate::schema::wit::{
-    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleDropper,
-    SecretHandleRep, decode_graph, decode_typed, decode_typed_rejecting_quota_with, decode_value,
+    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleRep,
+    SecretResolver, decode_graph, decode_typed, decode_typed_rejecting_quota_with, decode_value,
     decode_value_rejecting_quota_with, decode_value_with, encode_graph, encode_typed, encode_value,
     encode_value_with, wire,
 };
@@ -212,6 +212,16 @@ fn sample_snapshot() -> QuotaTokenValuePayload {
     }
 }
 
+fn sample_secret_snapshot() -> SecretValuePayload {
+    SecretValuePayload {
+        secret_id: uuid::Uuid::from_u64_pair(3, 4),
+        config_key: Some(vec!["db".to_string(), "password".to_string()]),
+        version: 7,
+        resolved_at: Utc.timestamp_opt(1_700_000_010, 0).single().unwrap(),
+        category: Some("api-key".to_string()),
+    }
+}
+
 /// A minimal [`QuotaTokenResolver`] backed by a real [`ResourceTable`], storing
 /// the trusted snapshot as the boxed payload of each handle. Mirrors what the
 /// executor does, without any of the live-lease machinery.
@@ -250,7 +260,7 @@ impl TableResolver {
     fn secret_handle(&mut self) -> Resource<SecretHandleRep> {
         let handle = self
             .table
-            .push(SecretHandleRep::new("secret-payload".to_string()))
+            .push(SecretHandleRep::new(sample_secret_snapshot()))
             .unwrap();
         self.live += 1;
         handle
@@ -296,7 +306,29 @@ impl QuotaTokenResolver for TableResolver {
     }
 }
 
-impl SecretHandleDropper for TableResolver {
+impl SecretResolver for TableResolver {
+    type Error = anyhow::Error;
+
+    fn snapshot_secret_handle(
+        &mut self,
+        handle: Resource<SecretHandleRep>,
+    ) -> Result<SecretValuePayload, Self::Error> {
+        let rep = self.table.delete(handle)?;
+        self.live -= 1;
+        rep.downcast_ref::<SecretValuePayload>()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("secret handle payload was not a snapshot"))
+    }
+
+    fn secret_handle_from_snapshot(
+        &mut self,
+        snapshot: &SecretValuePayload,
+    ) -> Result<Resource<SecretHandleRep>, Self::Error> {
+        let handle = self.table.push(SecretHandleRep::new(snapshot.clone()))?;
+        self.live += 1;
+        Ok(handle)
+    }
+
     fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>) {
         if self.table.delete(handle).is_ok() {
             self.live -= 1;
@@ -312,6 +344,16 @@ fn quota_token_round_trips_through_resolver() {
     let back = decode_value_with(wire, &mut resolver).expect("decode_with");
     assert_eq!(value, back);
     // The lowered handle was consumed by decoding; nothing leaks.
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn secret_round_trips_through_resolver() {
+    let value = SchemaValue::Secret(sample_secret_snapshot());
+    let mut resolver = TableResolver::new();
+    let wire = encode_value_with(&value, &mut resolver).expect("encode_with");
+    let back = decode_value_with(wire, &mut resolver).expect("decode_with");
+    assert_eq!(value, back);
     assert_eq!(resolver.live, 0);
 }
 
@@ -581,7 +623,7 @@ fn secrets_create_interface_is_imported_by_host_and_sdk_worlds() {
 }
 
 #[test]
-fn discover_agent_error_decode_path_leaks_custom_error_secret_handle() {
+fn agent_error_reject_decoder_drains_secret_handle() {
     let mut resolver = TableResolver::new();
     let valid = encode_typed(&TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::bool()),

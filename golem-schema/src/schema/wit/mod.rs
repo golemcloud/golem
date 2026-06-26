@@ -52,19 +52,20 @@ pub use encode::{
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use decode::{
-    decode_typed_rejecting_quota_with, decode_value_rejecting_quota_with, decode_value_with,
-    reject_quota_handles_in_value_tree,
+    decode_typed_rejecting_quota_with, decode_typed_rejecting_secret_with,
+    decode_value_rejecting_quota_with, decode_value_rejecting_secret_with, decode_value_with,
+    reject_quota_handles_in_value_tree, reject_secret_handles_in_value_tree,
 };
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use encode::encode_value_with;
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use host_support::{
     QuotaTokenHandleDropper, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleDropper,
-    SecretHandleRep,
+    SecretHandleRep, SecretResolver,
 };
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
-pub use guest_support::GuestQuotaTokenHandle;
+pub use guest_support::{GuestQuotaTokenHandle, GuestSecretHandle};
 
 /// Host-side bridge for the opaque `golem:core/types.quota-token` resource.
 ///
@@ -76,7 +77,7 @@ pub use guest_support::GuestQuotaTokenHandle;
 /// [`QuotaTokenResolver`] trait at the value-tree boundary.
 #[cfg(all(feature = "host", not(feature = "guest")))]
 mod host_support {
-    use crate::schema::schema_value::QuotaTokenValuePayload;
+    use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
     use wasmtime::component::Resource;
 
     /// Opaque host representation backing the `quota-token` WIT resource.
@@ -155,6 +156,29 @@ mod host_support {
         fn drop_handle(&mut self, handle: Resource<QuotaTokenHandleRep>);
     }
 
+    /// Boundary bridge between owned `secret` handles carried inside a
+    /// `schema-value-tree` and the trusted host snapshot.
+    pub trait SecretResolver {
+        type Error: std::fmt::Display;
+
+        /// Consume an owned handle lifted from a value tree and return its
+        /// trusted, plaintext-free snapshot.
+        fn snapshot_secret_handle(
+            &mut self,
+            handle: Resource<SecretHandleRep>,
+        ) -> Result<SecretValuePayload, Self::Error>;
+
+        /// Materialize a fresh owned handle from a trusted snapshot so it can be
+        /// lowered to a guest.
+        fn secret_handle_from_snapshot(
+            &mut self,
+            snapshot: &SecretValuePayload,
+        ) -> Result<Resource<SecretHandleRep>, Self::Error>;
+
+        /// Drop an owned handle without snapshotting it.
+        fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>);
+    }
+
     /// Minimal capability needed to clean up owned `quota-token` handles at
     /// boundaries that *reject* quota tokens.
     ///
@@ -183,6 +207,12 @@ mod host_support {
         }
     }
 
+    impl<R: SecretResolver> SecretHandleDropper for R {
+        fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>) {
+            SecretResolver::drop_secret_handle(self, handle)
+        }
+    }
+
     /// Opaque host representation backing the `secret` WIT resource.
     ///
     /// The boxed payload is owned and interpreted solely by the embedder. This
@@ -201,6 +231,10 @@ mod host_support {
 
         pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
             self.payload.downcast_ref::<T>()
+        }
+
+        pub fn downcast_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
+            self.payload.downcast_mut::<T>()
         }
 
         pub fn into_payload<T: std::any::Any>(self) -> Result<T, Self> {
@@ -345,6 +379,108 @@ mod guest_support {
                     "quota-token",
                     format!("{other:?}"),
                     "QuotaToken",
+                )),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct GuestSecretHandle {
+        inner: Rc<RefCell<Option<wire::Secret>>>,
+    }
+
+    impl GuestSecretHandle {
+        /// Wrap a freshly received owned handle in a take-once cell.
+        #[doc(hidden)]
+        pub fn new(handle: wire::Secret) -> Self {
+            Self {
+                inner: Rc::new(RefCell::new(Some(handle))),
+            }
+        }
+
+        /// Take the owned handle out of the cell. Returns `None` if it was
+        /// already transferred by a previous encode.
+        #[doc(hidden)]
+        pub fn take(&self) -> Option<wire::Secret> {
+            self.inner.borrow_mut().take()
+        }
+
+        /// Whether the handle is still present (not yet transferred).
+        #[doc(hidden)]
+        pub fn is_present(&self) -> bool {
+            self.inner.borrow().is_some()
+        }
+
+        /// Run `f` with a shared reference to the owned handle, if it is still
+        /// present.
+        #[doc(hidden)]
+        pub fn with_handle<R>(&self, f: impl FnOnce(&wire::Secret) -> R) -> Option<R> {
+            self.inner.borrow().as_ref().map(f)
+        }
+
+        /// Identity of the shared cell, used to detect the same secret
+        /// appearing more than once in a single value tree.
+        #[doc(hidden)]
+        pub fn cell_id(&self) -> *const () {
+            Rc::as_ptr(&self.inner).cast()
+        }
+    }
+
+    impl std::fmt::Debug for GuestSecretHandle {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let state = if self.is_present() {
+                "present"
+            } else {
+                "consumed"
+            };
+            write!(f, "GuestSecretHandle(<{state}>)")
+        }
+    }
+
+    impl PartialEq for GuestSecretHandle {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.inner, &other.inner)
+        }
+    }
+
+    impl serde::Serialize for GuestSecretHandle {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom(
+                "secret handles cannot be serialized; transfer them through a WIT schema-value-tree",
+            ))
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for GuestSecretHandle {
+        fn deserialize<D: serde::Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+            Err(serde::de::Error::custom(
+                "secret handles cannot be deserialized or forged from data",
+            ))
+        }
+    }
+
+    impl IntoSchema for GuestSecretHandle {
+        fn type_id() -> TypeId {
+            TypeId::new("golem.core.Secret")
+        }
+
+        fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+            SchemaType::secret(Default::default())
+        }
+
+        fn to_value(&self) -> SchemaValue {
+            SchemaValue::Secret(self.clone())
+        }
+    }
+
+    impl FromSchema for GuestSecretHandle {
+        fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+            match value {
+                SchemaValue::Secret(h) => Ok(h.clone()),
+                other => Err(FromSchemaError::shape_mismatch(
+                    "secret",
+                    format!("{other:?}"),
+                    "Secret",
                 )),
             }
         }

@@ -14,10 +14,10 @@
 
 //! Method-passable handle for the rich [`SchemaValue::Secret`] capability.
 //!
-//! A secret value carries only an opaque reference (`secret_ref`); the secret
-//! material itself is never embedded. This wrapper lets agent methods accept
-//! and return a [`SchemaType::Secret`] capability while the reference is
-//! redacted at the CLI/tracing surfaces.
+//! A secret value carries only a plaintext-free identity snapshot; the secret
+//! material itself is never embedded. This legacy wrapper lets host-side callers
+//! bridge string secret identifiers into [`SchemaValue::Secret`] while the
+//! capability is redacted at CLI/tracing surfaces.
 
 use super::{
     FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, secret_from_value, secret_to_value,
@@ -26,7 +26,7 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{SchemaType, SecretSpec};
 use crate::schema::schema_value::SchemaValue;
 
-/// An opaque reference to a secret, encoded as the rich [`SchemaValue::Secret`].
+/// A host-side string secret identifier, encoded as the rich [`SchemaValue::Secret`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretRef {
     secret_ref: String,
@@ -37,7 +37,9 @@ impl SecretRef {
     pub fn new(secret_ref: impl Into<String>) -> Result<Self, FromSchemaError> {
         let secret_ref = secret_ref.into();
         if secret_ref.is_empty() {
-            return Err(FromSchemaError::custom("secret_ref must not be empty"));
+            return Err(FromSchemaError::custom(
+                "secret identifier must not be empty",
+            ));
         }
         Ok(Self { secret_ref })
     }

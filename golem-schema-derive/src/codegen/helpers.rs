@@ -426,6 +426,7 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
             let category = option_string(spec.category.as_deref());
             quote! {
                 #private::SchemaType::secret(#private::SecretSpec {
+                    inner: ::std::boxed::Box::new(#private::SchemaType::string()),
                     category: #category,
                 })
             }

@@ -398,14 +398,12 @@ mod tests {
     use super::*;
     use crate::model::EnvironmentId;
     use crate::schema::schema_type::{QuotaTokenSpec, SecretSpec};
-    use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+    use crate::schema::schema_value::QuotaTokenValuePayload;
     use chrono::{TimeZone, Utc};
     use test_r::test;
 
     fn secret_value() -> SchemaValue {
-        SchemaValue::Secret(SecretValuePayload {
-            secret_ref: "shhh-do-not-log".to_string(),
-        })
+        crate::schema::conversion::secret_to_value("shhh-do-not-log".to_string())
     }
 
     fn quota_token_value() -> SchemaValue {

@@ -260,7 +260,7 @@ impl From<SchemaType> for proto::SchemaType {
             SchemaType::Duration { .. } => Body::DurationType(ProtoEmpty {}),
             SchemaType::Quantity { spec, .. } => Body::QuantityType(spec.into()),
             SchemaType::Union { spec, .. } => Body::UnionType(spec.into()),
-            SchemaType::Secret { spec, .. } => Body::SecretType(spec.into()),
+            SchemaType::Secret { spec, .. } => Body::SecretType(Box::new(spec.into())),
             SchemaType::QuotaToken { spec, .. } => Body::QuotaTokenType(spec.into()),
             SchemaType::Future { inner, .. } => Body::FutureType(Box::new(proto::WasiStubType {
                 element: opt_box_to_proto(inner),
@@ -386,7 +386,7 @@ impl TryFrom<proto::SchemaType> for SchemaType {
                 metadata,
             },
             Body::SecretType(s) => SchemaType::Secret {
-                spec: s.into(),
+                spec: (*s).try_into()?,
                 metadata,
             },
             Body::QuotaTokenType(q) => SchemaType::QuotaToken {
@@ -633,15 +633,22 @@ impl From<SecretSpec> for proto::SecretSpec {
     fn from(value: SecretSpec) -> Self {
         Self {
             category: value.category,
+            inner: Some(box_to_proto(value.inner)),
         }
     }
 }
 
-impl From<proto::SecretSpec> for SecretSpec {
-    fn from(value: proto::SecretSpec) -> Self {
-        Self {
+impl TryFrom<proto::SecretSpec> for SecretSpec {
+    type Error = String;
+
+    fn try_from(value: proto::SecretSpec) -> Result<Self, Self::Error> {
+        Ok(Self {
             category: value.category,
-        }
+            inner: match value.inner {
+                Some(inner) => box_from_proto(inner)?,
+                None => Box::new(SchemaType::string()),
+            },
+        })
     }
 }
 
@@ -903,7 +910,11 @@ impl From<SchemaValue> for proto::SchemaValue {
                 body: Some(value_to_boxed_proto(*u.body)),
             })),
             SchemaValue::Secret(s) => ValueBody::SecretValue(proto::SecretValue {
-                secret_ref: s.secret_ref,
+                secret_id: Some(s.secret_id.into()),
+                config_key: s.config_key.map(|items| proto::StringList { items }),
+                version: s.version,
+                resolved_at: Some(datetime_to_proto(s.resolved_at)),
+                category: s.category,
             }),
             SchemaValue::QuotaToken(q) => ValueBody::QuotaTokenValue(proto::QuotaTokenValue {
                 environment_id: Some(q.environment_id.uuid.into()),
@@ -1021,7 +1032,17 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                 })
             }
             ValueBody::SecretValue(s) => SchemaValue::Secret(SecretValuePayload {
-                secret_ref: s.secret_ref,
+                secret_id: s
+                    .secret_id
+                    .ok_or_else(|| "Missing field: SecretValue.secret_id".to_string())?
+                    .into(),
+                config_key: s.config_key.map(|sl| sl.items),
+                version: s.version,
+                resolved_at: datetime_from_proto(
+                    s.resolved_at
+                        .ok_or_else(|| "Missing field: SecretValue.resolved_at".to_string())?,
+                )?,
+                category: s.category,
             }),
             ValueBody::QuotaTokenValue(q) => SchemaValue::QuotaToken(QuotaTokenValuePayload {
                 environment_id: EnvironmentId::new(
@@ -1066,6 +1087,34 @@ impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
             .ok_or_else(|| "Missing field: TypedSchemaValue.value".to_string())?
             .try_into()?;
         Ok(TypedSchemaValue::new(graph, val))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn secret_ref_value_round_trip_preserves_opaque_identifier_legacy_proto_secret_spec_defaults_inner()
+     {
+        let proto = proto::SchemaType {
+            metadata: None,
+            body: Some(Body::SecretType(Box::new(proto::SecretSpec {
+                category: Some("api-key".to_string()),
+                inner: None,
+            }))),
+        };
+
+        let decoded = SchemaType::try_from(proto).expect("legacy SecretSpec without inner");
+
+        assert_eq!(
+            decoded,
+            SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: Some("api-key".to_string()),
+            })
+        );
     }
 }
 

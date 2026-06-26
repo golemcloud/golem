@@ -22,8 +22,7 @@ use crate::schema::schema_type::{
     SchemaType, SecretSpec, TextRestrictions, UnionBranch, UrlRestrictions,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue,
-    SecretValuePayload, TextValuePayload,
+    BinaryValuePayload, QuotaTokenValuePayload, ResultValuePayload, SchemaValue, TextValuePayload,
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -234,9 +233,6 @@ pub enum ValueError {
         path: ValuePath,
         reason: String,
     },
-    SecretRefEmpty {
-        path: ValuePath,
-    },
     QuotaTokenResourceMismatch {
         path: ValuePath,
         expected: String,
@@ -415,9 +411,6 @@ impl Display for ValueError {
             ),
             ValueError::QuantityOutOfRange { path, reason } => {
                 write!(f, "quantity value at {path} is out of range ({reason})")
-            }
-            ValueError::SecretRefEmpty { path } => {
-                write!(f, "secret value at {path} has an empty `secret_ref`")
             }
             ValueError::QuotaTokenResourceMismatch {
                 path,
@@ -1055,15 +1048,11 @@ fn check_quantity(
 
 fn check_secret(
     _spec: &SecretSpec,
-    payload: &SecretValuePayload,
+    _payload: &impl std::fmt::Debug,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
-    if payload.secret_ref.is_empty() {
-        errors.push(ValueError::SecretRefEmpty {
-            path: path.snapshot(),
-        });
-    }
+    let _ = (path, errors);
 }
 
 fn check_quota_token(

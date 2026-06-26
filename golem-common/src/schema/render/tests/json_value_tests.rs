@@ -23,8 +23,7 @@ use crate::schema::schema_type::{
     SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
-    VariantValuePayload,
+    QuotaTokenValuePayload, SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
@@ -674,12 +673,21 @@ fn multimodal_variant_list_round_trips_through_json() {
     assert!(schema_values_eq(&decoded, &value));
 }
 
+#[test]
+fn secret_ref_value_round_trip_preserves_opaque_identifier() {
+    use crate::schema::conversion::{FromSchema, IntoSchema, SecretRef};
+
+    let original = SecretRef::new("opaque-name").expect("valid SecretRef");
+    let value = original.to_value();
+    let decoded = SecretRef::from_value(&value).expect("from_value");
+
+    assert_eq!(decoded.as_str(), original.as_str());
+}
+
 // ------------------------------------------------------------------ redaction
 
 fn secret_value() -> SchemaValue {
-    SchemaValue::Secret(SecretValuePayload {
-        secret_ref: "shhh-do-not-log".to_string(),
-    })
+    crate::schema::conversion::secret_to_value("shhh-do-not-log".to_string())
 }
 
 fn quota_token_value() -> SchemaValue {
@@ -699,8 +707,25 @@ fn quota_token_value() -> SchemaValue {
 fn to_json_value_emits_canonical_capability_form() {
     let ty = SchemaType::secret(SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
-    let json = to_json_value(&graph, &ty, &secret_value()).expect("to_json_value");
-    assert_eq!(json, json!({ "secretRef": "shhh-do-not-log" }));
+    let value = secret_value();
+    let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
+    let SchemaValue::Secret(secret) = value else {
+        panic!("secret_value must construct a secret")
+    };
+    let mut expected = serde_json::Map::new();
+    expected.insert("secretId".to_string(), json!(secret.secret_id.to_string()));
+    if let Some(config_key) = secret.config_key {
+        expected.insert("configKey".to_string(), json!(config_key));
+    }
+    expected.insert("version".to_string(), json!(secret.version));
+    expected.insert(
+        "resolvedAt".to_string(),
+        json!(secret.resolved_at.to_rfc3339()),
+    );
+    if let Some(category) = secret.category {
+        expected.insert("category".to_string(), json!(category));
+    }
+    assert_eq!(json, serde_json::Value::Object(expected));
 }
 
 #[test]

@@ -16,8 +16,10 @@ use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::secrets::reveal;
 use crate::preview2::golem::secrets::types::{self, SecretId, SecretMetadata};
 use crate::workerctx::WorkerCtx;
+use golem_schema::schema::schema_value::SecretValuePayload;
 use golem_schema::schema::wit::wire::{HostSecret, SchemaGraph, SchemaValueTree};
-use golem_schema::schema::wit::{SecretHandleDropper, SecretHandleRep};
+use golem_schema::schema::wit::{SecretHandleRep, SecretResolver};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::Resource;
 
 impl<Ctx: WorkerCtx> HostSecret for DurableWorkerCtx<Ctx> {
@@ -28,7 +30,33 @@ impl<Ctx: WorkerCtx> HostSecret for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> SecretHandleDropper for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> SecretResolver for DurableWorkerCtx<Ctx> {
+    type Error = WorkerExecutorError;
+
+    fn snapshot_secret_handle(
+        &mut self,
+        handle: Resource<SecretHandleRep>,
+    ) -> Result<SecretValuePayload, Self::Error> {
+        self.table()
+            .delete(handle)
+            .map_err(|e| WorkerExecutorError::runtime(format!("invalid secret handle: {e}")))?
+            .into_payload::<SecretValuePayload>()
+            .map_err(|_| {
+                WorkerExecutorError::runtime("secret resource had unexpected payload type")
+            })
+    }
+
+    fn secret_handle_from_snapshot(
+        &mut self,
+        snapshot: &SecretValuePayload,
+    ) -> Result<Resource<SecretHandleRep>, Self::Error> {
+        self.table()
+            .push(SecretHandleRep::new(snapshot.clone()))
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("failed to create secret handle: {e}"))
+            })
+    }
+
     fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>) {
         let _ = self.table().delete(handle);
     }
@@ -54,5 +82,29 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<SchemaValueTree, types::SecretError>> {
         DurabilityHost::observe_function_call(self, "golem::secrets::reveal", "reveal");
         anyhow::bail!("golem:secrets/reveal.reveal is not yet implemented")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    #[test]
+    fn secret_backed_config_accepts_secret_payload_type_for_secret_declaration_and_secret_handle_operations_are_implemented(
+    ) {
+        let source = include_str!("secrets.rs");
+
+        assert!(
+            !source.contains("golem:secrets/types.id is not yet implemented"),
+            "secret-backed config returns opaque handles, so golem:secrets/types.id must work on those handles"
+        );
+        assert!(
+            !source.contains("golem:secrets/types.metadata is not yet implemented"),
+            "secret-backed config returns opaque handles, so golem:secrets/types.metadata must work on those handles"
+        );
+        assert!(
+            !source.contains("golem:secrets/reveal.reveal is not yet implemented"),
+            "secret-backed config returns opaque handles, so golem:secrets/reveal.reveal must reveal the stored value through the declared inner type"
+        );
     }
 }
