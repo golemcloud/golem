@@ -17,6 +17,7 @@ use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::schema::agent::typed_schema_value_with_projected_defs;
 use golem_common::schema::render::from_json_value;
+use golem_common::schema::schema_type::SecretSpec;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{
     AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
@@ -51,13 +52,20 @@ fn is_optional_type(graph: &SchemaGraph, ty: &SchemaType) -> bool {
 fn secret_config_payload_type<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> Option<(bool, &'a SchemaType)> {
+) -> Option<(bool, &'a SecretSpec)> {
     match resolve_type(graph, ty) {
         SchemaType::Option { inner, .. } => match resolve_type(graph, inner) {
-            SchemaType::Secret { spec, .. } => Some((true, &spec.inner)),
+            SchemaType::Secret { spec, .. } => Some((true, spec)),
             _ => None,
         },
-        SchemaType::Secret { spec, .. } => Some((false, &spec.inner)),
+        SchemaType::Secret { spec, .. } => Some((false, spec)),
+        _ => None,
+    }
+}
+
+fn secret_config_spec(graph: &SchemaGraph) -> Option<&SecretSpec> {
+    match resolve_type(graph, &graph.root) {
+        SchemaType::Secret { spec, .. } => Some(spec),
         _ => None,
     }
 }
@@ -89,7 +97,7 @@ pub fn ensure_required_agent_secrets_are_configured(
         // materializing a per-entry graph that clones the whole `defs` registry.
         let declared_graph = &agent_type.schema;
         let declared_type = &config_entry.value_type;
-        let Some((declared_optional, declared_secret_payload_type)) =
+        let Some((declared_optional, declared_secret_spec)) =
             secret_config_payload_type(declared_graph, declared_type)
         else {
             return Err(WorkerExecutorError::invalid_request(format!(
@@ -101,19 +109,26 @@ pub fn ensure_required_agent_secrets_are_configured(
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
                 let secret_graph = &agent_secret.secret_type;
+                let Some(stored_secret_spec) = secret_config_spec(secret_graph) else {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Required agent secret {} has invalid type",
+                        config_entry.path.join(".")
+                    )));
+                };
                 if !is_equivalent_cross_graph(
                     secret_graph,
-                    &secret_graph.root,
+                    &stored_secret_spec.inner,
                     declared_graph,
-                    declared_secret_payload_type,
-                ) {
+                    &declared_secret_spec.inner,
+                ) || stored_secret_spec.category != declared_secret_spec.category
+                {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has invalid type",
                         config_entry.path.join(".")
                     )));
                 }
                 if let Some(secret_value) = &agent_secret.secret_value {
-                    validate_value(secret_graph, &secret_graph.root, secret_value).map_err(
+                    validate_value(secret_graph, &stored_secret_spec.inner, secret_value).map_err(
                         |errors| {
                             WorkerExecutorError::invalid_request(format!(
                                 "Required agent secret {} has invalid value: {}",
@@ -327,7 +342,10 @@ mod tests {
     fn secret_backed_config_accepts_secret_payload_type_for_secret_declaration() {
         let agent_type_name = AgentTypeName("vault".to_string());
         let config_path = vec!["apiKey".to_string()];
-        let secret_type = SchemaGraph::anonymous(SchemaType::string());
+        let secret_type = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::string()),
+            category: None,
+        }));
         let agent_type = AgentTypeSchema {
             type_name: agent_type_name.clone(),
             description: String::new(),
@@ -401,14 +419,17 @@ mod tests {
         );
 
         ensure_required_agent_secrets_are_configured(&agent_secrets, Some(&agent_id), &component)
-            .expect("secret<T> config should accept an AgentSecret whose stored type is T");
+            .expect("secret<T> config should accept a matching stored secret<T>");
     }
 
     #[test]
     fn secret_backed_config_rejects_invalid_stored_secret_value() {
         let agent_type_name = AgentTypeName("vault".to_string());
         let config_path = vec!["apiKey".to_string()];
-        let secret_type = SchemaGraph::anonymous(SchemaType::string());
+        let secret_type = SchemaGraph::anonymous(SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::string()),
+            category: None,
+        }));
         let agent_type = AgentTypeSchema {
             type_name: agent_type_name.clone(),
             description: String::new(),

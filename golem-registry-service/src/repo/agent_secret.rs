@@ -24,6 +24,7 @@ use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent}
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
+use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -58,6 +59,14 @@ pub trait AgentSecretRepo: Send + Sync {
         &self,
         environment_id: Uuid,
     ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
+
+    async fn get_revision(
+        &self,
+        environment_id: Uuid,
+        agent_secret_id: AgentSecretId,
+        path: Vec<String>,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 }
 
 pub struct LoggedAgentSecretRepo<Repo: AgentSecretRepo> {
@@ -125,6 +134,19 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.repo
             .get_for_environment(environment_id)
+            .instrument(Self::span_environment_id(environment_id))
+            .await
+    }
+
+    async fn get_revision(
+        &self,
+        environment_id: Uuid,
+        agent_secret_id: AgentSecretId,
+        path: Vec<String>,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        self.repo
+            .get_revision(environment_id, agent_secret_id, path, revision)
             .instrument(Self::span_environment_id(environment_id))
             .await
     }
@@ -375,5 +397,32 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
             .await?;
 
         Ok(results)
+    }
+
+    async fn get_revision(
+        &self,
+        environment_id: Uuid,
+        agent_secret_id: AgentSecretId,
+        path: Vec<String>,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        let result: Option<AgentSecretExtRevisionRecord> = self.with_ro("get_revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! {r#"
+                    SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+                    FROM agent_secrets sec
+                    JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = $4
+                    WHERE sec.environment_id = $1 AND sec.agent_secret_id = $2 AND sec.path = $3 AND secr.deleted = FALSE
+                "#})
+                    .bind(environment_id)
+                    .bind(agent_secret_id.0)
+                    .bind(sqlx::types::Json(path))
+                    .bind(i64::try_from(revision.get()).map_err(|err| {
+                        AgentSecretRepoError::InternalError(anyhow::anyhow!(err))
+                    })?),
+            )
+            .await?;
+
+        Ok(result)
     }
 }

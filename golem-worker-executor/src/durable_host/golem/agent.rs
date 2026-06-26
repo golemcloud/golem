@@ -38,7 +38,7 @@ use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::graph::TypedSchemaValue;
-use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
+use golem_common::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec};
 use golem_common::schema::schema_value::{SchemaValue, SecretValuePayload};
 use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
@@ -231,19 +231,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ));
                     }
                     Some(secret) => {
+                        let stored_secret_spec = secret_spec(&secret.secret_type)
+                            .map_err(|err| anyhow!("secret key {path_str} has invalid type: {err}"))?;
+
                         if !schema_types_compatible(
                             &secret.secret_type,
-                            &secret.secret_type.root,
+                            &stored_secret_spec.inner,
                             &expected_graph,
                             &expected_secret_spec.inner,
-                        ) {
+                        ) || stored_secret_spec.category != expected_secret_spec.category
+                        {
                             return Err(anyhow!(
                                 "declared and expected type for config key {path_str} are not compatible"
                             ));
                         }
 
                         if let Some(secret_value) = &secret.secret_value {
-                            validate_value(&secret.secret_type, &secret.secret_type.root, secret_value)
+                            validate_value(&secret.secret_type, &stored_secret_spec.inner, secret_value)
                                 .map_err(|errors| {
                                     anyhow!(
                                         "secret key {path_str} has invalid stored value: {}",
@@ -270,7 +274,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             config_key: Some(secret.path.0.clone()),
                             version: secret.revision.get(),
                             resolved_at: Utc::now(),
-                            category: expected_secret_spec.category.clone(),
+                            category: stored_secret_spec.category.clone(),
                         });
 
                         if optional {
@@ -427,6 +431,13 @@ fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a
         }
     }
     ty
+}
+
+fn secret_spec<'a>(graph: &'a SchemaGraph) -> anyhow::Result<&'a SecretSpec> {
+    match resolve_schema_ref(graph, &graph.root) {
+        SchemaType::Secret { spec, .. } => Ok(spec),
+        other => Err(anyhow!("stored secret type must be secret, got {other:?}")),
+    }
 }
 
 fn validate_secret_config_result_shape(

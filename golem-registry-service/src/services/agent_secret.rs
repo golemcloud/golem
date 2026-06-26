@@ -34,6 +34,8 @@ use golem_common::model::card::{
 };
 use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
+use golem_common::schema::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::{validate_graph, validate_value};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -114,6 +116,41 @@ fn environment_owner_from_agent_secret(
     }
 }
 
+fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
+    let mut seen = std::collections::HashSet::new();
+    while let SchemaType::Ref { id, .. } = ty {
+        if !seen.insert(id.clone()) {
+            break;
+        }
+        match graph.lookup(id) {
+            Some(def) => ty = &def.body,
+            None => break,
+        }
+    }
+    ty
+}
+
+fn secret_inner_type<'a>(graph: &'a SchemaGraph) -> Result<&'a SchemaType, AgentSecretError> {
+    match resolve_schema_ref(graph, &graph.root) {
+        SchemaType::Secret { spec, .. } => Ok(&spec.inner),
+        other => Err(AgentSecretError::AgentSecretValueDoesNotMatchType {
+            errors: vec![format!("secret type must be secret, got {other:?}")],
+        }),
+    }
+}
+
+fn validate_agent_secret_value(
+    secret_type_graph: &SchemaGraph,
+    secret_value: &golem_common::schema::SchemaValue,
+) -> Result<(), AgentSecretError> {
+    let inner = secret_inner_type(secret_type_graph)?;
+    validate_value(secret_type_graph, inner, secret_value).map_err(|errors| {
+        AgentSecretError::AgentSecretValueDoesNotMatchType {
+            errors: errors.iter().map(|e| e.to_string()).collect(),
+        }
+    })
+}
+
 impl SafeDisplay for AgentSecretError {
     fn to_safe_string(&self) -> String {
         match self {
@@ -185,9 +222,10 @@ impl AgentSecretService {
                 errors: errors.iter().map(|e| e.to_string()).collect(),
             }
         })?;
+        let secret_inner_type = secret_inner_type(&secret_type_graph)?;
         let secret_value = data.secret_value;
         if let Some(sv) = &secret_value {
-            validate_value(&secret_type_graph, &secret_type_graph.root, sv).map_err(|errors| {
+            validate_value(&secret_type_graph, secret_inner_type, sv).map_err(|errors| {
                 AgentSecretError::AgentSecretValueDoesNotMatchType {
                     errors: errors.iter().map(|e| e.to_string()).collect(),
                 }
@@ -246,17 +284,8 @@ impl AgentSecretService {
             OptionalFieldUpdate::NoChange => {}
             OptionalFieldUpdate::Set(new_secret_value) => {
                 // The new value is schema-native; validate it against the
-                // stored secret's `SchemaGraph` before applying.
-                validate_value(
-                    &agent_secret.secret_type,
-                    &agent_secret.secret_type.root,
-                    &new_secret_value,
-                )
-                .map_err(|errors| {
-                    AgentSecretError::AgentSecretValueDoesNotMatchType {
-                        errors: errors.iter().map(|e| e.to_string()).collect(),
-                    }
-                })?;
+                // stored secret's inner type before applying.
+                validate_agent_secret_value(&agent_secret.secret_type, &new_secret_value)?;
                 agent_secret.secret_value = Some(new_secret_value);
             }
             OptionalFieldUpdate::Unset => {
@@ -302,6 +331,7 @@ impl AgentSecretService {
         }
 
         agent_secret.revision = current_revision.next()?;
+        agent_secret.secret_value = None;
 
         let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
@@ -384,6 +414,21 @@ impl AgentSecretService {
             .collect::<Result<_, _>>()?;
 
         Ok(result)
+    }
+
+    pub async fn get_revision_unchecked(
+        &self,
+        environment_id: EnvironmentId,
+        agent_secret_id: AgentSecretId,
+        path: CanonicalAgentSecretPath,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, AgentSecretError> {
+        self.agent_secret_repo
+            .get_revision(environment_id.0, agent_secret_id, path.0, revision)
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
     }
 
     async fn get_with_environment(
